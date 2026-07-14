@@ -141,9 +141,11 @@ def dispatch(name: str, arguments: str | dict) -> str:
     if entry is None:
         return f"ERROR: unknown tool '{name}'."
     fn, _ = entry
-    args = arguments if isinstance(arguments, dict) else json.loads(arguments or "{}")
     try:
+        args = arguments if isinstance(arguments, dict) else json.loads(arguments or "{}")
         return fn(**args)
+    except json.JSONDecodeError as e:
+        return f"ERROR: could not parse tool arguments: {e}"
     except TypeError as e:
         return f"ERROR calling {name}: {e}"
 

@@ -11,10 +11,11 @@ export default function Markdown({ children }) {
         remarkPlugins={[remarkGfm]}
         components={{
           table: (props) => (
-            <div className="table-wrap">
+            <div className="table-wrap" tabIndex={0} role="region" aria-label="Result table">
               <table {...props} />
             </div>
           ),
+          th: (props) => <th {...props} scope="col" />,
           a: (props) => <a {...props} target="_blank" rel="noreferrer" />,
         }}
       >

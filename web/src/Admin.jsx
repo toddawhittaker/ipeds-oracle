@@ -4,10 +4,13 @@ import { api } from "./api.js";
 export default function Admin() {
   const [tab, setTab] = useState("allowlist");
   return (
-    <div className="admin">
-      <nav className="subtabs">
+    <main className="admin">
+      <h1 className="sr-only">Admin</h1>
+      <nav className="subtabs" aria-label="Admin sections">
         {["allowlist", "imports", "usage", "skills"].map((t) => (
-          <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+          <button key={t} className={tab === t ? "on" : ""}
+                  aria-current={tab === t ? "page" : undefined}
+                  onClick={() => setTab(t)}>
             {t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
@@ -16,7 +19,7 @@ export default function Admin() {
       {tab === "imports" && <Imports />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
-    </div>
+    </main>
   );
 }
 
@@ -43,7 +46,7 @@ function Allowlist() {
     <div className="panel">
       {reqs.length > 0 && (
         <div className="requests">
-          <h3>Pending access requests</h3>
+          <h2>Pending access requests</h2>
           {reqs.map((r) => (
             <div key={r.id} className="req">
               <span>{r.email}</span>
@@ -55,11 +58,13 @@ function Allowlist() {
         </div>
       )}
 
-      <h3>Allowlist</h3>
+      <h2>Allowlist</h2>
       <form className="row" onSubmit={add}>
-        <input type="email" placeholder="email" required value={email}
+        <label htmlFor="allow-email" className="sr-only">Email</label>
+        <input id="allow-email" type="email" placeholder="email" required value={email}
                onChange={(e) => setEmail(e.target.value)} />
-        <input placeholder="note (optional)" value={note}
+        <label htmlFor="allow-note" className="sr-only">Note</label>
+        <input id="allow-note" placeholder="note (optional)" value={note}
                onChange={(e) => setNote(e.target.value)} />
         <label className="chk">
           <input type="checkbox" checked={isAdmin}
@@ -69,7 +74,7 @@ function Allowlist() {
       </form>
 
       <table className="grid">
-        <thead><tr><th>Email</th><th>Note</th><th>Admin</th><th>Last login</th><th></th></tr></thead>
+        <thead><tr><th scope="col">Email</th><th scope="col">Note</th><th scope="col">Admin</th><th scope="col">Last login</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.email}>
@@ -127,19 +132,20 @@ function Imports() {
 
   return (
     <div className="panel">
-      <h3>Load a new IPEDS year</h3>
+      <h2>Load a new IPEDS year</h2>
       <p className="muted small">
         Upload the year's <code>IPEDS{"{YYYY}{YY}"}.accdb</code>. It rebuilds into
         a staging database, runs integrity + magnitude checks, and only swaps in
         if everything passes — the live database is never touched until then.
       </p>
       <form className="row" onSubmit={upload}>
-        <input ref={fileRef} type="file" accept=".accdb" required />
+        <label htmlFor="import-file" className="sr-only">IPEDS Access database file</label>
+        <input id="import-file" ref={fileRef} type="file" accept=".accdb" required />
         <button type="submit" disabled={uploading}>{uploading ? "Uploading…" : "Import"}</button>
       </form>
 
       {active && (
-        <div className="job">
+        <div className="job" aria-live="polite">
           <div className={"badge " + active.status}>{active.status}</div>
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
@@ -149,9 +155,9 @@ function Imports() {
         </div>
       )}
 
-      <h4>Recent jobs</h4>
+      <h3>Recent jobs</h3>
       <table className="grid">
-        <thead><tr><th>#</th><th>File</th><th>Status</th><th>When</th><th></th></tr></thead>
+        <thead><tr><th scope="col">#</th><th scope="col">File</th><th scope="col">Status</th><th scope="col">When</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {jobs.map((jb) => (
             <tr key={jb.id}>
@@ -174,6 +180,7 @@ function Usage() {
   const t = u.totals;
   return (
     <div className="panel">
+      <h2 className="sr-only">Usage</h2>
       <div className="stats">
         <Stat label="Queries" value={t.queries} />
         <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
@@ -181,16 +188,16 @@ function Usage() {
         <Stat label="Escalations" value={t.escalations} />
         <Stat label="Failures" value={t.failures} />
       </div>
-      <h4>Last 30 days</h4>
+      <h3>Last 30 days</h3>
       <table className="grid">
-        <thead><tr><th>Day</th><th>Queries</th><th>Tokens</th></tr></thead>
+        <thead><tr><th scope="col">Day</th><th scope="col">Queries</th><th scope="col">Tokens</th></tr></thead>
         <tbody>{u.by_day.map((d) => (
           <tr key={d.day}><td>{d.day}</td><td>{d.queries}</td><td>{d.tokens.toLocaleString()}</td></tr>
         ))}</tbody>
       </table>
-      <h4>Top users</h4>
+      <h3>Top users</h3>
       <table className="grid">
-        <thead><tr><th>User</th><th>Queries</th></tr></thead>
+        <thead><tr><th scope="col">User</th><th scope="col">Queries</th></tr></thead>
         <tbody>{u.top_users.map((x) => (
           <tr key={x.email}><td>{x.email}</td><td>{x.queries}</td></tr>
         ))}</tbody>
@@ -206,10 +213,10 @@ function Stat({ label, value }) {
 function Skills() {
   const [rows, setRows] = useState([]);
   const load = () => api.skills().then(setRows);
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   return (
     <div className="panel">
-      <h3>Learned skills ({rows.length})</h3>
+      <h2>Learned skills ({rows.length})</h2>
       <p className="muted small">Validated NL→SQL exemplars used as few-shot context. 👍 on answers promotes new ones.</p>
       {rows.map((s) => (
         <div key={s.id} className="skill">

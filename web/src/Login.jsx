@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
 const EXAMPLES = [
@@ -11,7 +11,13 @@ const EXAMPLES = [
 export default function Login() {
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState(null);
+  const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
+  const noticeRef = useRef(null);
+
+  useEffect(() => {
+    if (ok) noticeRef.current?.focus();
+  }, [ok]);
 
   async function submit(e) {
     e.preventDefault();
@@ -19,8 +25,10 @@ export default function Login() {
     try {
       const r = await api.requestLink(email);
       setMsg(r.message);
+      setOk(true);
     } catch {
       setMsg("Something went wrong. Please try again.");
+      setOk(false);
     } finally {
       setBusy(false);
     }
@@ -34,12 +42,15 @@ export default function Login() {
           Ask natural-language questions about U.S. colleges &amp; universities.
           Access is by invitation.
         </p>
-        {msg ? (
-          <div className="notice">{msg}</div>
-        ) : (
+        {msg && (
+          <div className="notice" role="alert" tabIndex={-1} ref={noticeRef}>{msg}</div>
+        )}
+        {!ok && (
           <form onSubmit={submit}>
+            <label htmlFor="login-email" className="sr-only">Email</label>
             <input
-              type="email" required placeholder="you@franklin.edu"
+              id="login-email"
+              type="email" required placeholder="you@franklin.edu" autoComplete="email"
               value={email} onChange={(e) => setEmail(e.target.value)}
             />
             <button type="submit" disabled={busy}>

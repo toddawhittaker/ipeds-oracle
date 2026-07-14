@@ -118,8 +118,11 @@ def save_skill(question: str, canonical_sql: str, *, notes: str = "",
 
 
 def promote_from_message(question: str, sql: str) -> None:
-    """A 👍 on an answer promotes its (question, last SQL) into a verified skill,
-    or upvotes an existing near-duplicate."""
+    """A 👍 on an answer promotes its (question, last SQL) into a skill, pending
+    admin review, or upvotes an existing near-duplicate. Feedback-promoted
+    skills start UNVERIFIED — a user's 👍 alone must not make a skill
+    retrievable (retrieve_skills_block only returns verified=1 rows); an admin
+    must verify it via PATCH /api/admin/skills/{id} first."""
     if not sql:
         return
     con = connect()
@@ -128,13 +131,13 @@ def promote_from_message(question: str, sql: str) -> None:
             "SELECT id FROM skills WHERE question=? AND canonical_sql=?",
             (question, sql)).fetchone()
         if exists:
-            con.execute("UPDATE skills SET upvotes=upvotes+1, verified=1 WHERE id=?",
+            con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?",
                         (exists["id"],))
             con.commit()
             return
     finally:
         con.close()
-    save_skill(question, sql, created_by="feedback", verified=True)
+    save_skill(question, sql, created_by="feedback", verified=False)
 
 
 # --- Semantic answer cache -----------------------------------------------------

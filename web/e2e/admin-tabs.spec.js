@@ -1,0 +1,127 @@
+import { test, expect } from "@playwright/test";
+import {
+  mockMe,
+  mockConversations,
+  mockAllowlist,
+  mockAccessRequests,
+  mockUsage,
+  mockSkills,
+  mockImportJobs,
+} from "./mocks.js";
+
+// Flow 4: admin tabs. Signed in as an admin, click through each Admin subtab
+// and assert its mocked content renders; also submit the add-allowlist form
+// and assert the POST fired with the expected body.
+test("admin tabs render mocked content and the add-allowlist form posts", async ({ page }) => {
+  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockConversations(page, []);
+
+  const allowlist = await mockAllowlist(page, [
+    { email: "user@franklin.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+  ]);
+  await mockAccessRequests(page, [{ id: 1, email: "newperson@franklin.edu" }]);
+  await mockUsage(page, {
+    totals: { queries: 123, tokens: 45678, cache_hits: 12, escalations: 3, failures: 1 },
+    by_day: [{ day: "2026-07-13", queries: 10, tokens: 2000 }],
+    top_users: [{ email: "user@franklin.edu", queries: 50 }],
+  });
+  await mockSkills(page, [
+    {
+      id: 1,
+      question: "CA nursing associate's degrees by year",
+      canonical_sql: "SELECT year, SUM(x) FROM c_a WHERE cipcode='51.3801' GROUP BY year",
+      notes: "confirmed against known totals",
+      verified: true,
+      upvotes: 3,
+      downvotes: 0,
+      hits: 5,
+    },
+  ]);
+  await mockImportJobs(page, [
+    { id: 9, filename: "IPEDS2526.accdb", status: "passed", updated_at: 1700000000 },
+  ]);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+
+  // Allowlist is the default subtab — do the form submission here, before
+  // navigating anywhere else. Skills is still visited last purely to keep
+  // this happy-path spec's flow linear; the Skills-unmount crash regression
+  // itself is covered separately below.
+  await expect(page.getByRole("heading", { name: "Pending access requests" })).toBeVisible();
+  await expect(page.getByText("newperson@franklin.edu")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "user@franklin.edu" })).toBeVisible();
+
+  await page.getByPlaceholder("email").fill("newuser@franklin.edu");
+  await page.getByPlaceholder("note (optional)").fill("added via e2e");
+  await page.getByRole("button", { name: "Add" }).click();
+
+  await expect.poll(() => allowlist.posts.length).toBe(1);
+  expect(allowlist.posts[0]).toEqual({
+    email: "newuser@franklin.edu",
+    note: "added via e2e",
+    is_admin: false,
+  });
+
+  await page.getByRole("button", { name: "Imports" }).click();
+  await expect(page.getByText("IPEDS2526.accdb")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "9" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Usage" }).click();
+  // "Queries" also labels table columns further down the panel, so scope to
+  // the first (summary stat) occurrence rather than asserting a unique match.
+  await expect(page.getByText("123", { exact: true })).toBeVisible();
+  await expect(page.getByText("Queries", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("cell", { name: "user@franklin.edu" })).toBeVisible();
+
+  // Skills last — do not navigate away from it (see known-bug test below).
+  await page.getByRole("button", { name: "Skills" }).click();
+  await expect(page.getByText("CA nursing associate's degrees by year")).toBeVisible();
+  await expect(page.getByText("verified", { exact: true })).toBeVisible();
+});
+
+// Regression test — was a KNOWN BUG (test.fail'd) until fixed.
+//
+// web/src/Admin.jsx's Skills() component used to do:
+//   const load = () => api.skills().then(setRows);
+//   useEffect(load, []);
+// `load`'s arrow-fn body had no braces, so it implicitly returned the Promise
+// from `.then()`. React treats a non-undefined return from an effect as a
+// cleanup ("destroy") function; when Skills unmounted (i.e. the admin clicked
+// to any other subtab), React invoked that Promise as `destroy()`, threw
+// "TypeError: destroy is not a function", and — with no error boundary in the
+// tree — the entire app unmounted (root element went empty).
+//
+// Fixed to useEffect(() => { load(); }, []), which returns undefined. This
+// test now asserts the correct behavior directly: navigating away from Skills
+// (and back) must not crash the app.
+test("regression: navigating away from the Skills tab and back does not crash the app", async ({ page }) => {
+  const pageErrors = [];
+  page.on("pageerror", (err) => pageErrors.push(err));
+
+  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockAllowlist(page, []);
+  await mockAccessRequests(page, []);
+  await mockSkills(page, [
+    { id: 1, question: "q", canonical_sql: "SELECT 1", notes: "", verified: true, upvotes: 0, downvotes: 0, hits: 0 },
+  ]);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("button", { name: "Skills" }).click();
+  await expect(page.getByText("q", { exact: true })).toBeVisible();
+
+  // Unmount Skills by navigating to another subtab — this used to crash the
+  // whole app (root element went blank).
+  await page.getByRole("button", { name: "Allowlist" }).click();
+  await expect(page.getByRole("heading", { name: "Allowlist" })).toBeVisible();
+  // The rest of the shell must still be intact too, not just the Admin panel.
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+
+  // And back to Skills again, to be thorough about remounting.
+  await page.getByRole("button", { name: "Skills" }).click();
+  await expect(page.getByText("q", { exact: true })).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
+});

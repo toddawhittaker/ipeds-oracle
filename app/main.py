@@ -58,8 +58,9 @@ if WEB_DIST.exists():
         # API routes are handled above; everything else serves the SPA shell.
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not found"}, status_code=404)
-        candidate = WEB_DIST / full_path
-        if full_path and candidate.is_file():
+        web_root = WEB_DIST.resolve()
+        candidate = (WEB_DIST / full_path).resolve()
+        if full_path and candidate.is_relative_to(web_root) and candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(WEB_DIST / "index.html")
 else:

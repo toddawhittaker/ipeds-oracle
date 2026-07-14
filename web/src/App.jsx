@@ -19,10 +19,12 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">IPEDS Query</div>
-        <nav className="tabs">
-          <button className={view === "chat" ? "on" : ""} onClick={() => setView("chat")}>Chat</button>
+        <nav className="tabs" aria-label="Primary">
+          <button className={view === "chat" ? "on" : ""} aria-current={view === "chat" ? "page" : undefined}
+                  onClick={() => setView("chat")}>Chat</button>
           {user.is_admin && (
-            <button className={view === "admin" ? "on" : ""} onClick={() => setView("admin")}>Admin</button>
+            <button className={view === "admin" ? "on" : ""} aria-current={view === "admin" ? "page" : undefined}
+                    onClick={() => setView("admin")}>Admin</button>
           )}
         </nav>
         <div className="userbox">

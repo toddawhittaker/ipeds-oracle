@@ -59,6 +59,17 @@ def create_job(filename: str, created_by: str) -> int:
         con.close()
 
 
+def _restore_data_dir(data_target: Path, backup_accdb: Path | None) -> None:
+    """Undo the data_dir staging done before a rebuild so a failed import
+    doesn't leave a bad/corrupt .accdb sitting in the loader's data dir for a
+    later rebuild to pick up. Restores the previous file if one was backed
+    up, otherwise removes the newly-staged file."""
+    if backup_accdb and backup_accdb.exists():
+        shutil.move(str(backup_accdb), str(data_target))
+    elif data_target.exists():
+        data_target.unlink(missing_ok=True)
+
+
 def preflight(upload_path: Path) -> tuple[bool, str]:
     """Cheap checks before the (slow) rebuild."""
     name = upload_path.name
@@ -184,6 +195,7 @@ def run_import(job_id: int, upload_path: Path) -> None:
         proc.wait()
         if proc.returncode != 0:
             _set_status(job_id, "failed", f"Loader exited with code {proc.returncode}.")
+            _restore_data_dir(data_target, backup_accdb)
             return
 
         # Integrity + magnitude checks.
@@ -195,6 +207,7 @@ def run_import(job_id: int, upload_path: Path) -> None:
         if not passed:
             _set_status(job_id, "failed", "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
             staging.unlink(missing_ok=True)
+            _restore_data_dir(data_target, backup_accdb)
             return
 
         # Atomic swap: back up live, move staging into place.
@@ -217,5 +230,4 @@ def run_import(job_id: int, upload_path: Path) -> None:
     except Exception as e:  # noqa: BLE001
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
-        if backup_accdb and backup_accdb.exists():
-            shutil.move(str(backup_accdb), str(data_target))
+        _restore_data_dir(data_target, backup_accdb)
