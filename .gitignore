@@ -29,6 +29,13 @@ node_modules/
 web/dist/
 *.tsbuildinfo
 
+# --- Playwright e2e output ---
+web/test-results/
+web/playwright-report/
+
+# --- Claude Code local settings (agent definitions in .claude/agents/ ARE tracked) ---
+.claude/settings.local.json
+
 # --- Python ---
 __pycache__/
 *.py[cod]

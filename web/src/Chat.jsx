@@ -13,7 +13,10 @@ export default function Chat() {
 
   const refreshConvos = () => api.conversations().then(setConvos).catch(() => {});
   useEffect(() => { refreshConvos(); }, []);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, status]);
+  useEffect(() => {
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+  }, [messages, status]);
 
   async function openConvo(id) {
     setConvId(id);
@@ -67,16 +70,18 @@ export default function Chat() {
         <button className="newchat" onClick={newChat}>+ New chat</button>
         <div className="convo-list">
           {convos.map((c) => (
-            <div key={c.id}
-                 className={"convo" + (c.id === convId ? " on" : "")}
-                 onClick={() => openConvo(c.id)}>
+            <button key={c.id} type="button"
+                    className={"convo" + (c.id === convId ? " on" : "")}
+                    aria-current={c.id === convId ? "page" : undefined}
+                    onClick={() => openConvo(c.id)}>
               {c.title || "Untitled"}
-            </div>
+            </button>
           ))}
         </div>
       </aside>
 
       <main className="thread">
+        <h1 className="sr-only">Chat</h1>
         <div className="messages">
           {messages.length === 0 && (
             <div className="empty muted">
@@ -87,9 +92,15 @@ export default function Chat() {
           {messages.map((m, i) => (
             <div key={i} className={"msg " + m.role}>
               <div className="bubble">
-                {m.role === "assistant" && m.pending && !m.content
-                  ? <div className="muted">{status || "…"}</div>
-                  : <Markdown>{m.content || ""}</Markdown>}
+                {m.role === "assistant" ? (
+                  <div aria-live="polite" aria-busy={!!m.pending}>
+                    {m.pending && !m.content
+                      ? <div className="muted">{status || "…"}</div>
+                      : <Markdown>{m.content || ""}</Markdown>}
+                  </div>
+                ) : (
+                  <Markdown>{m.content || ""}</Markdown>
+                )}
                 {m.role === "assistant" && !m.pending && (
                   <div className="msg-actions">
                     {m.sql_log?.length > 0 && (
@@ -103,9 +114,11 @@ export default function Chat() {
                         <a className="link" href={api.csvUrl(m.id)}>Download CSV</a>
                         <span className="spacer" />
                         <button className={"vote" + (m.feedback === 1 ? " on" : "")}
-                                onClick={() => vote(m, 1)} title="Helpful">👍</button>
+                                onClick={() => vote(m, 1)} title="Helpful"
+                                aria-label="Helpful" aria-pressed={m.feedback === 1}>👍</button>
                         <button className={"vote" + (m.feedback === -1 ? " on" : "")}
-                                onClick={() => vote(m, -1)} title="Not helpful">👎</button>
+                                onClick={() => vote(m, -1)} title="Not helpful"
+                                aria-label="Not helpful" aria-pressed={m.feedback === -1}>👎</button>
                       </>
                     )}
                   </div>
@@ -117,7 +130,9 @@ export default function Chat() {
         </div>
 
         <form className="composer" onSubmit={send}>
+          <label htmlFor="composer-input" className="sr-only">Ask about IPEDS data</label>
           <textarea
+            id="composer-input"
             rows={1} value={input} placeholder="Ask about IPEDS data…"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) send(e); }}

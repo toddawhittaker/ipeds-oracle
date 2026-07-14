@@ -10,6 +10,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import current_user
 from app.db import connect
@@ -66,21 +67,25 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         yield _sse({"type": "conversation", "id": conv_id})
 
         # 1) Semantic cache: reuse SQL for a near-identical past question.
-        cached = skills.cache_lookup(question)
+        # Only a valid shortcut for a fresh, first-turn question — a follow-up
+        # inside an existing conversation depends on prior context, so it must
+        # never be served a cached answer from a different conversation.
+        cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
         if cached:
             answer = cached["answer_md"]
             yield _sse({"type": "status", "text": "Matched a recent question — reusing its query."})
             yield _sse({"type": "answer", "text": answer})
-            _persist(user["id"], conv_id, question, answer,
-                     sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
-                     model="cache", tokens=0, cached=True, ok=True)
+            await run_in_threadpool(
+                _persist, user["id"], conv_id, question, answer,
+                sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
+                model="cache", tokens=0, cached=True, ok=True)
             yield _sse({"type": "done", "cached": True})
             return
 
         # 2) Retrieve learned skills as few-shot context.
-        skills_block, skill_ids = skills.retrieve_skills_block(question)
+        skills_block, skill_ids = await run_in_threadpool(skills.retrieve_skills_block, question)
         if skill_ids:
-            skills.bump_hits(skill_ids)
+            await run_in_threadpool(skills.bump_hits, skill_ids)
 
         # 3) Run the agent, streaming progress.
         result = None
@@ -97,16 +102,17 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             yield _sse({"type": "done"})
             return
 
-        _persist(user["id"], conv_id, question, answer or (result.error or ""),
-                 sql_log=result.sql_log, model=result.model_used,
-                 tokens=result.total_tokens, cached=False,
-                 ok=result.error is None, escalated=result.escalated,
-                 prompt_tokens=result.prompt_tokens,
-                 completion_tokens=result.completion_tokens)
+        await run_in_threadpool(
+            _persist, user["id"], conv_id, question, answer or (result.error or ""),
+            sql_log=result.sql_log, model=result.model_used,
+            tokens=result.total_tokens, cached=False,
+            ok=result.error is None, escalated=result.escalated,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens)
 
-        # 4) Cache the successful answer for reuse.
-        if result.error is None and answer and result.sql_log:
-            skills.cache_store(question, result.sql_log[-1], answer)
+        # 4) Cache the successful answer for reuse (first-turn, context-free only).
+        if not history and result.error is None and answer and result.sql_log:
+            await run_in_threadpool(skills.cache_store, question, result.sql_log[-1], answer)
 
         yield _sse({"type": "done", "escalated": result.escalated,
                     "model": result.model_used, "tokens": result.total_tokens})

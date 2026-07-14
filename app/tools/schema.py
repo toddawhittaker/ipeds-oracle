@@ -20,7 +20,8 @@ def list_families() -> str:
 def get_columns(family: str) -> str:
     """Column names of a family (the actual unified columns)."""
     fam = family.strip().strip("'\"")
-    r = run_sql(f"SELECT name, type FROM pragma_table_info('{fam}')", limit=1000)
+    fam_q = fam.replace("'", "''")
+    r = run_sql(f"SELECT name, type FROM pragma_table_info('{fam_q}')", limit=1000)
     if not r.rows:
         return (f"No family named '{fam}'. Use list_families to see valid names "
                 "(query the family name, lowercase — never the year-specific name).")
@@ -30,9 +31,10 @@ def get_columns(family: str) -> str:
 def describe_variables(family: str, keyword: str | None = None) -> str:
     """Variable titles/descriptions for a family (from vartable, latest year)."""
     fam = family.strip().strip("'\"")
+    fam_q = fam.replace("'", "''")
     src = run_sql(
         "SELECT src_table FROM _family_map WHERE family = ? "
-        "ORDER BY year DESC LIMIT 1".replace("?", f"'{fam}'"))
+        "ORDER BY year DESC LIMIT 1".replace("?", f"'{fam_q}'"))
     if not src.rows:
         return f"No family named '{fam}'. Use list_families."
     phys = src.rows[0][0]

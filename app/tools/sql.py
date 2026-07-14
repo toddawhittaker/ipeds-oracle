@@ -18,12 +18,21 @@ from pathlib import Path
 from app.config import get_settings
 
 # Statements that must never appear (defense in depth on top of the RO handle).
+# `replace` gets a negative lookahead so the REPLACE(...) scalar string
+# function is allowed while `REPLACE INTO` / `INSERT OR REPLACE` DML still
+# trip the `insert`/other alternatives (and are also blocked by the
+# must-start-with-SELECT/WITH gate).
 _FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|create|replace|attach|detach|"
-    r"pragma|vacuum|reindex|analyze|begin|commit|rollback|savepoint)\b",
+    r"\b(insert|update|delete|drop|alter|create|attach|detach|"
+    r"pragma|vacuum|reindex|analyze|begin|commit|rollback|savepoint)\b"
+    r"|\breplace\b(?!\s*\()",
     re.IGNORECASE,
 )
 _LIMIT_RE = re.compile(r"\blimit\b", re.IGNORECASE)
+# Matches a whole single-quoted SQL string literal, honoring the doubled-quote
+# ('') escape -- used only to build a masked *scan* copy for the safety
+# checks below; the executed SQL is never altered.
+_STRING_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
 
 
 class SQLValidationError(ValueError):
@@ -66,17 +75,35 @@ def _strip_sql(sql: str) -> str:
     return sql.strip().rstrip(";").strip()
 
 
+def _mask_string_literals(sql: str) -> str:
+    """Build a *scan* copy with the contents of single-quoted string literals
+    blanked out, so the ';' and forbidden-keyword safety checks can't be
+    fooled by text that only appears inside a literal (e.g. `LIKE '%update%'`
+    or `SELECT 'a;b'`). Only characters strictly between a matched pair of
+    single quotes are ever touched -- an unmatched/unbalanced quote (e.g. an
+    injection attempt like `SELECT 1'; DROP TABLE t`) has no closing partner
+    to pair with, so the regex won't match it and the trailing text stays
+    fully visible to the scan. The doubled-quote escape (`'it''s'`) is
+    honored so it doesn't prematurely end the literal.
+
+    This never touches the SQL that actually gets executed -- callers must
+    keep using the original `cleaned` string for that.
+    """
+    return _STRING_LITERAL_RE.sub(lambda m: "'" + ("#" * (len(m.group(0)) - 2)) + "'", sql)
+
+
 def validate_sql(sql: str) -> str:
     """Return a cleaned, single read-only SELECT/WITH statement or raise."""
     cleaned = _strip_sql(sql)
     if not cleaned:
         raise SQLValidationError("Empty query.")
-    if ";" in cleaned:
+    scan = _mask_string_literals(cleaned)
+    if ";" in scan:
         raise SQLValidationError("Only a single statement is allowed (no ';').")
     low = cleaned.lstrip("(").lower()
     if not (low.startswith("select") or low.startswith("with")):
         raise SQLValidationError("Only SELECT / WITH queries are allowed.")
-    if _FORBIDDEN.search(cleaned):
+    if _FORBIDDEN.search(scan):
         raise SQLValidationError("Query contains a forbidden (write/DDL) keyword.")
     return cleaned
 
@@ -110,10 +137,19 @@ def run_sql(sql: str, *, limit: int | None = None,
 
     con = _connect_ro(db_path)
     timed_out = threading.Event()
+    done = threading.Event()
+    # Serializes the watchdog's con.interrupt() against the main thread's
+    # con.close() below -- without this, a timer firing at the same instant
+    # the query finishes could call interrupt() on an already-closing/closed
+    # connection.
+    lock = threading.Lock()
 
     def _watchdog():
-        con.interrupt()
-        timed_out.set()
+        with lock:
+            if done.is_set():
+                return
+            timed_out.set()
+            con.interrupt()
 
     timer = threading.Timer(timeout, _watchdog)
     timer.start()
@@ -132,6 +168,8 @@ def run_sql(sql: str, *, limit: int | None = None,
         raise
     finally:
         timer.cancel()
+        with lock:
+            done.set()
         con.close()
 
     return QueryResult(

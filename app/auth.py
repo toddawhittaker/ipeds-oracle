@@ -112,6 +112,8 @@ def _user_from_request(request: Request) -> sqlite3.Row | None:
             "SELECT u.id, u.email, u.is_admin, s.expires_at "
             "FROM sessions s JOIN users u ON u.id=s.user_id "
             "WHERE s.token_hash=?", (hash_token(tok),)).fetchone()
+        if row and not is_allowlisted(con, row["email"]):
+            return None
     finally:
         con.close()
     if not row or row["expires_at"] < time.time():

@@ -1,7 +1,6 @@
 """Admin API: allowlist, access requests, data imports, usage, skills."""
 from __future__ import annotations
 
-import shutil
 import sqlite3
 import threading
 import time
@@ -62,9 +61,14 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
 
 @router.delete("/allowlist/{email}")
 def remove_allowlist(email: str):
+    email = email.lower()
     con = connect()
     try:
-        con.execute("DELETE FROM allowlist WHERE email=?", (email.lower(),))
+        con.execute("DELETE FROM allowlist WHERE email=?", (email,))
+        con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
+        con.execute(
+            "DELETE FROM sessions WHERE user_id IN "
+            "(SELECT id FROM users WHERE email=?)", (email,))
         con.commit()
     finally:
         con.close()
@@ -84,19 +88,49 @@ def access_requests():
 
 
 # --- Data import --------------------------------------------------------------
+# Only one import may run at a time: concurrent rebuilds would race the same
+# ipeds_staging.db / atomic swap. Held from upload through run_import.
+_import_lock = threading.Lock()
+
+
 @router.post("/import")
 async def start_import(background: BackgroundTasks, file: UploadFile = File(...),
                        admin: sqlite3.Row = Depends(require_admin)):
     if not file.filename or not file.filename.lower().endswith(".accdb"):
         raise HTTPException(400, "Please upload an IPEDS .accdb file.")
+    if not _import_lock.acquire(blocking=False):
+        raise HTTPException(409, "An import is already running. Wait for it to finish.")
+
     s = get_settings()
     s.upload_dir.mkdir(parents=True, exist_ok=True)
     dest = s.upload_dir / Path(file.filename).name
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    job_id = importer.create_job(file.filename, admin["email"])
+    max_bytes = s.max_upload_mb * 1024 * 1024
+    try:
+        written = 0
+        with dest.open("wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        413, f"Upload exceeds the {s.max_upload_mb} MB limit.")
+                f.write(chunk)
+        job_id = importer.create_job(file.filename, admin["email"])
+    except Exception:
+        dest.unlink(missing_ok=True)
+        _import_lock.release()
+        raise
+
+    def _run():
+        try:
+            importer.run_import(job_id, dest)
+        finally:
+            _import_lock.release()
+
     # Run the (long) rebuild off the event loop.
-    threading.Thread(target=importer.run_import, args=(job_id, dest), daemon=True).start()
+    threading.Thread(target=_run, daemon=True).start()
     return {"job_id": job_id, "status": "pending"}
 
 

@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     sql_timeout_seconds: float = Field(default=25.0)
     sql_row_cap_model: int = Field(default=200)   # rows fed back to the model
     sql_row_cap_download: int = Field(default=100_000)  # rows for CSV export
+    max_upload_mb: int = Field(default=2048)  # cap on admin .accdb import uploads
 
     # --- Auth / sessions ---------------------------------------------------
-    session_secret: str = Field(default="dev-insecure-change-me")
     session_ttl_days: int = Field(default=30)
     magic_link_ttl_minutes: int = Field(default=15)
     cookie_secure: bool = Field(default=False)     # True in production (HTTPS)
