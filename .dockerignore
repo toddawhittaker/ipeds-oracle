@@ -1,0 +1,17 @@
+# Keep the build context small — data + local artifacts never go into the image.
+.git
+.venv
+ipeds.db
+ipeds.db-*
+ipeds_staging.db
+app.db
+app.db-*
+data/
+output/
+web/node_modules
+web/dist
+docs/
+__pycache__/
+*.pyc
+.env
+.env.*

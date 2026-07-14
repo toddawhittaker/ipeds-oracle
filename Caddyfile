@@ -1,0 +1,11 @@
+# Automatic HTTPS via Let's Encrypt. Caddy obtains + renews the cert for $DOMAIN.
+# Point $DOMAIN's DNS at this server (Cloudflare: set the record to "DNS only"
+# or use Full(strict) if proxied). Set DOMAIN in .env.
+
+{$DOMAIN} {
+	encode gzip
+	# SSE streaming: don't buffer the chat response.
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+}

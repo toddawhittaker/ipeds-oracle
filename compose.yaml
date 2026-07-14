@@ -1,0 +1,45 @@
+# Single-VPS deployment: FastAPI app + Caddy for automatic HTTPS.
+#
+#   1. Put ipeds.db and the source data/ under ./srv-data (see volume below):
+#        srv-data/ipeds.db          the built database
+#        srv-data/accdb/*.accdb     source Access files (for admin re-imports)
+#   2. Copy .env.example -> .env and fill it in (APP_PUBLIC_URL, keys, admins).
+#   3. Set DOMAIN in .env, then: docker compose up -d --build
+#
+# Data lives on the host volume, NOT in the image — rebuilds/atomic swaps and
+# app state (users, skills, chats) all persist across container restarts.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      IPEDS_DB_PATH: /data/ipeds.db
+      APP_DB_PATH: /data/app.db
+      DATA_DIR: /data/accdb
+      UPLOAD_DIR: /data/uploads
+      COOKIE_SECURE: "true"
+    volumes:
+      - ./srv-data:/data
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

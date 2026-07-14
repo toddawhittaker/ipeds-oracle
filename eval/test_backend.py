@@ -1,0 +1,99 @@
+"""End-to-end backend test (no LLM): auth round-trip, admin, skills, cache, CSV.
+
+Runs against a throwaway app.db. Patches the mailer to capture the magic link.
+"""
+import os, sys, tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# isolate app.db before importing settings
+tmp = tempfile.mkdtemp()
+os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
+os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+
+from fastapi.testclient import TestClient
+from app import mailer
+
+captured = {}
+mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
+mailer.send_access_request = lambda *a, **k: True
+
+from app.main import app
+from app import skills
+
+
+def run():
+    with TestClient(app) as c:
+        # --- auth round trip -----------------------------------------------
+        assert c.get("/api/auth/me").status_code == 401
+        r = c.post("/api/auth/request", json={"email": "admin@franklin.edu"})
+        assert r.status_code == 200, r.text
+        link = captured["link"]
+        token = link.split("token=")[1]
+        v = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
+        assert v.status_code == 303, v.status_code
+        me = c.get("/api/auth/me")
+        assert me.status_code == 200 and me.json()["is_admin"], me.text
+        print("  ✓ magic-link login + admin session")
+
+        # reused token must fail
+        c2 = TestClient(app)
+        assert c2.get(f"/api/auth/verify?token={token}",
+                      follow_redirects=False).headers["location"].endswith("error=invalid_link")
+        print("  ✓ magic-link token is single-use")
+
+        # --- admin: allowlist ----------------------------------------------
+        assert c.post("/api/admin/allowlist",
+                      json={"email": "prof@franklin.edu", "note": "colleague"}).status_code == 200
+        al = c.get("/api/admin/allowlist").json()
+        assert any(x["email"] == "prof@franklin.edu" for x in al)
+        print(f"  ✓ allowlist add ({len(al)} entries)")
+
+        # access request created for a stranger, visible to admin
+        c.post("/api/auth/request", json={"email": "stranger@x.com"})
+        reqs = c.get("/api/admin/access-requests").json()
+        assert any(r["email"] == "stranger@x.com" for r in reqs)
+        print("  ✓ access request recorded")
+
+        # --- skills seeded + retrieval -------------------------------------
+        sk = c.get("/api/admin/skills").json()
+        assert len(sk) >= 3, f"expected seeded skills, got {len(sk)}"
+        print(f"  ✓ {len(sk)} skills seeded")
+        block, ids = skills.retrieve_skills_block(
+            "associate degrees in nursing per year nationwide")
+        if ids:
+            print(f"  ✓ skill retrieval returned {len(ids)} exemplar(s) via embeddings")
+        else:
+            print("  ⚠ skill retrieval empty (fastembed not installed — expected offline)")
+
+        # --- usage endpoint ------------------------------------------------
+        u = c.get("/api/admin/usage").json()
+        assert "totals" in u
+        print("  ✓ usage dashboard endpoint")
+
+        # --- CSV export path via a hand-made conversation ------------------
+        # create a conversation + assistant message with a known SQL, then export
+        from app.db import connect
+        import time, json as _json
+        con = connect()
+        conv = con.execute("INSERT INTO conversations(user_id,title,created_at,updated_at)"
+                           " VALUES ((SELECT id FROM users WHERE email='admin@franklin.edu'),"
+                           " 'x', ?, ?)", (time.time(), time.time()))
+        conv_id = conv.lastrowid
+        sql = "SELECT year, SUM(ctotalt) a FROM c_a WHERE awlevel=3 AND majornum=1 AND cipcode='99' GROUP BY year"
+        con.execute("INSERT INTO messages(conversation_id,role,content,sql_log,created_at)"
+                    " VALUES (?,?,?,?,?)", (conv_id, "assistant", "ans",
+                                            _json.dumps([sql]), time.time()))
+        msg_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        con.commit(); con.close()
+        csv_resp = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_resp.status_code == 200 and "year" in csv_resp.text
+        rows = csv_resp.text.strip().splitlines()
+        print(f"  ✓ CSV export ({len(rows)-1} data rows)")
+
+    print("\nALL BACKEND TESTS PASSED")
+
+
+if __name__ == "__main__":
+    run()

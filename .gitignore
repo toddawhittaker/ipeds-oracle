@@ -1,0 +1,45 @@
+# --- Large data artifacts (kept out of git; see README for how to obtain/rebuild) ---
+# The built database (~1.9 GB) — rebuild with scripts/build_ipeds_db.py
+ipeds.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Source IPEDS Access files (~3.2 GB) — download from NCES, drop into data/
+data/*.accdb
+data/*.mdb
+
+# App state DB (users, skills, chats) and staging rebuilds — never commit
+app.db
+app.db-*
+ipeds_staging.db
+ipeds.db-*
+data/uploads/
+
+# Generated query outputs
+output/
+
+# --- Secrets / config ---
+.env
+.env.*
+!.env.example
+
+# --- Node / frontend ---
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Editor / OS cruft ---
+.DS_Store
+*.swp
+
+# Local deployment data volume
+srv-data/
