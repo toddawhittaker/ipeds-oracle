@@ -33,8 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Point the app at a throwaway fixture DB, never the real (absent) one.
-      IPEDS_DB_PATH: ${{ runner.temp }}/ipeds_ci.db
-      APP_DB_PATH: ${{ runner.temp }}/app_ci.db
+      # (runner.temp isn't available in job-level env; github.workspace is. The
+      # *.db paths are gitignored, so writing them into the workspace is fine.)
+      IPEDS_DB_PATH: ${{ github.workspace }}/.ci/ipeds.db
+      APP_DB_PATH: ${{ github.workspace }}/.ci/app.db
     steps:
       - uses: actions/checkout@v4
 
