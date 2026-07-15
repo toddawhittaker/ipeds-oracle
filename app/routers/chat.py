@@ -126,7 +126,8 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             tokens=result.total_tokens, cached=False,
             ok=result.error is None, escalated=result.escalated,
             prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens)
+            completion_tokens=result.completion_tokens,
+            cost=result.cost)
 
         # 4) Cache the successful answer for reuse (first-turn, context-free only).
         if not history and result.error is None and answer and result.sql_log:
@@ -149,7 +150,8 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
-             cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0):
+             cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
+             cost=0.0):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload)."""
@@ -168,10 +170,10 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
-            "prompt_tokens, completion_tokens, ok, cached, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "prompt_tokens, completion_tokens, ok, cached, cost, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
-             completion_tokens, int(ok), int(cached), now))
+             completion_tokens, int(ok), int(cached), float(cost), now))
         con.commit()
         return user_msg_id, assistant_id
     finally:
