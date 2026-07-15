@@ -31,6 +31,8 @@ CI_DIR="$REPO_ROOT/.ci"
 mkdir -p "$CI_DIR"
 export IPEDS_DB_PATH="$CI_DIR/ipeds.db"
 "$PY" scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH" >/dev/null
+# Ensure the SPA-serving block in app/main.py is active (see the script's docstring).
+"$PY" scripts/make_web_dist_stub.py
 
 rm -f "$REPO_ROOT/.coverage"
 for suite in eval/test_*.py; do

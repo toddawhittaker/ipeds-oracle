@@ -72,6 +72,10 @@ rm -f "$APP_DB_PATH"
 step "Backend: build CI fixture database"
 "$PY" scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH" || fail "fixture db build"
 
+# Ensure app/main.py's SPA-serving block is active for the test run (no-op if a
+# real web/dist build already exists).
+"$PY" scripts/make_web_dist_stub.py
+
 BACKEND_SUITES=(
   test_sql_guards.py
   test_sql_guards_hardening.py

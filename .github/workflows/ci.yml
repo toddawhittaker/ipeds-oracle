@@ -92,6 +92,9 @@ jobs:
       - name: Build CI fixture database
         run: python scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH"
 
+      - name: Stub web/dist (activates app/main.py SPA-serving + its traversal guard)
+        run: python scripts/make_web_dist_stub.py
+
       - name: SQL guard tests
         run: python eval/test_sql_guards.py
 
