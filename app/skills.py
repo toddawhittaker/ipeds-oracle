@@ -5,7 +5,6 @@ caching degrade gracefully to no-ops so the app still runs.
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 
@@ -79,7 +78,7 @@ def retrieve_skills_block(question: str) -> tuple[str, list[int]]:
     if not picked:
         return "", []
     blocks, ids = [], []
-    for r, sim in picked:
+    for r, _sim in picked:
         ids.append(r["id"])
         note = f"\n-- note: {r['notes']}" if r["notes"] else ""
         blocks.append(f"Q: {r['question']}\nSQL:\n{r['canonical_sql']}{note}")
@@ -205,7 +204,8 @@ def seed_from_schema_examples() -> int:
          "  WHERE cipcode='51.3801' AND awlevel=3 AND majornum=1\n"
          "    AND year > (SELECT MAX(year)-3 FROM _years)\n"
          "  GROUP BY year, unitid)\n"
-         ",ranked AS (SELECT *, RANK() OVER (PARTITION BY year ORDER BY awards DESC) rk FROM grads)\n"
+         ",ranked AS (SELECT *, RANK() OVER (PARTITION BY year ORDER BY awards DESC)"
+         " rk FROM grads)\n"
          "SELECT r.year, r.rk, ic.instnm, ic.stabbr, r.awards\n"
          "FROM ranked r JOIN institutions_current ic USING (unitid)\n"
          "WHERE r.rk<=20 ORDER BY r.year DESC, r.rk;",

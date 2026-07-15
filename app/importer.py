@@ -201,11 +201,13 @@ def run_import(job_id: int, upload_path: Path) -> None:
         # Integrity + magnitude checks.
         _set_status(job_id, "checks")
         _log(job_id, "Running integrity checks…")
-        passed, report = integrity_checks(staging, s.ipeds_db_path if s.ipeds_db_path.exists() else None)
+        passed, report = integrity_checks(
+            staging, s.ipeds_db_path if s.ipeds_db_path.exists() else None)
         report_text = "\n".join(report)
         _log(job_id, report_text)
         if not passed:
-            _set_status(job_id, "failed", "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
+            _set_status(job_id, "failed",
+                        "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
             staging.unlink(missing_ok=True)
             _restore_data_dir(data_target, backup_accdb)
             return
@@ -219,7 +221,8 @@ def run_import(job_id: int, upload_path: Path) -> None:
         # Bump data_version + clear the now-stale semantic cache.
         con = connect()
         try:
-            dv = int((con.execute("SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
+            dv = int((con.execute(
+                "SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
             set_meta(con, "data_version", str(dv + 1))
             con.commit()
         finally:

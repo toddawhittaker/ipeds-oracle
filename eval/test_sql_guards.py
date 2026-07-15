@@ -1,10 +1,12 @@
 """Smoke test for the read-only SQL engine: guards, a real query, and timeout."""
-import sys, time
+import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.tools.sql import run_sql, validate_sql, SQLValidationError, SQLTimeoutError
+from app.tools.sql import SQLTimeoutError, SQLValidationError, run_sql, validate_sql
+
 
 def expect_reject(sql):
     try:

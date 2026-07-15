@@ -6,14 +6,13 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
-                     UploadFile)
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr
 
+from app import importer
 from app.auth import require_admin
 from app.config import get_settings
 from app.db import connect
-from app import importer
 
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_admin)])

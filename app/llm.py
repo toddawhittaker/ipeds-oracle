@@ -11,8 +11,8 @@ is model-agnostic via OpenRouter's OpenAI-compatible API.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator
 
 import httpx
 

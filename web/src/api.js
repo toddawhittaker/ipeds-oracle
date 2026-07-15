@@ -60,7 +60,7 @@ export async function streamChat({ question, conversationId }, onEvent) {
     for (const p of parts) {
       const line = p.trim();
       if (line.startsWith("data:")) {
-        try { onEvent(JSON.parse(line.slice(5).trim())); } catch {}
+        try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* ignore malformed SSE line */ }
       }
     }
   }

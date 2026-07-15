@@ -5,11 +5,11 @@ functions can later be re-exported over MCP without change.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from app.tools import schema as sch
-from app.tools.sql import (QueryResult, SQLTimeoutError, SQLValidationError,
-                           run_sql)
+from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, run_sql
 
 # The last successful run_sql result is captured per-turn so the API layer can
 # offer a CSV download of the exact data behind the answer.

@@ -28,15 +28,16 @@ os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
 
 from fastapi.testclient import TestClient  # noqa: E402
+
 from app import mailer  # noqa: E402
 
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
 
-from app.main import app  # noqa: E402
 from app import skills  # noqa: E402
 from app.db import connect  # noqa: E402
+from app.main import app  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -317,7 +318,8 @@ def run() -> None:
     print("\n6. lower priority / TODO")
     check("oversized import upload is rejected (TODO — no seam yet)",
          test_import_rejects_oversized_upload)
-    check("schema.get_columns tolerates a quote in family", test_schema_family_with_quote_is_handled)
+    check("schema.get_columns tolerates a quote in family",
+          test_schema_family_with_quote_is_handled)
 
     print()
     if FAILURES:

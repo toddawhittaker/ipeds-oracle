@@ -12,11 +12,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from app import skills
 from app.auth import current_user
 from app.db import connect
 from app.llm import stream_agent
 from app.tools.sql import SQLValidationError, run_sql
-from app import skills
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -230,7 +230,7 @@ def download_csv(message_id: int, request: Request, user: sqlite3.Row = Depends(
     try:
         result = run_sql(sql_list[-1], limit=get_settings().sql_row_cap_download)
     except SQLValidationError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     buf = io.StringIO()
     w = csv.writer(buf)

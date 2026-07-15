@@ -59,7 +59,7 @@ export default function Login() {
           </form>
         )}
         <div className="examples">
-          <div className="muted small">You'll be able to ask things like:</div>
+          <div className="muted small">You&apos;ll be able to ask things like:</div>
           <ul>{EXAMPLES.map((x) => <li key={x}>{x}</li>)}</ul>
         </div>
       </div>
