@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
     llm_max_tool_iters: int = Field(default=12)
+    # Topical input guardrail: a cheap pre-flight classifier refuses off-topic /
+    # prompt-injection messages before the agent runs. Set false to disable.
+    guard_enabled: bool = Field(default=True)
     # public URL + title used for OpenRouter attribution headers (optional)
     app_public_url: str = Field(default="http://localhost:8000")
     app_title: str = Field(default="IPEDS Query")

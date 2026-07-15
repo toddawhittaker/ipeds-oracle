@@ -105,9 +105,11 @@ def send_access_approved(to: str, link: str) -> bool:
      helps the assistant get better over time.</p>
 
   <p style="color:#666;font-size:13px;border-top:1px solid #e2e8f0;
-     padding-top:12px;margin-top:22px">If the sign-in link above has expired,
-     just go to <a href="{app_url}" style="color:#2b6cb0">{app_url}</a> and enter
-     your email for a fresh one.</p>
+     padding-top:12px;margin-top:22px">The link above expires in {ttl} minutes,
+     but don't worry — you're already approved, so if it expires you can just go
+     to <a href="{app_url}" style="color:#2b6cb0">{app_url}</a>, enter your email,
+     and a fresh sign-in link arrives right away. You can do that any time you
+     need to sign in.</p>
 </div>"""
     text = (
         f"Welcome to {app_title} — you're approved!\n\n"
@@ -122,6 +124,7 @@ def send_access_approved(to: str, link: str) -> bool:
         "universities award last year?\n"
         "  - Which states awarded the most Master's degrees in Education?\n\n"
         "Every answer comes with sortable tables, inline charts, and CSV export.\n\n"
-        f"If the link above has expired, go to {app_url} and enter your email for "
-        "a fresh one.")
+        f"The link above expires in {ttl} minutes, but you're already approved — "
+        f"if it expires, just go to {app_url}, enter your email, and a fresh "
+        "sign-in link arrives right away. Do that any time you need to sign in.")
     return send_email(to, subject, html, text)
