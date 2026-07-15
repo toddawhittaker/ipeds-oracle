@@ -19,6 +19,29 @@ def is_allowlisted(con: sqlite3.Connection, email: str) -> bool:
                        (email,)).fetchone() is not None
 
 
+def admin_recipients(con: sqlite3.Connection) -> list[str]:
+    """Every address that should be notified of an access request: all current
+    admins (`users.is_admin=1`, whether bootstrapped from ADMIN_EMAILS or
+    promoted at runtime), plus the configured `access_request_to` override and
+    the bootstrap admin list. Deduped, lower-cased, order-stable."""
+    s = get_settings()
+    seen: list[str] = []
+
+    def add(email: str | None) -> None:
+        if not email:
+            return
+        email = email.strip().lower()
+        if email and email not in seen:
+            seen.append(email)
+
+    for row in con.execute("SELECT email FROM users WHERE is_admin=1"):
+        add(row["email"])
+    add(s.access_request_to)
+    for email in s.admin_email_list:
+        add(email)
+    return seen
+
+
 def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     """Insert a single-use login token for `email` and return its verify URL.
     The caller commits. Reused by the login flow and by admin approval."""
@@ -48,11 +71,9 @@ def request_login(email: str, base_url: str) -> dict:
                 "INSERT INTO access_requests(email, created_at) VALUES (?,?)",
                 (email, time.time()))
             con.commit()
-            s = get_settings()
-            admin_to = s.access_request_to or (s.admin_email_list[0]
-                                               if s.admin_email_list else None)
-            if admin_to:
-                send_access_request(admin_to, email)
+            admins = admin_recipients(con)
+            if admins:
+                send_access_request(admins, email)
     finally:
         con.close()
     return {"message": "If that address is approved, a sign-in link is on its "

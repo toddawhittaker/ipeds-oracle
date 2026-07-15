@@ -122,6 +122,9 @@ jobs:
       - name: log-buffer secret-scrubbing tests
         run: python eval/test_logbuffer.py
 
+      - name: mailer tests (failure handling · admin fan-out)
+        run: python eval/test_mailer.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
