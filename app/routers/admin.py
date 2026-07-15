@@ -75,6 +75,41 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
     return {"ok": True, "email": email, "invited": invited}
 
 
+class AllowlistAdminPatch(BaseModel):
+    is_admin: bool
+
+
+@router.patch("/allowlist/{email}")
+def set_allowlist_admin(email: str, body: AllowlistAdminPatch):
+    """Promote or demote an allowlisted user to/from admin. is_admin is read
+    live on every request, so the change takes effect immediately (no re-login).
+    Refuses to demote the last remaining admin, so the console can never lock
+    everyone out."""
+    email = email.strip().lower()
+    con = connect()
+    try:
+        if con.execute("SELECT 1 FROM allowlist WHERE email=?",
+                       (email,)).fetchone() is None:
+            raise HTTPException(404, "That email is not on the allowlist.")
+        if body.is_admin:
+            con.execute(
+                "INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
+                "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
+        else:
+            row = con.execute("SELECT COALESCE(is_admin,0) AS a FROM users "
+                              "WHERE email=?", (email,)).fetchone()
+            n_admins = con.execute(
+                "SELECT COUNT(*) FROM users WHERE is_admin=1").fetchone()[0]
+            if row and row["a"] and n_admins <= 1:
+                raise HTTPException(
+                    400, "Can't remove the last admin — promote someone else first.")
+            con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "email": email, "is_admin": body.is_admin}
+
+
 @router.delete("/allowlist/{email}")
 def remove_allowlist(email: str):
     email = email.lower()

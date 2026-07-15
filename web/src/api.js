@@ -36,6 +36,8 @@ export const api = {
   addAllow: (email, note, is_admin) =>
     j("POST", "/api/admin/allowlist", { email, note, is_admin }),
   removeAllow: (email) => j("DELETE", `/api/admin/allowlist/${encodeURIComponent(email)}`),
+  setAdmin: (email, is_admin) =>
+    j("PATCH", `/api/admin/allowlist/${encodeURIComponent(email)}`, { is_admin }),
   accessRequests: () => j("GET", "/api/admin/access-requests"),
   usage: (since, until) => {
     const p = new URLSearchParams();

@@ -157,6 +157,63 @@ def test_allowlist_add_approval_email_failure_is_logged_not_raised():
         assert r.json()["invited"] is False, r.text
 
 
+def _is_admin(c, email):
+    row = next((x for x in c.get("/api/admin/allowlist").json()
+                if x["email"] == email), None)
+    return bool(row and row["is_admin"])
+
+
+def test_promote_makes_user_admin_immediately_on_live_session():
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/api/admin/allowlist", json={"email": "prof@franklin.edu"})
+        # prof signs in as a normal (non-admin) user
+        prof = TestClient(app)
+        ptok = captured["approved_link"].split("token=")[1]
+        assert prof.post("/api/auth/verify", json={"token": ptok}).status_code == 200
+        assert prof.get("/api/auth/me").json()["is_admin"] is False
+        assert prof.get("/api/admin/allowlist").status_code == 403  # not admin yet
+
+        r = c.patch("/api/admin/allowlist/prof@franklin.edu", json={"is_admin": True})
+        assert r.status_code == 200 and r.json()["is_admin"] is True, r.text
+        # is_admin is read live, so prof's EXISTING session is now admin
+        assert prof.get("/api/auth/me").json()["is_admin"] is True
+        assert prof.get("/api/admin/allowlist").status_code == 200
+
+
+def test_demote_admin_when_another_exists():
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/api/admin/allowlist", json={"email": "prof2@franklin.edu"})
+        c.patch("/api/admin/allowlist/prof2@franklin.edu", json={"is_admin": True})
+        assert _is_admin(c, "prof2@franklin.edu") is True
+        r = c.patch("/api/admin/allowlist/prof2@franklin.edu", json={"is_admin": False})
+        assert r.status_code == 200 and r.json()["is_admin"] is False, r.text
+        assert _is_admin(c, "prof2@franklin.edu") is False
+
+
+def test_patch_admin_404_for_non_allowlisted():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.patch("/api/admin/allowlist/nobody@nowhere.test", json={"is_admin": True})
+        assert r.status_code == 404, r.text
+
+
+def test_cannot_demote_the_last_admin():
+    with TestClient(app) as c:
+        _login(c)
+        # Force admin@franklin.edu to be the SOLE admin, regardless of prior tests.
+        con = connect()
+        try:
+            con.execute("UPDATE users SET is_admin=0 WHERE email != 'admin@franklin.edu'")
+            con.commit()
+        finally:
+            con.close()
+        r = c.patch("/api/admin/allowlist/admin@franklin.edu", json={"is_admin": False})
+        assert r.status_code == 400, r.text
+        assert _is_admin(c, "admin@franklin.edu") is True  # guard left them admin
+
+
 def test_usage_since_after_until_is_swapped():
     with TestClient(app) as c:
         _login(c)
@@ -232,6 +289,14 @@ def run():
           test_import_job_not_found_404)
     check("allowlist add logs (not raises) an approval-email failure",
           test_allowlist_add_approval_email_failure_is_logged_not_raised)
+    check("promote makes a user admin immediately on their live session",
+          test_promote_makes_user_admin_immediately_on_live_session)
+    check("demote an admin when another admin exists",
+          test_demote_admin_when_another_exists)
+    check("PATCH admin 404s for a non-allowlisted email",
+          test_patch_admin_404_for_non_allowlisted)
+    check("cannot demote the last remaining admin",
+          test_cannot_demote_the_last_admin)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
     check("skills PATCH updates fields; empty body is a no-op",
