@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr
 
 from app import auth
 from app.auth import current_user
+from app.ratelimit import client_ip, enforce_auth_rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -19,8 +20,10 @@ class LoginRequest(BaseModel):
 
 @router.post("/request")
 def request_link(body: LoginRequest, request: Request):
+    email = str(body.email).strip().lower()
+    enforce_auth_rate_limit(email, client_ip(request))
     base = str(request.base_url)
-    return auth.request_login(str(body.email), base)
+    return auth.request_login(email, base)
 
 
 @router.get("/verify")

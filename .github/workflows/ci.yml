@@ -104,6 +104,9 @@ jobs:
       - name: Security regression tests
         run: python eval/test_security.py
 
+      - name: Auth rate-limit tests
+        run: python eval/test_rate_limit.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest

@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS login_tokens (
     used_at    REAL
 );
 
+-- One row per magic-link/access request, used for sliding-window rate limiting.
+CREATE TABLE IF NOT EXISTS auth_request_attempts (
+    email      TEXT NOT NULL,
+    ip         TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_attempts_created ON auth_request_attempts(created_at);
+
 -- Long-lived sessions (only the hash is stored; the cookie holds the raw token).
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
