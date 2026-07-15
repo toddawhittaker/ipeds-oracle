@@ -49,7 +49,7 @@ export default function Verify() {
   return (
     <div className="center">
       <div className="card login">
-        <h1>IPEDS Query</h1>
+        <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
         {state === "loading" && (
           <p className="muted">Checking your sign-in link…</p>
         )}

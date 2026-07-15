@@ -37,7 +37,7 @@ export default function Login() {
   return (
     <div className="center">
       <div className="card login">
-        <h1>IPEDS Query</h1>
+        <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
         <p className="muted">
           Ask natural-language questions about U.S. colleges &amp; universities.
           Access is by invitation.
