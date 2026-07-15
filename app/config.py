@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     # --- LLM (OpenRouter, OpenAI-compatible) -------------------------------
     openrouter_api_key: str = Field(default="")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
-    model_default: str = Field(default="deepseek/deepseek-chat")
-    model_escalation: str = Field(default="deepseek/deepseek-chat-v3.1")
+    model_default: str = Field(default="deepseek/deepseek-v4-pro")
+    model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
     llm_max_tool_iters: int = Field(default=8)
     # public URL + title used for OpenRouter attribution headers (optional)
