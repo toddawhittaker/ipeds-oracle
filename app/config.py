@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # --- Paths -------------------------------------------------------------
     ipeds_db_path: Path = Field(default=ROOT / "ipeds.db")
     app_db_path: Path = Field(default=ROOT / "app.db")
+    # Persistent server-log store. Defaults to sit beside app.db (see
+    # resolved_log_db_path) unless LOG_DB_PATH is set explicitly.
+    log_db_path: Path | None = Field(default=None)
     data_dir: Path = Field(default=ROOT / "data")
     upload_dir: Path = Field(default=ROOT / "data" / "uploads")
     schema_md_path: Path = Field(default=ROOT / "SCHEMA.md")
@@ -49,6 +52,9 @@ class Settings(BaseSettings):
     sql_row_cap_model: int = Field(default=200)   # rows fed back to the model
     sql_row_cap_download: int = Field(default=100_000)  # rows for CSV export
     max_upload_mb: int = Field(default=2048)  # cap on admin .accdb import uploads
+
+    # --- Server logs -------------------------------------------------------
+    log_retention_days: int = Field(default=30)  # older log rows are pruned
 
     # --- Auth / sessions ---------------------------------------------------
     session_ttl_days: int = Field(default=30)
@@ -76,6 +82,12 @@ class Settings(BaseSettings):
     @property
     def admin_email_list(self) -> list[str]:
         return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
+
+    @property
+    def resolved_log_db_path(self) -> Path:
+        """Where the server-log store lives — LOG_DB_PATH if set, else next to
+        app.db (so a temp APP_DB_PATH in tests keeps logs isolated too)."""
+        return self.log_db_path or (self.app_db_path.parent / "logs.db")
 
 
 @lru_cache

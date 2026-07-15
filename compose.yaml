@@ -17,6 +17,7 @@ services:
     environment:
       IPEDS_DB_PATH: /data/ipeds.db
       APP_DB_PATH: /data/app.db
+      LOG_DB_PATH: /data/logs.db   # persistent server logs (survive restarts)
       DATA_DIR: /data/accdb
       UPLOAD_DIR: /data/uploads
       COOKIE_SECURE: "true"
