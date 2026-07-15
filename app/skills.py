@@ -148,72 +148,99 @@ def save_skill(question: str, canonical_sql: str, *, notes: str = "",
 
 
 def _find_duplicate(con, qvec: np.ndarray | None, question: str,
-                    canonical_sql: str) -> int | None:
-    """Id of a near-duplicate lesson to upvote instead of inserting, else None.
-    Prefers embedding similarity (same scenario, even if reworded); falls back to
-    an exact (question, SQL) match when embeddings are unavailable."""
+                    canonical_sql: str, source: str) -> int | None:
+    """Id of an UNVERIFIED lesson from the SAME source to upvote instead of
+    inserting, else None.
+
+    Restricting the search to (verified=0, same created_by) is deliberate: a new
+    pending candidate must never collapse into — or inflate the upvotes of — an
+    already-APPROVED lesson or one from a DIFFERENT source. Without that filter, a
+    critic-discovered rule (say, award-level mixing) whose *question* is similar
+    to a verified seed (about CIP '99') would be silently discarded and the seed
+    spuriously upvoted, corrupting the admin's ranking signal. Prefers embedding
+    cosine over the same scenario; falls back to an exact (question, SQL) match
+    when embeddings are unavailable. Blobs whose dimension doesn't match the
+    current embed model are skipped (robust to an embed_model change)."""
     if qvec is not None:
         rows = con.execute(
-            "SELECT id, embedding FROM skills WHERE embedding IS NOT NULL").fetchall()
+            "SELECT id, embedding FROM skills "
+            "WHERE verified=0 AND created_by=? AND embedding IS NOT NULL",
+            (source,)).fetchall()
+        dim = qvec.shape[0]
         floor = get_settings().skill_dedup_threshold
         best_id, best_sim = None, floor
         for r in rows:
-            sim = float(_from_blob(r["embedding"]) @ qvec)
+            vec = _from_blob(r["embedding"])
+            if vec.shape[0] != dim:  # stale blob from a prior embed model — skip
+                continue
+            sim = float(vec @ qvec)
             if sim >= best_sim:
                 best_id, best_sim = r["id"], sim
         return best_id
-    row = con.execute("SELECT id FROM skills WHERE question=? AND canonical_sql=?",
-                      (question, canonical_sql)).fetchone()
+    row = con.execute(
+        "SELECT id FROM skills WHERE verified=0 AND created_by=? "
+        "AND question=? AND canonical_sql=?",
+        (source, question, canonical_sql)).fetchone()
     return row["id"] if row else None
 
 
 def _upvote_or_save(question: str, canonical_sql: str, *, lesson: str,
-                    created_by: str) -> None:
+                    source: str) -> None:
     """Dedup gate shared by feedback + critic promotion: bump an existing
-    near-duplicate's upvotes, else insert a new UNVERIFIED lesson pending admin
-    review (retrieve_skills_block only returns verified=1 rows)."""
+    same-source unverified near-duplicate's upvotes (backfilling its rule if it
+    had none, so no lesson text is lost), else insert a new UNVERIFIED lesson
+    pending admin review (retrieve_skills_block only returns verified=1 rows)."""
     v = embed(question)
     con = connect()
     try:
-        dup = _find_duplicate(con, v, question, canonical_sql)
+        dup = _find_duplicate(con, v, question, canonical_sql, source)
         if dup is not None:
+            if lesson:  # preserve a rule: backfill onto a rule-less match
+                con.execute(
+                    "UPDATE skills SET lesson=? WHERE id=? AND (lesson IS NULL OR lesson='')",
+                    (lesson, dup))
             con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?", (dup,))
             con.commit()
             return
     finally:
         con.close()
-    save_skill(question, canonical_sql, lesson=lesson,
-               created_by=created_by, verified=False)
+    save_skill(question, canonical_sql, lesson=lesson, created_by=source,
+               verified=False)
 
 
 def promote_from_message(question: str, sql: str) -> None:
     """A 👍 on an answer promotes its (question, last SQL) into an unverified
-    lesson, or upvotes a near-duplicate."""
+    lesson, or upvotes a same-source near-duplicate."""
     if not sql:
         return
-    _upvote_or_save(question, sql, lesson="", created_by="feedback")
+    _upvote_or_save(question, sql, lesson="", source="feedback")
 
 
 def record_lesson_from_critic(question: str, canonical_sql: str, issue: str) -> None:
     """The post-answer critic caught a likely mistake and forced a revision; its
-    finding IS the rule that fixes it. Capture it as an UNVERIFIED lesson (deduped)
-    pending admin review — this is the real self-learning signal, a mistake the
-    model actually made rather than an answer a user happened to like."""
+    finding IS the rule that fixes it. Capture it as an UNVERIFIED lesson (deduped
+    only against other pending critic candidates) pending admin review — this is
+    the real self-learning signal, a mistake the model actually made rather than
+    an answer a user happened to like."""
     issue = (issue or "").strip()
     if not issue:
         return
-    _upvote_or_save(question, canonical_sql or "", lesson=issue, created_by="critic")
+    _upvote_or_save(question, canonical_sql or "", lesson=issue, source="critic")
 
 
 # --- Semantic answer cache -----------------------------------------------------
 
 def cache_lookup(question: str) -> dict | None:
     """Return a cached {final_sql, answer_md} for a near-identical question at the
-    current data_version, else None."""
+    current data_version, else None. Gated by skills_enabled (like lesson
+    retrieval) so SKILLS_ENABLED=0 gives a clean, self-learning-off A/B baseline —
+    otherwise a cache hit would short-circuit the 'off' arm."""
+    s = get_settings()
+    if not s.skills_enabled:
+        return None
     q = embed(question)
     if q is None:
         return None
-    s = get_settings()
     con = connect()
     try:
         dv = data_version(con)

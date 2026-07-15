@@ -40,10 +40,42 @@ test("lessons view leads with the rule, hides SQL in a collapsible example, veri
   await page.getByText("Example query").click();
   await expect(page.getByText("SELECT SUM(ctotalt)")).toBeVisible();
 
-  // Approving the lesson PATCHes verified=true.
+  // Approving the lesson PATCHes verified=true. The button's accessible name is
+  // per-lesson (includes the rule) so screen-reader/voice users can disambiguate.
   const patch = page.waitForRequest(
     (r) => r.url().includes("/api/admin/skills/7") && r.method() === "PATCH");
-  await page.getByRole("button", { name: "verify" }).click();
+  await page.getByRole("button", { name: /Verify lesson:/ }).click();
   const body = (await patch).postDataJSON();
   expect(body).toMatchObject({ verified: true });
+});
+
+test("rejecting a verified lesson asks for confirmation before deleting", async ({ page }) => {
+  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockSkills(page, [
+    {
+      id: 3, question: "q", lesson: "Curated verified rule.",
+      canonical_sql: "SELECT 1", notes: "", verified: true,
+      created_by: "seed", upvotes: 3, downvotes: 0, hits: 9,
+    },
+  ]);
+  await page.route("**/api/admin/skills/*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("button", { name: "Skills" }).click();
+
+  // Dismissing the confirm must NOT fire a DELETE.
+  let deleted = false;
+  page.on("request", (r) => {
+    if (r.method() === "DELETE" && r.url().includes("/api/admin/skills/3")) deleted = true;
+  });
+  page.once("dialog", (d) => {
+    expect(d.message()).toMatch(/can't be undone/i);
+    d.dismiss();
+  });
+  await page.getByRole("button", { name: /Reject lesson:/ }).click();
+  await page.waitForTimeout(200);
+  expect(deleted).toBe(false);
 });

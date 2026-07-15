@@ -263,10 +263,13 @@ def usage(since: float | None = None, until: float | None = None):
 def list_skills():
     con = connect()
     try:
+        # Pending (unverified) lessons sort FIRST — this list is an approval queue,
+        # so the rows that need action must be at the top, not buried under the
+        # verified library.
         rows = con.execute(
             "SELECT id, question, lesson, canonical_sql, notes, upvotes, downvotes, "
-            "hits, verified, created_by, created_at FROM skills ORDER BY verified DESC, "
-            "hits DESC, id DESC LIMIT 500").fetchall()
+            "hits, verified, created_by, created_at FROM skills ORDER BY verified ASC, "
+            "created_at DESC, id DESC LIMIT 500").fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()

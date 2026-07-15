@@ -317,6 +317,44 @@ def test_critic_revision_records_a_lesson():
         assert "majornum" in captured.get("issue", ""), captured
 
 
+def test_critic_lesson_not_recorded_on_followup_turn():
+    with TestClient(app) as c:
+        _login(c)
+        calls = {"n": 0}
+
+        async def _critic_agent(question, *, history=None, skills_block=""):
+            yield {"type": "answer", "text": "ans"}
+            yield {"type": "done", "result": AgentResult(
+                answer="ans", model_used="test-model", error=None,
+                sql_log=["SELECT 1"], critic_revised=True, critic_issue="a rule")}
+
+        orig_agent = chat_router.stream_agent
+        orig_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        orig_record = skills.record_lesson_from_critic
+        chat_router.stream_agent = _critic_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        skills.record_lesson_from_critic = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+        try:
+            # Turn 1 (new conversation) records; find its conversation id.
+            r1 = c.post("/api/chat/stream", json={"question": "first turn q"})
+            conv_id = next(e["id"] for e in _parse_sse(r1.text) if e["type"] == "conversation")
+            assert calls["n"] == 1, "first turn should record a lesson"
+            # Turn 2 in the SAME conversation now has history → must NOT record.
+            c.post("/api/chat/stream",
+                   json={"question": "and for Ohio?", "conversation_id": conv_id})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+            skills.record_lesson_from_critic = orig_record
+        assert calls["n"] == 1, "a follow-up turn must not record a context-less lesson"
+
+
 # ---------------------------------------------------------------------------
 # conversation list / get / delete
 # ---------------------------------------------------------------------------
@@ -447,6 +485,8 @@ def run():
           test_retrieved_skills_bump_their_hit_count)
     check("a critic-driven correction records a candidate lesson",
           test_critic_revision_records_a_lesson)
+    check("a follow-up critic correction does NOT record a lesson",
+          test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
     check("thumbs-up feedback promotes a skill", test_feedback_thumbs_up_promotes_skill)
     check("thumbs-down feedback does not promote a skill",

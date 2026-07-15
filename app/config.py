@@ -79,8 +79,9 @@ class Settings(BaseSettings):
 
     # --- Embeddings / self-learning ---------------------------------------
     embed_model: str = Field(default="BAAI/bge-small-en-v1.5")
-    # Retrieve learned lessons as guidance. Set false to disable the whole
-    # self-learning retrieval path (used for the skills-on/off A/B eval).
+    # Self-learning retrieval master switch: gates BOTH lesson retrieval and the
+    # semantic answer cache. Set false for a clean self-learning-off A/B baseline
+    # (SKILLS_ENABLED=0 vs 1 over the NL→SQL eval).
     skills_enabled: bool = Field(default=True)
     skill_retrieve_k: int = Field(default=5)
     skill_similarity_floor: float = Field(default=0.35)  # min cos to inject a lesson
