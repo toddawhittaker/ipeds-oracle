@@ -64,8 +64,8 @@ npm run dev                               # UI on http://localhost:5173 (proxies
 You need a built `ipeds.db` at the repo root for real queries (see
 [Working with the database](#working-with-the-database)). In dev with no
 `RESEND_API_KEY`, magic‑link emails are **logged to the console** instead of
-sent, so sign‑in works locally — copy the `…/api/auth/verify?token=` link from
-the uvicorn log.
+sent, so sign‑in works locally — copy the `…/verify?token=` link from the
+uvicorn log and open it (it lands on a "Sign in as …?" confirmation page).
 
 Config is env‑driven via `pydantic-settings`; every setting lives in
 [`.env.example`](.env.example). The default model is `deepseek/deepseek-v4-flash`

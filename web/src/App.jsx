@@ -3,6 +3,9 @@ import { api } from "./api.js";
 import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import Admin from "./Admin.jsx";
+import Verify from "./Verify.jsx";
+
+const isVerifyRoute = () => window.location.pathname === "/verify";
 
 function currentTheme() {
   const forced = document.documentElement.getAttribute("data-theme");
@@ -16,6 +19,7 @@ export default function App() {
   const [theme, setTheme] = useState(currentTheme);
 
   useEffect(() => {
+    if (isVerifyRoute()) return; // the /verify page manages its own flow
     api.me().then(setUser).catch(() => setUser(null));
   }, []);
 
@@ -26,6 +30,7 @@ export default function App() {
     localStorage.setItem("theme", next);
   }
 
+  if (isVerifyRoute()) return <Verify />;
   if (user === undefined) return <div className="center muted">Loading…</div>;
   if (!user) return <Login onDone={() => api.me().then(setUser).catch(() => {})} />;
 

@@ -18,6 +18,10 @@ class LoginRequest(BaseModel):
     email: EmailStr
 
 
+class VerifyRequest(BaseModel):
+    token: str
+
+
 @router.post("/request")
 def request_link(body: LoginRequest, request: Request):
     email = str(body.email).strip().lower()
@@ -27,14 +31,25 @@ def request_link(body: LoginRequest, request: Request):
 
 
 @router.get("/verify")
-def verify(token: str):
-    # Set the cookie on a redirect to the app root.
-    resp = RedirectResponse(url="/", status_code=303)
-    try:
-        auth.verify_login(token, resp)
-    except Exception:
-        return RedirectResponse(url="/?error=invalid_link", status_code=303)
-    return resp
+def verify_get(token: str):
+    # A GET never consumes the token — email link-scanners / prefetchers that
+    # follow the link must not burn a single-use sign-in link. Bounce to the
+    # SPA confirmation page, which shows a button that POSTs to consume it.
+    # (Kept so old-style /api/auth/verify links still land somewhere sensible.)
+    return RedirectResponse(url=f"/verify?token={token}", status_code=303)
+
+
+@router.get("/verify-info")
+def verify_info(token: str):
+    # Non-consuming lookup so the confirmation page can name the account.
+    return auth.peek_login(token)
+
+
+@router.post("/verify")
+def verify_post(body: VerifyRequest, response: Response):
+    # Only a deliberate POST (the user clicking "Sign in") consumes the token
+    # and sets the session cookie.
+    return auth.verify_login(body.token, response)
 
 
 @router.get("/me")

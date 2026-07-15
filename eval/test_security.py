@@ -26,6 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+# Tiny import cap so the oversized-upload test can trip it with a small payload.
+os.environ["MAX_UPLOAD_MB"] = "1"
+# This suite logs in many times as the same few addresses; keep the per-email /
+# per-IP auth rate limiter out of the way so it never masks a real assertion.
+os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
+os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -61,10 +67,9 @@ def _login(client: TestClient, email: str) -> None:
     Leaves a valid session cookie set on `client`."""
     r = client.post("/api/auth/request", json={"email": email})
     assert r.status_code == 200, r.text
-    link = captured["link"]
-    token = link.split("token=")[1]
-    v = client.get(f"/api/auth/verify?token={token}", follow_redirects=False)
-    assert v.status_code == 303, f"verify failed: {v.status_code} {v.text}"
+    token = captured["link"].split("token=")[1]
+    v = client.post("/api/auth/verify", json={"token": token})
+    assert v.status_code == 200, f"verify failed: {v.status_code} {v.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -270,16 +275,67 @@ def test_cache_not_served_when_history_present() -> None:
 # Lower priority / TODO for the implementer's seam
 # ---------------------------------------------------------------------------
 def test_import_rejects_oversized_upload() -> None:
-    # TODO(implementer): app/routers/admin.py start_import has no upload size
-    # cap today (it streams straight to disk via shutil.copyfileobj). There is
-    # no env var to configure a cap yet, so this cannot be encoded as a clean
-    # failing assertion without guessing the implementer's seam (a settings
-    # field name, a Content-Length check, a chunked read-and-count loop, etc).
-    # Once a cap + config knob exists (e.g. settings.max_upload_mb), add a test
-    # here that POSTs a file larger than the cap to /api/admin/import (as an
-    # admin) and asserts a 4xx, not a 200 that silently truncates or a crash.
-    print("    ⚠ TODO: no upload-size cap/config knob exists yet to test against "
-         "(see app/routers/admin.py start_import) — left as a documented gap")
+    # app/routers/admin.py start_import caps uploads at settings.max_upload_mb
+    # (chunked read-and-count loop → 413). MAX_UPLOAD_MB=1 is set at module top,
+    # so a ~2 MB .accdb must be rejected with a 4xx, not a 200 that silently
+    # truncates or a crash. The rejected upload must also leave no import lock
+    # held (a later import must still be able to start).
+    with TestClient(app) as c:
+        _login(c, "admin@franklin.edu")
+        oversized = b"\0" * (2 * 1024 * 1024)  # 2 MB > 1 MB cap
+        r = c.post(
+            "/api/admin/import",
+            files={"file": ("big.accdb", oversized, "application/octet-stream")},
+        )
+        assert 400 <= r.status_code < 500, (
+            f"oversized upload must be rejected with a 4xx, got {r.status_code}: "
+            f"{r.text[:200]!r}")
+        assert r.status_code == 413, (
+            f"expected 413 for an over-cap upload, got {r.status_code}: {r.text[:200]!r}")
+        # The failed upload must have released the single-import lock: a second
+        # (also-rejected) attempt should fail on size (413), not on lock (409).
+        r2 = c.post(
+            "/api/admin/import",
+            files={"file": ("big2.accdb", oversized, "application/octet-stream")},
+        )
+        assert r2.status_code == 413, (
+            f"import lock leaked after a rejected upload (got {r2.status_code}: "
+            f"{r2.text[:200]!r})")
+
+
+def test_get_verify_does_not_consume_token() -> None:
+    # A GET to the verify endpoint (as an email link-scanner / prefetcher does)
+    # must NOT consume the single-use token — it only bounces to the SPA confirm
+    # page. Only a deliberate POST consumes it and signs the user in. Otherwise
+    # a scanner following the emailed link would burn the link before the user.
+    with TestClient(app) as c:
+        r = c.post("/api/auth/request", json={"email": "admin@franklin.edu"})
+        assert r.status_code == 200, r.text
+        link = captured["link"]
+        # Emailed link points at the SPA confirm route, not the consuming API GET.
+        assert "/verify?token=" in link and "/api/auth/verify" not in link, link
+        token = link.split("token=")[1]
+
+        # A scanner GET must redirect to the confirm page and NOT consume.
+        g = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
+        assert g.status_code == 303 and "/verify?token=" in g.headers["location"], (
+            f"GET should bounce to the SPA confirm page, got {g.status_code} "
+            f"{g.headers.get('location')!r}")
+
+        # Token is still live: the non-consuming peek names the account…
+        info = c.get(f"/api/auth/verify-info?token={token}")
+        assert info.status_code == 200 and info.json()["email"] == "admin@franklin.edu", (
+            f"verify-info should name the pending account, got {info.status_code}: {info.text}")
+
+        # …and the deliberate POST consumes it and signs in.
+        v = c.post("/api/auth/verify", json={"token": token})
+        assert v.status_code == 200, f"POST verify should sign in, got {v.status_code}: {v.text}"
+        assert c.get("/api/auth/me").status_code == 200, "session cookie not set by POST verify"
+
+        # The now-consumed token must not verify a second time.
+        again = c.post("/api/auth/verify", json={"token": token})
+        assert again.status_code == 400, (
+            f"a consumed token must be rejected, got {again.status_code}: {again.text}")
 
 
 def test_schema_family_with_quote_is_handled() -> None:
@@ -315,11 +371,15 @@ def run() -> None:
     check("cache not served for a history-bearing follow-up",
          test_cache_not_served_when_history_present)
 
-    print("\n6. lower priority / TODO")
-    check("oversized import upload is rejected (TODO — no seam yet)",
+    print("\n6. import upload size cap")
+    check("oversized import upload is rejected with 413 (no lock leak)",
          test_import_rejects_oversized_upload)
     check("schema.get_columns tolerates a quote in family",
           test_schema_family_with_quote_is_handled)
+
+    print("\n7. magic-link verify: GET is non-consuming, POST consumes")
+    check("GET verify never burns the token; POST signs in once",
+          test_get_verify_does_not_consume_token)
 
     print()
     if FAILURES:
