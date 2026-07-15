@@ -56,3 +56,5 @@ backups/
 
 # Local CI gate scratch (scripts/run_ci_local.sh)
 .ci/
+logs.db
+logs.db-*

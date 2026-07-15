@@ -49,8 +49,14 @@ export const api = {
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),
   importJobs: () => j("GET", "/api/admin/import/jobs"),
   importJob: (id) => j("GET", `/api/admin/import/jobs/${id}`),
-  logs: (limit = 200, level = "") =>
-    j("GET", `/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
+  logs: (limit = 200, level = "", q = "", since = null, until = null) => {
+    const p = new URLSearchParams({ limit: String(limit) });
+    if (level) p.set("level", level);
+    if (q) p.set("q", q);
+    if (since != null) p.set("since", String(since));
+    if (until != null) p.set("until", String(until));
+    return j("GET", `/api/admin/logs?${p.toString()}`);
+  },
 };
 
 // Stream a chat answer via SSE (POST + ReadableStream). Calls onEvent per event.

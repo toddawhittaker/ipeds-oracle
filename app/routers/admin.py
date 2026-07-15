@@ -278,12 +278,17 @@ def delete_skill(skill_id: int):
 
 # --- Server logs --------------------------------------------------------------
 @router.get("/logs")
-def server_logs(limit: int = 200, level: str | None = None):
-    """Recent in-memory server log records (newest last). Optionally filter by
-    level (INFO/WARNING/ERROR)."""
+def server_logs(limit: int = 200, level: str | None = None,
+                q: str | None = None, since: float | None = None,
+                until: float | None = None):
+    """Persisted server log records (newest last), surviving restarts.
+
+    Filters: `level` (INFO/WARNING/ERROR), case-insensitive substring `q` over
+    the message, and a `since`/`until` epoch-seconds time window."""
     from app.logbuffer import get_handler
     handler = get_handler()
     if handler is None:
         return {"records": []}
-    limit = max(1, min(limit, 500))
-    return {"records": handler.records(limit=limit, level=level)}
+    limit = max(1, min(limit, 2000))
+    return {"records": handler.records(limit=limit, level=level, q=q,
+                                       since=since, until=until)}
