@@ -93,6 +93,7 @@ BACKEND_SUITES=(
   test_critic.py
   test_skills.py
   test_importer.py
+  test_nces.py
   test_schema_tool.py
   test_registry.py
   test_chat_router.py

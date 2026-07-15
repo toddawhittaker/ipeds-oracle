@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+import app.nces as nces
 from app.config import get_settings
 from app.db import connect, set_meta
 from app.skills import invalidate_cache
@@ -21,6 +22,14 @@ from app.tools.sql import run_sql
 
 FILENAME_RE = re.compile(r"^IPEDS(\d{4})(\d{2})\.accdb$", re.IGNORECASE)
 REQUIRED_FAMILIES = ("c_a", "hd", "valuesets", "vartable", "_years")
+
+
+class NCESFetchError(RuntimeError):
+    """Raised by run_integrate's fetch loop when an NCES year can't be
+    retrieved. Its message is already deliberately worded for the job report
+    (which year, why, that the live DB is unchanged), so the outer handler
+    must pass it through verbatim rather than prepending 'Unexpected
+    error:' — that combination reads as self-contradictory."""
 
 
 def _log(job_id: int, line: str) -> None:
@@ -159,10 +168,77 @@ def integrity_checks(staging: Path, live: Path | None) -> tuple[bool, list[str]]
     return ok, report
 
 
-def run_import(job_id: int, upload_path: Path) -> None:
-    """Full pipeline. Intended to run in a background thread."""
+def build_check_swap(job_id: int, data_dir: Path) -> bool:
+    """The core rebuild pipeline, shared by run_import (an uploaded .accdb
+    staged into `data_dir`) and run_integrate (a temp work dir holding a whole
+    union of fetched .accdb files): full rebuild of `data_dir` into a staging
+    DB (reusing scripts/build_ipeds_db.py unchanged), integrity + magnitude
+    checks, and — only on success — the atomic swap + data_version bump +
+    semantic-cache invalidation.
+
+    Returns True on a completed swap, False on a handled failure (the job row
+    is already marked 'failed' with a report; the caller decides what else,
+    if anything, needs cleaning up). Unexpected exceptions are NOT caught here
+    — they propagate to the caller, which mirrors run_import's/run_integrate's
+    own top-level except-and-fail-the-job handling.
+    """
     s = get_settings()
     staging = s.ipeds_db_path.with_name("ipeds_staging.db")
+
+    # Full rebuild into a staging DB (reuse the loader unchanged).
+    _log(job_id, "Rebuilding staging database (this can take several minutes)…")
+    build = Path(__file__).resolve().parents[1] / "scripts" / "build_ipeds_db.py"
+    proc = subprocess.Popen(
+        [sys.executable, str(build), "--data-dir", str(data_dir),
+         "--out", str(staging)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:  # stream loader output (incl. collision warnings)
+        _log(job_id, line.rstrip())
+    proc.wait()
+    if proc.returncode != 0:
+        _set_status(job_id, "failed", f"Loader exited with code {proc.returncode}.")
+        return False
+
+    # Integrity + magnitude checks.
+    _set_status(job_id, "checks")
+    _log(job_id, "Running integrity checks…")
+    passed, report = integrity_checks(
+        staging, s.ipeds_db_path if s.ipeds_db_path.exists() else None)
+    report_text = "\n".join(report)
+    _log(job_id, report_text)
+    if not passed:
+        _set_status(job_id, "failed",
+                    "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
+        staging.unlink(missing_ok=True)
+        return False
+
+    # Atomic swap: back up live, move staging into place.
+    if s.ipeds_db_path.exists():
+        shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
+    shutil.move(str(staging), str(s.ipeds_db_path))
+    _log(job_id, "Swapped staging → live ipeds.db")
+
+    # Bump data_version + clear the now-stale semantic cache.
+    con = connect()
+    try:
+        dv = int((con.execute(
+            "SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
+        set_meta(con, "data_version", str(dv + 1))
+        con.commit()
+    finally:
+        con.close()
+    invalidate_cache()
+    _log(job_id, "Bumped data_version and cleared semantic cache.")
+    _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
+    return True
+
+
+def run_import(job_id: int, upload_path: Path) -> None:
+    """Full pipeline for one uploaded .accdb. Intended to run in a background
+    thread. Preflights the file, stages it into DATA_DIR (backing up any
+    existing same-named file), then hands off to build_check_swap — restoring
+    the pre-import state of DATA_DIR if that fails."""
+    s = get_settings()
     data_target = s.data_dir / upload_path.name
     backup_accdb = None
     try:
@@ -183,54 +259,70 @@ def run_import(job_id: int, upload_path: Path) -> None:
             shutil.copy2(str(upload_path), str(data_target))
         _log(job_id, f"Staged source file at {data_target}")
 
-        # Full rebuild into a staging DB (reuse the loader unchanged).
-        _log(job_id, "Rebuilding staging database (this can take several minutes)…")
-        build = Path(__file__).resolve().parents[1] / "scripts" / "build_ipeds_db.py"
-        proc = subprocess.Popen(
-            [sys.executable, str(build), "--data-dir", str(s.data_dir),
-             "--out", str(staging)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        for line in proc.stdout:  # stream loader output (incl. collision warnings)
-            _log(job_id, line.rstrip())
-        proc.wait()
-        if proc.returncode != 0:
-            _set_status(job_id, "failed", f"Loader exited with code {proc.returncode}.")
+        if not build_check_swap(job_id, s.data_dir):
             _restore_data_dir(data_target, backup_accdb)
-            return
-
-        # Integrity + magnitude checks.
-        _set_status(job_id, "checks")
-        _log(job_id, "Running integrity checks…")
-        passed, report = integrity_checks(
-            staging, s.ipeds_db_path if s.ipeds_db_path.exists() else None)
-        report_text = "\n".join(report)
-        _log(job_id, report_text)
-        if not passed:
-            _set_status(job_id, "failed",
-                        "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
-            staging.unlink(missing_ok=True)
-            _restore_data_dir(data_target, backup_accdb)
-            return
-
-        # Atomic swap: back up live, move staging into place.
-        if s.ipeds_db_path.exists():
-            shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
-        shutil.move(str(staging), str(s.ipeds_db_path))
-        _log(job_id, "Swapped staging → live ipeds.db")
-
-        # Bump data_version + clear the now-stale semantic cache.
-        con = connect()
-        try:
-            dv = int((con.execute(
-                "SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
-            set_meta(con, "data_version", str(dv + 1))
-            con.commit()
-        finally:
-            con.close()
-        invalidate_cache()
-        _log(job_id, "Bumped data_version and cleared semantic cache.")
-        _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
     except Exception as e:  # noqa: BLE001
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
         _restore_data_dir(data_target, backup_accdb)
+
+
+def run_integrate(job_id: int, start_years: list[int]) -> None:
+    """Fetch + rebuild the union of already-integrated ending years and the
+    newly-selected NCES start years into a temp work dir, then hand off to
+    build_check_swap — a full rebuild of that union, never an incremental
+    merge. Intended to run in a background thread; never propagates (mirrors
+    run_import's own catch-and-fail-the-job handling). The work dir is always
+    removed afterward, success or failure."""
+    s = get_settings()
+    work = Path(s.nces_work_dir) / f"integrate_{job_id}"
+    try:
+        _set_status(job_id, "running")
+
+        existing_end_years: list[int] = []
+        if Path(s.ipeds_db_path).exists():
+            existing_end_years = _years(s.ipeds_db_path)
+        already_integrated_starts = {y - 1 for y in existing_end_years}
+        newly_selected_starts = set(start_years)
+        union = sorted(already_integrated_starts | newly_selected_starts)
+        _log(job_id, f"Integrating start years {union} "
+                    f"(already integrated: {sorted(already_integrated_starts)}, "
+                    f"newly selected: {sorted(newly_selected_starts)})")
+
+        work.mkdir(parents=True, exist_ok=True)
+        max_total_bytes = s.nces_total_max_mb * 1024 * 1024
+        total_bytes = 0
+        for start_year in union:
+            _log(job_id, f"Fetching NCES start year {start_year}…")
+            try:
+                accdb_path = nces.fetch_year(start_year, work)
+            except Exception as e:
+                # A full-union rebuild re-fetches EVERY already-integrated year,
+                # not just the newly-selected one(s) — if NCES has since removed
+                # or relocated an already-integrated year, say exactly which
+                # year and which kind it was, rather than a generic error that
+                # reads like the newly-selected year(s) are the problem.
+                which = ("an already-integrated" if start_year in already_integrated_starts
+                        else "a newly-selected")
+                year_label = f"{start_year}-{str(start_year + 1)[-2:]}"
+                raise NCESFetchError(
+                    f"Could not fetch {which} year {year_label} from NCES "
+                    f"(it may have been moved or withdrawn). Live database "
+                    f"unchanged. ({type(e).__name__}: {e})") from e
+            total_bytes += accdb_path.stat().st_size
+            if total_bytes > max_total_bytes:
+                raise ValueError(
+                    f"union download size exceeded the {s.nces_total_max_mb} MB cap")
+            _log(job_id, f"Fetched {accdb_path.name}")
+
+        build_check_swap(job_id, work)
+    except NCESFetchError as e:
+        # Deliberately-worded failure — pass the message through as-is (no
+        # "Unexpected error:" prefix; see NCESFetchError's docstring).
+        _log(job_id, f"ERROR: {e}")
+        _set_status(job_id, "failed", str(e))
+    except Exception as e:  # noqa: BLE001 — mirror run_import: never propagate
+        _log(job_id, f"ERROR: {type(e).__name__}: {e}")
+        _set_status(job_id, "failed", f"Unexpected error: {e}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

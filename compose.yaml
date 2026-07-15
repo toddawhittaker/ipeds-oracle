@@ -25,6 +25,7 @@ services:
       LOG_DB_PATH: /data/logs.db   # persistent server logs (survive restarts)
       DATA_DIR: /data/accdb
       UPLOAD_DIR: /data/uploads
+      NCES_WORK_DIR: /data/work  # scratch space for the Imports year-catalog fetch; cleaned up after every run
       COOKIE_SECURE: "true"
     volumes:
       - ./srv-data:/data

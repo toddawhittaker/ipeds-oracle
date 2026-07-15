@@ -36,10 +36,12 @@ from app.importer import (  # noqa: E402
     _restore_data_dir,
     _set_status,
     _years,
+    build_check_swap,
     create_job,
     integrity_checks,
     preflight,
     run_import,
+    run_integrate,
 )
 
 init_db()
@@ -416,8 +418,25 @@ class _FakeProc:
         pass
 
 
-def _fake_settings(ipeds_db_path, data_dir):
-    return types.SimpleNamespace(ipeds_db_path=ipeds_db_path, data_dir=data_dir)
+def _fake_settings(ipeds_db_path, data_dir, *, nces_total_max_mb=51200):
+    """Stand-in for app.config.Settings used across the importer tests.
+
+    Mirrors every nces_* field the real Settings defines (see app/config.py)
+    so run_integrate can read them directly, with no getattr/hasattr
+    fallback. nces_work_dir is pinned under data_dir's parent — same tmp
+    root the test already controls — so run_integrate's temp work dir lands
+    (and gets cleaned up) inside the test's own tmpdir, just like the old
+    fallback did. nces_total_max_mb is overridable so a test can force the
+    union size-cap enforcement path."""
+    return types.SimpleNamespace(
+        ipeds_db_path=ipeds_db_path,
+        data_dir=data_dir,
+        nces_work_dir=Path(data_dir).parent / "work",
+        nces_http_timeout_seconds=60.0,
+        nces_zip_max_mb=512,
+        nces_accdb_max_mb=3072,
+        nces_total_max_mb=nces_total_max_mb,
+    )
 
 
 def _new_upload(d, name="IPEDS202526.accdb", content=b"fake accdb bytes"):
@@ -634,6 +653,201 @@ def test_run_import_success_swaps_and_bumps_data_version():
         con.close()
 
 
+# ---------------------------------------------------------------------------
+# build_check_swap — the extracted loader->checks->swap core (used by both
+# run_import, above, and run_integrate, below). run_import's existing tests
+# already exercise its behavior end-to-end through this seam (they monkeypatch
+# importer.subprocess.Popen / importer.integrity_checks as bare module
+# globals, which build_check_swap must call the same way for those mocks to
+# still take effect) — this just pins that the extracted function exists and
+# is directly callable, i.e. the refactor actually happened.
+# ---------------------------------------------------------------------------
+
+def test_build_check_swap_is_a_standalone_callable():
+    assert callable(build_check_swap), "importer.build_check_swap must exist post-refactor"
+
+
+# ---------------------------------------------------------------------------
+# run_integrate — NCES year-catalog batch integration
+# ---------------------------------------------------------------------------
+
+def _live_with_years(path, years):
+    if path.exists():
+        path.unlink()
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE _years (survey_year TEXT, year INTEGER PRIMARY KEY)")
+    for y in years:
+        con.execute("INSERT INTO _years VALUES (?,?)", (f"{y - 1}-{str(y)[2:]}", y))
+    con.commit()
+    con.close()
+
+
+def test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    # live already has years 2024, 2025 -> already-integrated start_years {2023, 2024}.
+    _live_with_years(live, [2024, 2025])
+
+    fetched = []
+
+    def fake_fetch_year(start_year, work_dir):
+        fetched.append(start_year)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p
+
+    swap_calls = []
+
+    def fake_build_check_swap(jid, ddir):
+        swap_calls.append((jid, str(ddir)))
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = fake_build_check_swap
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        # Selecting 2024 (already integrated -> must not duplicate) and 2025 (new).
+        run_integrate(jid, [2024, 2025])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert sorted(fetched) == [2023, 2024, 2025], fetched
+    assert len(swap_calls) == 1, swap_calls
+    assert swap_calls[0][0] == jid, swap_calls
+
+
+def test_run_integrate_cleans_up_temp_dir_on_success():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])
+
+    work_dir_holder = {}
+
+    def fake_fetch_year(start_year, work_dir):
+        work_dir_holder["path"] = Path(work_dir)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = lambda jid, ddir: None
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2025])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert "path" in work_dir_holder, "fetch_year was never called"
+    assert not work_dir_holder["path"].exists(), \
+        "the temp work dir must be removed after a successful build_check_swap"
+
+
+def test_run_integrate_enforces_total_size_cap():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated start year -> {2024}
+
+    fetched = []
+    work_dir_holder = {}
+
+    def fake_fetch_year(start_year, work_dir):
+        fetched.append(start_year)
+        work_dir_holder["path"] = Path(work_dir)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake-bytes-bigger-than-the-cap")
+        return p
+
+    swap_called = {"hit": False}
+
+    def fake_build_check_swap(jid, ddir):
+        swap_called["hit"] = True
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    # A 0 MB cap means the very first fetched file already exceeds it,
+    # regardless of exactly how many bytes the fake file contains.
+    importer.get_settings = lambda: _fake_settings(live, data_dir, nces_total_max_mb=0)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = fake_build_check_swap
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        # union = sorted({2024} | {2026}) = [2024, 2026]; must abort after
+        # the first fetch, before ever fetching the second year.
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert len(fetched) == 1, \
+        f"must abort after the first fetch once the cap is exceeded, got {fetched}"
+    assert swap_called["hit"] is False, \
+        "build_check_swap must never run once the union size cap is exceeded"
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert "cap" in (row["report"] or "").lower(), row
+    assert "path" in work_dir_holder, "fetch_year was never called"
+    assert not work_dir_holder["path"].exists(), \
+        "the temp work dir must still be cleaned up after a size-cap abort"
+
+
+def test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])
+
+    work_dir_holder = {}
+
+    def fake_fetch_year(start_year, work_dir):
+        work_dir_holder["path"] = Path(work_dir)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p
+
+    def _boom(jid, ddir):
+        raise RuntimeError("integrity checks blew up")
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = _boom
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])  # must not raise back out to the caller
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert "path" in work_dir_holder, "fetch_year was never called"
+    assert not work_dir_holder["path"].exists(), \
+        "the temp work dir must be removed even when build_check_swap raises"
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+
+
 def run():
     print("importer contract:")
     check("create_job writes a pending row", test_create_job_row)
@@ -697,6 +911,16 @@ def run():
           test_run_import_backs_up_existing_staged_accdb)
     check("run_import: success swaps db, bumps data_version, clears cache",
           test_run_import_success_swaps_and_bumps_data_version)
+    check("build_check_swap exists as a standalone callable (extracted core)",
+          test_build_check_swap_is_a_standalone_callable)
+    check("run_integrate: union is correct, idempotent, fetches once per year",
+          test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year)
+    check("run_integrate: cleans up the temp work dir on success",
+          test_run_integrate_cleans_up_temp_dir_on_success)
+    check("run_integrate: enforces the union total size cap and cleans up",
+          test_run_integrate_enforces_total_size_cap)
+    check("run_integrate: cleans up the temp work dir when build_check_swap raises",
+          test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

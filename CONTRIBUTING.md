@@ -31,7 +31,8 @@ app/                FastAPI backend
   routers/            auth, chat (stream/history/CSV), admin
   auth.py, security.py, mailer.py, ratelimit.py
   skills.py           skill library + semantic cache (fastembed)
-  importer.py         background "load a new year" job
+  importer.py         background "load a new year" job (upload + NCES integrate)
+  nces.py             fetch IPEDS .accdb releases from nces.ed.gov (SSRF-hardened)
   db.py               schema + PRAGMA user_version migrations
   logbuffer.py        in-memory log ring buffer (admin Logs view)
 web/                React + Vite front end
@@ -190,7 +191,41 @@ Two rules that will bite you if ignored (both detailed in SCHEMA.md):
 
 ### Adding a new IPEDS year
 
-Drop the new `IPEDS{YYYY}{YY}.accdb` into `data/` and rerun
-`scripts/build_ipeds_db.py`, **or** upload it in the running app under
-**Admin → Imports** (which builds to a staging DB, runs integrity + magnitude
-checks, and atomically swaps only on success).
+The easiest path: in the running app, go to **Admin → Imports** and pick the
+year(s) from the live NCES catalog (a card grid — Final/Provisional/already
+integrated/unavailable, per year). Selecting one or more years and clicking
+**Integrate selected (N)** fetches each `.accdb` straight from `nces.ed.gov`
+into a transient work dir, then rebuilds the **full union** of every
+already-integrated year plus the newly-picked ones into a staging DB, runs
+integrity + magnitude checks, and atomically swaps only on success — same
+pipeline as a manual upload, just with NCES as the source and always a full
+rebuild (never an incremental merge). The work dir is deleted afterward,
+success or failure.
+
+Alternatively (no network access, or a file you already have): drop
+`IPEDS{YYYY}{YY}.accdb` into `data/` and rerun `scripts/build_ipeds_db.py`, or
+use the manual upload fallback (a collapsed `<details>` under the year catalog
+in the same Imports tab) — same staging-DB + integrity-checks + atomic-swap
+pipeline, just for one file instead of a union.
+
+**`app/nces.py`** is the fetch layer: every URL it requests is built ONLY from
+a fixed host (`nces.ed.gov`) + a fixed template + a validated integer year (the
+SSRF choke point) — never from caller-supplied strings — and a redirect that
+resolves off that host is rejected. `GET /api/admin/import/catalog` merges
+`nces.probe_catalog()` (one entry per start year 2004…this year+1, Final
+falling back to Provisional, cached ~1h in-process) with `importer._years()`
+(which ending years are already integrated) to mark each year
+integrated/final/provisional/unknown + selectable. `POST
+/api/admin/import/integrate {years:[...]}` validates each year (in range,
+available, not already integrated), takes the same single-flight import lock
+as manual upload, and runs `importer.run_integrate()` in a background thread.
+Relevant config knobs (`.env.example`): `NCES_WORK_DIR` (scratch dir for
+fetched `.accdb`s), `NCES_HTTP_TIMEOUT_SECONDS`, `NCES_ZIP_MAX_MB` (per-year
+compressed download cap), `NCES_ACCDB_MAX_MB` (per-year uncompressed extract
+cap — zip-bomb guard), `NCES_TOTAL_MAX_MB` (ceiling across one integrate run's
+whole union). `eval/test_nces.py` exercises the fetch layer entirely against
+`httpx.MockTransport` (no socket, no real NCES); `eval/test_importer.py` and
+`eval/test_admin_router.py` monkeypatch `nces.fetch_year` /
+`nces.probe_catalog` / `importer._years` as bare module attributes (never
+`from ... import`) so tests can substitute fakes without touching the real
+network or loader.

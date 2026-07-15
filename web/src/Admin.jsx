@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 
+// Backend _set_status (app/importer.py) only ever emits running/checks/
+// swapped/failed — "passed" is not a real job status.
+const TERMINAL_JOB_STATUSES = ["failed", "swapped"];
+
 export default function Admin({ me }) {
   const [tab, setTab] = useState("allowlist");
   return (
@@ -131,15 +135,118 @@ function Allowlist({ me }) {
   );
 }
 
+const STATUS_GLYPH = {
+  integrated: "✓",
+  final: "◆",
+  provisional: "◑",
+  unknown: "?",
+};
+const STATUS_TEXT = {
+  integrated: "Integrated",
+  final: "Final",
+  provisional: "Provisional",
+  unknown: "Can't check",
+};
+
+function StatusBadge({ status }) {
+  return (
+    <span className={"badge " + status}>
+      <span aria-hidden="true">{STATUS_GLYPH[status] || ""}</span> {STATUS_TEXT[status] || status}
+    </span>
+  );
+}
+
+function YearCard({ entry, locked, checked, onToggle }) {
+  const disabled = !entry.selectable || locked;
+  const label = `Integrate ${entry.year_label} (${entry.release})`;
+  const cls = ["year-card", entry.status, checked ? "selected" : "", locked ? "locked" : ""]
+    .filter(Boolean).join(" ");
+
+  return (
+    <div
+      className={cls}
+      data-year={entry.start_year}
+      data-status={entry.status}
+      aria-disabled={disabled ? "true" : undefined}
+    >
+      <div className="year-label">{entry.year_label}</div>
+      {entry.selectable && (
+        <input
+          type="checkbox"
+          aria-label={label}
+          checked={checked}
+          disabled={locked}
+          onChange={(e) => onToggle(e.target.checked)}
+        />
+      )}
+      <StatusBadge status={entry.status} />
+    </div>
+  );
+}
+
 function Imports() {
   const [jobs, setJobs] = useState([]);
   const [active, setActive] = useState(null);
+  const [activeYears, setActiveYears] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [notice, setNotice] = useState("");
   const fileRef = useRef();
   const poll = useRef();
+  const noticeRef = useRef();
+  // Read inside `tick` below (a long-lived interval closure), so it must stay
+  // fresh across renders rather than closing over a stale `activeYears`.
+  const activeYearsRef = useRef(null);
+
+  const [catalog, setCatalog] = useState(null);
+  const [catalogError, setCatalogError] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [integrating, setIntegrating] = useState(false);
+
+  useEffect(() => { activeYearsRef.current = activeYears; }, [activeYears]);
+  // Move focus to the notice whenever it (re)appears — covers both the
+  // success and failure announcements below, and the just-integrated card's
+  // checkbox no longer being in the DOM after a catalog refresh.
+  useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
 
   const loadJobs = () => api.importJobs().then(setJobs);
-  useEffect(() => { loadJobs(); return () => clearInterval(poll.current); }, []);
+  const loadCatalog = useCallback((refresh = false) => api.importCatalog(refresh)
+    .then((data) => { setCatalog(data); setCatalogError(false); })
+    .catch(() => setCatalogError(true)), []);
+
+  useEffect(() => {
+    loadJobs();
+    loadCatalog();
+    return () => clearInterval(poll.current);
+  }, [loadCatalog]);
+
+  const jobRunning = active != null && !TERMINAL_JOB_STATUSES.includes(active.status);
+  const locked = jobRunning || integrating;
+
+  function watch(id) {
+    clearInterval(poll.current);
+    const tick = async () => {
+      const job = await api.importJob(id);
+      setActive(job);
+      if (TERMINAL_JOB_STATUSES.includes(job.status)) {
+        clearInterval(poll.current);
+        loadJobs();
+        if (job.status === "swapped") {
+          setSelected(new Set());
+          loadCatalog(true);
+          const yrs = activeYearsRef.current;
+          const what = yrs && yrs.length
+            ? `${yrs.length > 1 ? "years" : "year"} ${yrs
+                .map((y) => `${y}-${String(y + 1).slice(-2)}`).join(", ")}`
+            : (job.filename || "the file");
+          setNotice(`Integration complete — ${what} added to the live database.`);
+        } else if (job.status === "failed") {
+          setNotice("Import failed — the live database was not changed.");
+        }
+      }
+    };
+    tick();
+    poll.current = setInterval(tick, 2000);
+  }
 
   async function upload(e) {
     e.preventDefault();
@@ -151,41 +258,155 @@ function Imports() {
     const r = await fetch("/api/admin/import", { method: "POST", body: fd });
     const data = await r.json();
     setUploading(false);
+    setActiveYears(null);
     if (data.job_id) watch(data.job_id);
     loadJobs();
   }
 
-  function watch(id) {
-    clearInterval(poll.current);
-    const tick = async () => {
-      const job = await api.importJob(id);
-      setActive(job);
-      if (["passed", "failed", "swapped"].includes(job.status)) {
-        clearInterval(poll.current);
-        loadJobs();
+  function toggleYear(startYear, checked) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (checked) next.add(startYear); else next.delete(startYear);
+      return next;
+    });
+  }
+
+  const selectableYears = (catalog?.years || []).filter((y) => y.selectable);
+  const yearsNewestFirst = catalog ? catalog.years.slice().reverse() : [];
+
+  async function submitIntegrate() {
+    setNotice("");
+    setIntegrating(true);
+    const years = Array.from(selected);
+    try {
+      const body = await api.integrateYears(years);
+      setActiveYears(years.slice().sort((a, b) => a - b));
+      watch(body.job_id);
+    } catch (err) {
+      let msg = "Could not start the import.";
+      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      setNotice(msg);
+      if (/already running/i.test(msg)) {
+        // Someone else's import is mid-flight — find it and watch its progress.
+        const list = await api.importJobs().catch(() => []);
+        const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
+        if (runningJob) watch(runningJob.id);
       }
-    };
-    tick();
-    poll.current = setInterval(tick, 2000);
+    } finally {
+      setIntegrating(false);
+    }
   }
 
   return (
     <div className="panel">
-      <h2>Load a new IPEDS year</h2>
+      <h2>Load IPEDS years</h2>
       <p className="muted small">
-        Upload the year&apos;s <code>IPEDS{"{YYYY}{YY}"}.accdb</code>. It rebuilds into
-        a staging database, runs integrity + magnitude checks, and only swaps in
-        if everything passes — the live database is never touched until then.
+        Select one or more years to fetch straight from NCES — each run rebuilds a
+        staging database from the union of every already-integrated year plus the
+        ones you pick, runs integrity + magnitude checks, and only swaps in if
+        everything passes. The live database is never touched until then.
       </p>
-      <form className="row" onSubmit={upload}>
-        <label htmlFor="import-file" className="sr-only">IPEDS Access database file</label>
-        <input id="import-file" ref={fileRef} type="file" accept=".accdb" required />
-        <button type="submit" disabled={uploading}>{uploading ? "Uploading…" : "Import"}</button>
-      </form>
+
+      {notice && (
+        <div ref={noticeRef} tabIndex={-1} className="notice" role="status">{notice}</div>
+      )}
+      {jobRunning && (
+        <div className="notice" role="status">
+          An import is running… controls are locked until it finishes.
+        </div>
+      )}
+
+      <div className="year-catalog">
+        <div className="catalog-legend">
+          <span className="legend-item"><StatusBadge status="integrated" /></span>
+          <span className="legend-item"><StatusBadge status="final" /></span>
+          <span className="legend-item"><StatusBadge status="provisional" /></span>
+          <span className="legend-item"><StatusBadge status="unknown" /></span>
+        </div>
+
+        {!catalog && !catalogError && (
+          <>
+            <p className="muted small">Checking NCES for available years…</p>
+            <div className="year-grid">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="year-card skeleton" aria-hidden="true" />
+              ))}
+            </div>
+          </>
+        )}
+
+        {catalogError && (
+          <div className="notice" role="alert">
+            Could not reach NCES to check available years.{" "}
+            <button type="button" className="link" onClick={() => loadCatalog(true)}>Retry</button>
+          </div>
+        )}
+
+        {catalog && (
+          <>
+            {catalog.partial && (
+              <div className="notice" role="status">
+                Some years could not be checked.{" "}
+                <button type="button" className="link" onClick={() => loadCatalog(true)}>Retry</button>
+              </div>
+            )}
+
+            <div className="catalog-toolbar">
+              <button type="button" disabled={locked || selectableYears.length === 0}
+                      onClick={() => setSelected(new Set(selectableYears.map((y) => y.start_year)))}>
+                Select all available ({selectableYears.length})
+              </button>
+              <button type="button" disabled={locked || selected.size === 0}
+                      onClick={() => setSelected(new Set())}>
+                Clear selection
+              </button>
+              <span role="status" className="muted small">{selected.size} selected</span>
+              <button type="button" disabled={locked} onClick={() => loadCatalog(true)}>
+                ⟳ Refresh
+              </button>
+            </div>
+
+            <div className="year-grid">
+              {yearsNewestFirst.map((y) => (
+                <YearCard key={y.start_year} entry={y} locked={locked}
+                          checked={selected.has(y.start_year)}
+                          onToggle={(checked) => toggleYear(y.start_year, checked)} />
+              ))}
+            </div>
+
+            <div className="integrate-bar">
+              <button type="button" disabled={locked || selected.size === 0}
+                      onClick={submitIntegrate}>
+                Integrate selected ({selected.size})
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <details className="manual-import">
+        <summary>Manual upload (.accdb fallback)</summary>
+        <p className="muted small">
+          Upload a year&apos;s <code>IPEDS{"{YYYY}{YY}"}.accdb</code> directly — the same
+          rebuild-and-check pipeline runs on just that file.
+        </p>
+        <form className="row" onSubmit={upload}>
+          <label htmlFor="import-file" className="sr-only">IPEDS Access database file</label>
+          <input id="import-file" ref={fileRef} type="file" accept=".accdb" required disabled={locked} />
+          <button type="submit" disabled={uploading || locked}>{uploading ? "Uploading…" : "Import"}</button>
+        </form>
+      </details>
 
       {active && (
-        <div className="job" aria-live="polite">
-          <div className={"badge " + active.status}>{active.status}</div>
+        <div className="job">
+          <div role="status" aria-live="polite">
+            <div className={"badge " + active.status}>{active.status}</div>
+            {activeYears && (
+              <span className="muted small">
+                &nbsp;integrating start year{activeYears.length > 1 ? "s" : ""}: {activeYears.join(", ")}
+              </span>
+            )}
+          </div>
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
             <summary>Log</summary>
@@ -203,7 +424,7 @@ function Imports() {
               <td>{jb.id}</td><td>{jb.filename}</td>
               <td><span className={"badge " + jb.status}>{jb.status}</span></td>
               <td>{new Date(jb.updated_at * 1000).toLocaleString()}</td>
-              <td><button className="link" onClick={() => watch(jb.id)}>view</button></td>
+              <td><button className="link" onClick={() => { setActiveYears(null); watch(jb.id); }}>view</button></td>
             </tr>
           ))}
         </tbody>

@@ -76,14 +76,22 @@ them and offer a few concrete examples to prime them, e.g.:
 # B) Developing the web app
 
 **Architecture:** FastAPI backend (`app/`: config, db, auth, security, mailer,
-llm, prompt, guard, critic, skills, importer, logbuffer, ratelimit, tools/* —
+llm, prompt, guard, critic, skills, importer, nces, logbuffer, ratelimit, tools/* —
 incl. `tools/sqllint.py`, a deterministic pre-flight check that flags IPEDS
 aggregation foot-guns (CIP rollup/second-major double counts, DISTINCT-year
 full-scan) in model SQL and feeds the warning back so the agent self-corrects —
 routers/*) +
 React SPA (`web/`, SSE-streamed chat). SQLite everywhere: `ipeds.db` (read-only
 query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
-`logs.db` (persistent admin logs). LLM = DeepSeek via **OpenRouter**
+`logs.db` (persistent admin logs). Admin → Imports is a live **NCES year
+catalog**: `app/nces.py` probes `nces.ed.gov` (SSRF-hardened — URLs are built
+only from a fixed host + template + a validated year) for which start years have
+a Final/Provisional release, and lets an admin multi-select years to fetch +
+integrate; each run is a **full rebuild of the union** of already-integrated and
+newly-picked years (never an incremental merge) through the same staging-DB +
+integrity-checks + atomic-swap pipeline as a manual upload. Fetched `.accdb`
+files land in a transient `NCES_WORK_DIR` scratch dir that's deleted after every
+run, success or failure — never a permanent store. LLM = DeepSeek via **OpenRouter**
 (`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can

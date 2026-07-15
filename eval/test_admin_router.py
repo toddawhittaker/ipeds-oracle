@@ -140,6 +140,176 @@ def test_import_job_not_found_404():
         assert r.status_code == 404, r.text
 
 
+# ---------------------------------------------------------------------------
+# NCES year catalog + batch integrate
+#
+# admin_router.nces.probe_catalog and admin_router.importer._years are
+# monkeypatched as bare module-level names (mirrors the existing
+# importer.subprocess.Popen / importer.preflight convention above) so the
+# router must call `nces.probe_catalog(...)` / `importer._years(...)`
+# (through the module, not a captured `from ... import` binding) for these
+# patches to take effect.
+# ---------------------------------------------------------------------------
+
+_FAKE_CATALOG = [
+    {"start_year": 2022, "year_label": "2022-23", "year": 2023,
+     "available": True, "release": "Final"},
+    {"start_year": 2023, "year_label": "2023-24", "year": 2024,
+     "available": True, "release": "Final"},
+    {"start_year": 2024, "year_label": "2024-25", "year": 2025,
+     "available": True, "release": "Provisional"},
+    {"start_year": 2025, "year_label": "2025-26", "year": 2026,
+     "available": False, "release": None},
+]
+
+
+def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025)):
+    """integrated_years mirrors importer._years()'s return (ending years);
+    already-integrated start_years = {y-1 for y in integrated_years}."""
+    orig_probe = admin_router.nces.probe_catalog
+    orig_years = admin_router.importer._years
+    admin_router.nces.probe_catalog = lambda refresh=False: catalog
+    admin_router.importer._years = lambda path: list(integrated_years)
+
+    def _restore():
+        admin_router.nces.probe_catalog = orig_probe
+        admin_router.importer._years = orig_years
+    return _restore
+
+
+def test_import_catalog_marks_integrated_vs_selectable():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore()
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "probed_at" in body, body
+        assert "partial" in body and isinstance(body["partial"], bool), body
+        assert "years" in body, body
+
+        by_year = {e["start_year"]: e for e in body["years"]}
+
+        assert by_year[2022]["integrated"] is False, by_year[2022]
+        assert by_year[2022]["available"] is True, by_year[2022]
+        assert by_year[2022]["release"] == "Final", by_year[2022]
+        assert by_year[2022]["selectable"] is True, by_year[2022]
+        assert by_year[2022]["status"] == "final", by_year[2022]
+        assert by_year[2022]["year"] == 2023, by_year[2022]
+        assert by_year[2022]["year_label"] == "2022-23", by_year[2022]
+
+        # 2023, 2024 are already integrated (importer._years -> [2024, 2025]).
+        assert by_year[2023]["integrated"] is True, by_year[2023]
+        assert by_year[2023]["selectable"] is False, by_year[2023]
+        assert by_year[2023]["status"] == "integrated", by_year[2023]
+
+        assert by_year[2024]["integrated"] is True, by_year[2024]
+        assert by_year[2024]["selectable"] is False, by_year[2024]
+        assert by_year[2024]["status"] == "integrated", by_year[2024]
+
+        # 2025 is not integrated and NCES doesn't have it yet either.
+        assert by_year[2025]["integrated"] is False, by_year[2025]
+        assert by_year[2025]["available"] is False, by_year[2025]
+        assert by_year[2025]["selectable"] is False, by_year[2025]
+        assert by_year[2025]["status"] == "unknown", by_year[2025]
+
+
+def test_import_catalog_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.get("/api/admin/import/catalog")
+        assert r.status_code == 401, r.text
+
+
+def test_integrate_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.post("/api/admin/import/integrate", json={"years": [2022]})
+        assert r.status_code == 401, r.text
+
+
+def _run_integrate_success(job_id, start_years):
+    con = connect()
+    try:
+        con.execute("UPDATE import_jobs SET status='swapped', report=? WHERE id=?",
+                    ("mock integrate ok", job_id))
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_integrate_success_creates_a_job():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()
+        orig_thread = admin_router.threading.Thread
+        orig_run_integrate = admin_router.importer.run_integrate
+        admin_router.threading.Thread = _SyncThread
+        admin_router.importer.run_integrate = _run_integrate_success
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [2022]})
+        finally:
+            restore()
+            admin_router.threading.Thread = orig_thread
+            admin_router.importer.run_integrate = orig_run_integrate
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "job_id" in body, body
+        assert body["status"] == "pending", body
+
+        detail = c.get(f"/api/admin/import/jobs/{body['job_id']}")
+        assert detail.status_code == 200 and detail.json()["status"] == "swapped", detail.text
+
+
+def test_integrate_rejects_out_of_range_year():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [1900]})
+        finally:
+            restore()
+        assert r.status_code == 400, r.text
+
+
+def test_integrate_rejects_already_integrated_year():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()  # 2023 is already integrated
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [2023]})
+        finally:
+            restore()
+        assert r.status_code == 400, r.text
+
+
+def test_integrate_rejects_unavailable_year():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()  # 2025 is not available from NCES
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [2025]})
+        finally:
+            restore()
+        assert r.status_code == 400, r.text
+
+
+def test_integrate_conflicts_while_one_already_running():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()
+        assert admin_router._import_lock.acquire(blocking=False)
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [2022]})
+            assert r.status_code == 409, r.text
+        finally:
+            admin_router._import_lock.release()
+            restore()
+
+
 def test_allowlist_add_approval_email_failure_is_logged_not_raised():
     with TestClient(app) as c:
         _login(c)
@@ -283,6 +453,22 @@ def run():
           test_import_success_creates_and_completes_a_job)
     check("import job detail 404s for an unknown job id",
           test_import_job_not_found_404)
+    check("import catalog marks already-integrated vs. selectable years",
+          test_import_catalog_marks_integrated_vs_selectable)
+    check("import catalog requires admin",
+          test_import_catalog_requires_admin)
+    check("integrate requires admin",
+          test_integrate_requires_admin)
+    check("integrate success creates a job",
+          test_integrate_success_creates_a_job)
+    check("integrate rejects an out-of-range year",
+          test_integrate_rejects_out_of_range_year)
+    check("integrate rejects an already-integrated year",
+          test_integrate_rejects_already_integrated_year)
+    check("integrate rejects an unavailable year",
+          test_integrate_rejects_unavailable_year)
+    check("integrate conflicts (409) while one is already running",
+          test_integrate_conflicts_while_one_already_running)
     check("allowlist add logs (not raises) an approval-email failure",
           test_allowlist_add_approval_email_failure_is_logged_not_raised)
     check("promote makes a user admin immediately on their live session",
