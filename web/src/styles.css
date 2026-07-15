@@ -4,14 +4,14 @@
 :root, :root[data-theme="light"] {
   --bg: #f7f8fa; --panel: #fff; --line: #e3e6ea; --text: #1a1f26;
   --muted: #6b7280; --accent: #2b6cb0; --accent-d: #245a97;
-  --user: #eef4fb; --danger: #c0392b; --ok: #157347;
+  --user: #eef4fb; --danger: #c0392b; --ok: #157347; --warn: #946a00;
   --scroll-thumb: rgba(0, 0, 0, .18); --scroll-thumb-hover: rgba(0, 0, 0, .34);
   --on-fg: #ffffff; /* text/icon on an --accent fill (contrast-safe in light) */
 }
 :root[data-theme="dark"] {
   --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
   --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
-  --user: #232c38; --danger: #e06a5c; --ok: #4cc38a;
+  --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
   --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
   --on-fg: #10151b; /* dark text on the lighter dark-theme --accent (contrast-safe) */
 }
@@ -19,7 +19,7 @@
   :root:not([data-theme]) {
     --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
     --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
-    --user: #232c38; --danger: #e06a5c; --ok: #4cc38a;
+    --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
     --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
     --on-fg: #10151b;
   }
@@ -302,6 +302,59 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .badge.swapped, .badge.passed { color: var(--ok); border-color: var(--ok); }
 .badge.failed { color: var(--danger); border-color: var(--danger); }
 .badge.running, .badge.checks, .badge.pending { color: var(--accent); border-color: var(--accent); }
+
+/* NCES year catalog (Admin -> Imports) */
+.badge.integrated { color: var(--ok); border-color: var(--ok); }
+.badge.final { color: var(--accent); border-color: var(--accent); }
+.badge.provisional { color: var(--warn); border-color: var(--warn); border-style: dashed; }
+.badge.unknown { color: var(--muted); border-style: dotted; }
+.year-catalog { margin: 14px 0 20px; }
+.catalog-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 14px; }
+.legend-item { display: inline-flex; align-items: center; }
+.catalog-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.catalog-toolbar button {
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  border-radius: 8px; padding: 6px 12px; font-size: 13px;
+}
+.catalog-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+.year-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+.year-card {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  background: var(--panel); cursor: pointer; display: flex; flex-direction: column;
+  gap: 8px; transition: outline-color .1s;
+}
+.year-card.integrated, .year-card.unknown { cursor: default; opacity: .8; }
+.year-card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.year-card.locked { opacity: .5; pointer-events: none; }
+/* Deliberately distinct from .selected's solid outline (dashed + larger
+   offset) so a focused-but-unselected card can't be misread as selected by a
+   keyboard user. Declared after .selected so a card that is both selected
+   and focused still shows the focus ring for the current interaction. */
+.year-card:focus-within { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.year-card input[type="checkbox"] { align-self: flex-start; }
+.year-card.skeleton {
+  min-height: 68px; cursor: default;
+  background: linear-gradient(90deg, var(--bg) 25%, var(--line) 37%, var(--bg) 63%);
+  background-size: 400% 100%; animation: skeleton-pulse 1.4s ease infinite;
+}
+@keyframes skeleton-pulse { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) {
+  .year-card.skeleton { animation: none; }
+  .year-card { transition: none; }
+}
+.year-label { font-weight: 600; font-size: 15px; }
+.year-note { color: var(--muted); font-size: 12px; }
+.integrate-bar { margin: 14px 0; }
+.integrate-bar button {
+  background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px;
+  padding: 9px 18px; font-weight: 600;
+}
+.integrate-bar button:disabled { opacity: .5; cursor: not-allowed; }
+.manual-import { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.manual-import summary { cursor: pointer; color: var(--muted); }
 .skill { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
 .skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .tags { display: flex; gap: 6px; }

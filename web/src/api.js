@@ -51,6 +51,9 @@ export const api = {
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),
   importJobs: () => j("GET", "/api/admin/import/jobs"),
   importJob: (id) => j("GET", `/api/admin/import/jobs/${id}`),
+  importCatalog: (refresh = false) =>
+    j("GET", "/api/admin/import/catalog" + (refresh ? "?refresh=1" : "")),
+  integrateYears: (years) => j("POST", "/api/admin/import/integrate", { years }),
   logs: (limit = 200, level = "", q = "", since = null, until = null) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (level) p.set("level", level);

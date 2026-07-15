@@ -144,6 +144,9 @@ jobs:
       - name: importer tests (preflight · integrity checks · run_import pipeline)
         run: python eval/test_importer.py
 
+      - name: NCES fetch tests (host-pin · zip-slip/zip-bomb guards · catalog)
+        run: python eval/test_nces.py
+
       - name: schema discovery-tool tests
         run: python eval/test_schema_tool.py
 

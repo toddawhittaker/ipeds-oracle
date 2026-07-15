@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=ROOT / "data")
     upload_dir: Path = Field(default=ROOT / "data" / "uploads")
     schema_md_path: Path = Field(default=ROOT / "SCHEMA.md")
+    # Scratch space for the NCES year-catalog "integrate" flow: each run
+    # downloads+extracts .accdb files here, then deletes the directory
+    # (success or failure) — never a permanent store.
+    nces_work_dir: Path = Field(default=ROOT / "data" / "work")
 
     # --- LLM (OpenRouter, OpenAI-compatible) -------------------------------
     openrouter_api_key: str = Field(default="")
@@ -56,6 +60,14 @@ class Settings(BaseSettings):
     sql_row_cap_model: int = Field(default=200)   # rows fed back to the model
     sql_row_cap_download: int = Field(default=100_000)  # rows for CSV export
     max_upload_mb: int = Field(default=2048)  # cap on admin .accdb import uploads
+
+    # --- NCES year-catalog fetch (app/nces.py) ------------------------------
+    # The NCES base URL + year bounds are fixed constants in app/nces.py (the
+    # SSRF choke point), not config — these are only the operational knobs.
+    nces_http_timeout_seconds: float = Field(default=60.0)
+    nces_zip_max_mb: int = Field(default=512)     # per-year compressed download cap
+    nces_accdb_max_mb: int = Field(default=3072)  # per-year uncompressed extract cap
+    nces_total_max_mb: int = Field(default=51200)  # ceiling across one integrate run's union
 
     # --- Server logs -------------------------------------------------------
     log_retention_days: int = Field(default=30)  # older log rows are pruned

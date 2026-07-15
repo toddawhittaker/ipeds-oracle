@@ -26,7 +26,11 @@ Browser ─► Caddy (auto-HTTPS) ─► FastAPI (app/) ─► OpenRouter (DeepS
   near-identical repeat questions and is invalidated on each data import.
 - **Imports** (`app/importer.py`): reuses `scripts/build_ipeds_db.py` to rebuild
   into a **staging** DB, runs integrity + magnitude checks, then **atomically
-  swaps** — the live DB is never written in place.
+  swaps** — the live DB is never written in place. The **Imports** tab's year
+  catalog (`app/nces.py`) fetches `.accdb` releases directly from
+  `nces.ed.gov` — the only outbound HTTPS dependency this app has — into a
+  transient scratch dir, then runs the same staging/checks/swap pipeline over
+  the full union of years.
 
 ## Prerequisites
 
@@ -35,6 +39,13 @@ Browser ─► Caddy (auto-HTTPS) ─► FastAPI (app/) ─► OpenRouter (DeepS
   "DNS only" or Full(strict) if proxied).
 - An **OpenRouter** API key and a **Resend** API key (+ a verified sending
   domain in Resend).
+- **Outbound HTTPS egress to `nces.ed.gov`** — the Imports tab's year catalog
+  fetches `.accdb` releases from there directly (`app/nces.py`). If your
+  network/firewall only allows specific outbound destinations, allowlist that
+  host; nothing else is required (OpenRouter/Resend are already outbound-only
+  API calls). Without it, the year-catalog view degrades gracefully (a "could
+  not reach NCES" notice with retry) and the manual `.accdb` upload fallback
+  still works.
 
 ## How releases ship (CI/CD)
 
@@ -61,7 +72,7 @@ git tag v1.2.0 && git push origin v1.2.0     # CI publishes :v1.2.0 + :latest
 git clone <your-repo> ipeds && cd ipeds
 
 # 2. Provide the data volume (NOT in git — too large)
-mkdir -p srv-data/accdb srv-data/uploads
+mkdir -p srv-data/accdb srv-data/uploads srv-data/work
 cp /path/to/ipeds.db        srv-data/ipeds.db      # the built database (~1.9 GB)
 cp /path/to/IPEDS*.accdb    srv-data/accdb/        # source files, for re-imports
 
@@ -119,9 +130,25 @@ Sign in with an `ADMIN_EMAILS` address and open the **Admin** tab:
 
 ### Adding a new IPEDS year
 
-**Admin → Imports →** upload `IPEDS{YYYY}{YY}.accdb`. The job streams its log,
-runs checks, and swaps the new database in only if they pass. The live app keeps
-serving the old data until the swap; a failed check leaves it untouched.
+**Admin → Imports →** the year catalog shows every NCES start year as a card
+(already integrated / Final / Provisional / not yet available). Multi-select
+one or more years and click **Integrate selected (N)** — it fetches each
+`.accdb` from NCES, rebuilds the **full union** of already-integrated years
+plus the newly-picked ones into a staging DB, and swaps in only if integrity +
+magnitude checks pass. The job streams its log the same way a manual upload
+does. The live app keeps serving the old data until the swap; a failed check
+(or a failed NCES fetch) leaves it untouched, and the fetched `.accdb`s are
+always cleaned up afterward (they're never kept around).
+
+No network access, or you already have the file? The same tab has a collapsed
+**manual upload** fallback for a single `IPEDS{YYYY}{YY}.accdb`.
+
+**Disk headroom:** an integrate run needs room for the source zip(s) +
+extracted `.accdb`(s) for every year in the union (~1 GB uncompressed per year,
+roughly) **plus** the ~1.9 GB staging DB it rebuilds into — size `NCES_WORK_DIR`
+and the data volume accordingly if you integrate several years' worth in one
+run. The scratch dir is deleted after each run, so this is peak, not steady-state,
+usage.
 
 ## Configuration (`.env`)
 
@@ -139,6 +166,8 @@ Every setting is listed in [`.env.example`](.env.example); the essentials:
 | `DOMAIN` | hostname Caddy obtains a TLS cert for |
 | `COOKIE_SECURE` | `true` in production (HTTPS) |
 | `SQL_TIMEOUT_SECONDS` | per-query watchdog (default 25) |
+| `NCES_WORK_DIR` | scratch dir for the Imports year-catalog's fetched `.accdb`s (default `./data/work`; put it on the data volume) |
+| `NCES_ZIP_MAX_MB` / `NCES_ACCDB_MAX_MB` / `NCES_TOTAL_MAX_MB` | per-year download/extract caps + a ceiling across one integrate run's whole union (defaults 512 / 3072 / 51200) |
 
 Secrets live only in `.env` (gitignored) / the container environment — never in
 code.

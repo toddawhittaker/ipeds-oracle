@@ -5,11 +5,13 @@ import logging
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr
 
+import app.nces as nces
 from app import importer
 from app.auth import mint_login_link, require_admin
 from app.config import get_settings
@@ -206,6 +208,105 @@ def import_job(job_id: int):
         return dict(row)
     finally:
         con.close()
+
+
+def _integrated_starts() -> set[int]:
+    """Already-integrated start years, derived from the live ipeds.db's
+    ending years (empty if it doesn't exist yet — e.g. a brand new deploy)."""
+    s = get_settings()
+    if not Path(s.ipeds_db_path).exists():
+        return set()
+    return {y - 1 for y in importer._years(s.ipeds_db_path)}
+
+
+@router.get("/import/catalog")
+def import_catalog(refresh: bool = False):
+    """The NCES year catalog merged with which ending years are already
+    integrated into the live DB. `status` per year: 'integrated' (any
+    release, never selectable again), 'final'/'provisional' (not yet
+    integrated, available, selectable), or 'unknown' (NCES doesn't have it —
+    not selectable). `partial=True` flags a degraded probe (some/all years
+    could not be checked) so the UI can show a retry notice. `refresh=true`
+    bypasses probe_catalog's in-process TTL cache (the toolbar's "Refresh")."""
+    integrated_starts = _integrated_starts()
+    partial = False
+    try:
+        catalog = nces.probe_catalog(refresh=refresh)
+    except Exception as e:  # noqa: BLE001 — a probe failure must not 500 the page
+        log.warning("NCES probe_catalog failed: %s", e)
+        catalog = []
+        partial = True
+
+    by_year = {e["start_year"]: e for e in catalog}
+    all_start_years = sorted(set(by_year) | integrated_starts)
+
+    years = []
+    for sy in all_start_years:
+        entry = by_year.get(sy)
+        if entry is None:
+            # We know it's integrated (from _years) but NCES's probe didn't
+            # cover it — still show it correctly, and flag the response.
+            partial = True
+            entry = {"year_label": f"{sy}-{str(sy + 1)[-2:]}", "year": sy + 1,
+                     "available": False, "release": None}
+        integrated = sy in integrated_starts
+        available = bool(entry["available"])
+        release = entry["release"]
+        if integrated:
+            status, selectable = "integrated", False
+        elif available and release == "Final":
+            status, selectable = "final", True
+        elif available and release == "Provisional":
+            status, selectable = "provisional", True
+        else:
+            status, selectable = "unknown", False
+        years.append({
+            "start_year": sy, "year": entry["year"], "year_label": entry["year_label"],
+            "status": status, "integrated": integrated, "available": available,
+            "release": release, "selectable": selectable,
+        })
+    return {"probed_at": time.time(), "partial": partial, "years": years}
+
+
+class IntegrateRequest(BaseModel):
+    years: list[int]
+
+
+@router.post("/import/integrate")
+def integrate(body: IntegrateRequest, admin: sqlite3.Row = Depends(require_admin)):
+    if not _import_lock.acquire(blocking=False):
+        raise HTTPException(409, "An import is already running. Wait for it to finish.")
+    try:
+        if not body.years:
+            raise HTTPException(400, "Select at least one year to integrate.")
+
+        current_year = datetime.now().year
+        integrated_starts = _integrated_starts()
+        catalog_by_year = {e["start_year"]: e for e in nces.probe_catalog()}
+
+        for y in body.years:
+            if type(y) is not int or not (nces.EARLIEST_START_YEAR <= y <= current_year + 1):  # noqa: E721
+                raise HTTPException(400, f"{y} is not a valid NCES start year.")
+            if y in integrated_starts:
+                raise HTTPException(400, f"{y} is already integrated.")
+            entry = catalog_by_year.get(y)
+            if entry is None or not entry.get("available"):
+                raise HTTPException(400, f"{y} is not available from NCES yet.")
+
+        label = "integrate:" + ",".join(str(y) for y in sorted(body.years))
+        job_id = importer.create_job(label, admin["email"])
+    except Exception:
+        _import_lock.release()
+        raise
+
+    def _run():
+        try:
+            importer.run_integrate(job_id, body.years)
+        finally:
+            _import_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"job_id": job_id, "status": "pending"}
 
 
 # --- Usage dashboard ----------------------------------------------------------

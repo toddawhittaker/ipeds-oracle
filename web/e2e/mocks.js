@@ -199,3 +199,49 @@ export async function mockImportJobs(page, rows) {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
   });
 }
+
+/**
+ * GET /api/admin/import/jobs/:id -> a job detail row, advancing through
+ * `sequence` on each successive poll (the app polls every 2s until the
+ * status is one of passed/failed/swapped — see web/src/Admin.jsx `watch()`);
+ * once `sequence` is exhausted, the last entry is returned forever.
+ */
+export async function mockImportJobPoll(page, jobId, sequence) {
+  let i = 0;
+  await page.route(`**/api/admin/import/jobs/${jobId}`, async (route) => {
+    const job = sequence[Math.min(i, sequence.length - 1)];
+    i += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+  });
+}
+
+/**
+ * GET /api/admin/import/catalog -> {probed_at, partial, years:[{start_year,
+ * year, year_label, status, integrated, available, release, selectable}]}.
+ */
+export async function mockImportCatalog(page, data) {
+  await page.route("**/api/admin/import/catalog", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+  });
+}
+
+/**
+ * POST /api/admin/import/integrate {years:[start_year,...]} -> {job_id, status}
+ * (or a non-200 `httpStatus`, e.g. 409 when an import is already running).
+ * Returns captured POST bodies so specs can assert the exact years posted.
+ */
+export async function mockIntegrate(page, { jobId = 1, status = "pending", httpStatus = 200, detail } = {}) {
+  const posts = [];
+  await page.route("**/api/admin/import/integrate", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    posts.push(route.request().postDataJSON());
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ job_id: jobId, status }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "An import is already running. Wait for it to finish." }) });
+    }
+  });
+  return { posts };
+}
