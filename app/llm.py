@@ -42,12 +42,16 @@ class AgentResult:
 
 
 async def _chat(client: httpx.AsyncClient, model: str, messages: list[dict],
-                tools: list[dict]) -> dict:
+                tools: list[dict] | None = None) -> dict:
     s = get_settings()
-    payload = {
-        "model": model, "messages": messages, "tools": tools,
-        "tool_choice": "auto", "temperature": s.llm_temperature,
+    payload: dict = {
+        "model": model, "messages": messages, "temperature": s.llm_temperature,
     }
+    # Omitting tools entirely forces a plain text answer (more provider-portable
+    # than tool_choice="none") — used for the final synthesis pass.
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
     headers = {
         "Authorization": f"Bearer {s.openrouter_api_key}",
         "HTTP-Referer": s.app_public_url, "X-Title": s.app_title,
@@ -108,6 +112,9 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             tool_calls = msg.get("tool_calls") or []
+            reasoning = msg.get("reasoning")
+            if reasoning:
+                yield {"type": "thinking", "text": reasoning}
             messages.append({
                 "role": "assistant", "content": msg.get("content") or "",
                 **({"tool_calls": tool_calls} if tool_calls else {}),
@@ -154,11 +161,56 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             else:
                 consecutive_fails = 0
 
-        res.error = "Reached max tool iterations without a final answer."
+        # Tool budget exhausted. Rather than discard the data already gathered,
+        # make one final pass with tools disabled so the model MUST answer from
+        # the query results it has collected.
+        yield {"type": "status", "text": "Summarizing results…"}
+        messages.append({"role": "user", "content":
+            "You've reached the tool-call limit — do NOT call any more tools. "
+            "Give your best final answer now using the query results above, "
+            "noting briefly if anything is incomplete."})
+        try:
+            data = await _chat(client, model, messages, tools=None)
+            usage = data.get("usage") or {}
+            res.prompt_tokens += usage.get("prompt_tokens", 0)
+            res.completion_tokens += usage.get("completion_tokens", 0)
+            final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        except httpx.HTTPError:
+            final = ""
+
         res.model_used = model
         res.last_result = last_sql_result["result"]
+        if final.strip():
+            res.answer = final
+            yield {"type": "answer", "text": final}
+            yield {"type": "done", "result": res}
+            return
+
+        res.error = "Reached max tool iterations without a final answer."
         yield {"type": "error", "text": res.error}
         yield {"type": "done", "result": res}
+
+
+async def generate_title(question: str, answer: str) -> str:
+    """Ask the cheap model for a short conversation title. Returns "" on any
+    failure so titling never blocks or breaks a chat turn."""
+    s = get_settings()
+    if not s.openrouter_api_key:
+        return ""
+    prompt = [
+        {"role": "system", "content":
+            "You write a concise 3–6 word title for a chat about U.S. college "
+            "data. Reply with ONLY the title — no quotes, no trailing period."},
+        {"role": "user", "content":
+            f"Question: {question}\n\nAnswer: {answer[:500]}\n\nTitle:"},
+    ]
+    try:
+        async with httpx.AsyncClient() as client:
+            data = await _chat(client, s.model_default, prompt, tools=None)
+    except httpx.HTTPError:
+        return ""
+    title = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return title.strip().strip('"').strip().rstrip(".")[:80]
 
 
 async def run_agent(question: str, *, history: list[dict] | None = None,

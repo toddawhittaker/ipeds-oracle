@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     model_default: str = Field(default="deepseek/deepseek-v4-flash")
     model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
-    llm_max_tool_iters: int = Field(default=8)
+    llm_max_tool_iters: int = Field(default=12)
     # public URL + title used for OpenRouter attribution headers (optional)
     app_public_url: str = Field(default="http://localhost:8000")
     app_title: str = Field(default="IPEDS Query")
