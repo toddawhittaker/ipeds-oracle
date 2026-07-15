@@ -11,12 +11,8 @@ from typing import Any
 from app.tools import schema as sch
 from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, run_sql
 
-# The last successful run_sql result is captured per-turn so the API layer can
-# offer a CSV download of the exact data behind the answer.
-LAST_RESULT: dict[str, QueryResult | None] = {"result": None}
 
-
-def _tool_run_sql(sql: str) -> str:
+def _tool_run_sql(sql: str, sink: dict[str, QueryResult | None] | None = None) -> str:
     try:
         r = run_sql(sql)
     except SQLValidationError as e:
@@ -25,7 +21,11 @@ def _tool_run_sql(sql: str) -> str:
         return f"SQL TIMEOUT: {e}"
     except Exception as e:  # surface the sqlite error text to the model
         return f"SQL ERROR: {type(e).__name__}: {e}"
-    LAST_RESULT["result"] = r
+    # Hand the exact result back to the caller (per-request), so the API layer
+    # can offer a CSV of the data behind the answer. No shared module state — a
+    # global here would let concurrent chat turns clobber each other's result.
+    if sink is not None:
+        sink["result"] = r
     header = f"OK — {r.row_count} row(s)" + (" (truncated)" if r.truncated else "")
     notes = ("\n" + " ".join(r.notes)) if r.notes else ""
     return f"{header}{notes}\n\n{r.to_markdown(max_rows=200)}"
@@ -135,20 +135,21 @@ def tool_specs() -> list[dict[str, Any]]:
     return [spec for _, spec in _TOOLS.values()]
 
 
-def dispatch(name: str, arguments: str | dict) -> str:
-    """Run a tool call and return its string result."""
+def dispatch(name: str, arguments: str | dict,
+             result_sink: dict[str, QueryResult | None] | None = None) -> str:
+    """Run a tool call and return its string result. For run_sql, the caller may
+    pass a per-request `result_sink` dict to receive the QueryResult (used for
+    the CSV download); other tools ignore it."""
     entry = _TOOLS.get(name)
     if entry is None:
         return f"ERROR: unknown tool '{name}'."
     fn, _ = entry
     try:
         args = arguments if isinstance(arguments, dict) else json.loads(arguments or "{}")
+        if name == "run_sql":
+            return fn(sink=result_sink, **args)
         return fn(**args)
     except json.JSONDecodeError as e:
         return f"ERROR: could not parse tool arguments: {e}"
     except TypeError as e:
         return f"ERROR calling {name}: {e}"
-
-
-def reset_last_result() -> None:
-    LAST_RESULT["result"] = None

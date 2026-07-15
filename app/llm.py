@@ -73,7 +73,9 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         yield {"type": "error", "text": "OPENROUTER_API_KEY is not configured."}
         return
 
-    registry.reset_last_result()
+    # Per-request sink for the last run_sql result (no shared module state, so
+    # concurrent turns can't clobber each other's data behind the answer).
+    last_sql_result: dict = {"result": None}
     tools = registry.tool_specs()
     messages: list[dict] = [{"role": "system", "content": build_system_prompt(skills_block)}]
     if history:
@@ -114,7 +116,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             if not tool_calls:
                 res.answer = msg.get("content") or ""
                 res.model_used = model
-                res.last_result = registry.LAST_RESULT["result"]
+                res.last_result = last_sql_result["result"]
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
@@ -135,7 +137,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         pass
                 else:
                     yield {"type": "status", "text": f"Looking up {name.replace('_', ' ')}…"}
-                result = registry.dispatch(name, args)
+                result = registry.dispatch(name, args, result_sink=last_sql_result)
                 ok = not any(result.startswith(m) for m in _FAIL_MARKERS)
                 turn_had_fail = turn_had_fail or not ok
                 yield {"type": "tool", "name": name, "ok": ok}
@@ -154,7 +156,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
         res.error = "Reached max tool iterations without a final answer."
         res.model_used = model
-        res.last_result = registry.LAST_RESULT["result"]
+        res.last_result = last_sql_result["result"]
         yield {"type": "error", "text": res.error}
         yield {"type": "done", "result": res}
 

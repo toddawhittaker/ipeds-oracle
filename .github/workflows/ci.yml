@@ -110,6 +110,9 @@ jobs:
       - name: app.db migration tests
         run: python eval/test_migrations.py
 
+      - name: run_sql result isolation tests
+        run: python eval/test_result_isolation.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
