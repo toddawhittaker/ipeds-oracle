@@ -90,12 +90,42 @@ code.
 ## Backups
 
 `app.db` holds the irreplaceable state (users, skills, chat history); `ipeds.db`
-is rebuildable from `srv-data/accdb/`. Back up `app.db` to R2 on a cron:
+is rebuildable from `srv-data/accdb/`. `scripts/backup_app_db.py` takes a
+consistent online snapshot (WAL-safe, no downtime), prunes to the most recent N,
+and — if `R2_REMOTE` is set (an `rclone` remote:path) — uploads it off-site.
 
 ```bash
-# host crontab; needs sqlite3 + rclone (remote "r2" configured)
-0 3 * * *  APP_DB_PATH=/srv/ipeds/srv-data/app.db /srv/ipeds/scripts/backup_app_db.sh
+# host crontab; needs the venv + (for off-site) rclone with an R2 remote configured
+0 3 * * *  APP_DB_PATH=/srv/ipeds/srv-data/app.db R2_REMOTE=r2:ipeds-backups \
+           /srv/ipeds/.venv/bin/python /srv/ipeds/scripts/backup_app_db.py --keep 30
 ```
+
+Configure the R2 remote once with `rclone config` (New remote → S3 → provider
+Cloudflare R2 → your R2 access key/secret + account endpoint). Without
+`R2_REMOTE` the backup is local-only under `backups/`.
+
+### Restore drill
+
+Practice this so a real restore is muscle memory. `restore_app_db.py` validates
+the backup (integrity check + expected tables), snapshots the current file to
+`app.db.pre-restore-<ts>`, then swaps the backup in.
+
+```bash
+# 1. Stop the app so nothing is writing app.db.
+docker compose down            # or: systemctl stop ipeds
+
+# 2. (If restoring from R2) pull the chosen backup down first.
+rclone copy r2:ipeds-backups/app-20260714-030000.db ./backups/
+
+# 3. Restore (validates + snapshots the current file first; needs --yes).
+APP_DB_PATH=/srv/ipeds/srv-data/app.db \
+  .venv/bin/python scripts/restore_app_db.py backups/app-20260714-030000.db --yes
+
+# 4. Start the app and confirm a known user can log in and see their history.
+docker compose up -d
+```
+
+If the restore looks wrong, the pre-restore snapshot lets you roll straight back.
 
 ## Development (without Docker)
 
