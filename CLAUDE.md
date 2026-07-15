@@ -74,7 +74,11 @@ them and offer a few concrete examples to prime them, e.g.:
 # B) Developing the web app
 
 **Architecture:** FastAPI backend (`app/`: config, db, auth, security, mailer,
-llm, prompt, guard, skills, importer, logbuffer, ratelimit, tools/*, routers/*) +
+llm, prompt, guard, skills, importer, logbuffer, ratelimit, tools/* — incl.
+`tools/sqllint.py`, a deterministic pre-flight check that flags IPEDS
+aggregation foot-guns (CIP rollup/second-major double counts, DISTINCT-year
+full-scan) in model SQL and feeds the warning back so the agent self-corrects —
+routers/*) +
 React SPA (`web/`, SSE-streamed chat). SQLite everywhere: `ipeds.db` (read-only
 query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
 `logs.db` (persistent admin logs). LLM = DeepSeek via **OpenRouter**

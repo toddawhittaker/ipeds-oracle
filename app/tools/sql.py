@@ -134,6 +134,12 @@ def run_sql(sql: str, *, limit: int | None = None,
     notes: list[str] = []
     if not _LIMIT_RE.search(cleaned):
         notes.append(f"No LIMIT in query; showing at most {limit} rows.")
+    # Pre-flight aggregation lint (advisory): flag the IPEDS rollup/hang
+    # foot-guns so the model can reconsider before a wrong number is returned.
+    # Imported locally to avoid an import cycle (sqllint reuses helpers here).
+    from app.tools.sqllint import lint_sql
+    for finding in lint_sql(cleaned):
+        notes.append(f"⚠ AGGREGATION CHECK ({finding.code}): {finding.message}")
 
     con = _connect_ro(db_path)
     timed_out = threading.Event()
