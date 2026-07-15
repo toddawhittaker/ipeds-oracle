@@ -93,10 +93,10 @@ changes inline. **State which path you're taking.** The `test-engineer` is the
 **sole owner of test files**; the `implementer` must not edit tests.
 
 **Testing standard — non-negotiable.** Every behavior change ships with unit
-tests, and **`app/` coverage stays ≥ 80%**. Tests are dependency-light scripts in
-`eval/` (`sys.exit(1)` on failure, no API key needed). Measure with:
-`coverage run --source=app --append eval/test_*.py && coverage report`. New
-low-coverage code is not "done" until it's tested.
+tests, and **every `app/` module stays ≥ 80%** line coverage (per-module, not just
+the total) — enforced by `scripts/coverage_check.sh` in CI and the pre-push gate.
+Tests are dependency-light scripts in `eval/` (`sys.exit(1)` on failure, no API
+key needed). New low-coverage code is not "done" until it's tested.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
 CI (ruff `app scripts eval` + ESLint; the `eval/` backend suites against a

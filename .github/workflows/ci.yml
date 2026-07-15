@@ -134,6 +134,15 @@ jobs:
       - name: schema discovery-tool tests
         run: python eval/test_schema_tool.py
 
+      - name: tool-registry tests (tool_specs · dispatch error handling)
+        run: python eval/test_registry.py
+
+      - name: chat router tests (cache hit · edit/rerun · feedback · CSV errors)
+        run: python eval/test_chat_router.py
+
+      - name: admin router tests (import HTTP surface · usage · skills · logs)
+        run: python eval/test_admin_router.py
+
       - name: Coverage gate (app/ >= 80%)
         run: |
           pip install coverage==7.15.1

@@ -87,6 +87,9 @@ BACKEND_SUITES=(
   test_guard.py
   test_importer.py
   test_schema_tool.py
+  test_registry.py
+  test_chat_router.py
+  test_admin_router.py
 )
 for suite in "${BACKEND_SUITES[@]}"; do
   step "Backend: eval/$suite"
