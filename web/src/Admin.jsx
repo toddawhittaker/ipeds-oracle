@@ -31,6 +31,7 @@ function Allowlist() {
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [flash, setFlash] = useState("");
 
   const load = () => {
     api.allowlist().then(setRows);
@@ -38,21 +39,30 @@ function Allowlist() {
   };
   useEffect(load, []);
 
+  async function invite(addr, noteText, admin = false) {
+    const res = await api.addAllow(addr, noteText, admin).catch(() => ({}));
+    setFlash(res?.invited
+      ? `Approved — a sign-in link was emailed to ${addr}.`
+      : `${addr} added. (No email was sent — the sign-in link is in the server log.)`);
+    load();
+  }
+
   async function add(e) {
     e.preventDefault();
-    await api.addAllow(email, note, isAdmin);
-    setEmail(""); setNote(""); setIsAdmin(false); load();
+    await invite(email, note, isAdmin);
+    setEmail(""); setNote(""); setIsAdmin(false);
   }
 
   return (
     <div className="panel">
+      {flash && <div className="notice" role="status">{flash}</div>}
       {reqs.length > 0 && (
         <div className="requests">
           <h2>Pending access requests</h2>
           {reqs.map((r) => (
             <div key={r.id} className="req">
               <span>{r.email}</span>
-              <button onClick={() => api.addAllow(r.email, "approved request", false).then(load)}>
+              <button onClick={() => invite(r.email, "approved request", false)}>
                 Approve
               </button>
             </div>

@@ -1,6 +1,7 @@
 """Admin API: allowlist, access requests, data imports, usage, skills."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import time
@@ -10,9 +11,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel, EmailStr
 
 from app import importer
-from app.auth import require_admin
+from app.auth import mint_login_link, require_admin
 from app.config import get_settings
 from app.db import connect
+from app.mailer import send_access_approved
+
+log = logging.getLogger("ipeds.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_admin)])
@@ -41,9 +45,12 @@ def list_allowlist():
 
 @router.post("/allowlist")
 def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin)):
-    email = str(body.email).lower()
+    email = str(body.email).strip().lower()
     con = connect()
+    invite_link = None
     try:
+        newly_added = con.execute("SELECT 1 FROM allowlist WHERE email=?",
+                                  (email,)).fetchone() is None
         con.execute("INSERT INTO allowlist(email, note, added_by, added_at) "
                     "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET note=excluded.note",
                     (email, body.note, admin["email"], time.time()))
@@ -52,10 +59,20 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
                         "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
         con.execute("UPDATE access_requests SET status='approved' "
                     "WHERE email=? AND status='pending'", (email,))
+        # Newly approved/added people get a ready-to-use sign-in link so they can
+        # get in without having to know to request one again.
+        if newly_added:
+            invite_link = mint_login_link(con, email, get_settings().app_public_url)
         con.commit()
     finally:
         con.close()
-    return {"ok": True, "email": email}
+    invited = False
+    if invite_link:
+        try:
+            invited = send_access_approved(email, invite_link)
+        except Exception as e:  # noqa: BLE001 — approval must not fail if email does
+            log.warning("approval email to %s failed: %s", email, e)
+    return {"ok": True, "email": email, "invited": invited}
 
 
 @router.delete("/allowlist/{email}")

@@ -52,3 +52,27 @@ def send_access_request(admin_to: str, requester: str, reason: str = "") -> bool
             "Add them in the admin console's Allowlist tab to approve.")
     html = f"<pre style='font-family:system-ui,sans-serif'>{body}</pre>"
     return send_email(admin_to, subject, html, body)
+
+
+def send_access_approved(to: str, link: str) -> bool:
+    """Sent when an admin approves/adds someone: welcomes them with a ready
+    sign-in link, plus the app URL as a fallback if that link expires."""
+    s = get_settings()
+    ttl = s.magic_link_ttl_minutes
+    app_url = s.app_public_url
+    subject = "You're approved for IPEDS Query"
+    html = f"""\
+<div style="font-family:system-ui,sans-serif;max-width:480px">
+  <h2>Welcome to IPEDS Query</h2>
+  <p>Your access has been approved. Click below to sign in — this link works
+     once and expires in {ttl} minutes.</p>
+  <p><a href="{link}" style="display:inline-block;padding:10px 18px;
+     background:#2b6cb0;color:#fff;border-radius:6px;text-decoration:none">
+     Sign in</a></p>
+  <p style="color:#666;font-size:13px">If the link has expired, go to
+     <a href="{app_url}">{app_url}</a> and enter your email for a fresh one.</p>
+</div>"""
+    text = (f"Your access to IPEDS Query is approved. Sign in (expires in "
+            f"{ttl} min):\n{link}\n\nIf that link has expired, go to {app_url} "
+            "and enter your email.")
+    return send_email(to, subject, html, text)

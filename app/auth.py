@@ -19,6 +19,16 @@ def is_allowlisted(con: sqlite3.Connection, email: str) -> bool:
                        (email,)).fetchone() is not None
 
 
+def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
+    """Insert a single-use login token for `email` and return its verify URL.
+    The caller commits. Reused by the login flow and by admin approval."""
+    token = new_token()
+    con.execute(
+        "INSERT INTO login_tokens(token_hash, email, expires_at) VALUES (?,?,?)",
+        (hash_token(token), email.strip().lower(), magic_link_expiry()))
+    return f"{base_url.rstrip('/')}/api/auth/verify?token={token}"
+
+
 def request_login(email: str, base_url: str) -> dict:
     """Start a login. Returns a neutral message either way (never reveals whether
     an address is on the allowlist). Allowlisted → emails a link; otherwise →
@@ -27,12 +37,8 @@ def request_login(email: str, base_url: str) -> dict:
     con = connect()
     try:
         if is_allowlisted(con, email):
-            token = new_token()
-            con.execute(
-                "INSERT INTO login_tokens(token_hash, email, expires_at) "
-                "VALUES (?,?,?)", (hash_token(token), email, magic_link_expiry()))
+            link = mint_login_link(con, email, base_url)
             con.commit()
-            link = f"{base_url.rstrip('/')}/api/auth/verify?token={token}"
             send_magic_link(email, link)
         else:
             con.execute(
