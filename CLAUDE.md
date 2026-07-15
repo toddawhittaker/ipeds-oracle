@@ -1,13 +1,35 @@
 # IPEDS project
 
-Unified, cross-year **IPEDS** (Integrated Postsecondary Education Data System)
-database for natural-language querying. IPEDS is the U.S. Dept. of Education's
-census of colleges/universities.
+Two things live in this repo, and most sessions are one or the other:
 
-## Starting a conversation
-When a new conversation opens and the user hasn't already asked something
-specific, greet them and ask what they'd like to query. Offer a few concrete
-natural-language examples to prime them, e.g.:
+1. A **data-analysis assistant** that answers natural-language questions about
+   U.S. colleges/universities against `ipeds.db` (IPEDS = the U.S. Dept. of
+   Education's census of postsecondary institutions).
+2. A **private web app** (FastAPI + React) that puts that assistant in front of
+   approved Franklin University colleagues. **This is the active software
+   project** — most code work is here.
+
+Work out which you're doing and read the matching half below.
+
+## Layout
+- `ipeds.db` — **the** dataset: SQLite, ~1.9 GB, every IPEDS survey table stacked
+  across collection years **2020-21 … 2024-25**. Opened **read-only** by the app.
+- `SCHEMA.md` — **read before writing any query.** Data model, conventions,
+  family catalog, code references, query patterns, worked NL→SQL examples.
+- `app/` — FastAPI backend. `web/` — Vite/React SPA. `eval/` — test suites.
+- `app.db` — app state (users, sessions, conversations, usage). `logs.db` —
+  persistent server logs. Both separate from the read-only `ipeds.db`.
+- `scripts/build_ipeds_db.py` — repeatable loader that builds `ipeds.db` from the
+  `data/*.accdb` files (`--dry-run` prints the table→family mapping).
+- `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
+  team). `DEPLOY.md` — VPS/Docker deploy. `docs/` — official IPEDS Excel docs.
+
+---
+
+# A) Answering a natural-language data question
+
+When a new conversation opens and the user hasn't asked something specific, greet
+them and offer a few concrete examples to prime them, e.g.:
 - "Top 20 institutions awarding Associate's degrees in Registered Nursing
   (CIP 51.3801) over the last 3 years."
 - "How many Computer Science (CIP 11.0701) bachelor's degrees did California
@@ -15,33 +37,20 @@ natural-language examples to prime them, e.g.:
 - "National total of Associate's degrees per year, all programs."
 - "Which states awarded the most Master's degrees in Education?"
 
-(If their first message is already a data question, just answer it — skip the
-greeting.)
+(If their first message is already a data question, skip the greeting.)
 
-## Layout
-- `ipeds.db` — **the** database: SQLite, ~1.9 GB, all IPEDS survey tables stacked
-  across collection years **2020-21 … 2024-25**.
-- `SCHEMA.md` — **read this before writing any query.** Data model, conventions,
-  family catalog, code references, query patterns, and worked NL→SQL examples.
-- `scripts/build_ipeds_db.py` — repeatable loader that builds `ipeds.db` from the
-  Access files. `--dry-run` prints the table→family mapping.
-- `data/` — source `IPEDS{YYYY}{YY}.accdb` files (one per collection year).
-- `docs/` — official IPEDS Excel table documentation (human-readable backup).
-
-## Answering a natural-language data question
-1. **Load `SCHEMA.md`** for the model + the relevant family/columns. The DB is
+**To answer one:**
+1. **Load `SCHEMA.md`** for the model + relevant family/columns. The DB is
    self-describing — use the *Discovery* queries in §3 (`tables`, `vartable`,
-   `valuesets`) to look up any table, variable, or code you're unsure about
-   rather than guessing column names.
+   `valuesets`) to look up any table/variable/code rather than guessing.
 2. Write SQL and run it: `sqlite3 -header -column ipeds.db "…"`.
-3. **Sanity-check magnitudes** against reality before reporting (e.g. ~1M
-   associate's/yr nationally). A number that's 2–4× off usually means an
-   aggregation-level mistake (see the CIP/award-level rollup rule in SCHEMA §2).
+3. **Sanity-check magnitudes** against reality (e.g. ~1M associate's/yr
+   nationally). A number 2–4× off usually means an aggregation-level mistake.
 
-## Critical gotchas (details in SCHEMA.md)
-- **"Recent N years" = constant bound**, never a join:
+## Critical query gotchas (details in SCHEMA.md)
+- **"Recent N years" = a constant bound**, never a join:
   `WHERE year > (SELECT MAX(year)-3 FROM _years)`. A `JOIN (SELECT DISTINCT
-  year …)` makes SQLite full-scan the 8M-row `c_a` and effectively hangs.
+  year …)` makes SQLite full-scan the 8M-row `c_a` and effectively hang.
 - **Never mix CIP/award-level aggregation levels in a SUM.** In `c_a`, cipcode
   exists at 2-/4-/6-digit + a `'99'` grand-total row, each summing to the same
   total. Match an exact 6-digit code, or use `'99'`/`length(cipcode)=7` for
@@ -52,10 +61,60 @@ greeting.)
 - `year` = **ending** year of the collection (2024-25 → 2025).
 
 ## Operational notes
-- Query timeouts: wrap ad-hoc CLI queries in `timeout 30 …` so a bad plan can't
-  hang a shell. **Never** poll with `until [ -s outfile ]` — a zero-row or
-  hanging query never fills the file → infinite loop. If a query hangs, find the
-  holder with `fuser ipeds.db` and `kill -9` it (a stuck `sqlite3` locks the DB).
-- Tools installed via apt: `mdbtools` (reads `.accdb`), `sqlite3` CLI.
-- Rebuild: `python3 scripts/build_ipeds_db.py` (drop a new year's `.accdb` into
-  `data/` first to extend coverage).
+- Wrap ad-hoc CLI queries in `timeout 30 …` so a bad plan can't hang a shell.
+  **Never** poll with `until [ -s outfile ]` — a zero-row/hanging query never
+  fills the file → infinite loop. If a query hangs, find the holder with
+  `fuser ipeds.db` and `kill -9` it (a stuck `sqlite3` locks the DB).
+- Tools (apt): `mdbtools` (reads `.accdb`), `sqlite3` CLI.
+- Rebuild/extend: drop a new year's `.accdb` into `data/`, then
+  `python3 scripts/build_ipeds_db.py`.
+
+---
+
+# B) Developing the web app
+
+**Architecture:** FastAPI backend (`app/`: config, db, auth, security, mailer,
+llm, prompt, guard, skills, importer, logbuffer, ratelimit, tools/*, routers/*) +
+React SPA (`web/`, SSE-streamed chat). SQLite everywhere: `ipeds.db` (read-only
+query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
+`logs.db` (persistent admin logs). LLM = DeepSeek via **OpenRouter**
+(`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
+a topical **guardrail**. Auth = passwordless **magic link**, manual allowlist,
+email via **Resend**. Self-learning = skill exemplars + semantic cache.
+**Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
+
+## How we work (operating rules — follow these)
+
+**Coding workflow — hybrid.** Route *substantial* features (multi-file, needs
+design + tests + review) through the `.claude/agents/` team: `project-manager`
+orchestrates `architect` → `test-engineer` (writes failing tests first) →
+`implementer` → `security`/`a11y`/`code` reviewers. Do *small, well-scoped*
+changes inline. **State which path you're taking.** The `test-engineer` is the
+**sole owner of test files**; the `implementer` must not edit tests.
+
+**Testing standard — non-negotiable.** Every behavior change ships with unit
+tests, and **`app/` coverage stays ≥ 80%**. Tests are dependency-light scripts in
+`eval/` (`sys.exit(1)` on failure, no API key needed). Measure with:
+`coverage run --source=app --append eval/test_*.py && coverage report`. New
+low-coverage code is not "done" until it's tested.
+
+**Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
+CI (ruff `app scripts eval` + ESLint; the `eval/` backend suites against a
+fixture DB; Playwright e2e). A `.githooks/pre-push` hook runs it automatically
+(bypass: `git push --no-verify`; skip e2e: `SKIP_E2E=1`). This is the *only*
+merge gate — GitHub branch protection isn't available on this repo's plan, so a
+red CI check can otherwise land on `main`.
+
+**Ship via branch → PR → merge on green.** Never commit straight to `main`.
+Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), keep PRs focused (one item),
+open a PR, watch `gh pr checks <n> --watch`, merge only when lint · backend · e2e
+are all green. End commit messages with the `Co-Authored-By:` trailer.
+
+**Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys) bleeds
+into tests — run auth suites with `COOKIE_SECURE=false`, and blank
+`OPENROUTER_API_KEY`/`RESEND_API_KEY` to match CI's key-free environment
+(`run_ci_local.sh` already does this).
+
+**Keep the docs synced.** When a change alters architecture, workflow, config, or
+commands, update `CLAUDE.md` (and `CONTRIBUTING.md`/`DEPLOY.md`) in the *same*
+PR. These files must always reflect the current state of the project.

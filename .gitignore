@@ -58,3 +58,8 @@ backups/
 .ci/
 logs.db
 logs.db-*
+
+# coverage.py artifacts
+.coverage
+.coverage.*
+htmlcov/

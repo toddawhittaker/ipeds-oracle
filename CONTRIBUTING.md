@@ -85,7 +85,7 @@ fixture `ipeds.db`.
 .venv/bin/python eval/test_security.py            # path traversal, de-auth, IDOR, …
 .venv/bin/python eval/test_agent_loop.py          # tool-loop synthesis fallback
 # also: test_sql_guards_hardening, test_rate_limit, test_migrations,
-#       test_result_isolation, test_backup, test_logbuffer
+#       test_result_isolation, test_backup, test_logbuffer, test_mailer, test_guard
 
 # End-to-end UI (network-mocked; no key, no ipeds.db needed)
 cd web && npm run test:e2e
@@ -97,6 +97,21 @@ cd web && npm run test:e2e
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
 
+**Coverage standard: `app/` stays ≥ 80%.** Every behavior change ships with unit
+tests. Measure locally:
+
+```bash
+.venv/bin/coverage run --source=app --append eval/test_<suite>.py   # per suite
+.venv/bin/coverage report --sort=cover                              # combined
+```
+
+**Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
+three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
+`git config core.hooksPath .githooks`). Bypass with `git push --no-verify`; skip
+just the slow e2e job with `SKIP_E2E=1`. This is the real merge gate — branch
+protection isn't available on this repo's plan, so a red CI check can otherwise
+land on `main`.
+
 > If a real production `.env` (with `COOKIE_SECURE=true`) is present, the
 > auth‑dependent suites can't hold the session cookie over http — run them with
 > `COOKIE_SECURE=false .venv/bin/python eval/test_backend.py`. CI has no `.env`,
@@ -105,7 +120,7 @@ cd web && npm run test:e2e
 ## Lint & format
 
 ```bash
-.venv/bin/ruff check app/          # backend lint + import order (config in pyproject.toml)
+.venv/bin/ruff check app scripts eval   # backend lint + import order (matches CI scope; config in pyproject.toml)
 cd web && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
 cd web && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
 ```
