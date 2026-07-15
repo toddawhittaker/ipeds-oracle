@@ -41,7 +41,7 @@ eval/                backend test suites + the NL→SQL accuracy harness
 scripts/            build_ipeds_db.py, backups, CI fixture builder
 data/               source IPEDS{YYYY}{YY}.accdb files (gitignored, large)
 docs/               official IPEDS Excel table documentation
-.github/workflows/  CI (lint · backend · e2e) + manual NL→SQL eval
+.github/workflows/  CI (lint · backend · e2e · image) + manual NL→SQL eval
 .claude/agents/     the specialist agent team (see below)
 ```
 
@@ -129,10 +129,18 @@ cd web && npm run format           # Prettier (write) — optional; existing fil
 
 ## CI & the contribution workflow
 
-`.github/workflows/ci.yml` runs on every PR and push to `main`, with three jobs:
+`.github/workflows/ci.yml` runs on every PR and push to `main`, with four jobs:
 **lint** (ruff + ESLint), **backend** (all the `eval/test_*` suites against a
-fixture DB), and **e2e** (Playwright, network‑mocked). A separate
+fixture DB), **e2e** (Playwright, network‑mocked), and **image** (builds the
+Docker image, boots it, and curls `/api/health` as a smoke test). A separate
 `nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an API key + the real DB).
+
+The **image** job gates on the three test jobs, so a broken build or a boot
+failure never reaches the registry. It publishes to GHCR only on pushes, not on
+PRs: a push to `main` moves `:edge` + `:sha-<short>`, and a `v*` release tag
+publishes `:vX.Y.Z` + `:latest`. The VPS pulls those — see DEPLOY.md. (The four
+test/lint jobs are still the *merge* gate; publishing is a downstream effect of
+landing on `main`.)
 
 Workflow:
 
@@ -140,7 +148,7 @@ Workflow:
 2. Keep PRs focused; don't split a single file across PRs.
 3. Add or update tests for behavior changes — the **test‑engineer** agent owns
    test files (see below); new behavior is written test‑first where practical.
-4. Open a PR; it merges only when all three CI jobs are green.
+4. Open a PR; it merges only when lint · backend · e2e · image are green.
 5. End commit messages with the `Co-Authored-By:` trailer.
 
 ## The agent team

@@ -15,6 +15,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -192,3 +193,81 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 7
+
+  image:
+    name: Docker image (build · smoke-test · publish)
+    runs-on: ubuntu-latest
+    # Only build/publish the deployable image once the tests are green, so a
+    # broken build or a boot failure can't reach the registry.
+    needs: [lint, backend, e2e]
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io/<owner>/ipeds-ai
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build once, load into the local daemon, and smoke-test it BEFORE any
+      # push. Layers are cached to GHA so the later push step is a cache hit.
+      - name: Build image (load for smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ipeds-ai:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the container (boots + /api/health)
+        run: |
+          # No ipeds.db/keys — the app lazily opens the query DB and fails open
+          # without an LLM key, so /api/health must answer on a bare boot.
+          docker run -d --name smoke -p 8000:8000 \
+            -e COOKIE_SECURE=false -e OPENROUTER_API_KEY= -e RESEND_API_KEY= \
+            ipeds-ai:smoke
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health | grep -q '"ok":true'; then
+              echo "health OK"; docker rm -f smoke; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container did not become healthy"; docker logs smoke; \
+            docker rm -f smoke; exit 1
+
+      # Tag scheme: main push -> :edge + :sha-<short>; a v* tag (release) ->
+      # :vX.Y.Z + :X.Y + :latest. PRs build+smoke only (no push).
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=edge,branch=main
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image (main + tags only)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
