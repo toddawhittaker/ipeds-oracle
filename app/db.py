@@ -152,6 +152,12 @@ MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA),
     # Per-request OpenRouter cost (USD), for the admin spend dashboard.
     (2, "ALTER TABLE usage_log ADD COLUMN cost REAL NOT NULL DEFAULT 0;"),
+    # Skills become "lessons": a human-readable RULE (the transferable knowledge)
+    # is now the primary payload, with the SQL kept only as an optional worked
+    # example. Backfill from the seed `notes`, which already read as rules.
+    (3, "ALTER TABLE skills ADD COLUMN lesson TEXT;\n"
+        "UPDATE skills SET lesson=notes "
+        "WHERE lesson IS NULL AND notes IS NOT NULL AND trim(notes) != '';"),
 ]
 
 

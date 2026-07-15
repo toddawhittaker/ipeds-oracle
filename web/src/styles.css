@@ -302,6 +302,12 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .tags { display: flex; gap: 6px; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.warn { color: var(--danger); border-color: var(--danger); }
+.lesson-rule { font-weight: 600; line-height: 1.4; }
+.lesson-example { margin-top: 10px; }
+.lesson-example summary { cursor: pointer; }
+.lesson-example .qtext { margin: 6px 0 4px; font-style: italic; }
+.lesson-example pre { margin: 6px 0 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
 .job { margin: 14px 0; }
 
 /* logs */

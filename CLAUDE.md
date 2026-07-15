@@ -88,7 +88,11 @@ query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
 force one revision round). Auth = passwordless **magic link**, manual allowlist,
-email via **Resend**. Self-learning = skill exemplars + semantic cache.
+email via **Resend**. Self-learning = a library of **lessons** (a human-readable
+rule + optional SQL example) retrieved as guidance and **emitted by the critic**
+when it catches a mistake (feedback/critic lessons start unverified → admin
+approves; deduped on save; `SKILLS_ENABLED=0/1` gates the on/off eval A/B) +
+semantic answer cache.
 **Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
 
 ## How we work (operating rules — follow these)

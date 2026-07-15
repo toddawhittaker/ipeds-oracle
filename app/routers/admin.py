@@ -264,8 +264,8 @@ def list_skills():
     con = connect()
     try:
         rows = con.execute(
-            "SELECT id, question, canonical_sql, notes, upvotes, downvotes, hits, "
-            "verified, created_by, created_at FROM skills ORDER BY verified DESC, "
+            "SELECT id, question, lesson, canonical_sql, notes, upvotes, downvotes, "
+            "hits, verified, created_by, created_at FROM skills ORDER BY verified DESC, "
             "hits DESC, id DESC LIMIT 500").fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -274,6 +274,7 @@ def list_skills():
 
 class SkillUpdate(BaseModel):
     verified: bool | None = None
+    lesson: str | None = None
     notes: str | None = None
     canonical_sql: str | None = None
 
@@ -283,6 +284,8 @@ def update_skill(skill_id: int, body: SkillUpdate):
     sets, vals = [], []
     if body.verified is not None:
         sets.append("verified=?"); vals.append(int(body.verified))
+    if body.lesson is not None:
+        sets.append("lesson=?"); vals.append(body.lesson)
     if body.notes is not None:
         sets.append("notes=?"); vals.append(body.notes)
     if body.canonical_sql is not None:

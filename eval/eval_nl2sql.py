@@ -5,6 +5,12 @@ SCHEMA.md §8 + README). Use it to (a) sanity-check the pipeline and (b) gate
 model swaps. Requires OPENROUTER_API_KEY in the environment/.env.
 
     .venv/bin/python eval/eval_nl2sql.py
+
+Learned-lessons A/B: run it twice against the real ipeds.db and compare the
+pass rate to measure whether retrieved lessons actually help —
+
+    SKILLS_ENABLED=1 .venv/bin/python eval/eval_nl2sql.py   # lessons on
+    SKILLS_ENABLED=0 .venv/bin/python eval/eval_nl2sql.py   # lessons off
 """
 import asyncio
 import re

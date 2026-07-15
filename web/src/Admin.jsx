@@ -326,27 +326,43 @@ function Skills() {
   const [rows, setRows] = useState([]);
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
+  const pending = rows.filter((r) => !r.verified).length;
   return (
     <div className="panel">
-      <h2>Learned skills ({rows.length})</h2>
-      <p className="muted small">Validated NL→SQL exemplars used as few-shot context. 👍 on answers promotes new ones.</p>
+      <h2>Learned lessons ({rows.length})</h2>
+      <p className="muted small">
+        Rules the assistant applies as guidance. The post-answer critic proposes a
+        lesson when it catches a mistake, and a 👍 on an answer proposes one too —
+        both start <strong>unverified</strong> until you approve them here.
+        {pending > 0 && ` ${pending} awaiting review.`}
+      </p>
       {rows.map((s) => (
         <div key={s.id} className="skill">
           <div className="skill-head">
-            <strong>{s.question}</strong>
+            <span className="lesson-rule">
+              {s.lesson || s.notes || <em className="muted">(no rule yet — add one below)</em>}
+            </span>
             <span className="tags">
-              {s.verified ? <span className="tag ok">verified</span> : <span className="tag">unverified</span>}
+              {s.verified
+                ? <span className="tag ok">verified</span>
+                : <span className="tag warn">unverified</span>}
+              <span className="tag">from {s.created_by || "?"}</span>
               <span className="tag">▲{s.upvotes} ▼{s.downvotes}</span>
               <span className="tag">hits {s.hits}</span>
             </span>
           </div>
-          <pre>{s.canonical_sql}</pre>
-          {s.notes && <div className="muted small">{s.notes}</div>}
+          {s.canonical_sql && (
+            <details className="lesson-example">
+              <summary className="muted small">Example query</summary>
+              {s.question && <div className="muted small qtext">{s.question}</div>}
+              <pre>{s.canonical_sql}</pre>
+            </details>
+          )}
           <div className="msg-actions">
             <button className="link" onClick={() => api.patchSkill(s.id, { verified: !s.verified }).then(load)}>
               {s.verified ? "unverify" : "verify"}
             </button>
-            <button className="link danger" onClick={() => api.deleteSkill(s.id).then(load)}>delete</button>
+            <button className="link danger" onClick={() => api.deleteSkill(s.id).then(load)}>reject</button>
           </div>
         </div>
       ))}

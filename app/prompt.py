@@ -89,6 +89,7 @@ def build_system_prompt(skills_block: str = "") -> str:
              _schema_md()]
     if skills_block:
         parts.append(
-            "\n\n===== LEARNED EXAMPLES (validated NL→SQL from past queries; "
-            "adapt, don't copy blindly) =====\n" + skills_block)
+            "\n\n===== LEARNED LESSONS (rules distilled from past queries + "
+            "corrections; apply the rule, adapt any example, don't copy blindly) "
+            "=====\n" + skills_block)
     return "".join(parts)

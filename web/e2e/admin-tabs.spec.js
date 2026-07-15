@@ -30,9 +30,11 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
     {
       id: 1,
       question: "CA nursing associate's degrees by year",
+      lesson: "Match cipcode='51.3801' exactly; never LIKE (rollup overcount).",
       canonical_sql: "SELECT year, SUM(x) FROM c_a WHERE cipcode='51.3801' GROUP BY year",
       notes: "confirmed against known totals",
       verified: true,
+      created_by: "seed",
       upvotes: 3,
       downvotes: 0,
       hits: 5,
@@ -77,7 +79,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
 
   // Skills last — do not navigate away from it (see known-bug test below).
   await page.getByRole("button", { name: "Skills" }).click();
-  await expect(page.getByText("CA nursing associate's degrees by year")).toBeVisible();
+  await expect(page.getByText(/Match cipcode='51.3801' exactly/)).toBeVisible();
   await expect(page.getByText("verified", { exact: true })).toBeVisible();
 });
 
@@ -105,13 +107,14 @@ test("regression: navigating away from the Skills tab and back does not crash th
   await mockAllowlist(page, []);
   await mockAccessRequests(page, []);
   await mockSkills(page, [
-    { id: 1, question: "q", canonical_sql: "SELECT 1", notes: "", verified: true, upvotes: 0, downvotes: 0, hits: 0 },
+    { id: 1, question: "q", lesson: "example rule", canonical_sql: "SELECT 1", notes: "",
+      verified: true, created_by: "seed", upvotes: 0, downvotes: 0, hits: 0 },
   ]);
 
   await page.goto("/");
   await page.getByRole("button", { name: "Admin" }).click();
   await page.getByRole("button", { name: "Skills" }).click();
-  await expect(page.getByText("q", { exact: true })).toBeVisible();
+  await expect(page.getByText("example rule")).toBeVisible();
 
   // Unmount Skills by navigating to another subtab — this used to crash the
   // whole app (root element went blank).
@@ -122,7 +125,7 @@ test("regression: navigating away from the Skills tab and back does not crash th
 
   // And back to Skills again, to be thorough about remounting.
   await page.getByRole("button", { name: "Skills" }).click();
-  await expect(page.getByText("q", { exact: true })).toBeVisible();
+  await expect(page.getByText("example rule")).toBeVisible();
 
   expect(pageErrors).toEqual([]);
 });
