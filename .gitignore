@@ -50,3 +50,6 @@ env/
 
 # Local deployment data volume
 srv-data/
+
+# Local app.db backups (scripts/backup_app_db.py) — precious state lives off-site
+backups/

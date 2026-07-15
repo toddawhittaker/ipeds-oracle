@@ -113,6 +113,9 @@ jobs:
       - name: run_sql result isolation tests
         run: python eval/test_result_isolation.py
 
+      - name: app.db backup/restore tests
+        run: python eval/test_backup.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
