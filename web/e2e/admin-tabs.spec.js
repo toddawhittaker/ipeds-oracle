@@ -21,9 +21,10 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   ]);
   await mockAccessRequests(page, [{ id: 1, email: "newperson@franklin.edu" }]);
   await mockUsage(page, {
-    totals: { queries: 123, tokens: 45678, cache_hits: 12, escalations: 3, failures: 1 },
-    by_day: [{ day: "2026-07-13", queries: 10, tokens: 2000 }],
-    top_users: [{ email: "user@franklin.edu", queries: 50 }],
+    since: 0, until: 1, bucket: "day",
+    totals: { queries: 123, tokens: 45678, spend: 0.42, cache_hits: 12, escalations: 3, failures: 1 },
+    series: [{ t: "2026-07-13", queries: 10, tokens: 2000, spend: 0.02 }],
+    top_users: [{ email: "user@franklin.edu", queries: 50, tokens: 12000, spend: 0.1 }],
   });
   await mockSkills(page, [
     {

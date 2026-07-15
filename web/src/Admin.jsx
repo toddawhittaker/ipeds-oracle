@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import Chart from "./Chart.jsx";
 
 export default function Admin() {
   const [tab, setTab] = useState("allowlist");
@@ -174,35 +175,108 @@ function Imports() {
   );
 }
 
+const RANGES = [
+  { key: "hour", label: "Hour", secs: 3600 },
+  { key: "day", label: "Day", secs: 86400 },
+  { key: "7d", label: "7 days", secs: 7 * 86400 },
+  { key: "30d", label: "30 days", secs: 30 * 86400 },
+];
+const money = (v) => "$" + Number(v || 0).toFixed(Number(v) >= 1 ? 2 : 4);
+
+const METRICS = ["queries", "tokens", "spend"];
+
 function Usage() {
+  const [range, setRange] = useState("7d");
+  const [custom, setCustom] = useState({ since: "", until: "" });
+  const [metric, setMetric] = useState("tokens");
   const [u, setU] = useState(null);
-  useEffect(() => { api.usage().then(setU); }, []);
-  if (!u) return <div className="panel muted">Loading…</div>;
-  const t = u.totals;
+  const [loading, setLoading] = useState(true);
+
+  // `<input type=date>` values are parsed as LOCAL midnight (matching the local
+  // "now" used by the quick ranges), not UTC, so the window aligns with the
+  // admin's day.
+  useEffect(() => {
+    const now = Date.now() / 1000;
+    let since, until;
+    if (range === "custom") {
+      since = custom.since ? new Date(`${custom.since}T00:00:00`).getTime() / 1000 : now - 7 * 86400;
+      until = custom.until ? new Date(`${custom.until}T23:59:59`).getTime() / 1000 : now;
+    } else {
+      since = now - RANGES.find((r) => r.key === range).secs;
+      until = now;
+    }
+    api.usage(since, until).then(setU).catch(() => {}).finally(() => setLoading(false));
+  }, [range, custom]);
+
+  const pick = (fn) => { setLoading(true); fn(); };
+  const t = u?.totals || {};
+  const spec = useMemo(() => {
+    const s = u?.series || [];
+    return s.length ? {
+      type: "line", x: "t", y: [metric], yLabel: metric === "spend" ? "USD" : metric,
+      data: s.map((r) => ({ t: r.t, queries: r.queries, tokens: r.tokens, spend: Number(r.spend) })),
+    } : null;
+  }, [u, metric]);
+
   return (
     <div className="panel">
       <h2 className="sr-only">Usage</h2>
-      <div className="stats">
-        <Stat label="Queries" value={t.queries} />
-        <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
-        <Stat label="Cache hits" value={t.cache_hits} />
-        <Stat label="Escalations" value={t.escalations} />
-        <Stat label="Failures" value={t.failures} />
+      <div className="usage-range" role="group" aria-label="Time range">
+        {RANGES.map((r) => (
+          <button key={r.key} className={range === r.key ? "on" : ""} aria-pressed={range === r.key}
+                  onClick={() => pick(() => setRange(r.key))}>{r.label}</button>
+        ))}
+        <button className={range === "custom" ? "on" : ""} aria-pressed={range === "custom"}
+                onClick={() => pick(() => setRange("custom"))}>Custom</button>
+        {range === "custom" && (
+          <span className="usage-custom">
+            <input type="date" value={custom.since} aria-label="From date"
+                   onChange={(e) => pick(() => setCustom((c) => ({ ...c, since: e.target.value })))} />
+            <span className="muted">to</span>
+            <input type="date" value={custom.until} aria-label="To date"
+                   onChange={(e) => pick(() => setCustom((c) => ({ ...c, until: e.target.value })))} />
+          </span>
+        )}
+        {loading && u && <span className="muted small">updating…</span>}
       </div>
-      <h3>Last 30 days</h3>
-      <table className="grid">
-        <thead><tr><th scope="col">Day</th><th scope="col">Queries</th><th scope="col">Tokens</th></tr></thead>
-        <tbody>{u.by_day.map((d) => (
-          <tr key={d.day}><td>{d.day}</td><td>{d.queries}</td><td>{d.tokens.toLocaleString()}</td></tr>
-        ))}</tbody>
-      </table>
-      <h3>Top users</h3>
-      <table className="grid">
-        <thead><tr><th scope="col">User</th><th scope="col">Queries</th></tr></thead>
-        <tbody>{u.top_users.map((x) => (
-          <tr key={x.email}><td>{x.email}</td><td>{x.queries}</td></tr>
-        ))}</tbody>
-      </table>
+
+      {!u ? <div className="muted">Loading…</div> : (
+        <div className={"usage-body" + (loading ? " updating" : "")}>
+          <div className="stats">
+            <Stat label="Queries" value={(t.queries || 0).toLocaleString()} />
+            <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
+            <Stat label="Spend" value={money(t.spend)} />
+            <Stat label="Cache hits" value={t.cache_hits || 0} />
+            <Stat label="Escalations" value={t.escalations || 0} />
+            <Stat label="Failures" value={t.failures || 0} />
+          </div>
+
+          <div className="usage-chart-head">
+            <h3>{metric[0].toUpperCase() + metric.slice(1)} over time ({u.bucket === "hour" ? "hourly" : "daily"})</h3>
+            <div className="chart-types" role="group" aria-label="Metric">
+              {METRICS.map((m) => (
+                <button key={m} className={metric === m ? "on" : ""} aria-pressed={metric === m}
+                        onClick={() => setMetric(m)}>{m[0].toUpperCase() + m.slice(1)}</button>
+              ))}
+            </div>
+          </div>
+          {spec ? <Chart spec={spec} /> : <div className="muted">No activity in this range.</div>}
+
+          <h3>Top users</h3>
+          <table className="grid">
+            <thead><tr>
+              <th scope="col">User</th><th scope="col">Queries</th>
+              <th scope="col">Tokens</th><th scope="col">Spend</th>
+            </tr></thead>
+            <tbody>{u.top_users.map((x) => (
+              <tr key={x.email}>
+                <td>{x.email}</td><td>{x.queries}</td>
+                <td>{(x.tokens || 0).toLocaleString()}</td><td>{money(x.spend)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

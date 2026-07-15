@@ -159,29 +159,48 @@ def import_job(job_id: int):
 
 # --- Usage dashboard ----------------------------------------------------------
 @router.get("/usage")
-def usage():
+def usage(since: float | None = None, until: float | None = None):
+    """Usage/spend over a time window [since, until] (unix seconds; default: the
+    last 7 days). Returns totals, a time-bucketed series (hourly for short
+    windows, else daily) for charting, top users, and recent activity."""
+    now = time.time()
+    until = float(until) if until else now
+    since = float(since) if since else (now - 7 * 86400)
+    if since > until:
+        since, until = until, since
+    hourly = (until - since) <= 2 * 86400 + 1
+    bucket_fmt = "%Y-%m-%d %H:00" if hourly else "%Y-%m-%d"
+    win = "WHERE created_at BETWEEN ? AND ?"
+    args = (since, until)
+
     con = connect()
     try:
         totals = con.execute(
             "SELECT COUNT(*) AS queries, "
             "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens, "
+            "COALESCE(SUM(cost),0.0) AS spend, "
             "COALESCE(SUM(cached),0) AS cache_hits, "
             "COALESCE(SUM(escalated),0) AS escalations, "
             "COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0) AS failures "
-            "FROM usage_log").fetchone()
-        by_day = con.execute(
-            "SELECT date(created_at,'unixepoch') AS day, COUNT(*) AS queries, "
-            "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens "
-            "FROM usage_log GROUP BY day ORDER BY day DESC LIMIT 30").fetchall()
+            f"FROM usage_log {win}", args).fetchone()
+        series = con.execute(
+            f"SELECT strftime('{bucket_fmt}', created_at,'unixepoch') AS t, "
+            "COUNT(*) AS queries, "
+            "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens, "
+            "COALESCE(SUM(cost),0.0) AS spend "
+            f"FROM usage_log {win} GROUP BY t ORDER BY t", args).fetchall()
         top_users = con.execute(
-            "SELECT u.email, COUNT(*) AS queries FROM usage_log l "
-            "JOIN users u ON u.id=l.user_id GROUP BY u.email "
-            "ORDER BY queries DESC LIMIT 10").fetchall()
+            "SELECT u.email, COUNT(*) AS queries, "
+            "COALESCE(SUM(l.prompt_tokens+l.completion_tokens),0) AS tokens, "
+            "COALESCE(SUM(l.cost),0.0) AS spend FROM usage_log l "
+            "JOIN users u ON u.id=l.user_id WHERE l.created_at BETWEEN ? AND ? "
+            "GROUP BY u.email ORDER BY queries DESC LIMIT 10", args).fetchall()
         recent = con.execute(
-            "SELECT question, model_used, ok, cached, created_at FROM usage_log "
-            "ORDER BY id DESC LIMIT 20").fetchall()
-        return {"totals": dict(totals),
-                "by_day": [dict(r) for r in by_day],
+            "SELECT question, model_used, ok, cached, cost, created_at "
+            f"FROM usage_log {win} ORDER BY id DESC LIMIT 20", args).fetchall()
+        return {"since": since, "until": until, "bucket": "hour" if hourly else "day",
+                "totals": dict(totals),
+                "series": [dict(r) for r in series],
                 "top_users": [dict(r) for r in top_users],
                 "recent": [dict(r) for r in recent]}
     finally:

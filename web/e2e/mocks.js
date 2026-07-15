@@ -143,9 +143,9 @@ export async function mockAccessRequests(page, rows) {
   });
 }
 
-/** GET /api/admin/usage -> {totals, by_day, top_users}. */
+/** GET /api/admin/usage?since&until -> {totals, series, top_users, bucket}. */
 export async function mockUsage(page, data) {
-  await page.route("**/api/admin/usage", async (route) => {
+  await page.route("**/api/admin/usage*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
 }

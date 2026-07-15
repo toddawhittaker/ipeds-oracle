@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS meta (
 # edit or renumber a shipped migration.
 MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA),
-    # (2, "ALTER TABLE users ADD COLUMN display_name TEXT;"),  # example
+    # Per-request OpenRouter cost (USD), for the admin spend dashboard.
+    (2, "ALTER TABLE usage_log ADD COLUMN cost REAL NOT NULL DEFAULT 0;"),
 ]
 
 

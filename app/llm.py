@@ -34,6 +34,7 @@ class AgentResult:
     last_result: QueryResult | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cost: float = 0.0  # summed OpenRouter cost (USD) across the turn's calls
     error: str | None = None
 
     @property
@@ -109,6 +110,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             usage = data.get("usage") or {}
             res.prompt_tokens += usage.get("prompt_tokens", 0)
             res.completion_tokens += usage.get("completion_tokens", 0)
+            res.cost += usage.get("cost") or 0
 
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             tool_calls = msg.get("tool_calls") or []
@@ -174,6 +176,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             usage = data.get("usage") or {}
             res.prompt_tokens += usage.get("prompt_tokens", 0)
             res.completion_tokens += usage.get("completion_tokens", 0)
+            res.cost += usage.get("cost") or 0
             final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         except httpx.HTTPError:
             final = ""

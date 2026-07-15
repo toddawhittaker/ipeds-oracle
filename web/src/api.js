@@ -33,7 +33,13 @@ export const api = {
     j("POST", "/api/admin/allowlist", { email, note, is_admin }),
   removeAllow: (email) => j("DELETE", `/api/admin/allowlist/${encodeURIComponent(email)}`),
   accessRequests: () => j("GET", "/api/admin/access-requests"),
-  usage: () => j("GET", "/api/admin/usage"),
+  usage: (since, until) => {
+    const p = new URLSearchParams();
+    if (since) p.set("since", String(Math.floor(since)));
+    if (until) p.set("until", String(Math.floor(until)));
+    const qs = p.toString();
+    return j("GET", "/api/admin/usage" + (qs ? `?${qs}` : ""));
+  },
   skills: () => j("GET", "/api/admin/skills"),
   deleteSkill: (id) => j("DELETE", `/api/admin/skills/${id}`),
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),
