@@ -120,7 +120,12 @@ red CI check can otherwise land on `main`.
 **Ship via branch → PR → merge on green.** Never commit straight to `main`.
 Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), keep PRs focused (one item),
 open a PR, watch `gh pr checks <n> --watch`, merge only when lint · backend · e2e
-are all green. End commit messages with the `Co-Authored-By:` trailer.
+· image are all green. End commit messages with the `Co-Authored-By:` trailer.
+
+**Release/deploy (CI/CD).** CI's **image** job builds + smoke-tests the Docker
+image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*`
+git tag** publishes `:vX.Y.Z` + `:latest`. Production is **pull-on-the-box** —
+the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `DEPLOY.md`.
 
 **Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys) bleeds
 into tests — run auth suites with `COOKIE_SECURE=false`, and blank

@@ -36,10 +36,28 @@ Browser ─► Caddy (auto-HTTPS) ─► FastAPI (app/) ─► OpenRouter (DeepS
 - An **OpenRouter** API key and a **Resend** API key (+ a verified sending
   domain in Resend).
 
+## How releases ship (CI/CD)
+
+The app runs from a **pre-built image**, not a build-on-the-box. CI
+(`.github/workflows/ci.yml`, the **image** job) builds the Docker image, boots
+it, and smoke-tests `/api/health` on every PR — so a broken build can't land —
+and publishes to **GHCR** (`ghcr.io/toddawhittaker/ipeds-ai`) on pushes:
+
+- push to `main` → `:edge` + `:sha-<short>` (the tip, for staging/testing)
+- a **`v*` git tag** (a release) → `:vX.Y.Z` + `:X.Y` + `:latest`
+
+Deploy is **pull-on-the-box** (no inbound SSH from GitHub). Cut a release, then
+on the VPS run `scripts/deploy.sh` (below) to roll onto it.
+
+```bash
+# Cut a release from your workstation once CI is green on main:
+git tag v1.2.0 && git push origin v1.2.0     # CI publishes :v1.2.0 + :latest
+```
+
 ## First deploy
 
 ```bash
-# 1. Get the code onto the server
+# 1. Get the code onto the server (compose.yaml, .env, scripts/ — not the image)
 git clone <your-repo> ipeds && cd ipeds
 
 # 2. Provide the data volume (NOT in git — too large)
@@ -50,17 +68,37 @@ cp /path/to/IPEDS*.accdb    srv-data/accdb/        # source files, for re-import
 # 3. Configure secrets
 cp .env.example .env
 $EDITOR .env            # OPENROUTER_API_KEY, RESEND_API_KEY, SESSION_SECRET,
-                        # ADMIN_EMAILS, MAIL_FROM, APP_PUBLIC_URL, DOMAIN
+                        # ADMIN_EMAILS, MAIL_FROM, APP_PUBLIC_URL, DOMAIN,
+                        # IPEDS_TAG (pin a release, or leave :latest)
 #   Generate a session secret:
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
-#   Add DOMAIN=ipeds.yourschool.edu to .env (used by Caddy)
 
-# 4. Launch
-docker compose up -d --build
+# 4. Launch — pulls the published image (GHCR is public-read for this repo's
+#    packages; if you made them private, `docker login ghcr.io` first).
+docker compose up -d
 ```
 
 Visit `https://$DOMAIN`. Sign in with an address in `ADMIN_EMAILS` (auto
 allowlisted + admin on first boot). Add colleagues under **Admin → Allowlist**.
+
+> No published image yet (before your first CI release)? `docker compose up -d
+> --build` still builds locally from source — `compose.yaml` keeps a `build:`
+> stanza for exactly this.
+
+## Deploying a new release
+
+```bash
+cd /srv/ipeds && git pull        # refresh compose.yaml / scripts if they changed
+scripts/deploy.sh v1.2.0         # pin & roll onto an exact release (persists to .env)
+scripts/deploy.sh                # or: pull whatever IPEDS_TAG/:latest resolves to
+```
+
+`scripts/deploy.sh` pulls the `app` image, recreates just that service, waits for
+`/api/health`, and prunes dangling images. Caddy and the data volume are
+untouched, so `app.db`/`ipeds.db` survive the swap. Roll back by re-running it
+with the previous tag (`scripts/deploy.sh v1.1.0`). To make releases fully
+hands-off later, a host cron or systemd timer can call `scripts/deploy.sh` on a
+schedule.
 
 > No `ipeds.db` yet? Put the source `.accdb` files in `srv-data/accdb/`, start
 > the app, and run the first build with
