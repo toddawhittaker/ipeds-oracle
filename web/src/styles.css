@@ -57,7 +57,19 @@ input, textarea, button { font-family: inherit; }
   display: flex; align-items: center; gap: 20px; padding: 10px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.brand { font-weight: 700; color: var(--accent); }
+.brand { display: flex; align-items: center; }
+/* Wordmark logo (transparent PNG, no built-in padding). Swaps to a light-text
+   variant on dark backgrounds where the navy lettering would otherwise vanish.
+   Sized by height; width follows the source aspect ratio. */
+.wordmark {
+  display: block; aspect-ratio: 924 / 200;
+  background: url(./assets/wordmark.png) left center / contain no-repeat;
+}
+:root[data-theme="dark"] .wordmark { background-image: url(./assets/wordmark-dark.png); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .wordmark { background-image: url(./assets/wordmark-dark.png); }
+}
+.brand .wordmark { height: 26px; }
 .tabs { display: flex; gap: 6px; }
 .tabs button, .subtabs button {
   background: transparent; border: 1px solid transparent; color: var(--muted);
@@ -73,7 +85,8 @@ input, textarea, button { font-family: inherit; }
 /* login */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
 .login { max-width: 440px; width: 100%; }
-.login h1 { margin: 0 0 4px; color: var(--accent); }
+.login h1 { margin: 0 0 10px; }
+.login .wordmark { height: 46px; }
 .login form { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
 .login input, .composer textarea, .row input, .row select {
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;

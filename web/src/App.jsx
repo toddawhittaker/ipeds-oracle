@@ -37,7 +37,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">IPEDS Query</div>
+        <div className="brand"><span className="wordmark" role="img" aria-label="IPEDS Query" /></div>
         <nav className="tabs" aria-label="Primary">
           <button className={view === "chat" ? "on" : ""} aria-current={view === "chat" ? "page" : undefined}
                   onClick={() => setView("chat")}>Chat</button>

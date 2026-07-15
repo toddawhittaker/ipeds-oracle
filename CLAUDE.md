@@ -23,6 +23,8 @@ Work out which you're doing and read the matching half below.
   `data/*.accdb` files (`--dry-run` prints the table→family mapping).
 - `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
   team). `DEPLOY.md` — VPS/Docker deploy. `docs/` — official IPEDS Excel docs.
+- `brand/` — logo source masters (icon + wordmark) and the ImageMagick commands
+  that regenerate the web favicons + `web/src/assets/wordmark*.png` from them.
 
 ---
 
