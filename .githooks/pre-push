@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# pre-push — client-side CI merge gate.
+#
+# Branch protection / required status checks aren't available on this repo's
+# plan, so GitHub CI can't block a merge. This hook runs the full CI scope
+# locally before every push and aborts the push if anything is red.
+#
+# Bypass (use sparingly): git push --no-verify
+# Skip only the slow e2e job:  SKIP_E2E=1 git push
+#
+# Enabled via: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/run_ci_local.sh"
