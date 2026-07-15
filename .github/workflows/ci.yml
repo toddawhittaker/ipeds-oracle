@@ -92,6 +92,9 @@ jobs:
       - name: Build CI fixture database
         run: python scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH"
 
+      - name: Stub web/dist (activates app/main.py SPA-serving + its traversal guard)
+        run: python scripts/make_web_dist_stub.py
+
       - name: SQL guard tests
         run: python eval/test_sql_guards.py
 
@@ -133,6 +136,15 @@ jobs:
 
       - name: schema discovery-tool tests
         run: python eval/test_schema_tool.py
+
+      - name: tool-registry tests (tool_specs · dispatch error handling)
+        run: python eval/test_registry.py
+
+      - name: chat router tests (cache hit · edit/rerun · feedback · CSV errors)
+        run: python eval/test_chat_router.py
+
+      - name: admin router tests (import HTTP surface · usage · skills · logs)
+        run: python eval/test_admin_router.py
 
       - name: Coverage gate (app/ >= 80%)
         run: |

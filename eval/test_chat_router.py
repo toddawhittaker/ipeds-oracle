@@ -1,0 +1,429 @@
+"""Chat router contract (app/routers/chat.py): streaming turns, the semantic
+cache-hit shortcut, edit/rerun (replacing an old exchange in place),
+conversation list/get/delete, feedback (a thumbs-up promotes a skill), and the
+CSV export's error branches.
+
+No LLM/API key needed: guard.classify is patched to always allow, and
+chat_router.stream_agent is replaced per-test with a canned async generator
+(same pattern as eval/test_guard.py) so every branch runs deterministically.
+"""
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+tmp = tempfile.mkdtemp()
+os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
+os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["COOKIE_SECURE"] = "false"
+os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["RESEND_API_KEY"] = ""
+# This suite logs in as more than one user; keep the auth rate limiter out of
+# the way so it never masks a real assertion.
+os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
+os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app import mailer  # noqa: E402
+
+captured = {}
+mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
+mailer.send_access_request = lambda *a, **k: True
+mailer.send_access_approved = (
+    lambda to, link: captured.__setitem__("approved_link", link) or True)
+
+from app import guard, skills  # noqa: E402
+from app.llm import AgentResult  # noqa: E402
+from app.main import app  # noqa: E402
+from app.routers import chat as chat_router  # noqa: E402
+
+FAILURES = []
+
+
+def check(name, fn):
+    try:
+        fn()
+        print(f"  ✓ {name}")
+    except AssertionError as e:
+        FAILURES.append(name)
+        print(f"  ✗ {name}: {e}")
+
+
+async def _always_allow(question, history=None):
+    return guard.Verdict(allowed=True, tokens=1)
+
+
+guard.classify = _always_allow
+
+
+def _login(c, email="admin@franklin.edu"):
+    c.post("/api/auth/request", json={"email": email})
+    token = captured["link"].split("token=")[1]
+    assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
+
+
+def _parse_sse(text):
+    events = []
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if block.startswith("data: "):
+            events.append(json.loads(block[len("data: "):]))
+    return events
+
+
+def _make_agent(answer_text, *, sql_log=None, error=None, model="test-model"):
+    """A canned chat_router.stream_agent replacement yielding one answer + done."""
+    async def _agent(question, *, history=None, skills_block=""):
+        if answer_text is not None:
+            yield {"type": "answer", "text": answer_text}
+        yield {"type": "done", "result": AgentResult(
+            answer=answer_text or "", model_used=model, error=error,
+            sql_log=sql_log or [], prompt_tokens=3, completion_tokens=2)}
+    return _agent
+
+
+def _post_turn(c, question, *, conversation_id=None, edit_message_id=None,
+              answer_text="42", sql_log=None, error=None):
+    orig_agent = chat_router.stream_agent
+    orig_skills_block = skills.retrieve_skills_block
+    orig_bump = skills.bump_hits
+    orig_cache_lookup = skills.cache_lookup
+    orig_cache_store = skills.cache_store
+    chat_router.stream_agent = _make_agent(answer_text, sql_log=sql_log, error=error)
+    skills.retrieve_skills_block = lambda q: ("", [])
+    skills.bump_hits = lambda ids: None
+    skills.cache_lookup = lambda q: None
+    skills.cache_store = lambda *a, **k: None
+    try:
+        body = {"question": question}
+        if conversation_id is not None:
+            body["conversation_id"] = conversation_id
+        if edit_message_id is not None:
+            body["edit_message_id"] = edit_message_id
+        r = c.post("/api/chat/stream", json=body)
+    finally:
+        chat_router.stream_agent = orig_agent
+        skills.retrieve_skills_block = orig_skills_block
+        skills.bump_hits = orig_bump
+        skills.cache_lookup = orig_cache_lookup
+        skills.cache_store = orig_cache_store
+    return r
+
+
+# ---------------------------------------------------------------------------
+# chat_stream: validation, ownership, edit/rerun
+# ---------------------------------------------------------------------------
+
+def test_empty_question_rejected():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/chat/stream", json={"question": "   "})
+        assert r.status_code == 400, r.text
+
+
+def test_stream_unknown_conversation_id_404():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/chat/stream",
+                   json={"question": "hi", "conversation_id": 999999})
+        assert r.status_code == 404, r.text
+
+
+def test_stream_conversation_not_owned_by_caller_404():
+    with TestClient(app) as c:
+        _login(c, "admin@franklin.edu")
+        r = _post_turn(c, "first question in admin's conversation")
+        events = _parse_sse(r.text)
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+
+        # A second user must not be able to post into admin's conversation.
+        c.post("/api/admin/allowlist", json={"email": "other@franklin.edu"})
+        approved_link = captured["approved_link"]
+        atok = approved_link.split("token=")[1]
+        c2 = TestClient(app)
+        assert c2.post("/api/auth/verify", json={"token": atok}).status_code == 200
+        r2 = c2.post("/api/chat/stream",
+                    json={"question": "hi", "conversation_id": conv_id})
+        assert r2.status_code == 404, r2.text
+
+
+def test_edit_message_id_replaces_old_exchange():
+    with TestClient(app) as c:
+        _login(c)
+        r1 = _post_turn(c, "original question", answer_text="original answer")
+        events1 = _parse_sse(r1.text)
+        conv_id = next(e["id"] for e in events1 if e["type"] == "conversation")
+        done1 = next(e for e in events1 if e["type"] == "done")
+        first_user_msg_id = done1["user_message_id"]
+
+        before = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assert len(before) == 2, before  # user + assistant
+
+        r2 = _post_turn(c, "edited question", conversation_id=conv_id,
+                        edit_message_id=first_user_msg_id,
+                        answer_text="edited answer")
+        assert r2.status_code == 200, r2.text
+
+        after = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assert len(after) == 2, after  # old pair replaced, not appended
+        assert after[0]["content"] == "edited question", after
+        assert after[1]["content"] == "edited answer", after
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache hit branch
+# ---------------------------------------------------------------------------
+
+def test_cache_hit_serves_cached_answer_and_titles_new_conversation():
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_cache_lookup = skills.cache_lookup
+        orig_gen_title = chat_router.generate_title
+        orig_skills_block = skills.retrieve_skills_block
+
+        def _explode(question, *, history=None, skills_block=""):
+            raise AssertionError("stream_agent must not run on a cache hit")
+
+        async def _fake_title(question, answer):
+            return "A Cached Title"
+
+        chat_router.stream_agent = _explode
+        skills.cache_lookup = lambda q: {
+            "answer_md": "cached answer 12,345", "final_sql": "SELECT 1"}
+        chat_router.generate_title = _fake_title
+        skills.retrieve_skills_block = lambda q: ("", [])
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a cacheable question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.cache_lookup = orig_cache_lookup
+            chat_router.generate_title = orig_gen_title
+            skills.retrieve_skills_block = orig_skills_block
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        answer = next(e for e in events if e["type"] == "answer")
+        assert answer["text"] == "cached answer 12,345", events
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("cached") is True, done
+        assert done.get("title") == "A Cached Title", done
+
+
+def test_normal_flow_titles_a_new_conversation():
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_gen_title = chat_router.generate_title
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+
+        async def _fake_title(question, answer):
+            return "A Real-Flow Title"
+
+        chat_router.stream_agent = _make_agent("a real answer", sql_log=["SELECT 1"])
+        chat_router.generate_title = _fake_title
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a fresh question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            chat_router.generate_title = orig_gen_title
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("title") == "A Real-Flow Title", done
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        convs = c.get("/api/chat/conversations").json()
+        assert any(x["id"] == conv_id and x["title"] == "A Real-Flow Title"
+                  for x in convs), convs
+
+
+def test_retrieved_skills_bump_their_hit_count():
+    with TestClient(app) as c:
+        _login(c)
+        skill_row = c.get("/api/admin/skills").json()[0]
+        skill_id = skill_row["id"]
+        before_hits = skill_row["hits"]
+
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+
+        chat_router.stream_agent = _make_agent("answer", sql_log=["SELECT 1"])
+        skills.retrieve_skills_block = lambda q: ("some few-shot block", [skill_id])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a question using a skill"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        after = next(x for x in c.get("/api/admin/skills").json() if x["id"] == skill_id)
+        assert after["hits"] == before_hits + 1, after
+
+
+# ---------------------------------------------------------------------------
+# conversation list / get / delete
+# ---------------------------------------------------------------------------
+
+def test_conversation_crud():
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a crud test question")
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+
+        lst = c.get("/api/chat/conversations").json()
+        assert any(x["id"] == conv_id for x in lst), lst
+
+        got = c.get(f"/api/chat/conversations/{conv_id}")
+        assert got.status_code == 200 and len(got.json()) == 2, got.text
+
+        missing = c.get("/api/chat/conversations/999999")
+        assert missing.status_code == 404, missing.text
+
+        deleted = c.delete(f"/api/chat/conversations/{conv_id}")
+        assert deleted.status_code == 200 and deleted.json()["ok"] is True
+
+        gone = c.get(f"/api/chat/conversations/{conv_id}")
+        assert gone.status_code == 404, gone.text
+
+        missing_delete = c.delete("/api/chat/conversations/999999")
+        assert missing_delete.status_code == 404, missing_delete.text
+
+
+# ---------------------------------------------------------------------------
+# feedback: thumbs-up promotes a skill, thumbs-down doesn't, 404 for unknown
+# ---------------------------------------------------------------------------
+
+def test_feedback_thumbs_up_promotes_skill():
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "nursing degrees per year", answer_text="lots",
+                       sql_log=["SELECT 1 AS nursing_total"])
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        msg_id = done["message_id"]
+
+        promoted = {}
+        orig_promote = skills.promote_from_message
+        skills.promote_from_message = (
+            lambda q, sql: promoted.update(question=q, sql=sql))
+        try:
+            fb = c.post(f"/api/chat/messages/{msg_id}/feedback", json={"value": 1})
+        finally:
+            skills.promote_from_message = orig_promote
+        assert fb.status_code == 200 and fb.json()["feedback"] == 1, fb.text
+        assert promoted.get("sql") == "SELECT 1 AS nursing_total", promoted
+        assert promoted.get("question") == "nursing degrees per year", promoted
+
+
+def test_feedback_thumbs_down_does_not_promote():
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "another question", answer_text="an answer",
+                       sql_log=["SELECT 2"])
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        msg_id = done["message_id"]
+
+        called = {"hit": False}
+        orig_promote = skills.promote_from_message
+        skills.promote_from_message = lambda q, sql: called.__setitem__("hit", True)
+        try:
+            fb = c.post(f"/api/chat/messages/{msg_id}/feedback", json={"value": -1})
+        finally:
+            skills.promote_from_message = orig_promote
+        assert fb.status_code == 200 and fb.json()["feedback"] == -1, fb.text
+        assert called["hit"] is False, "thumbs-down must not promote a skill"
+
+
+def test_feedback_unknown_message_404():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/chat/messages/999999/feedback", json={"value": 1})
+        assert r.status_code == 404, r.text
+
+
+# ---------------------------------------------------------------------------
+# CSV download error branches (the success path is covered in test_backend.py)
+# ---------------------------------------------------------------------------
+
+def test_download_csv_unknown_message_404():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.get("/api/chat/messages/999999/download.csv")
+        assert r.status_code == 404, r.text
+
+
+def test_download_csv_no_sql_log_400():
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a question with no sql", answer_text="just prose",
+                       sql_log=[])
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        msg_id = done["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 400, csv_r.text
+
+
+def test_download_csv_rejected_sql_400():
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a question with bad sql", answer_text="answer",
+                       sql_log=["DROP TABLE c_a"])
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        msg_id = done["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 400, csv_r.text
+
+
+def run():
+    print("chat router contract:")
+    check("empty question is rejected (400)", test_empty_question_rejected)
+    check("streaming into an unknown conversation_id 404s",
+          test_stream_unknown_conversation_id_404)
+    check("streaming into another user's conversation 404s",
+          test_stream_conversation_not_owned_by_caller_404)
+    check("edit_message_id replaces the old exchange in place",
+          test_edit_message_id_replaces_old_exchange)
+    check("a semantic cache hit serves the cached answer + titles the chat",
+          test_cache_hit_serves_cached_answer_and_titles_new_conversation)
+    check("a normal (non-cached) successful turn titles a new conversation",
+          test_normal_flow_titles_a_new_conversation)
+    check("retrieved few-shot skills bump their hit count",
+          test_retrieved_skills_bump_their_hit_count)
+    check("conversation list/get/delete (+404s)", test_conversation_crud)
+    check("thumbs-up feedback promotes a skill", test_feedback_thumbs_up_promotes_skill)
+    check("thumbs-down feedback does not promote a skill",
+          test_feedback_thumbs_down_does_not_promote)
+    check("feedback on an unknown message 404s", test_feedback_unknown_message_404)
+    check("CSV download of an unknown message 404s",
+          test_download_csv_unknown_message_404)
+    check("CSV download with no associated query 400s",
+          test_download_csv_no_sql_log_400)
+    check("CSV download of a rejected/forbidden SQL 400s",
+          test_download_csv_rejected_sql_400)
+    print()
+    if FAILURES:
+        print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")
+        sys.exit(1)
+    print("ALL CHAT-ROUTER TESTS PASSED")
+
+
+if __name__ == "__main__":
+    run()

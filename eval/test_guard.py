@@ -12,9 +12,12 @@ import asyncio
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import httpx  # noqa: E402
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
@@ -65,6 +68,93 @@ def test_classify_fails_open_without_key():
     # No OPENROUTER_API_KEY in this env -> allowed, no network call.
     v = asyncio.run(guard.classify("give me a recipe for key lime pie"))
     assert v.allowed is True, "classify must fail open when unconfigured"
+
+
+# ---------------------------------------------------------------------------
+# LIVE classify() path — a key IS configured, so classify() must actually
+# build the request and interpret a real HTTP response (or fail open on a
+# transport error). Rather than touching the real OPENROUTER_API_KEY/env
+# (which would break the "fails open without a key" contract above),
+# guard.get_settings is monkeypatched per-test to simulate a configured key,
+# and guard.httpx.AsyncClient is monkeypatched to a fake transport returning
+# a real httpx.Response (so response.raise_for_status()/.json() behave
+# exactly like the real thing) without any network access.
+# ---------------------------------------------------------------------------
+
+def _configured_settings(**overrides):
+    base = dict(guard_enabled=True, openrouter_api_key="test-key",
+               model_default="deepseek/deepseek-v4-flash",
+               openrouter_base_url="https://openrouter.ai/api/v1",
+               app_public_url="http://localhost:8000", app_title="IPEDS Query")
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+class _FakeAsyncClient:
+    """Returns (or raises) one canned item for every POST; ignores request args."""
+
+    def __init__(self, item):
+        self._item = item
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, json=None, headers=None, timeout=None):
+        if isinstance(self._item, BaseException):
+            raise self._item
+        return self._item
+
+
+def _json_response(data, status=200):
+    return httpx.Response(status, json=data,
+                          request=httpx.Request("POST", "http://x/chat/completions"))
+
+
+def _with_fake_transport(item, fn):
+    orig_settings, orig_client_cls = guard.get_settings, guard.httpx.AsyncClient
+    guard.get_settings = _configured_settings
+    guard.httpx.AsyncClient = lambda *a, **k: _FakeAsyncClient(item)
+    try:
+        return fn()
+    finally:
+        guard.get_settings = orig_settings
+        guard.httpx.AsyncClient = orig_client_cls
+
+
+def test_classify_in_scope_reply_with_live_key():
+    resp = _json_response({
+        "choices": [{"message": {"content": "IN_SCOPE"}}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 1},
+    })
+    history = [{"role": "user", "content": "prior turn"},
+              {"role": "assistant", "content": "prior answer"}]
+    v = _with_fake_transport(
+        resp, lambda: asyncio.run(guard.classify(
+            "How many nursing degrees were awarded?", history=history)))
+    assert v.allowed is True, v
+    assert v.tokens == 13, v.tokens
+    assert v.raw == "IN_SCOPE", v.raw
+
+
+def test_classify_out_of_scope_reply_with_live_key():
+    resp = _json_response({
+        "choices": [{"message": {"content": "OUT_OF_SCOPE — this is a recipe"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+    })
+    v = _with_fake_transport(
+        resp, lambda: asyncio.run(guard.classify("give me a recipe")))
+    assert v.allowed is False, v
+    assert v.tokens == 14, v.tokens
+
+
+def test_classify_transport_error_fails_open_with_live_key():
+    v = _with_fake_transport(
+        httpx.ConnectError("connection refused"),
+        lambda: asyncio.run(guard.classify("How many degrees were awarded?")))
+    assert v.allowed is True, "a transport error must fail open, not refuse"
 
 
 def _login(c):
@@ -132,6 +222,12 @@ def run():
           test_reply_parsing)
     check("classify fails open when unconfigured/disabled",
           test_classify_fails_open_without_key)
+    check("classify (live key): IN_SCOPE reply allows, with history + tokens",
+          test_classify_in_scope_reply_with_live_key)
+    check("classify (live key): OUT_OF_SCOPE reply refuses",
+          test_classify_out_of_scope_reply_with_live_key)
+    check("classify (live key): transport error fails open",
+          test_classify_transport_error_fails_open_with_live_key)
     check("out-of-scope message refused, agent never runs",
           test_out_of_scope_refused_without_calling_agent)
     check("in-scope message reaches the agent", test_in_scope_reaches_agent)

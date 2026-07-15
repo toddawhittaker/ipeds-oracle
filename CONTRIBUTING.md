@@ -97,10 +97,10 @@ cd web && npm run test:e2e
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
 
-**Coverage standard: `app/` stays ≥ 80%** — enforced in CI (and the pre-push
-gate) by `scripts/coverage_check.sh`, which runs every `eval/test_*.py` under
-coverage.py and fails under the threshold. Every behavior change ships with unit
-tests. Measure locally:
+**Coverage standard: every `app/` module stays ≥ 80%** (per-module, not just the
+total) — enforced in CI (and the pre-push gate) by `scripts/coverage_check.sh`,
+which runs every `eval/test_*.py` under coverage.py and fails if any module drops
+below the floor. Every behavior change ships with unit tests. Measure locally:
 
 ```bash
 scripts/coverage_check.sh                                           # the gate (>=80% or fail)
