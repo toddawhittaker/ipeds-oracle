@@ -116,6 +116,9 @@ jobs:
       - name: app.db backup/restore tests
         run: python eval/test_backup.py
 
+      - name: agent tool-loop tests
+        run: python eval/test_agent_loop.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
