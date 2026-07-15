@@ -20,6 +20,11 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("ipeds.app")
 
+# Keep recent log records in memory so admins can view them in the UI.
+from app.logbuffer import install as _install_logbuffer  # noqa: E402
+
+_install_logbuffer()
+
 WEB_DIST = ROOT / "web" / "dist"
 
 

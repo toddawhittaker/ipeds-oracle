@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from app import skills
 from app.auth import current_user
 from app.db import connect
-from app.llm import stream_agent
+from app.llm import generate_title, stream_agent
 from app.tools.sql import SQLValidationError, run_sql
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -26,6 +26,9 @@ HISTORY_TURNS = 6  # prior messages fed back to the model for context
 class ChatRequest(BaseModel):
     question: str
     conversation_id: int | None = None
+    # When re-asking an edited/rerun prompt: drop this message and everything
+    # after it first, so the new turn REPLACES the old exchange in place.
+    edit_message_id: int | None = None
 
 
 def _sse(event: dict) -> str:
@@ -46,6 +49,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         raise HTTPException(400, "Empty question.")
 
     con = connect()
+    is_new = not req.conversation_id
     try:
         conv_id = req.conversation_id
         if conv_id:
@@ -53,6 +57,13 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                                (conv_id, user["id"])).fetchone()
             if not owns:
                 raise HTTPException(404, "Conversation not found.")
+            # Editing/rerunning: delete the target message and everything after
+            # it so the incoming turn replaces the old exchange.
+            if req.edit_message_id:
+                con.execute(
+                    "DELETE FROM messages WHERE conversation_id=? AND id>=?",
+                    (conv_id, req.edit_message_id))
+                con.commit()
         else:
             cur = con.execute(
                 "INSERT INTO conversations(user_id, title, created_at, updated_at) "
@@ -75,11 +86,18 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             answer = cached["answer_md"]
             yield _sse({"type": "status", "text": "Matched a recent question — reusing its query."})
             yield _sse({"type": "answer", "text": answer})
-            await run_in_threadpool(
+            user_msg_id, msg_id = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer,
                 sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
                 model="cache", tokens=0, cached=True, ok=True)
-            yield _sse({"type": "done", "cached": True})
+            done = {"type": "done", "cached": True, "message_id": msg_id,
+                    "user_message_id": user_msg_id}
+            if is_new and answer:
+                title = await generate_title(question, answer)
+                if title:
+                    await run_in_threadpool(_update_title, conv_id, title)
+                    done["title"] = title
+            yield _sse(done)
             return
 
         # 2) Retrieve learned skills as few-shot context.
@@ -102,7 +120,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             yield _sse({"type": "done"})
             return
 
-        await run_in_threadpool(
+        user_msg_id, msg_id = await run_in_threadpool(
             _persist, user["id"], conv_id, question, answer or (result.error or ""),
             sql_log=result.sql_log, model=result.model_used,
             tokens=result.total_tokens, cached=False,
@@ -114,8 +132,16 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         if not history and result.error is None and answer and result.sql_log:
             await run_in_threadpool(skills.cache_store, question, result.sql_log[-1], answer)
 
-        yield _sse({"type": "done", "escalated": result.escalated,
-                    "model": result.model_used, "tokens": result.total_tokens})
+        done = {"type": "done", "escalated": result.escalated,
+                "model": result.model_used, "tokens": result.total_tokens,
+                "message_id": msg_id, "user_message_id": user_msg_id}
+        # 5) Let the model name a brand-new conversation (better than the raw query).
+        if is_new and result.error is None and answer:
+            title = await generate_title(question, answer)
+            if title:
+                await run_in_threadpool(_update_title, conv_id, title)
+                done["title"] = title
+        yield _sse(done)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
@@ -124,16 +150,21 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0):
+    """Persist the user + assistant messages and usage row. Returns the new
+    assistant message id (so the stream can hand it to the client without a
+    full conversation reload)."""
     con = connect()
     try:
         now = time.time()
-        con.execute(
+        ucur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, created_at) "
             "VALUES (?,?,?,?)", (conv_id, "user", question, now))
-        con.execute(
+        user_msg_id = ucur.lastrowid
+        cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
             "model_used, tokens, created_at) VALUES (?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log), model, tokens, now))
+        assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
@@ -141,6 +172,16 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, int(ok), int(cached), now))
+        con.commit()
+        return user_msg_id, assistant_id
+    finally:
+        con.close()
+
+
+def _update_title(conv_id: int, title: str) -> None:
+    con = connect()
+    try:
+        con.execute("UPDATE conversations SET title=? WHERE id=?", (title, conv_id))
         con.commit()
     finally:
         con.close()
@@ -172,6 +213,22 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         return [dict(r) for r in rows]
     finally:
         con.close()
+
+
+@router.delete("/conversations/{conv_id}")
+def delete_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
+    con = connect()
+    try:
+        owns = con.execute("SELECT 1 FROM conversations WHERE id=? AND user_id=?",
+                           (conv_id, user["id"])).fetchone()
+        if not owns:
+            raise HTTPException(404, "Not found.")
+        con.execute("DELETE FROM messages WHERE conversation_id=?", (conv_id,))
+        con.execute("DELETE FROM conversations WHERE id=?", (conv_id,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
 
 
 class Feedback(BaseModel):
