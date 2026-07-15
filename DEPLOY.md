@@ -100,7 +100,7 @@ is rebuildable from `srv-data/accdb/`. Back up `app.db` to R2 on a cron:
 ## Development (without Docker)
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.lock
 cp .env.example .env && $EDITOR .env        # at least OPENROUTER_API_KEY, ADMIN_EMAILS
 .venv/bin/uvicorn app.main:app --reload     # API on :8000
 cd web && npm install && npm run dev         # UI on :5173 (proxies /api → :8000)

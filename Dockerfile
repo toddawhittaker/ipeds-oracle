@@ -16,8 +16,9 @@ RUN apt-get update \
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the pinned + hashed lockfile for reproducible builds.
+COPY requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 # App code + the loader + the schema guide (used as the system prompt).
 COPY app/ ./app/
