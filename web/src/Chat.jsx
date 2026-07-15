@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api, streamChat } from "./api.js";
+import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 
 // Copy plain text, falling back to execCommand for non-secure contexts
@@ -20,25 +21,72 @@ async function copyText(text) {
 // Copy a rendered node as rich HTML (so pasting into email/Word keeps the
 // table). Tries the async Clipboard API, then falls back to selecting the node
 // and execCommand, which preserves formatting even without a secure context.
+// Clone the answer DOM and replace each live chart (Recharts SVG + wrapper divs
+// + type buttons, which paste as garbage) with its rasterized PNG, so it lands
+// cleanly in Word/Outlook/Docs. A chart with no PNG yet is dropped.
+function cleanCloneForCopy(node) {
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll("figure.chart").forEach((fig) => {
+    const exp = fig.querySelector("img.chart-export-img");
+    const src = exp?.getAttribute("src");
+    // The exported PNG already includes the title (drawn into the SVG), so we
+    // just swap the whole figure for the image.
+    if (src && src.startsWith("data:image")) {
+      const img = document.createElement("img");
+      img.setAttribute("src", src);
+      const w = exp.getAttribute("data-w");
+      if (w) img.setAttribute("width", String(Math.round(Number(w))));
+      fig.replaceWith(img);
+    } else {
+      fig.remove();
+    }
+  });
+  clone.querySelectorAll(".chart-export-img").forEach((n) => n.remove());
+  // Drop interactive UI that isn't part of the answer content.
+  clone.querySelectorAll(".table-tools").forEach((n) => n.remove());
+  return clone;
+}
+
+// Chart specs are a rendering directive, not prose — strip them from copied
+// text. Require a line break after `chart` so it can't match ```chartjs etc.
+const CHART_BLOCK_RE = /```chart[ \t]*\r?\n[\s\S]*?```/g;
+function stripChartBlocks(md) {
+  return (md || "").replace(CHART_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 async function copyHtml(node, plain) {
   if (!node) return false;
-  const html = node.innerHTML || "";
+  const clone = cleanCloneForCopy(node);
+  const html = clone.innerHTML || "";
+  const text = plain || node.innerText || "";
   try {
     if (navigator.clipboard?.write && window.ClipboardItem) {
       await navigator.clipboard.write([new window.ClipboardItem({
         "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([plain || node.innerText || ""], { type: "text/plain" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
       })]);
       return true;
     }
   } catch { /* fall through */ }
+  // Fallback (non-secure context, e.g. plain-http LAN): select a temporary
+  // off-screen node holding the CLEANED html so the copy excludes the live SVG.
   try {
+    const holder = document.createElement("div");
+    holder.setAttribute("contenteditable", "true");
+    holder.style.cssText = "position:fixed;left:-9999px;top:0;white-space:pre-wrap";
+    holder.appendChild(clone);
+    document.body.appendChild(holder);
+    // Ensure the chart PNGs are decoded before the synchronous copy, so the
+    // paste doesn't land as broken images.
+    await Promise.all([...holder.querySelectorAll("img")]
+      .map((im) => (im.decode ? im.decode().catch(() => {}) : null)));
     const range = document.createRange();
-    range.selectNodeContents(node);
+    range.selectNodeContents(holder);
     const sel = window.getSelection();
     sel.removeAllRanges(); sel.addRange(range);
     const ok = document.execCommand("copy");
     sel.removeAllRanges();
+    document.body.removeChild(holder);
     return ok;
   } catch { return false; }
 }
@@ -72,6 +120,7 @@ export default function Chat() {
   const [editText, setEditText] = useState("");
   const bottom = useRef(null);
   const taRef = useRef(null);
+  const editTrigger = useRef(null); // Edit button that opened the inline editor
   const mdRefs = useRef({}); // message index -> rendered markdown DOM node
 
   const refreshConvos = () => api.conversations().then(setConvos).catch(() => {});
@@ -89,9 +138,10 @@ export default function Chat() {
   }, [input]);
 
   async function doCopy(i, kind, markdown) {
+    const text = stripChartBlocks(markdown);
     const ok = kind === "html"
-      ? await copyHtml(mdRefs.current[i], markdown)
-      : await copyText(markdown);
+      ? await copyHtml(mdRefs.current[i], text)
+      : await copyText(text);
     if (ok) { setCopied(`${i}:${kind}`); setTimeout(() => setCopied(null), 1400); }
   }
 
@@ -118,16 +168,24 @@ export default function Chat() {
   }
 
   // Edit a prior prompt inline, then re-run it — replacing that exchange and
-  // everything after it (both in the UI and server-side).
-  function startEdit(i, content) { setEditingIdx(i); setEditText(content); }
-  function cancelEdit() { setEditingIdx(null); setEditText(""); }
+  // everything after it (both in the UI and server-side). We remember the
+  // trigger button so focus can return to it when the editor closes (a11y).
+  function startEdit(i, content, trigger) {
+    editTrigger.current = trigger || null;
+    setEditingIdx(i); setEditText(content);
+  }
+  function cancelEdit() {
+    setEditingIdx(null); setEditText("");
+    requestAnimationFrame(() => editTrigger.current?.focus?.());
+  }
   function saveEdit(i) {
     const text = editText.trim();
     if (!text || busy) return;
     const editMessageId = messages[i]?.id;
-    cancelEdit();
+    setEditingIdx(null); setEditText("");
     setMessages((m) => m.slice(0, i));   // drop this turn + everything after
     submit(text, { editMessageId });
+    requestAnimationFrame(() => taRef.current?.focus());  // land focus in composer
   }
   // Rerun a prior prompt as-is (e.g. after a failure), replacing from that point.
   function rerun(i) {
@@ -229,7 +287,7 @@ export default function Chat() {
                 </button>
                 <button type="button" className="convo-del"
                         onClick={(e) => deleteConvo(e, c.id)}
-                        title="Delete chat" aria-label="Delete chat">×</button>
+                        title="Delete chat" aria-label="Delete chat"><IconTrash /></button>
               </div>
             ))}
           </div>
@@ -247,7 +305,7 @@ export default function Chat() {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={"msg " + m.role}>
+            <div key={i} className={"msg " + m.role + (editingIdx === i ? " editing" : "")}>
               <div className="bubble">
                 {m.role === "assistant" ? (
                   <div aria-live="polite" aria-busy={!!m.pending}
@@ -260,7 +318,7 @@ export default function Chat() {
                         </div>
                         {m.thinking?.length > 0 && (
                           <details className="thoughts">
-                            <summary>Show thinking</summary>
+                            <summary>Thinking</summary>
                             <ThinkingTrace items={m.thinking} />
                           </details>
                         )}
@@ -278,19 +336,23 @@ export default function Chat() {
                         else if (e.key === "Escape") cancelEdit();
                       }} />
                     <div className="edit-actions">
-                      <button className="link" onClick={cancelEdit}>Cancel</button>
-                      <button className="send-sm" onClick={() => saveEdit(i)}
-                              disabled={busy || !editText.trim()}>Send</button>
+                      <button className="link ico" onClick={cancelEdit}>
+                        <IconClose />Cancel
+                      </button>
+                      <button className="send-sm ico" onClick={() => saveEdit(i)}
+                              disabled={busy || !editText.trim()}>
+                        <IconSend />Send
+                      </button>
                     </div>
                   </div>
                 ) : (
                   <>
                     <Markdown>{m.content || ""}</Markdown>
                     <div className="msg-actions user-actions">
-                      <button className="link" onClick={() => startEdit(i, m.content)}
-                              title="Edit this prompt">Edit</button>
-                      <button className="link" onClick={() => rerun(i)} disabled={busy}
-                              title="Run this prompt again">Rerun</button>
+                      <button className="link ico" onClick={(e) => startEdit(i, m.content, e.currentTarget)}
+                              title="Edit this prompt"><IconEdit />Edit</button>
+                      <button className="link ico" onClick={() => rerun(i)} disabled={busy}
+                              title="Run this prompt again"><IconRerun />Rerun</button>
                     </div>
                   </>
                 )}
@@ -298,7 +360,7 @@ export default function Chat() {
                   <div className="msg-actions">
                     {m.thinking?.length > 0 && (
                       <details className="sql">
-                        <summary>Thoughts</summary>
+                        <summary>Thinking</summary>
                         <ThinkingTrace items={m.thinking} />
                       </details>
                     )}
@@ -322,7 +384,6 @@ export default function Chat() {
                     )}
                     {m.id && (
                       <>
-                        <a className="link" href={api.csvUrl(m.id)}>Download CSV</a>
                         <span className="spacer" />
                         <button className={"vote" + (m.feedback === 1 ? " on" : "")}
                                 onClick={() => vote(m, 1)} title="Helpful"

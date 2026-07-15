@@ -6,12 +6,14 @@
   --muted: #6b7280; --accent: #2b6cb0; --accent-d: #245a97;
   --user: #eef4fb; --danger: #c0392b; --ok: #157347;
   --scroll-thumb: rgba(0, 0, 0, .18); --scroll-thumb-hover: rgba(0, 0, 0, .34);
+  --on-fg: #ffffff; /* text/icon on an --accent fill (contrast-safe in light) */
 }
 :root[data-theme="dark"] {
   --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
   --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
   --user: #232c38; --danger: #e06a5c; --ok: #4cc38a;
   --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
+  --on-fg: #10151b; /* dark text on the lighter dark-theme --accent (contrast-safe) */
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -19,6 +21,7 @@
     --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
     --user: #232c38; --danger: #e06a5c; --ok: #4cc38a;
     --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
+    --on-fg: #10151b;
   }
 }
 
@@ -63,6 +66,8 @@ input, textarea, button { font-family: inherit; }
 .tabs button.on, .subtabs button.on { color: var(--text); background: var(--bg); border-color: var(--line); }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
+.ico { display: inline-flex; align-items: center; gap: 5px; }
+.ico svg { flex: none; }
 .link.danger { color: var(--danger); }
 
 /* login */
@@ -107,8 +112,8 @@ input, textarea, button { font-family: inherit; }
 .convo-row.on .convo { color: var(--text); }
 .convo-del {
   flex: none; width: 28px; height: 28px; margin-right: 4px; border: none;
-  background: none; color: var(--muted); font-size: 17px; line-height: 1;
-  border-radius: 6px; opacity: 0;
+  background: none; color: var(--muted); line-height: 1; border-radius: 6px;
+  opacity: 0; display: grid; place-items: center;
 }
 .convo-row:hover .convo-del, .convo-del:focus-visible { opacity: 1; }
 .convo-del:hover { color: var(--danger); background: var(--bg); }
@@ -126,8 +131,10 @@ input, textarea, button { font-family: inherit; }
 .msg.user { justify-content: flex-end; }
 .bubble { max-width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
 .msg.user .bubble { background: var(--user); max-width: 680px; }
-/* Assistant replies read as flowing text (Claude-style), not a card. */
-.msg.assistant .bubble { border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
+/* Assistant replies read as flowing text (Claude-style), not a card, and span
+   the full reading column so the actions bar underneath is full width. */
+.msg.assistant { width: 100%; }
+.msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
 .msg-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
 .vote { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; filter: grayscale(1); opacity: .6; }
@@ -174,7 +181,7 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 }
 .send {
   flex: none; width: 34px; height: 34px; border-radius: 50%; padding: 0;
-  background: var(--accent); color: #fff; border: none;
+  background: var(--accent); color: var(--on-fg); border: none;
   display: grid; place-items: center;
 }
 .send:not(:disabled):hover { background: var(--accent-d); }
@@ -188,15 +195,18 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 }
 .msg.user:hover .user-actions, .user-actions:focus-within { opacity: 1; }
 
-/* Inline prompt editor */
-.edit-box { display: flex; flex-direction: column; gap: 8px; min-width: 280px; }
+/* Inline prompt editor — while editing, the message spans the full reading
+   column so the textarea is roomy for a large prompt. */
+.msg.user.editing { width: 100%; }
+.msg.user.editing .bubble { width: 100%; max-width: 100%; }
+.edit-box { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .edit-box textarea {
-  width: 100%; min-height: 60px; max-height: 240px; resize: vertical;
+  width: 100%; min-height: 140px; max-height: 60vh; resize: vertical;
   border: 1px solid var(--accent); border-radius: 10px; background: var(--bg);
-  color: var(--text); padding: 8px 10px; line-height: 1.5; font-size: 15px; outline: none;
+  color: var(--text); padding: 10px 12px; line-height: 1.5; font-size: 15px; outline: none;
 }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.send-sm { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 5px 14px; }
+.send-sm { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; }
 .send-sm:not(:disabled):hover { background: var(--accent-d); }
 .send-sm:disabled { opacity: .5; }
 
@@ -210,9 +220,21 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .md code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 .md pre { background: var(--bg); padding: 12px; border-radius: 8px; overflow: auto; }
 
+/* result tables: per-table toolbar (CSV + chart this) */
+.table-block { margin: 8px 0; }
+.table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
+
 /* charts */
-.chart { margin: 12px 0; padding: 8px 4px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-.chart-title { font-size: 13px; font-weight: 600; color: var(--text); text-align: center; margin: 2px 0 8px; }
+.chart { margin: 10px 0; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.chart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 6px; }
+.chart-head-tools { display: flex; align-items: center; gap: 12px; flex: none; }
+.chart-types { display: flex; gap: 4px; }
+.chart-types button, .pill-toggle { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+.chart-types button.on, .pill-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
+.chart-head-tools .link { font-size: 13px; }
+.chart-export-img { display: none; }
+/* Off-screen but laid out, so its SVG has real dimensions to rasterize. */
+.chart-export-src { position: absolute; left: -99999px; top: 0; width: 600px; height: 300px; opacity: 0; pointer-events: none; }
 
 /* admin */
 .admin { flex: 1; overflow: auto; padding: 20px; }
@@ -227,6 +249,15 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .requests { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
 .req { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .req button { margin-left: auto; }
+.usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
+.usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
+.usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
+.usage-custom { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
+.usage-custom input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+.usage-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.usage-chart-head h3 { margin: 0; }
+.usage-body { transition: opacity .12s; }
+.usage-body.updating { opacity: .5; }
 .stats { display: flex; gap: 14px; flex-wrap: wrap; }
 .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; min-width: 110px; }
 .stat .v { font-size: 24px; font-weight: 700; }
