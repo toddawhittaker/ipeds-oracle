@@ -34,17 +34,20 @@ def run():
         r = c.post("/api/auth/request", json={"email": "admin@franklin.edu"})
         assert r.status_code == 200, r.text
         link = captured["link"]
+        # Emailed link lands on the SPA confirm page; a GET there never consumes.
+        assert "/verify?token=" in link, link
         token = link.split("token=")[1]
-        v = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
-        assert v.status_code == 303, v.status_code
+        g = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
+        assert g.status_code == 303 and "/verify?token=" in g.headers["location"], g.headers
+        v = c.post("/api/auth/verify", json={"token": token})
+        assert v.status_code == 200, v.text
         me = c.get("/api/auth/me")
         assert me.status_code == 200 and me.json()["is_admin"], me.text
-        print("  ✓ magic-link login + admin session")
+        print("  ✓ magic-link login (POST verify) + admin session")
 
-        # reused token must fail
+        # reused token must fail (already consumed by the POST above)
         c2 = TestClient(app)
-        assert c2.get(f"/api/auth/verify?token={token}",
-                      follow_redirects=False).headers["location"].endswith("error=invalid_link")
+        assert c2.post("/api/auth/verify", json={"token": token}).status_code == 400
         print("  ✓ magic-link token is single-use")
 
         # --- admin: allowlist ----------------------------------------------
@@ -60,9 +63,9 @@ def run():
         approved_link = captured.get("approved_link")
         assert approved_link and "token=" in approved_link, "no approval sign-in link"
         prof = TestClient(app)
+        assert "/verify?token=" in approved_link, approved_link
         atok = approved_link.split("token=")[1]
-        assert prof.get(f"/api/auth/verify?token={atok}",
-                        follow_redirects=False).status_code == 303
+        assert prof.post("/api/auth/verify", json={"token": atok}).status_code == 200
         pme = prof.get("/api/auth/me")
         assert pme.status_code == 200 and pme.json()["email"] == "prof@franklin.edu"
         print("  ✓ approval emails a working sign-in link")

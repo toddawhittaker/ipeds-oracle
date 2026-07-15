@@ -18,6 +18,10 @@ async function j(method, url, body) {
 export const api = {
   me: () => j("GET", "/api/auth/me"),
   requestLink: (email) => j("POST", "/api/auth/request", { email }),
+  // Sign-in confirmation page: peek (non-consuming) then verify (consumes).
+  verifyInfo: (token) =>
+    j("GET", "/api/auth/verify-info?token=" + encodeURIComponent(token)),
+  verify: (token) => j("POST", "/api/auth/verify", { token }),
   logout: () => j("POST", "/api/auth/logout"),
 
   conversations: () => j("GET", "/api/chat/conversations"),

@@ -26,7 +26,10 @@ def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     con.execute(
         "INSERT INTO login_tokens(token_hash, email, expires_at) VALUES (?,?,?)",
         (hash_token(token), email.strip().lower(), magic_link_expiry()))
-    return f"{base_url.rstrip('/')}/api/auth/verify?token={token}"
+    # Point at the SPA confirmation page, not the consuming API endpoint: the
+    # page shows a "Sign in" button that POSTs the token. Email link-scanners
+    # that GET this URL therefore can't burn the single-use link.
+    return f"{base_url.rstrip('/')}/verify?token={token}"
 
 
 def request_login(email: str, base_url: str) -> dict:
@@ -55,6 +58,25 @@ def request_login(email: str, base_url: str) -> dict:
     return {"message": "If that address is approved, a sign-in link is on its "
                        "way. Otherwise, an access request has been sent to the "
                        "administrator."}
+
+
+def peek_login(token: str) -> dict:
+    """Look up the email for a pending magic-link token WITHOUT consuming it, so
+    the sign-in confirmation page can say whom the link signs in. Raises if the
+    token is unknown, already used, or expired. Only a holder of a valid token
+    (i.e. an allowlisted user who was emailed one) can learn anything here."""
+    th = hash_token(token)
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT email, expires_at, used_at FROM login_tokens WHERE token_hash=?",
+            (th,)).fetchone()
+    finally:
+        con.close()
+    if not row or row["used_at"] is not None or row["expires_at"] < time.time():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "This sign-in link is invalid or expired.")
+    return {"email": row["email"]}
 
 
 def verify_login(token: str, response: Response) -> dict:

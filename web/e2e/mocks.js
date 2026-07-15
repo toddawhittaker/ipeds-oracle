@@ -38,6 +38,42 @@ export async function mockRequestLink(page, message = "Check your email for a si
   });
 }
 
+/**
+ * GET /api/auth/verify-info?token=… -> 200 {email} (non-consuming peek) or a
+ * 4xx {detail} for an invalid/expired token. Drives the /verify confirm page.
+ */
+export async function mockVerifyInfo(page, email, { status = 200 } = {}) {
+  await page.route("**/api/auth/verify-info*", async (route) => {
+    if (status === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ email }) });
+    } else {
+      await route.fulfill({ status, contentType: "application/json",
+        body: JSON.stringify({ detail: "invalid" }) });
+    }
+  });
+}
+
+/**
+ * POST /api/auth/verify {token} -> 200 {email,is_admin} (consumes + sets cookie)
+ * or a 4xx {detail}. Returns captured POST bodies so specs can assert it fired.
+ */
+export async function mockVerify(page, { status = 200, is_admin = false } = {}) {
+  const calls = [];
+  await page.route("**/api/auth/verify", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push(route.request().postDataJSON());
+    if (status === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ email: "user@franklin.edu", is_admin }) });
+    } else {
+      await route.fulfill({ status, contentType: "application/json",
+        body: JSON.stringify({ detail: "invalid" }) });
+    }
+  });
+  return { calls };
+}
+
 /** POST /api/auth/logout -> 200. Returns a handle so specs can assert it fired. */
 export async function mockLogout(page) {
   const calls = [];
