@@ -148,6 +148,14 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         if not history and result.error is None and answer and result.sql_log:
             await run_in_threadpool(skills.cache_store, question, result.sql_log[-1], answer)
 
+        # 4b) If the critic caught a real mistake and forced a correction, capture
+        # its finding as an unverified lesson (self-learning from actual errors).
+        if (result.critic_revised and result.critic_issue
+                and result.error is None and result.sql_log):
+            await run_in_threadpool(
+                skills.record_lesson_from_critic, question,
+                result.sql_log[-1], result.critic_issue)
+
         done = {"type": "done", "escalated": result.escalated,
                 "model": result.model_used, "tokens": result.total_tokens,
                 "message_id": msg_id, "user_message_id": user_msg_id}

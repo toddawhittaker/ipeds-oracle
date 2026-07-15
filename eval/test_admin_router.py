@@ -222,13 +222,16 @@ def test_skills_patch_updates_fields_and_noop_with_empty_body():
         before = c.get("/api/admin/skills").json()
         skill_id = before[0]["id"]
 
+        assert "lesson" in before[0], "skills list must expose the lesson field"
+
         r = c.patch(f"/api/admin/skills/{skill_id}",
-                   json={"verified": True, "notes": "reviewed by test",
-                         "canonical_sql": "SELECT 1"})
+                   json={"verified": True, "lesson": "edited rule",
+                         "notes": "reviewed by test", "canonical_sql": "SELECT 1"})
         assert r.status_code == 200 and r.json()["ok"] is True, r.text
 
         after = next(s for s in c.get("/api/admin/skills").json() if s["id"] == skill_id)
         assert after["verified"] == 1, after
+        assert after["lesson"] == "edited rule", after
         assert after["notes"] == "reviewed by test", after
         assert after["canonical_sql"] == "SELECT 1", after
 

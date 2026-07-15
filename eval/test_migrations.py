@@ -72,6 +72,23 @@ def test_existing_preversion_db_advances_safely():
     assert con.execute("SELECT a FROM t").fetchone()[0] == 42, "existing data lost"
 
 
+def test_migration_3_adds_lesson_and_backfills_from_notes():
+    # Bring a db up to version 2 (skills table exists, no `lesson` column yet),
+    # insert a legacy row whose `notes` reads as a rule, then apply the real
+    # migration 3 and confirm it adds the column and backfills lesson=notes.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 2])
+    assert "lesson" not in _cols(con, "skills")
+    con.execute("INSERT INTO skills(question, canonical_sql, notes, created_at) "
+                "VALUES ('q', 'SELECT 1', 'use cipcode=99 for totals', 0)")
+    con.commit()
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "lesson" in _cols(con, "skills")
+    lesson = con.execute("SELECT lesson FROM skills").fetchone()[0]
+    assert lesson == "use cipcode=99 for totals", lesson
+
+
 def test_real_init_db_sets_baseline_and_bootstraps():
     init_db()
     con = connect()
@@ -96,6 +113,8 @@ def run():
     check("only newly-added migrations run on re-apply", test_incremental_only_new_runs)
     check("pre-version db advances safely, data preserved",
           test_existing_preversion_db_advances_safely)
+    check("migration 3 adds skills.lesson + backfills from notes",
+          test_migration_3_adds_lesson_and_backfills_from_notes)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()

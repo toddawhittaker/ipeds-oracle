@@ -137,6 +137,9 @@ jobs:
       - name: critic tests (post-answer review · one-shot revision)
         run: python eval/test_critic.py
 
+      - name: self-learning lesson tests (store · dedup · critic emission)
+        run: python eval/test_skills.py
+
       - name: importer tests (preflight · integrity checks · run_import pipeline)
         run: python eval/test_importer.py
 

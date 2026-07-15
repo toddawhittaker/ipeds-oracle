@@ -279,6 +279,44 @@ def test_retrieved_skills_bump_their_hit_count():
         assert after["hits"] == before_hits + 1, after
 
 
+def test_critic_revision_records_a_lesson():
+    with TestClient(app) as c:
+        _login(c)
+        captured = {}
+
+        async def _critic_agent(question, *, history=None, skills_block=""):
+            yield {"type": "answer", "text": "corrected answer"}
+            yield {"type": "done", "result": AgentResult(
+                answer="corrected answer", model_used="test-model", error=None,
+                sql_log=["SELECT SUM(x) FROM c_a"], critic_revised=True,
+                critic_issue="no majornum=1 filter; double count")}
+
+        orig_agent = chat_router.stream_agent
+        orig_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        orig_record = skills.record_lesson_from_critic
+        chat_router.stream_agent = _critic_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        skills.record_lesson_from_critic = \
+            lambda q, sql, issue: captured.update(q=q, sql=sql, issue=issue)
+        try:
+            r = c.post("/api/chat/stream", json={"question": "national bachelor total"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+            skills.record_lesson_from_critic = orig_record
+
+        assert r.status_code == 200, r.text
+        assert captured.get("q") == "national bachelor total", captured
+        assert captured.get("sql") == "SELECT SUM(x) FROM c_a", captured
+        assert "majornum" in captured.get("issue", ""), captured
+
+
 # ---------------------------------------------------------------------------
 # conversation list / get / delete
 # ---------------------------------------------------------------------------
@@ -407,6 +445,8 @@ def run():
           test_normal_flow_titles_a_new_conversation)
     check("retrieved few-shot skills bump their hit count",
           test_retrieved_skills_bump_their_hit_count)
+    check("a critic-driven correction records a candidate lesson",
+          test_critic_revision_records_a_lesson)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
     check("thumbs-up feedback promotes a skill", test_feedback_thumbs_up_promotes_skill)
     check("thumbs-down feedback does not promote a skill",

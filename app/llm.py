@@ -37,6 +37,7 @@ class AgentResult:
     completion_tokens: int = 0
     cost: float = 0.0  # summed OpenRouter cost (USD) across the turn's calls
     critic_revised: bool = False  # the critic flagged the draft and forced a revision
+    critic_issue: str = ""        # the critic's finding (captured as a candidate lesson)
     error: str | None = None
 
     @property
@@ -139,6 +140,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     res.cost += crit.cost
                     if not crit.ok:
                         res.critic_revised = True
+                        res.critic_issue = crit.issue
                         yield {"type": "status", "text": "Double-checking the result…"}
                         messages.append({"role": "user",
                                          "content": critic.revision_instruction(crit.issue)})

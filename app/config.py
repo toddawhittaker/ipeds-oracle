@@ -79,8 +79,12 @@ class Settings(BaseSettings):
 
     # --- Embeddings / self-learning ---------------------------------------
     embed_model: str = Field(default="BAAI/bge-small-en-v1.5")
+    # Retrieve learned lessons as guidance. Set false to disable the whole
+    # self-learning retrieval path (used for the skills-on/off A/B eval).
+    skills_enabled: bool = Field(default=True)
     skill_retrieve_k: int = Field(default=5)
-    skill_similarity_floor: float = Field(default=0.35)  # min cos to few-shot
+    skill_similarity_floor: float = Field(default=0.35)  # min cos to inject a lesson
+    skill_dedup_threshold: float = Field(default=0.92)  # collapse near-duplicate lessons
     cache_similarity_threshold: float = Field(default=0.93)  # reuse SQL above this
 
     @property

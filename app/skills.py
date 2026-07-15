@@ -1,7 +1,19 @@
-"""Self-learning: a skill library (validated NL→SQL exemplars) retrieved as
-few-shot context, plus a semantic answer cache. Embeddings run locally via
-fastembed (CPU, no per-call cost). If fastembed isn't installed, retrieval and
-caching degrade gracefully to no-ops so the app still runs.
+"""Self-learning: a library of LESSONS retrieved as guidance, plus a semantic
+answer cache.
+
+A "lesson" is a short human-readable RULE ("for a national degree total filter
+cipcode='99'; never sum across CIP codes — ~4x overcount") — the transferable
+knowledge — with the original question as the retrieval key and an OPTIONAL SQL
+worked example. Lessons come from three sources: `seed` (SCHEMA.md examples),
+`feedback` (a user 👍), and `critic` (the post-answer critic caught a real
+mistake and phrased the fix as a rule). Feedback/critic lessons start UNVERIFIED
+and must be approved in the admin UI before they are ever retrieved.
+
+Retrieval embeds the incoming question and returns the rules attached to the
+most similar past scenarios, deduped so near-identical lessons don't crowd the
+few-shot slots. Embeddings run locally via fastembed (CPU, no per-call cost); if
+fastembed isn't installed, retrieval/dedup degrade gracefully (no-op retrieval,
+exact-match dedup) so the app still runs.
 """
 from __future__ import annotations
 
@@ -56,16 +68,33 @@ def _cosine(q: np.ndarray, mat: np.ndarray) -> np.ndarray:
 
 # --- Skill retrieval (few-shot) ------------------------------------------------
 
+def _lesson_text(row) -> str:
+    """One retrieved lesson: lead with the RULE, then an optional worked example."""
+    lesson = (row["lesson"] or row["notes"] or "").strip()
+    sql = (row["canonical_sql"] or "").strip()
+    parts = []
+    if lesson:
+        parts.append(f"LESSON: {lesson}")
+    if row["question"] and sql:
+        prefix = "e.g. " if lesson else ""
+        parts.append(f"{prefix}Q: {row['question']}\nSQL:\n{sql}")
+    return "\n".join(parts)
+
+
 def retrieve_skills_block(question: str) -> tuple[str, list[int]]:
-    """Return (few-shot text, skill_ids) for the most similar verified skills."""
+    """Return (guidance text, skill_ids) — the lessons attached to the verified
+    scenarios most similar to `question`. Empty when disabled, unconfigured
+    (no embeddings), or nothing clears the similarity floor."""
+    s = get_settings()
+    if not s.skills_enabled:
+        return "", []
     q = embed(question)
     if q is None:
         return "", []
-    s = get_settings()
     con = connect()
     try:
         rows = con.execute(
-            "SELECT id, question, canonical_sql, notes, embedding FROM skills "
+            "SELECT id, question, canonical_sql, notes, lesson, embedding FROM skills "
             "WHERE verified=1 AND embedding IS NOT NULL").fetchall()
     finally:
         con.close()
@@ -79,9 +108,10 @@ def retrieve_skills_block(question: str) -> tuple[str, list[int]]:
         return "", []
     blocks, ids = [], []
     for r, _sim in picked:
-        ids.append(r["id"])
-        note = f"\n-- note: {r['notes']}" if r["notes"] else ""
-        blocks.append(f"Q: {r['question']}\nSQL:\n{r['canonical_sql']}{note}")
+        text = _lesson_text(r)
+        if text:
+            ids.append(r["id"])
+            blocks.append(text)
     return "\n\n".join(blocks), ids
 
 
@@ -100,15 +130,16 @@ def bump_hits(skill_ids: list[int]) -> None:
 # --- Skill authoring -----------------------------------------------------------
 
 def save_skill(question: str, canonical_sql: str, *, notes: str = "",
-               created_by: str = "system", verified: bool = False,
+               lesson: str = "", created_by: str = "system", verified: bool = False,
                tags: str = "") -> int:
     v = embed(question)
     con = connect()
     try:
         cur = con.execute(
-            "INSERT INTO skills(question, canonical_sql, notes, embedding, tags, "
-            "verified, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (question, canonical_sql, notes, _to_blob(v) if v is not None else None,
+            "INSERT INTO skills(question, canonical_sql, notes, lesson, embedding, "
+            "tags, verified, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (question, canonical_sql, notes, lesson,
+             _to_blob(v) if v is not None else None,
              tags, int(verified), created_by, time.time()))
         con.commit()
         return cur.lastrowid
@@ -116,27 +147,62 @@ def save_skill(question: str, canonical_sql: str, *, notes: str = "",
         con.close()
 
 
-def promote_from_message(question: str, sql: str) -> None:
-    """A 👍 on an answer promotes its (question, last SQL) into a skill, pending
-    admin review, or upvotes an existing near-duplicate. Feedback-promoted
-    skills start UNVERIFIED — a user's 👍 alone must not make a skill
-    retrievable (retrieve_skills_block only returns verified=1 rows); an admin
-    must verify it via PATCH /api/admin/skills/{id} first."""
-    if not sql:
-        return
+def _find_duplicate(con, qvec: np.ndarray | None, question: str,
+                    canonical_sql: str) -> int | None:
+    """Id of a near-duplicate lesson to upvote instead of inserting, else None.
+    Prefers embedding similarity (same scenario, even if reworded); falls back to
+    an exact (question, SQL) match when embeddings are unavailable."""
+    if qvec is not None:
+        rows = con.execute(
+            "SELECT id, embedding FROM skills WHERE embedding IS NOT NULL").fetchall()
+        floor = get_settings().skill_dedup_threshold
+        best_id, best_sim = None, floor
+        for r in rows:
+            sim = float(_from_blob(r["embedding"]) @ qvec)
+            if sim >= best_sim:
+                best_id, best_sim = r["id"], sim
+        return best_id
+    row = con.execute("SELECT id FROM skills WHERE question=? AND canonical_sql=?",
+                      (question, canonical_sql)).fetchone()
+    return row["id"] if row else None
+
+
+def _upvote_or_save(question: str, canonical_sql: str, *, lesson: str,
+                    created_by: str) -> None:
+    """Dedup gate shared by feedback + critic promotion: bump an existing
+    near-duplicate's upvotes, else insert a new UNVERIFIED lesson pending admin
+    review (retrieve_skills_block only returns verified=1 rows)."""
+    v = embed(question)
     con = connect()
     try:
-        exists = con.execute(
-            "SELECT id FROM skills WHERE question=? AND canonical_sql=?",
-            (question, sql)).fetchone()
-        if exists:
-            con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?",
-                        (exists["id"],))
+        dup = _find_duplicate(con, v, question, canonical_sql)
+        if dup is not None:
+            con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?", (dup,))
             con.commit()
             return
     finally:
         con.close()
-    save_skill(question, sql, created_by="feedback", verified=False)
+    save_skill(question, canonical_sql, lesson=lesson,
+               created_by=created_by, verified=False)
+
+
+def promote_from_message(question: str, sql: str) -> None:
+    """A 👍 on an answer promotes its (question, last SQL) into an unverified
+    lesson, or upvotes a near-duplicate."""
+    if not sql:
+        return
+    _upvote_or_save(question, sql, lesson="", created_by="feedback")
+
+
+def record_lesson_from_critic(question: str, canonical_sql: str, issue: str) -> None:
+    """The post-answer critic caught a likely mistake and forced a revision; its
+    finding IS the rule that fixes it. Capture it as an UNVERIFIED lesson (deduped)
+    pending admin review — this is the real self-learning signal, a mistake the
+    model actually made rather than an answer a user happened to like."""
+    issue = (issue or "").strip()
+    if not issue:
+        return
+    _upvote_or_save(question, canonical_sql or "", lesson=issue, created_by="critic")
 
 
 # --- Semantic answer cache -----------------------------------------------------
@@ -232,6 +298,7 @@ def seed_from_schema_examples() -> int:
     if have:
         return 0
     for q, sql, note in seeds:
-        save_skill(q, sql, notes=note, created_by="seed", verified=True)
+        # `note` is the rule → it's the lesson; the SQL is the worked example.
+        save_skill(q, sql, notes=note, lesson=note, created_by="seed", verified=True)
         n += 1
     return n
