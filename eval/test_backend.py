@@ -68,8 +68,9 @@ def run():
         print("  ✓ approval emails a working sign-in link")
 
         # re-adding an existing allowlisted email does NOT re-invite
-        assert c.post("/api/admin/allowlist",
-                      json={"email": "prof@franklin.edu", "note": "dup"}).json().get("invited") is False
+        dup = c.post("/api/admin/allowlist",
+                     json={"email": "prof@franklin.edu", "note": "dup"})
+        assert dup.json().get("invited") is False
         print("  ✓ re-adding an existing member does not re-invite")
 
         # access request created for a stranger, visible to admin
