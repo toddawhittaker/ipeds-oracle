@@ -53,3 +53,6 @@ srv-data/
 
 # Local app.db backups (scripts/backup_app_db.py) — precious state lives off-site
 backups/
+
+# Local CI gate scratch (scripts/run_ci_local.sh)
+.ci/
