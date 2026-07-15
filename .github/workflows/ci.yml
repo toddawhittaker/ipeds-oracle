@@ -28,6 +28,41 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Lint (ruff · eslint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff (lint + import order)
+        run: ruff check app scripts eval
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web deps
+        run: npm ci
+        working-directory: web
+
+      - name: ESLint
+        run: npm run lint
+        working-directory: web
+
   backend:
     name: Backend suites (guards · hardening · backend · security)
     runs-on: ubuntu-latest

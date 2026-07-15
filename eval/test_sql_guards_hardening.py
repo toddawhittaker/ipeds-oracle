@@ -23,10 +23,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.tools.sql import (
-    run_sql, validate_sql, _connect_ro, SQLValidationError, SQLTimeoutError,
-)
 from app.config import get_settings
+from app.tools.sql import (
+    SQLValidationError,
+    _connect_ro,
+    run_sql,
+    validate_sql,
+)
 
 DB_PATH = get_settings().ipeds_db_path
 
@@ -86,7 +89,8 @@ print("\n-- comment tricks trying to smuggle a forbidden statement --")
 # Comment-split keyword: SQLite itself would tokenize ATTA / CH as two
 # separate (invalid) tokens, so this was never executable as ATTACH -- but
 # confirm our validator rejects it too, and via which check.
-must_reject("ATTA/**/CH DATABASE 'x' AS y", "comment-split ATTACH (also fails 'must start with SELECT')")
+must_reject("ATTA/**/CH DATABASE 'x' AS y",
+            "comment-split ATTACH (also fails 'must start with SELECT')")
 # Nested block comment: the non-greedy comment-stripper closes at the FIRST
 # '*/', so the "DROP TABLE" text survives stripping and remains visible to
 # the forbidden-keyword scan.
@@ -96,7 +100,8 @@ must_reject("/* /* nested */ DROP TABLE c_a */ SELECT 1",
 ok_after_strip = "SELECT 1 -- ; DROP TABLE c_a\n"
 try:
     cleaned = validate_sql(ok_after_strip)
-    record(cleaned == "SELECT 1", "line-comment-hidden '; DROP TABLE' safely stripped, not executed",
+    record(cleaned == "SELECT 1",
+           "line-comment-hidden '; DROP TABLE' safely stripped, not executed",
            f"cleaned={cleaned!r}")
 except SQLValidationError as e:
     record(False, "line-comment-hidden '; DROP TABLE' safely stripped, not executed", str(e))
@@ -114,9 +119,7 @@ def probe_function_is_neutralized(sql: str, label: str, expect_error_substr: str
     """
     try:
         validate_sql(sql)
-        slipped = True
     except SQLValidationError as e:
-        slipped = False
         record(True, f"{label}: rejected at validate_sql layer ({e})")
         return
     # It slipped past validate_sql -- the connection-level guarantee must hold.
@@ -125,7 +128,8 @@ def probe_function_is_neutralized(sql: str, label: str, expect_error_substr: str
         record(False, f"{label}: validate_sql accepted it AND run_sql executed it (SECURITY HOLE)")
     except Exception as e:
         ok = expect_error_substr.lower() in str(e).lower()
-        record(ok, f"{label}: validate_sql accepted (gap) but run_sql blocked it -- {type(e).__name__}: {e}")
+        record(ok, f"{label}: validate_sql accepted (gap) but run_sql blocked it "
+                   f"-- {type(e).__name__}: {e}")
 
 
 probe_function_is_neutralized(
@@ -154,14 +158,16 @@ for sql, label in [
     r = run_sql(sql, timeout=5)
     record(True,
            f"{label}: validator gap (accepted) but query is read-only introspection "
-           f"on a query_only/immutable connection -- {len(r.rows)} row(s) returned, no mutation possible")
+           f"on a query_only/immutable connection -- {len(r.rows)} row(s) returned, "
+           f"no mutation possible")
 
 print("\n-- Python sqlite3 driver itself refuses multi-statement `execute()` "
       "(defense-in-depth below our own ';' check) --")
 con = _connect_ro(DB_PATH)
 try:
     con.execute("SELECT 1; SELECT 2")
-    record(False, "Connection.execute() single-statement enforcement", "allowed a multi-statement string!")
+    record(False, "Connection.execute() single-statement enforcement",
+           "allowed a multi-statement string!")
 except Exception as e:
     record("one statement at a time" in str(e).lower(),
            "Connection.execute() single-statement enforcement", f"{type(e).__name__}: {e}")
@@ -175,13 +181,16 @@ print("\n== 2. MUST-ACCEPT: legitimate read-only queries must not be rejected ==
 
 print("\n-- forbidden-keyword substrings inside string literals (regex scans raw text) --")
 must_accept_validate(
-    "SELECT instnm FROM hd WHERE instnm LIKE '%update%'", "LIKE '%update%' (word 'update' in a literal)")
+    "SELECT instnm FROM hd WHERE instnm LIKE '%update%'",
+    "LIKE '%update%' (word 'update' in a literal)")
 must_accept_validate(
-    "SELECT instnm FROM hd WHERE instnm LIKE '%Delete%'", "LIKE '%Delete%' (word 'delete' in a literal)")
+    "SELECT instnm FROM hd WHERE instnm LIKE '%Delete%'",
+    "LIKE '%Delete%' (word 'delete' in a literal)")
 must_accept_validate(
     "SELECT instnm FROM hd WHERE instnm LIKE '%Create%College%'", "LIKE '%Create%College%'")
 must_accept_validate(
-    "SELECT instnm FROM hd WHERE instnm LIKE '%Commit%'", "LIKE '%Commit%' (word 'commit' in a literal)")
+    "SELECT instnm FROM hd WHERE instnm LIKE '%Commit%'",
+    "LIKE '%Commit%' (word 'commit' in a literal)")
 
 print("\n-- semicolon inside a string literal (naive ';' membership check) --")
 must_accept_validate("SELECT 'a;b' AS x", "string literal containing ';'")

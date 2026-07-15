@@ -20,8 +20,14 @@ Design (see memory/unified-ipeds-db-design.md):
 Usage:
     python3 build_ipeds_db.py [--data-dir DIR] [--out ipeds.db] [--dry-run]
 """
-import argparse, csv, os, re, subprocess, sqlite3, sys
-from collections import defaultdict, OrderedDict
+import argparse
+import csv
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+from collections import OrderedDict, defaultdict
 
 csv.field_size_limit(1 << 24)  # long LongDescription fields
 
@@ -80,8 +86,7 @@ def stream_table(accdb, table):
 
     def rows():
         try:
-            for r in reader:
-                yield r
+            yield from reader
         finally:
             p.stdout.close()
             p.wait()
@@ -103,7 +108,7 @@ ADDED = ("survey_year", "year", "src_table")
 def build_type_map(files):
     """var_lower -> 'A'/'N' from every varTable; 'A' wins if a var is ever alpha."""
     tmap = {}
-    for path, start, *_ in files:
+    for path, _start, *_ in files:
         vt = next((t for t in list_tables(path) if t.lower().startswith("vartable")), None)
         if not vt:
             continue
@@ -200,7 +205,7 @@ def main():
 
         placeholders = ", ".join("?" for _ in cols)
         insert = f'INSERT INTO "{fam}" VALUES ({placeholders})'
-        for path, tbl, start, survey_year, year_end in fam_srcs[fam]:
+        for path, tbl, _start, survey_year, year_end in fam_srcs[fam]:
             header, rows = stream_table(path, tbl)
             idx = {c: i for i, c in enumerate(header)}
             batch, n = [], 0
@@ -221,7 +226,8 @@ def main():
         con.commit()
 
     # provenance + column-presence bookkeeping
-    cur.execute("CREATE TABLE _family_map (src_table TEXT, family TEXT, survey_year TEXT, year INTEGER, n_rows INTEGER)")
+    cur.execute("CREATE TABLE _family_map (src_table TEXT, family TEXT, survey_year TEXT,"
+                " year INTEGER, n_rows INTEGER)")
     cur.executemany("INSERT INTO _family_map VALUES (?,?,?,?,?)", fam_map_rows)
     cur.execute("CREATE TABLE _column_presence (family TEXT, column_name TEXT, years TEXT)")
     cur.executemany(
@@ -244,7 +250,8 @@ def main():
         cur.execute('CREATE INDEX ix_valuesets_lk ON valuesets (tablename, varname, codevalue)')
 
     # friendly views
-    for meta, phys in (("meta_tables", "tables"), ("meta_variables", "vartable"), ("meta_valuesets", "valuesets")):
+    for meta, phys in (("meta_tables", "tables"), ("meta_variables", "vartable"),
+                       ("meta_valuesets", "valuesets")):
         if phys in fam_cols:
             cur.execute(f"CREATE VIEW {meta} AS SELECT * FROM \"{phys}\"")
     if "hd" in fam_cols:

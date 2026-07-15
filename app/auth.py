@@ -11,8 +11,7 @@ from fastapi import Depends, HTTPException, Request, Response, status
 from app.config import get_settings
 from app.db import connect
 from app.mailer import send_access_request, send_magic_link
-from app.security import (hash_token, magic_link_expiry, new_token,
-                          session_expiry)
+from app.security import hash_token, magic_link_expiry, new_token, session_expiry
 
 
 def is_allowlisted(con: sqlite3.Connection, email: str) -> bool:

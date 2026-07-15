@@ -2,7 +2,9 @@
 
 Runs against a throwaway app.db. Patches the mailer to capture the magic link.
 """
-import os, sys, tempfile
+import os
+import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,14 +15,15 @@ os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
 
 from fastapi.testclient import TestClient
+
 from app import mailer
 
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
 
-from app.main import app
 from app import skills
+from app.main import app
 
 
 def run():
@@ -74,14 +77,17 @@ def run():
 
         # --- CSV export path via a hand-made conversation ------------------
         # create a conversation + assistant message with a known SQL, then export
+        import json as _json
+        import time
+
         from app.db import connect
-        import time, json as _json
         con = connect()
         conv = con.execute("INSERT INTO conversations(user_id,title,created_at,updated_at)"
                            " VALUES ((SELECT id FROM users WHERE email='admin@franklin.edu'),"
                            " 'x', ?, ?)", (time.time(), time.time()))
         conv_id = conv.lastrowid
-        sql = "SELECT year, SUM(ctotalt) a FROM c_a WHERE awlevel=3 AND majornum=1 AND cipcode='99' GROUP BY year"
+        sql = ("SELECT year, SUM(ctotalt) a FROM c_a "
+               "WHERE awlevel=3 AND majornum=1 AND cipcode='99' GROUP BY year")
         con.execute("INSERT INTO messages(conversation_id,role,content,sql_log,created_at)"
                     " VALUES (?,?,?,?,?)", (conv_id, "assistant", "ans",
                                             _json.dumps([sql]), time.time()))

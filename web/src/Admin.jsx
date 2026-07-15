@@ -134,7 +134,7 @@ function Imports() {
     <div className="panel">
       <h2>Load a new IPEDS year</h2>
       <p className="muted small">
-        Upload the year's <code>IPEDS{"{YYYY}{YY}"}.accdb</code>. It rebuilds into
+        Upload the year&apos;s <code>IPEDS{"{YYYY}{YY}"}.accdb</code>. It rebuilds into
         a staging database, runs integrity + magnitude checks, and only swaps in
         if everything passes — the live database is never touched until then.
       </p>
