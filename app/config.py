@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = Field(default=False)     # True in production (HTTPS)
     cookie_name: str = Field(default="ipeds_session")
     admin_emails: str = Field(default="")          # comma-separated bootstrap admins
+    # Rate limit on POST /api/auth/request (magic-link / access-request spam).
+    auth_rate_window_seconds: float = Field(default=900.0)  # 15-minute sliding window
+    auth_rate_max_per_email: int = Field(default=5)
+    auth_rate_max_per_ip: int = Field(default=20)
 
     # --- Email (Resend) ----------------------------------------------------
     resend_api_key: str = Field(default="")
