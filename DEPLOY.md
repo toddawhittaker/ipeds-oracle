@@ -75,7 +75,7 @@ serving the old data until the swap; a failed check leaves it untouched.
 | Key | Purpose |
 |-----|---------|
 | `OPENROUTER_API_KEY` | LLM access (required) |
-| `MODEL_DEFAULT` / `MODEL_ESCALATION` | primary model + escalation target (default `deepseek/deepseek-v4-pro`; see below) |
+| `MODEL_DEFAULT` / `MODEL_ESCALATION` | primary + escalation model (defaults: `deepseek/deepseek-v4-flash` → `deepseek/deepseek-v4-pro`; see below) |
 | `RESEND_API_KEY` / `MAIL_FROM` | magic-link + access-request email |
 | `SESSION_SECRET` | signs session cookies (set a long random value) |
 | `ADMIN_EMAILS` | comma-separated bootstrap admins (auto-allowlisted) |
@@ -90,9 +90,13 @@ code.
 > **Model routing:** OpenRouter enforces any "Allowed Providers" allowlist on
 > your account. If a model's live providers aren't on that list you get a 404
 > ("No allowed providers are available") — even for a model whose name matches an
-> allowed provider. We run `deepseek/deepseek-v4-pro` (passes `eval/eval_nl2sql.py`
-> 3/3). If your account can't route it, either relax the allowlist (add DeepInfra
-> / Novita) or set `MODEL_DEFAULT`/`MODEL_ESCALATION` to a model it can.
+> allowed provider. We default to `deepseek/deepseek-v4-flash` (cheap) and
+> auto-escalate to `deepseek/deepseek-v4-pro` on repeated SQL errors / failed
+> magnitude checks; both pass `eval/eval_nl2sql.py` (flash 3/3 with no escalation,
+> ~3x cheaper per query). If your account can't route them, either relax the
+> allowlist (add DeepInfra / Novita) or set `MODEL_DEFAULT`/`MODEL_ESCALATION` to a
+> model it can. Watch the escalation rate in the admin usage dashboard — if flash
+> escalates on a large fraction of real queries, reconsider the split.
 
 ## Backups
 
