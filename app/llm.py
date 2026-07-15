@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app import critic
 from app.config import get_settings
 from app.prompt import build_system_prompt
 from app.tools import registry
@@ -35,6 +36,7 @@ class AgentResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0  # summed OpenRouter cost (USD) across the turn's calls
+    critic_revised: bool = False  # the critic flagged the draft and forced a revision
     error: str | None = None
 
     @property
@@ -90,6 +92,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     res = AgentResult()
     model = s.model_default
     consecutive_fails = 0
+    critiqued = False  # the post-answer critic runs at most once per turn
 
     async with httpx.AsyncClient() as client:
         for i in range(s.llm_max_tool_iters):
@@ -123,7 +126,24 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             })
 
             if not tool_calls:
-                res.answer = msg.get("content") or ""
+                answer = msg.get("content") or ""
+                # Post-answer critic: once per turn, and only for answers built
+                # from SQL (a plain refusal has nothing to sanity-check). If it
+                # flags a likely error, feed the critique back for ONE revision
+                # round instead of returning the suspect number.
+                if s.critic_enabled and not critiqued and res.sql_log and answer.strip():
+                    critiqued = True
+                    crit = await critic.review(question, res.sql_log, answer)
+                    res.prompt_tokens += crit.prompt_tokens
+                    res.completion_tokens += crit.completion_tokens
+                    res.cost += crit.cost
+                    if not crit.ok:
+                        res.critic_revised = True
+                        yield {"type": "status", "text": "Double-checking the result…"}
+                        messages.append({"role": "user",
+                                         "content": critic.revision_instruction(crit.issue)})
+                        continue
+                res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
                 yield {"type": "answer", "text": res.answer}

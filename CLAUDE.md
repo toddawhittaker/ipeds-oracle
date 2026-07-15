@@ -74,8 +74,8 @@ them and offer a few concrete examples to prime them, e.g.:
 # B) Developing the web app
 
 **Architecture:** FastAPI backend (`app/`: config, db, auth, security, mailer,
-llm, prompt, guard, skills, importer, logbuffer, ratelimit, tools/* — incl.
-`tools/sqllint.py`, a deterministic pre-flight check that flags IPEDS
+llm, prompt, guard, critic, skills, importer, logbuffer, ratelimit, tools/* —
+incl. `tools/sqllint.py`, a deterministic pre-flight check that flags IPEDS
 aggregation foot-guns (CIP rollup/second-major double counts, DISTINCT-year
 full-scan) in model SQL and feeds the warning back so the agent self-corrects —
 routers/*) +
@@ -83,7 +83,9 @@ React SPA (`web/`, SSE-streamed chat). SQLite everywhere: `ipeds.db` (read-only
 query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
 `logs.db` (persistent admin logs). LLM = DeepSeek via **OpenRouter**
 (`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
-a topical **guardrail**. Auth = passwordless **magic link**, manual allowlist,
+a topical **guardrail** and backstopped by a deterministic SQL **linter** +
+a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
+force one revision round). Auth = passwordless **magic link**, manual allowlist,
 email via **Resend**. Self-learning = skill exemplars + semantic cache.
 **Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
 

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Topical input guardrail: a cheap pre-flight classifier refuses off-topic /
     # prompt-injection messages before the agent runs. Set false to disable.
     guard_enabled: bool = Field(default=True)
+    # Post-answer critic: after the agent answers from SQL, a cheap review call
+    # judges the result for likely aggregation/magnitude errors and, if flagged,
+    # drives ONE revision round. Adds a call per data answer. Set false to disable.
+    critic_enabled: bool = Field(default=True)
     # public URL + title used for OpenRouter attribution headers (optional)
     app_public_url: str = Field(default="http://localhost:8000")
     app_title: str = Field(default="IPEDS Query")

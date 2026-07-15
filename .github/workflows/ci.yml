@@ -134,6 +134,9 @@ jobs:
       - name: guardrail tests (topical gate · injection refusal)
         run: python eval/test_guard.py
 
+      - name: critic tests (post-answer review · one-shot revision)
+        run: python eval/test_critic.py
+
       - name: importer tests (preflight · integrity checks · run_import pipeline)
         run: python eval/test_importer.py
 
