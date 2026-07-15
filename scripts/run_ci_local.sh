@@ -90,6 +90,7 @@ BACKEND_SUITES=(
   test_logbuffer.py
   test_mailer.py
   test_guard.py
+  test_critic.py
   test_importer.py
   test_schema_tool.py
   test_registry.py
