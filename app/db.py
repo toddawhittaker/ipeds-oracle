@@ -142,6 +142,18 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+# Ordered schema migrations, keyed by an increasing integer version tracked in
+# `PRAGMA user_version`. Migration 1 is the full baseline schema — every
+# statement is CREATE ... IF NOT EXISTS, so it is a safe no-op on a database that
+# predates this system (it simply advances an existing db to version 1). Add each
+# future schema change as a new (version, ddl) tuple with the next integer; never
+# edit or renumber a shipped migration.
+MIGRATIONS: list[tuple[int, str]] = [
+    (1, SCHEMA),
+    # (2, "ALTER TABLE users ADD COLUMN display_name TEXT;"),  # example
+]
+
+
 def connect() -> sqlite3.Connection:
     s = get_settings()
     con = sqlite3.connect(str(s.app_db_path), check_same_thread=False)
@@ -152,13 +164,29 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def _apply_migrations(con: sqlite3.Connection,
+                      migrations: list[tuple[int, str]] = MIGRATIONS) -> int:
+    """Apply every migration whose version exceeds the db's current
+    `user_version`, in order, bumping `user_version` after each. Returns the
+    resulting version. Idempotent: already-applied migrations are skipped."""
+    current = con.execute("PRAGMA user_version").fetchone()[0]
+    for version, ddl in sorted(migrations):
+        if version > current:
+            con.executescript(ddl)
+            # user_version can't be parameterized; version is our own trusted int.
+            con.execute(f"PRAGMA user_version = {int(version)}")
+            con.commit()
+            current = version
+    return current
+
+
 def init_db() -> None:
-    """Create tables (idempotent) and bootstrap admins + data_version."""
+    """Run pending migrations (idempotent) and bootstrap admins + data_version."""
     s = get_settings()
     s.app_db_path.parent.mkdir(parents=True, exist_ok=True)
     con = connect()
     try:
-        con.executescript(SCHEMA)
+        _apply_migrations(con)
         # data_version starts at 1 (bumped by each successful import swap)
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('data_version', '1')")
         # Bootstrap admin accounts + allowlist from ADMIN_EMAILS.
