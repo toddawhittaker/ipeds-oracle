@@ -119,6 +119,9 @@ jobs:
       - name: agent tool-loop tests
         run: python eval/test_agent_loop.py
 
+      - name: log-buffer secret-scrubbing tests
+        run: python eval/test_logbuffer.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest

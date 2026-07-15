@@ -8,10 +8,18 @@ under concurrent requests and can't grow without limit.
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from threading import Lock
 
 _handler: RingBufferHandler | None = None
+
+# The admin Logs view is readable by any admin, so never retain records that can
+# carry secrets: the mailer logs full email bodies (incl. magic-link tokens) in
+# dev mode, and any message may embed a `token=`/`Bearer` value. We drop the
+# mail logger entirely and redact token-like substrings from everything else.
+_EXCLUDED_LOGGERS = ("ipeds.mail",)
+_REDACT_RE = re.compile(r"(?i)(token=|bearer\s+|sk-or-[\w-]{0,4})[\w.\-]+")
 
 
 class RingBufferHandler(logging.Handler):
@@ -21,8 +29,10 @@ class RingBufferHandler(logging.Handler):
         self._lock = Lock()
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.name.startswith(_EXCLUDED_LOGGERS):
+            return
         try:
-            msg = record.getMessage()
+            msg = _REDACT_RE.sub(r"\1<redacted>", record.getMessage())
         except Exception:  # noqa: BLE001 — logging must never raise
             return
         with self._lock:
