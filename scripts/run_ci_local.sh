@@ -85,11 +85,17 @@ BACKEND_SUITES=(
   test_logbuffer.py
   test_mailer.py
   test_guard.py
+  test_importer.py
+  test_schema_tool.py
 )
 for suite in "${BACKEND_SUITES[@]}"; do
   step "Backend: eval/$suite"
   "$PY" "eval/$suite" || fail "eval/$suite"
 done
+
+# Coverage gate — app/ must stay >= 80% (re-runs suites under coverage.py).
+step "Backend: coverage gate (app/ >= 80%)"
+"$REPO_ROOT/scripts/coverage_check.sh" || fail "coverage < 80%"
 
 # =========================================================================
 # Job 3 — Playwright e2e (network-mocked UI)
