@@ -6,6 +6,9 @@ tool-calling agent over `ipeds.db` (DeepSeek via OpenRouter), passwordless
 magic-link auth, a self-learning skill library, and an admin console for loading
 each new IPEDS year. Runs as a single Docker stack on a small VPS.
 
+> For the user-facing overview see [README.md](README.md); for local development
+> and the code layout see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Architecture
 
 ```
@@ -64,7 +67,19 @@ allowlisted + admin on first boot). Add colleagues under **Admin → Allowlist**
 > `docker compose exec app python scripts/build_ipeds_db.py --data-dir /data/accdb --out /data/ipeds.db`,
 > or upload a year through **Admin → Imports** (first import builds from scratch).
 
-## Adding a new IPEDS year
+## Admin console
+
+Sign in with an `ADMIN_EMAILS` address and open the **Admin** tab:
+
+- **Allowlist** — approve/remove people and act on access requests.
+- **Imports** — load a new IPEDS year (below).
+- **Usage** — queries, tokens, and **spend** over a chosen range
+  (hour / day / 7 / 30 days / custom), charted, with a per‑user breakdown. Spend
+  is captured from OpenRouter's per‑request cost.
+- **Skills** — review/curate the learned NL→SQL exemplars.
+- **Logs** — recent server activity (secrets are scrubbed from this view).
+
+### Adding a new IPEDS year
 
 **Admin → Imports →** upload `IPEDS{YYYY}{YY}.accdb`. The job streams its log,
 runs checks, and swaps the new database in only if they pass. The live app keeps
@@ -72,10 +87,13 @@ serving the old data until the swap; a failed check leaves it untouched.
 
 ## Configuration (`.env`)
 
+Every setting is listed in [`.env.example`](.env.example); the essentials:
+
 | Key | Purpose |
 |-----|---------|
 | `OPENROUTER_API_KEY` | LLM access (required) |
 | `MODEL_DEFAULT` / `MODEL_ESCALATION` | primary + escalation model (defaults: `deepseek/deepseek-v4-flash` → `deepseek/deepseek-v4-pro`; see below) |
+| `LLM_MAX_TOOL_ITERS` | max agent tool‑call rounds per question (default 12) |
 | `RESEND_API_KEY` / `MAIL_FROM` | magic-link + access-request email |
 | `SESSION_SECRET` | signs session cookies (set a long random value) |
 | `ADMIN_EMAILS` | comma-separated bootstrap admins (auto-allowlisted) |

@@ -1,83 +1,101 @@
-# Unified IPEDS database
+# IPEDS Query
 
-`ipeds.db` — a single SQLite database stacking **all IPEDS survey tables across
-collection years 2020-21 … 2024-25**, built from the Access files in `data/`.
+Ask questions about U.S. colleges and universities in plain English and get
+back conversational answers with tables and charts — no SQL, no spreadsheets.
 
-> **Web app:** there is now a private natural-language query app on top of this
-> database (FastAPI + React, magic-link auth, self-learning agent). See
-> [DEPLOY.md](DEPLOY.md) to run it; app code lives in `app/` and `web/`.
+It's a private, invitation-only web app for exploring **IPEDS** (the U.S.
+Department of Education's annual census of colleges) across collection years
+**2020‑21 through 2024‑25**: degrees awarded, enrollment, tuition and financial
+aid, graduation and outcome rates, admissions, and institutional details.
 
-## Build / rebuild
+> **Just want to use it?** Read the rest of this page.
+> **Running or deploying it?** See [DEPLOY.md](DEPLOY.md).
+> **Working on the code?** See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-python3 scripts/build_ipeds_db.py            # build ipeds.db from data/*.accdb
-python3 scripts/build_ipeds_db.py --dry-run  # just print the table→family map
-```
-Add a new year by dropping its `IPEDS{YYYY}{YY}.accdb` into `data/` and rerunning.
-Requires `mdbtools` (`sudo apt-get install mdbtools`).
+---
 
-## How it's organized
+## What you can ask
 
-Each physical Access table (e.g. `C2024_A`, `HD2024`, `F2324_F1A`) is grouped
-into a **family** by stripping the year from its name, and all years are stacked
-into one table. Every row carries:
+Type questions the way you'd ask a colleague. A few to get you started:
 
-| column        | meaning                                   |
-|---------------|-------------------------------------------|
-| `survey_year` | collection year, e.g. `'2024-25'`         |
-| `year`        | ending year, e.g. `2025` (use for sorting/filtering) |
-| `src_table`   | original Access table name (provenance)   |
+- "Top 20 institutions awarding Associate's degrees in Registered Nursing over
+  the last 3 years."
+- "How many Computer Science bachelor's degrees did California public
+  universities award last year?"
+- "Which states awarded the most Master's degrees in Education?"
+- "Show me a graph of nursing degrees awarded nationally over the last 5 years."
+- "In a 60‑mile radius of Columbus, Ohio, the top 5 universities graduating MBA
+  students over 5 years."
 
-Key families: `c_a` (completions by CIP/award level — the main one), `c_b`,
-`c_c`, `hd` (institution directory), `ef*` (fall enrollment), `effy` (12-month
-enrollment), `gr*` (graduation rates), `sfa*` (student financial aid),
-`f_f1a/f_f2/f_f3` (finance), `adm` (admissions), `om` (outcome measures), etc.
+You don't need to know program codes or table names — just describe what you
+want. The assistant figures out the query, runs it, sanity‑checks the numbers,
+and explains the answer.
 
-Column affinity comes from IPEDS's own dictionary: text codes like `CIPCODE`
-keep leading zeros (`'01.0000'`); numeric fields are numeric.
+## Signing in
 
-### Metadata / label lookups (from the Access files themselves)
-- `valuesets` — code → label (e.g. `AWLEVEL 3` → "Associate's degree"). Views: `meta_valuesets`.
-- `vartable` — full data dictionary (variable titles, long descriptions). View: `meta_variables`.
-- `tables` — table catalog (survey, coverage, description). View: `meta_tables`.
+Access is by invitation. On the sign‑in page, enter your email:
 
-### Convenience objects
-- `institutions_current` — latest known directory row per `unitid` (clean current names).
-- `_years` — the loaded years (fast source for "recent N years").
-- `_family_map` — every source table → family, year, row count.
-- `_column_presence` — which columns exist in which years (schema drift).
+- If you've been approved, you'll get a **one‑time sign‑in link** by email — no
+  password to remember. Click it and you're in for about a month.
+- If you haven't been approved yet, you can **request access**, and an
+  administrator will be notified.
 
-## ⚠️ Query pattern for "recent N years"
+## Using it
 
-Express it as a **constant bound on `year`**, NOT as a join to a year list — a
-join flips SQLite's plan into full table scans and can hang on the 8M-row `c_a`.
+Ask a question in the box at the bottom and watch the answer stream in.
 
-```sql
--- Top 20 institutions granting Associate's degrees (AWLEVEL=3) in a CIP,
--- per year, over the last 3 years. Runs in <1s.
-WITH grads AS (
-  SELECT c.year, c.unitid, SUM(c.ctotalt) AS awards
-  FROM c_a c
-  WHERE c.cipcode = '51.3801'          -- Registered Nursing
-    AND c.awlevel = 3                  -- Associate's degree
-    AND c.majornum = 1                 -- first majors only
-    AND c.year > (SELECT MAX(year) - 3 FROM _years)   -- ← constant bound
-  GROUP BY c.year, c.unitid
-),
-ranked AS (
-  SELECT year, unitid, awards,
-         RANK() OVER (PARTITION BY year ORDER BY awards DESC) AS rk
-  FROM grads
-)
-SELECT r.year, r.rk, ic.instnm, ic.stabbr, r.awards
-FROM ranked r
-JOIN institutions_current ic ON ic.unitid = r.unitid
-WHERE r.rk <= 20
-ORDER BY r.year DESC, r.rk;
-```
+- **Answers** lead with the direct result, then a compact table, then a short
+  note on how it was calculated. Expand **Thinking** to see the steps and the
+  exact SQL the assistant ran.
+- **Tables** — each result table has its own **Download CSV** button, and
+  **Chart this** when the data suits a graph.
+- **Charts** — switch between **Line** and **Bar**, toggle **data labels**, and
+  **Copy image** to paste a chart straight into an email, doc, or slide. Charts
+  paste as clean images that look right in light or dark mode.
+- **Copy** a whole answer as **Markdown** or **HTML** (the HTML keeps the table
+  and chart formatting when pasted into Word, Outlook, or Google Docs).
+- **Edit** or **Rerun** any of your earlier prompts to refine a question — the
+  new answer replaces the old one in place.
+- **Conversations** are saved in the sidebar (named automatically), and you can
+  delete any you don't need. Collapse the sidebar for more room.
+- **👍 / 👎** on an answer tells the app which queries were good — helpful
+  answers are remembered and reused to make future questions faster and more
+  accurate.
+- **Light or dark mode** — toggle in the top bar; your choice is remembered.
 
-Look up a CIP or any code's label:
-```sql
-SELECT DISTINCT codevalue, valuelabel FROM valuesets
-WHERE varname='AWLEVEL' AND year=2025 ORDER BY CAST(codevalue AS INT);
-```
+A repeat of a near‑identical question may return instantly from a cache, but the
+numbers are always re‑checked against the live data.
+
+## Data coverage & accuracy
+
+The database contains **five collection years, 2020‑21 → 2024‑25**, covering the
+main IPEDS surveys. When a new year is published, an administrator loads it and
+the app picks it up automatically.
+
+The assistant sanity‑checks magnitudes before answering (for example, ~1 million
+associate's degrees are awarded nationally per year), but it's a tool, not an
+oracle — for anything you'll publish or make a decision on, spot‑check the
+result, and use **Download CSV** or **Thinking → SQL** to verify the underlying
+numbers.
+
+## For administrators
+
+Signed‑in admins get an **Admin** tab:
+
+- **Allowlist** — approve or remove people, and act on access requests.
+- **Imports** — upload a new year's IPEDS file; it builds and validates in the
+  background and swaps in only if the checks pass (the live data is never
+  disturbed mid‑import).
+- **Usage** — queries, tokens, and **spend** over a chosen time range
+  (hour / day / 7 / 30 days / custom), with a chart and per‑user breakdown.
+- **Skills** — review and curate the learned NL→SQL examples.
+- **Logs** — recent server activity.
+
+## Under the hood
+
+A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
+SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
+charts. It's designed to be cheap to run and safe by construction — the model
+can only issue read‑only queries, guarded by a timeout. Details in
+[CONTRIBUTING.md](CONTRIBUTING.md) and [DEPLOY.md](DEPLOY.md); the data model and
+query conventions are documented in [SCHEMA.md](SCHEMA.md).
