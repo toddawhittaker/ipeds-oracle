@@ -80,12 +80,18 @@ class AllowlistAdminPatch(BaseModel):
 
 
 @router.patch("/allowlist/{email}")
-def set_allowlist_admin(email: str, body: AllowlistAdminPatch):
+def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
+                        admin: sqlite3.Row = Depends(require_admin)):
     """Promote or demote an allowlisted user to/from admin. is_admin is read
     live on every request, so the change takes effect immediately (no re-login).
-    Refuses to demote the last remaining admin, so the console can never lock
-    everyone out."""
+
+    You can't demote YOURSELF (ask another admin) — this both stops an accidental
+    self-lockout and, since the caller is always an admin, guarantees at least one
+    admin always remains, so the console can never be left with zero admins."""
     email = email.strip().lower()
+    if not body.is_admin and email == admin["email"].strip().lower():
+        raise HTTPException(
+            400, "You can't remove your own admin access — ask another admin.")
     con = connect()
     try:
         if con.execute("SELECT 1 FROM allowlist WHERE email=?",
@@ -96,13 +102,6 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch):
                 "INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
                 "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
         else:
-            row = con.execute("SELECT COALESCE(is_admin,0) AS a FROM users "
-                              "WHERE email=?", (email,)).fetchone()
-            n_admins = con.execute(
-                "SELECT COUNT(*) FROM users WHERE is_admin=1").fetchone()[0]
-            if row and row["a"] and n_admins <= 1:
-                raise HTTPException(
-                    400, "Can't remove the last admin — promote someone else first.")
             con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
         con.commit()
     finally:
