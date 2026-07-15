@@ -190,7 +190,7 @@ test.describe("Admin landmark + login alert", () => {
     await mockRequestLink(page, "Check your email for a sign-in link.");
 
     await page.goto("/");
-    await page.getByPlaceholder("you@franklin.edu").fill("todd@thewhittakers.org");
+    await page.getByPlaceholder("you@franklin.edu").fill("admin@franklin.edu");
     await page.getByRole("button", { name: "Email me a sign-in link" }).click();
 
     await expect(page.getByRole("alert")).toHaveText("Check your email for a sign-in link.");

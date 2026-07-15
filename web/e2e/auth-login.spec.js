@@ -31,7 +31,7 @@ test.describe("auth / login", () => {
       page.getByText("Which states awarded the most Master's degrees in Education?", { exact: false })
     ).toBeVisible();
 
-    await emailInput.fill("todd@thewhittakers.org");
+    await emailInput.fill("admin@franklin.edu");
     await page.getByRole("button", { name: "Email me a sign-in link" }).click();
 
     // Form is replaced by the .notice message on success.
