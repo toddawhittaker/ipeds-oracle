@@ -21,6 +21,7 @@ from app import mailer
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
+mailer.send_access_approved = lambda to, link: captured.__setitem__("approved_link", link) or True
 
 from app import skills
 from app.main import app
@@ -47,11 +48,29 @@ def run():
         print("  ✓ magic-link token is single-use")
 
         # --- admin: allowlist ----------------------------------------------
-        assert c.post("/api/admin/allowlist",
-                      json={"email": "prof@franklin.edu", "note": "colleague"}).status_code == 200
+        r_add = c.post("/api/admin/allowlist",
+                       json={"email": "prof@franklin.edu", "note": "colleague"})
+        assert r_add.status_code == 200
+        assert r_add.json().get("invited") is True, "approving should email an invite"
         al = c.get("/api/admin/allowlist").json()
         assert any(x["email"] == "prof@franklin.edu" for x in al)
         print(f"  ✓ allowlist add ({len(al)} entries)")
+
+        # approval emails a working, single-use sign-in link
+        approved_link = captured.get("approved_link")
+        assert approved_link and "token=" in approved_link, "no approval sign-in link"
+        prof = TestClient(app)
+        atok = approved_link.split("token=")[1]
+        assert prof.get(f"/api/auth/verify?token={atok}",
+                        follow_redirects=False).status_code == 303
+        pme = prof.get("/api/auth/me")
+        assert pme.status_code == 200 and pme.json()["email"] == "prof@franklin.edu"
+        print("  ✓ approval emails a working sign-in link")
+
+        # re-adding an existing allowlisted email does NOT re-invite
+        assert c.post("/api/admin/allowlist",
+                      json={"email": "prof@franklin.edu", "note": "dup"}).json().get("invited") is False
+        print("  ✓ re-adding an existing member does not re-invite")
 
         # access request created for a stranger, visible to admin
         c.post("/api/auth/request", json={"email": "stranger@x.com"})
