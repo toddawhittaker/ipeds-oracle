@@ -53,11 +53,31 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   const sqlDetails = page.locator("details").filter({ has: page.getByText("SQL", { exact: true }) });
   await expect(sqlDetails.locator("pre")).toContainText(SQL);
 
-  // The done event's message_id unlocks feedback + CSV controls.
-  const csvLink = page.getByRole("link", { name: "Download CSV" });
-  await expect(csvLink).toBeVisible();
-  await expect(csvLink).toHaveAttribute("href", `/api/chat/messages/${MSG_ID}/download.csv`);
+  // Each rendered table has its own client-side CSV download button.
+  await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
 
+  // The table has a numeric column, so "Chart this" is offered; toggling it
+  // reveals the chart with a line/bar type switcher.
+  const chartBtn = page.getByRole("button", { name: "Chart this" });
+  await expect(chartBtn).toBeVisible();
+  await chartBtn.click();
+  await expect(page.getByRole("button", { name: "Bar", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Line", exact: true })).toBeVisible();
+
+  // The chart is rasterized to a PNG (hidden <img>) for clean HTML copy/paste.
+  await expect(page.locator("img.chart-export-img"))
+    .toHaveAttribute("src", /^data:image\/png/, { timeout: 5000 });
+
+  // Switching the type must survive a re-render (e.g. a copy) — regression for
+  // the chart remounting and snapping back to line.
+  await page.getByRole("button", { name: "Bar", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Bar", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Copy Markdown" }).click();
+  await expect(page.getByRole("button", { name: "Bar", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+
+  // The done event's message_id unlocks the feedback controls.
   // exact: true — "Helpful" is otherwise a substring match of "Not helpful".
   const upvote = page.getByTitle("Helpful", { exact: true });
   const downvote = page.getByTitle("Not helpful");

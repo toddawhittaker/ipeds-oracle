@@ -35,6 +35,9 @@ export default [
       // codebase deliberately doesn't use prop-types.
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
+      // Allow `const { node, ...rest } = props` to drop react-markdown's `node`
+      // prop (so it isn't spread onto real DOM elements) without a lint error.
+      "no-unused-vars": ["error", { ignoreRestSiblings: true }],
     },
   },
   {
