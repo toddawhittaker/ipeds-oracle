@@ -101,6 +101,9 @@ jobs:
       - name: SQL guard hardening tests
         run: python eval/test_sql_guards_hardening.py
 
+      - name: SQL aggregation lint tests (rollup/hang foot-gun checks)
+        run: python eval/test_sqllint.py
+
       - name: Backend tests (auth · admin · skills · cache · CSV)
         run: python eval/test_backend.py
 

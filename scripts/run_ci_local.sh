@@ -79,6 +79,7 @@ step "Backend: build CI fixture database"
 BACKEND_SUITES=(
   test_sql_guards.py
   test_sql_guards_hardening.py
+  test_sqllint.py
   test_backend.py
   test_security.py
   test_rate_limit.py
