@@ -53,6 +53,20 @@ function Allowlist() {
     setEmail(""); setNote(""); setIsAdmin(false);
   }
 
+  async function toggleAdmin(r) {
+    try {
+      await api.setAdmin(r.email, !r.is_admin);
+      setFlash(r.is_admin
+        ? `${r.email} is no longer an admin.`
+        : `${r.email} is now an admin.`);
+    } catch (err) {
+      let msg = "Could not update admin status.";
+      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      setFlash(msg);
+    }
+    load();
+  }
+
   return (
     <div className="panel">
       {flash && <div className="notice" role="status">{flash}</div>}
@@ -92,7 +106,14 @@ function Allowlist() {
             <tr key={r.email}>
               <td>{r.email}</td>
               <td>{r.note}</td>
-              <td>{r.is_admin ? "✓" : ""}</td>
+              <td>
+                <button type="button"
+                        className={"link admintoggle" + (r.is_admin ? " on" : "")}
+                        aria-pressed={r.is_admin ? "true" : "false"}
+                        onClick={() => toggleAdmin(r)}>
+                  {r.is_admin ? "✓ admin" : "make admin"}
+                </button>
+              </td>
               <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
               <td><button className="link danger"
                           onClick={() => api.removeAllow(r.email).then(load)}>remove</button></td>
