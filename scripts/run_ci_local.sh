@@ -84,6 +84,7 @@ BACKEND_SUITES=(
   test_agent_loop.py
   test_logbuffer.py
   test_mailer.py
+  test_guard.py
 )
 for suite in "${BACKEND_SUITES[@]}"; do
   step "Backend: eval/$suite"

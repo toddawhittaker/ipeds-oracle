@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app import skills
+from app import guard, skills
 from app.auth import current_user
 from app.db import connect
 from app.llm import generate_title, stream_agent
@@ -76,6 +76,21 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
     async def gen():
         yield _sse({"type": "conversation", "id": conv_id})
+
+        # 0) Topical guardrail: refuse anything that isn't a good-faith IPEDS
+        # question (off-topic requests, prompt-injection) BEFORE any cache or
+        # model/tool work, so an adversarial message never drives the agent.
+        verdict = await guard.classify(question, history)
+        if not verdict.allowed:
+            answer = guard.REFUSAL
+            yield _sse({"type": "answer", "text": answer})
+            user_msg_id, msg_id = await run_in_threadpool(
+                _persist, user["id"], conv_id, question, answer,
+                sql_log=[], model="guard", tokens=verdict.tokens,
+                cached=False, ok=True)
+            yield _sse({"type": "done", "refused": True, "message_id": msg_id,
+                        "user_message_id": user_msg_id})
+            return
 
         # 1) Semantic cache: reuse SQL for a near-identical past question.
         # Only a valid shortcut for a fresh, first-turn question — a follow-up

@@ -125,6 +125,9 @@ jobs:
       - name: mailer tests (failure handling · admin fan-out)
         run: python eval/test_mailer.py
 
+      - name: guardrail tests (topical gate · injection refusal)
+        run: python eval/test_guard.py
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
