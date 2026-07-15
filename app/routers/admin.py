@@ -238,3 +238,16 @@ def delete_skill(skill_id: int):
     finally:
         con.close()
     return {"ok": True}
+
+
+# --- Server logs --------------------------------------------------------------
+@router.get("/logs")
+def server_logs(limit: int = 200, level: str | None = None):
+    """Recent in-memory server log records (newest last). Optionally filter by
+    level (INFO/WARNING/ERROR)."""
+    from app.logbuffer import get_handler
+    handler = get_handler()
+    if handler is None:
+        return {"records": []}
+    limit = max(1, min(limit, 500))
+    return {"records": handler.records(limit=limit, level=level)}
