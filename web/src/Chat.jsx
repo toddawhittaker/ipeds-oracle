@@ -3,6 +3,20 @@ import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 
+// Clickable starter prompts shown on the empty chat screen.
+const EXAMPLES = [
+  "Top 20 institutions awarding Associate's degrees in Registered Nursing (CIP 51.3801) over the last 3 years.",
+  "How many Computer Science (CIP 11.0701) bachelor's degrees did California public universities award last year?",
+  "National total of Associate's degrees per year, all programs.",
+  "Which states awarded the most Master's degrees in Education?",
+];
+
+// Sidebar is user-resizable (drag or arrow keys); width persists in localStorage.
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 288;
+const clampWidth = (w) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)));
+
 // Copy plain text, falling back to execCommand for non-secure contexts
 // (navigator.clipboard is undefined over plain http on a LAN IP).
 async function copyText(text) {
@@ -116,10 +130,16 @@ export default function Chat() {
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(null); // `${i}:${kind}` most recently copied
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "1");
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = parseInt(localStorage.getItem("sidebarWidth"), 10);
+    return Number.isFinite(v) ? clampWidth(v) : SIDEBAR_DEFAULT;
+  });
+  const [resizing, setResizing] = useState(false);
   const [editingIdx, setEditingIdx] = useState(null);
   const [editText, setEditText] = useState("");
   const bottom = useRef(null);
   const taRef = useRef(null);
+  const chatRef = useRef(null);
   const editTrigger = useRef(null); // Edit button that opened the inline editor
   const mdRefs = useRef({}); // message index -> rendered markdown DOM node
 
@@ -157,6 +177,40 @@ export default function Chat() {
 
   function toggleSidebar() {
     setCollapsed((v) => { const n = !v; localStorage.setItem("sidebarCollapsed", n ? "1" : "0"); return n; });
+  }
+
+  const persistWidth = (w) => { const c = clampWidth(w); setSidebarWidth(c); localStorage.setItem("sidebarWidth", String(c)); };
+
+  // Drag the divider to resize the sidebar; width persists on release.
+  function startResize(e) {
+    e.preventDefault();
+    setResizing(true);
+    const left = chatRef.current?.getBoundingClientRect().left ?? 0;
+    let w = sidebarWidth;
+    const onMove = (ev) => { w = clampWidth(ev.clientX - left); setSidebarWidth(w); };
+    const onUp = () => {
+      setResizing(false);
+      localStorage.setItem("sidebarWidth", String(w));
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+  // Keyboard resize for the separator (arrow keys nudge the width).
+  function resizeKey(e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      persistWidth(sidebarWidth + (e.key === "ArrowLeft" ? -16 : 16));
+    }
+  }
+
+  // Drop an example prompt into the composer and focus it (user reviews, then sends).
+  function fillExample(text) {
+    setInput(text);
+    requestAnimationFrame(() => taRef.current?.focus());
   }
 
   function send(e) {
@@ -261,8 +315,9 @@ export default function Chat() {
   }
 
   return (
-    <div className="chat">
-      <aside className={"sidebar" + (collapsed ? " collapsed" : "")}>
+    <div className="chat" ref={chatRef}>
+      <aside className={"sidebar" + (collapsed ? " collapsed" : "") + (resizing ? " resizing" : "")}
+             style={collapsed ? undefined : { width: sidebarWidth }}>
         <div className="sidebar-head">
           <button className="icon-btn" onClick={toggleSidebar}
                   title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -294,14 +349,39 @@ export default function Chat() {
         )}
       </aside>
 
+      {!collapsed && (
+        <div className="sidebar-resizer" role="separator" aria-orientation="vertical"
+             tabIndex={0} aria-label="Resize sidebar"
+             aria-valuenow={sidebarWidth} aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX}
+             title="Drag to resize (or use arrow keys)"
+             onMouseDown={startResize} onKeyDown={resizeKey} />
+      )}
+
       <main className="thread">
         <h1 className="sr-only">Chat</h1>
         <div className="messages thin-scroll">
           <div className="messages-inner">
           {messages.length === 0 && (
-            <div className="empty muted">
-              Ask a question about IPEDS data — degrees awarded, enrollment,
-              tuition, graduation rates, and more, across 2020-21 → 2024-25.
+            <div className="empty">
+              <p className="muted">
+                Ask a question about IPEDS data — degrees awarded, enrollment,
+                tuition, graduation rates, and more, across 2020-21 → 2024-25.
+              </p>
+              <div className="examples-grid">
+                {EXAMPLES.map((ex) => (
+                  <button key={ex} type="button" className="example-chip"
+                          onClick={() => fillExample(ex)}>
+                    {ex}
+                  </button>
+                ))}
+              </div>
+              <div className="privacy-warning" role="note">
+                <strong>⚠️ Do not enter proprietary or confidential Franklin
+                information.</strong> To keep costs down, this tool uses DeepSeek,
+                which may train on the data you submit. Ask only about public IPEDS
+                data — <strong>no</strong> student records, internal figures, or
+                other non-public information.
+              </div>
             </div>
           )}
           {messages.map((m, i) => (

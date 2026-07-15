@@ -199,16 +199,9 @@ def test_patch_admin_404_for_non_allowlisted():
         assert r.status_code == 404, r.text
 
 
-def test_cannot_demote_the_last_admin():
+def test_cannot_demote_self():
     with TestClient(app) as c:
-        _login(c)
-        # Force admin@franklin.edu to be the SOLE admin, regardless of prior tests.
-        con = connect()
-        try:
-            con.execute("UPDATE users SET is_admin=0 WHERE email != 'admin@franklin.edu'")
-            con.commit()
-        finally:
-            con.close()
+        _login(c)  # signed in as admin@franklin.edu
         r = c.patch("/api/admin/allowlist/admin@franklin.edu", json={"is_admin": False})
         assert r.status_code == 400, r.text
         assert _is_admin(c, "admin@franklin.edu") is True  # guard left them admin
@@ -295,8 +288,8 @@ def run():
           test_demote_admin_when_another_exists)
     check("PATCH admin 404s for a non-allowlisted email",
           test_patch_admin_404_for_non_allowlisted)
-    check("cannot demote the last remaining admin",
-          test_cannot_demote_the_last_admin)
+    check("cannot demote yourself (prevents self-lockout + keeps an admin)",
+          test_cannot_demote_self)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
     check("skills PATCH updates fields; empty body is a no-op",

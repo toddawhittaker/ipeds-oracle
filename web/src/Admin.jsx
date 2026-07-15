@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 
-export default function Admin() {
+export default function Admin({ me }) {
   const [tab, setTab] = useState("allowlist");
   return (
     <main className="admin">
@@ -16,7 +16,7 @@ export default function Admin() {
           </button>
         ))}
       </nav>
-      {tab === "allowlist" && <Allowlist />}
+      {tab === "allowlist" && <Allowlist me={me} />}
       {tab === "imports" && <Imports />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
@@ -25,7 +25,7 @@ export default function Admin() {
   );
 }
 
-function Allowlist() {
+function Allowlist({ me }) {
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
   const [email, setEmail] = useState("");
@@ -107,12 +107,18 @@ function Allowlist() {
               <td>{r.email}</td>
               <td>{r.note}</td>
               <td>
-                <button type="button"
-                        className={"link admintoggle" + (r.is_admin ? " on" : "")}
-                        aria-pressed={r.is_admin ? "true" : "false"}
-                        onClick={() => toggleAdmin(r)}>
-                  {r.is_admin ? "✓ admin" : "make admin"}
-                </button>
+                {me && r.email === me.email && r.is_admin ? (
+                  <span className="admintoggle on" title="You can't remove your own admin access">
+                    ✓ admin (you)
+                  </span>
+                ) : (
+                  <button type="button"
+                          className={"link admintoggle" + (r.is_admin ? " on" : "")}
+                          aria-pressed={r.is_admin ? "true" : "false"}
+                          onClick={() => toggleAdmin(r)}>
+                    {r.is_admin ? "✓ admin" : "make admin"}
+                  </button>
+                )}
               </td>
               <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
               <td><button className="link danger"

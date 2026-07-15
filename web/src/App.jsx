@@ -58,7 +58,7 @@ export default function App() {
           </button>
         </div>
       </header>
-      {view === "chat" ? <Chat /> : <Admin />}
+      {view === "chat" ? <Chat /> : <Admin me={user} />}
     </div>
   );
 }
