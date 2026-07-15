@@ -150,7 +150,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
         # 4b) If the critic caught a real mistake and forced a correction, capture
         # its finding as an unverified lesson (self-learning from actual errors).
-        if (result.critic_revised and result.critic_issue
+        # First-turn only (like the cache above): a follow-up's bare question
+        # ("and for Ohio?") is a context-less, useless retrieval key.
+        if (not history and result.critic_revised and result.critic_issue
                 and result.error is None and result.sql_log):
             await run_in_threadpool(
                 skills.record_lesson_from_critic, question,

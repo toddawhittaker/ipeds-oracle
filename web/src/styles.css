@@ -78,6 +78,11 @@ input, textarea, button { font-family: inherit; }
 .tabs button.on, .subtabs button.on { color: var(--text); background: var(--bg); border-color: var(--line); }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
+.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Primary action in the lessons approval queue — approving should read louder
+   than the destructive "reject" link. */
+.btn-verify { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; }
+.btn-verify:hover { background: var(--accent-d); }
 .ico { display: inline-flex; align-items: center; gap: 5px; }
 .ico svg { flex: none; }
 .link.danger { color: var(--danger); }

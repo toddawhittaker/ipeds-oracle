@@ -322,11 +322,31 @@ function Stat({ label, value }) {
   return <div className="stat"><div className="v">{value}</div><div className="l">{label}</div></div>;
 }
 
+function ruleName(s) {
+  return s.lesson || s.notes || s.question || "untitled lesson";
+}
+
 function Skills() {
   const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState("");
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
   const pending = rows.filter((r) => !r.verified).length;
+
+  const setVerified = (s, verified) =>
+    api.patchSkill(s.id, { verified }).then(() => {
+      setStatus(verified ? "Lesson verified." : "Lesson moved back to unverified.");
+      load();
+    });
+  const reject = (s) => {
+    // Confirm only when there's curated/used data to lose — a fresh unreviewed
+    // proposal (verified=false, no votes/hits) can be dismissed without nagging.
+    const risky = s.verified || s.upvotes > 0 || s.hits > 0;
+    if (risky && !window.confirm(
+      `Delete this ${s.verified ? "verified " : ""}lesson? This can't be undone.`)) return;
+    api.deleteSkill(s.id).then(() => { setStatus("Lesson rejected."); load(); });
+  };
+
   return (
     <div className="panel">
       <h2>Learned lessons ({rows.length})</h2>
@@ -336,18 +356,26 @@ function Skills() {
         both start <strong>unverified</strong> until you approve them here.
         {pending > 0 && ` ${pending} awaiting review.`}
       </p>
+      <div className="sr-only" role="status" aria-live="polite">{status}</div>
+      {rows.length === 0 && (
+        <p className="muted small">
+          No lessons yet — they’ll appear here as the critic and 👍 feedback propose them.
+        </p>
+      )}
       {rows.map((s) => (
         <div key={s.id} className="skill">
           <div className="skill-head">
             <span className="lesson-rule">
-              {s.lesson || s.notes || <em className="muted">(no rule yet — add one below)</em>}
+              {s.lesson || s.notes || <em className="muted">(no rule text)</em>}
             </span>
             <span className="tags">
               {s.verified
                 ? <span className="tag ok">verified</span>
                 : <span className="tag warn">unverified</span>}
               <span className="tag">from {s.created_by || "?"}</span>
-              <span className="tag">▲{s.upvotes} ▼{s.downvotes}</span>
+              <span className="tag" aria-label={`${s.upvotes} upvotes, ${s.downvotes} downvotes`}>
+                <span aria-hidden="true">▲{s.upvotes} ▼{s.downvotes}</span>
+              </span>
               <span className="tag">hits {s.hits}</span>
             </span>
           </div>
@@ -359,10 +387,15 @@ function Skills() {
             </details>
           )}
           <div className="msg-actions">
-            <button className="link" onClick={() => api.patchSkill(s.id, { verified: !s.verified }).then(load)}>
-              {s.verified ? "unverify" : "verify"}
-            </button>
-            <button className="link danger" onClick={() => api.deleteSkill(s.id).then(load)}>reject</button>
+            {s.verified ? (
+              <button className="link" aria-label={`Unverify lesson: ${ruleName(s)}`}
+                      onClick={() => setVerified(s, false)}>unverify</button>
+            ) : (
+              <button className="btn-verify" aria-label={`Verify lesson: ${ruleName(s)}`}
+                      onClick={() => setVerified(s, true)}>Verify</button>
+            )}
+            <button className="link danger" aria-label={`Reject lesson: ${ruleName(s)}`}
+                    onClick={() => reject(s)}>reject</button>
           </div>
         </div>
       ))}

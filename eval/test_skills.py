@@ -198,6 +198,58 @@ def test_critic_lesson_dedups_against_existing():
     assert _count() == 1, "a repeat critic finding on the same scenario must dedup"
 
 
+def test_critic_lesson_not_collapsed_into_verified_seed():
+    # The HIGH review bug: a new critic finding on a question similar to an
+    # already-VERIFIED lesson must NOT be discarded into it (nor upvote it) — it's
+    # a distinct rule and must be stored as its own pending candidate.
+    _reset()
+    q = "national total associate degrees per year"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", lesson="use cipcode='99'", created_by="seed", verified=True))
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        q, "SELECT 2", "award-level rollup mixing — filter awlevel to real codes"))
+    assert _count() == 2, "a distinct critic rule must not collapse into a verified seed"
+    con = connect()
+    seed = con.execute("SELECT upvotes FROM skills WHERE created_by='seed'").fetchone()[0]
+    con.close()
+    assert seed == 0, "the verified seed's upvotes must not be inflated by dedup"
+
+
+def test_dedup_does_not_cross_sources():
+    # A feedback 👍 and a critic finding on the same scenario are different signals
+    # and must not dedup into each other.
+    _reset()
+    q = "same scenario two sources"
+    _with_embed(lambda: skills.promote_from_message(q, "SELECT 1"))      # feedback
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", "a rule"))  # critic
+    assert _count() == 2, "different sources on the same scenario must not dedup"
+
+
+def test_dedup_backfills_empty_lesson():
+    # If the matched pending row has no rule yet, a later same-source finding with
+    # a rule backfills it instead of losing the text.
+    _reset()
+    q = "backfill scenario words"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", lesson="", created_by="critic", verified=False))
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", "the real rule"))
+    assert _count() == 1, "same-source same-scenario must dedup"
+    con = connect()
+    lesson = con.execute("SELECT lesson FROM skills").fetchone()[0]
+    con.close()
+    assert lesson == "the real rule", f"empty rule should be backfilled, got {lesson!r}"
+
+
+def test_cache_lookup_disabled_when_skills_off():
+    orig = skills.get_settings
+    skills.get_settings = lambda: type("S", (), {"skills_enabled": False})()
+    try:
+        assert skills.cache_lookup("anything") is None, \
+            "cache must be gated by skills_enabled for a clean A/B baseline"
+    finally:
+        skills.get_settings = orig
+
+
 def run():
     print("self-learning lessons:")
     check("_lesson_text leads with the rule then the example",
@@ -215,6 +267,11 @@ def run():
     check("critic-emitted lesson is unverified", test_record_lesson_from_critic_is_unverified)
     check("empty critic issue is a no-op", test_record_lesson_empty_issue_is_noop)
     check("repeat critic finding dedups", test_critic_lesson_dedups_against_existing)
+    check("distinct critic rule not collapsed into a verified seed",
+          test_critic_lesson_not_collapsed_into_verified_seed)
+    check("dedup does not cross sources", test_dedup_does_not_cross_sources)
+    check("dedup backfills an empty rule", test_dedup_backfills_empty_lesson)
+    check("cache lookup is gated by skills_enabled", test_cache_lookup_disabled_when_skills_off)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} lesson test(s) FAILED: {FAILURES}")
