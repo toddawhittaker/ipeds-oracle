@@ -29,7 +29,7 @@ const ANSWER_MD =
 async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
   await mockMe(page, { email: "user@franklin.edu", is_admin: false });
   const convos = await mockConversations(page, []);
-  await mockStreamChat(page, { conversationId: convId, sql: [SQL], answer: ANSWER_MD });
+  await mockStreamChat(page, { conversationId: convId, sql: [SQL], answer: ANSWER_MD, messageId: msgId });
   const feedback = await mockFeedback(page);
   await mockConversation(page, convId, [
     { role: "user", content: "Associate's degrees in Registered Nursing by state" },

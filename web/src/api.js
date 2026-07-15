@@ -22,6 +22,7 @@ export const api = {
 
   conversations: () => j("GET", "/api/chat/conversations"),
   conversation: (id) => j("GET", `/api/chat/conversations/${id}`),
+  deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
   feedback: (msgId, value) =>
     j("POST", `/api/chat/messages/${msgId}/feedback`, { value }),
   csvUrl: (msgId) => `/api/chat/messages/${msgId}/download.csv`,
@@ -38,14 +39,20 @@ export const api = {
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),
   importJobs: () => j("GET", "/api/admin/import/jobs"),
   importJob: (id) => j("GET", `/api/admin/import/jobs/${id}`),
+  logs: (limit = 200, level = "") =>
+    j("GET", `/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
 };
 
 // Stream a chat answer via SSE (POST + ReadableStream). Calls onEvent per event.
-export async function streamChat({ question, conversationId }, onEvent) {
+export async function streamChat({ question, conversationId, editMessageId }, onEvent) {
   const r = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, conversation_id: conversationId ?? null }),
+    body: JSON.stringify({
+      question,
+      conversation_id: conversationId ?? null,
+      edit_message_id: editMessageId ?? null,
+    }),
   });
   if (!r.ok) throw new Error(await r.text());
   const reader = r.body.getReader();

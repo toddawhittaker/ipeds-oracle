@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
 export default function Admin() {
@@ -7,7 +7,7 @@ export default function Admin() {
     <main className="admin">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
-        {["allowlist", "imports", "usage", "skills"].map((t) => (
+        {["allowlist", "imports", "usage", "skills", "logs"].map((t) => (
           <button key={t} className={tab === t ? "on" : ""}
                   aria-current={tab === t ? "page" : undefined}
                   onClick={() => setTab(t)}>
@@ -19,6 +19,7 @@ export default function Admin() {
       {tab === "imports" && <Imports />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
+      {tab === "logs" && <Logs />}
     </main>
   );
 }
@@ -238,6 +239,56 @@ function Skills() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function Logs() {
+  const [records, setRecords] = useState([]);
+  const [level, setLevel] = useState("");
+  const [auto, setAuto] = useState(true);
+  const load = useCallback(() => {
+    api.logs(300, level).then((d) => setRecords(d.records || [])).catch(() => {});
+  }, [level]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return undefined;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [auto, load]);
+
+  const fmt = (ts) => new Date(ts * 1000).toLocaleTimeString();
+  return (
+    <div className="panel">
+      <h2>Server logs</h2>
+      <p className="muted small">Most recent in-memory log records (newest at the bottom).</p>
+      <div className="row">
+        <label className="chk">Level:&nbsp;
+          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+            <option value="">all</option>
+            <option value="INFO">info</option>
+            <option value="WARNING">warning</option>
+            <option value="ERROR">error</option>
+          </select>
+        </label>
+        <label className="chk">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          auto-refresh
+        </label>
+        <button onClick={load}>Refresh</button>
+      </div>
+      <div className="log logbox thin-scroll">
+        {records.length === 0
+          ? <div className="muted">No log records.</div>
+          : records.map((r, i) => (
+            <div key={i} className={"logline lvl-" + r.level}>
+              <span className="logts">{fmt(r.ts)}</span>
+              <span className="loglvl">{r.level}</span>
+              <span className="logname">{r.name}</span>
+              <span className="logmsg">{r.msg}</span>
+            </div>
+          ))}
+      </div>
     </div>
   );
 }

@@ -4,13 +4,27 @@ import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import Admin from "./Admin.jsx";
 
+function currentTheme() {
+  const forced = document.documentElement.getAttribute("data-theme");
+  if (forced) return forced;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined=loading, null=logged out
   const [view, setView] = useState("chat");
+  const [theme, setTheme] = useState(currentTheme);
 
   useEffect(() => {
     api.me().then(setUser).catch(() => setUser(null));
   }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("theme", next);
+  }
 
   if (user === undefined) return <div className="center muted">Loading…</div>;
   if (!user) return <Login onDone={() => api.me().then(setUser).catch(() => {})} />;
@@ -28,6 +42,11 @@ export default function App() {
           )}
         </nav>
         <div className="userbox">
+          <button className="link theme-toggle" onClick={toggleTheme}
+                  title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                  aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
           <span className="muted">{user.email}</span>
           <button className="link" onClick={async () => { await api.logout(); setUser(null); }}>
             Sign out

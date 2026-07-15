@@ -80,7 +80,9 @@ export async function mockConversation(page, id, messages) {
 
 /**
  * POST /api/chat/stream -> SSE stream of {type,...} events.
- * Emits, in order: conversation -> status -> sql* -> answer.
+ * Emits, in order: conversation -> status -> sql* -> answer -> done.
+ * The final `done` carries `message_id`/`user_message_id` (the app reads these
+ * to attach ids that unlock feedback/CSV/copy — see Chat.jsx submit()).
  * `answer` should be markdown containing a GFM table so specs can assert the
  * rendered <table>.
  */
@@ -89,6 +91,9 @@ export async function mockStreamChat(page, {
   statusText = "Thinking…",
   sql = [],
   answer = "Answer.",
+  messageId = null,
+  userMessageId = null,
+  title = null,
 } = {}) {
   await page.route("**/api/chat/stream", async (route) => {
     const events = [
@@ -96,6 +101,8 @@ export async function mockStreamChat(page, {
       { type: "status", text: statusText },
       ...sql.map((s) => ({ type: "sql", sql: s })),
       { type: "answer", text: answer },
+      { type: "done", message_id: messageId, user_message_id: userMessageId,
+        model: "test", tokens: 0, ...(title ? { title } : {}) },
     ];
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });
