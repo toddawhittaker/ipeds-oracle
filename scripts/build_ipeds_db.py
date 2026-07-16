@@ -186,6 +186,13 @@ def main():
     if args.dry_run:
         return
 
+    # Machine-readable progress markers for app/importer.py's build_check_swap
+    # (drives the Imports tab's determinate rebuild progress bar) — additive,
+    # alongside all the human-readable prints above/below, never replacing them.
+    tables_total = sum(len(fam_srcs[f]) for f in fam_cols)
+    print(f"##PROGRESS## tables_total={tables_total}", flush=True)
+    tables_done = 0
+
     type_map = build_type_map(files)
     print(f"\nType map: {len(type_map)} variables from varTable")
 
@@ -223,6 +230,8 @@ def main():
                 cur.executemany(insert, batch); n += len(batch)
             fam_map_rows.append((tbl, fam, survey_year, year_end, n))
             print(f"  loaded {tbl:<28} -> {fam:<22} {n:>8} rows")
+            tables_done += 1
+            print(f"##PROGRESS## tables_done={tables_done}", flush=True)
         con.commit()
 
     # provenance + column-presence bookkeeping

@@ -42,6 +42,16 @@ fulfilled by a mock before it leaves the page.
   and assert each panel's mocked content; submit the add-allowlist form and
   assert the POST body. Also carries the Skills-tab-unmount crash regression
   test (see comment in that file for the bug history).
+- `nces-catalog.spec.js` — the Imports tab's NCES year catalog: per-year
+  cards' selectable/integrated state, the "Integrate selected (N)" button, the
+  disk-headroom meter, per-file download progress, "update"-status cards, and
+  keyboard/selection styling.
+- `year-remove.spec.js` — the trashcan (`.year-remove`, DELETE
+  `/api/admin/import/year/{start_year}` via `mockDeintegrate`) that removes an
+  already-integrated year: button visibility gated on integrated/update
+  status, the confirm-dialog gate, and the resulting job poll/success notice;
+  plus the rebuild progress bar (`[data-testid="rebuild-progress"]`) driven by
+  a polled job's `progress.rebuild` JSON.
 - `a11y.spec.js` — coverage for the accessibility fixes: conversation list
   items are real buttons (with `aria-current` on the active one), 👍/👎 vote
   buttons are reachable by accessible name and expose `aria-pressed`, the

@@ -282,3 +282,45 @@ entirely against `httpx.MockTransport` (no socket, no real NCES);
 `importer.shutil.disk_usage` / `admin.shutil.disk_usage` as bare module
 attributes (never `from ... import`) so tests can substitute fakes without
 touching the real network, filesystem, or loader.
+
+### Removing an integrated year (the trashcan)
+
+Each already-integrated (or "update") year card on **Admin → Imports** shows a
+`.year-remove` trashcan; clicking it (after a confirm dialog) calls `DELETE
+/api/admin/import/year/{start_year}`, which — after the same single-flight
+`_import_lock` and a not-integrated/only-remaining-year 400 check as the
+router does — spawns `importer.run_deintegrate()` in a background thread.
+`run_deintegrate` is a fully **offline** de-integration: it copies live
+`ipeds.db` to a staging file (never mutating live in place), `DELETE`s the
+removed ending year's rows from every base table that carries a `year` column
+(every family table plus `_family_map`/`_years`/`valuesets`/`vartable`/
+`tables`), strips that year's survey_year token out of `_column_presence`'s
+CSV `years` field (dropping any row whose CSV becomes empty), `VACUUM`s to
+reclaim the space, and only then runs **`deintegrate_checks`** — a separate
+check function from `integrity_checks`, since `integrity_checks`' >20%-family-
+shrink rule exists to catch an accidental loss on *import* and would falsely
+fail a deliberate year removal. `deintegrate_checks` instead confirms the
+removed year is truly gone, no *other* year was lost, and every surviving
+year's per-family row counts are byte-identical to live. On success it
+activates staging through the same swap tail `build_check_swap` uses
+(`importer._activate_staging` — atomic swap, `data_version` bump, semantic-
+cache invalidation) and deletes the removed year's `year_provenance` row. A
+disk-headroom preflight (same `importer.shutil.disk_usage` bare-module-attr
+convention, ~2x the live db size padded by `NCES_DISK_SAFETY_FACTOR`, to cover
+the copy + `VACUUM`'s own temp rebuild) refuses before ever copying anything.
+
+### Rebuild progress bar
+
+`scripts/build_ipeds_db.py` emits machine-readable `##PROGRESS##
+tables_total=N` (after planning) and `##PROGRESS## tables_done=k` (after each
+table load) lines alongside its normal human-readable prints.
+`build_check_swap`'s stdout-streaming loop parses these into
+`import_jobs.progress["rebuild"] = {tables_total, tables_done, pct}` (via
+`importer._update_rebuild_progress`, throttled to once per integer-pct
+change) and keeps marker lines OUT of the human-readable job log. The Imports
+tab renders a determinate `[data-testid="rebuild-progress"]` bar
+(`role="progressbar"`) whenever `progress.rebuild` is present — i.e. during a
+manual upload or NCES integrate rebuild (both go through
+`build_check_swap`'s loader subprocess). A year removal (above) never invokes
+the loader, so it has no rebuild bar of its own — its own phases show up via
+`progress.overall`/the job log instead.

@@ -360,6 +360,37 @@ def integrate(body: IntegrateRequest, admin: sqlite3.Row = Depends(require_admin
     return {"job_id": job_id, "status": "pending"}
 
 
+@router.delete("/import/year/{start_year}")
+def deintegrate(start_year: int, admin: sqlite3.Row = Depends(require_admin)):
+    """Remove an already-integrated year from the live database (the
+    "trashcan"): a full offline rebuild of live minus that year's rows, with
+    its own de-integration integrity checks — see importer.run_deintegrate.
+    Single-flight with /import and /import/integrate via the same
+    `_import_lock` (they'd otherwise race the same ipeds_staging.db)."""
+    if not _import_lock.acquire(blocking=False):
+        raise HTTPException(409, "An import is already running. Wait for it to finish.")
+    try:
+        integrated_starts = _integrated_starts()
+        if start_year not in integrated_starts:
+            raise HTTPException(400, f"{start_year} is not integrated.")
+        if len(integrated_starts) <= 1:
+            raise HTTPException(400, "Can't remove the only integrated year.")
+
+        job_id = importer.create_job(f"deintegrate:{start_year}", admin["email"])
+    except Exception:
+        _import_lock.release()
+        raise
+
+    def _run():
+        try:
+            importer.run_deintegrate(job_id, start_year)
+        finally:
+            _import_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"job_id": job_id, "status": "pending"}
+
+
 # --- Usage dashboard ----------------------------------------------------------
 @router.get("/usage")
 def usage(since: float | None = None, until: float | None = None):

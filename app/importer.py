@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -32,6 +33,10 @@ REQUIRED_FAMILIES = ("c_a", "hd", "valuesets", "vartable", "_years")
 # The Imports tab polls every 2s (web/src/Admin.jsx) — persisting per-year
 # progress more often than that is pure overhead. See _ProgressWriter below.
 PROGRESS_MIN_INTERVAL_SECONDS = 1.5
+# scripts/build_ipeds_db.py emits these machine-readable lines (in addition to
+# its normal human-readable prints) so build_check_swap can drive a
+# determinate rebuild progress bar without screen-scraping the log text.
+PROGRESS_MARKER_RE = re.compile(r"^##PROGRESS## (\w+)=(\d+)$")
 
 
 class NCESFetchError(RuntimeError):
@@ -159,6 +164,33 @@ def _update_overall_phase(job_id: int, phase: str, message: str) -> None:
     _set_progress(job_id, progress)
 
 
+def _update_rebuild_progress(job_id: int, tables_total: int, tables_done: int) -> None:
+    """Update just the progress["rebuild"] block ({tables_total, tables_done,
+    pct}), preserving whatever overall/years progress is already there — same
+    read-merge-write shape as _update_overall_phase, just for the loader's
+    ##PROGRESS## markers (see build_check_swap). The caller (build_check_swap)
+    throttles calls to once per integer-pct change; this function itself
+    always writes when called."""
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT progress FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    finally:
+        con.close()
+    progress = None
+    if row and row["progress"]:
+        try:
+            progress = json.loads(row["progress"])
+        except ValueError:
+            progress = None
+    if not isinstance(progress, dict):
+        progress = {}
+    progress.setdefault("years", {})
+    pct = int(tables_done * 100 / tables_total) if tables_total else 0
+    progress["rebuild"] = {"tables_total": tables_total, "tables_done": tables_done, "pct": pct}
+    _set_progress(job_id, progress)
+
+
 def _human_bytes(n: float) -> str:
     """A short human-readable byte size for job-report messages (e.g. '6.4 GB')."""
     n = float(n)
@@ -236,6 +268,33 @@ def _years(db_path: Path) -> list[int]:
     return [row[0] for row in r.rows]
 
 
+def _family_year_counts(db_path: Path) -> dict[int, int]:
+    """Per-year SUM(n_rows) from _family_map, across every family — a
+    bookkeeping-consistency check used by deintegrate_checks. NOTE: this is
+    NOT proof the actual data rows are untouched — the year-removal DELETE
+    never touches _family_map rows for surviving years, so this can only
+    catch a bug that corrupted the bookkeeping table itself, not an
+    over/under-deletion of real data (see _core_family_row_count for that)."""
+    r = run_sql("SELECT year, SUM(n_rows) AS n FROM _family_map GROUP BY year",
+                limit=1000, db_path=db_path)
+    return {row[0]: row[1] for row in r.rows}
+
+
+def _core_family_row_count(db_path: Path, year: int) -> int | None:
+    """REAL-DATA assurance: actual row count in the core `c_a` family for one
+    `year`, straight off the physical table (not the _family_map bookkeeping
+    copy, which the removal DELETE never touches for surviving years and so
+    can't detect over/under-deletion of actual rows). Returns None if `c_a`
+    is somehow absent — it's a REQUIRED_FAMILY, so this should never happen
+    outside a badly corrupt fixture, but the caller must not crash on it."""
+    try:
+        r = run_sql(f"SELECT COUNT(*) FROM c_a WHERE year={int(year)}",
+                    limit=1, db_path=db_path)
+    except Exception:  # noqa: BLE001 — treated as "can't confirm", not a crash
+        return None
+    return r.rows[0][0] if r.rows else None
+
+
 def _associates_latest(db_path: Path) -> int | None:
     r = run_sql("SELECT SUM(ctotalt) FROM c_a WHERE awlevel=3 AND majornum=1 "
                 "AND cipcode='99' AND year=(SELECT MAX(year) FROM _years)",
@@ -295,6 +354,117 @@ def integrity_checks(staging: Path, live: Path | None) -> tuple[bool, list[str]]
     return ok, report
 
 
+def deintegrate_checks(staging: Path, live: Path, removed_year: int) -> tuple[bool, list[str]]:
+    """De-integration-specific integrity checks for run_deintegrate.
+
+    Deliberately NOT integrity_checks — its >20%-family-shrink rule exists to
+    catch an accidental data loss on IMPORT, and would falsely fail a
+    deliberate year removal (which is exactly a big, intentional shrink).
+    Instead: confirm the required families/objects are still present, the
+    removed year's rows are ACTUALLY gone from the core `c_a` table (a
+    real-data check — the _family_map bookkeeping comparison below can't
+    prove this on its own, see _core_family_row_count), no OTHER year was
+    lost in the process, at least one year remains, every surviving year's
+    _family_map bookkeeping is internally consistent, and the new max year's
+    associate's total is still sane."""
+    report: list[str] = []
+    ok = True
+
+    fams = _family_counts(staging)
+    missing = [f for f in REQUIRED_FAMILIES if f != "_years" and f not in fams]
+    new_years = _years(staging)
+    if missing or not new_years:
+        ok = False
+        report.append("✗ required family/object missing or empty: "
+                      + (", ".join(missing) if missing else "_years"))
+    else:
+        report.append("✓ required families present")
+
+    report.append(f"years in staging: {new_years}")
+
+    if removed_year in new_years:
+        ok = False
+        report.append(f"✗ removed year {removed_year} is still present in staging")
+    else:
+        report.append(f"✓ removed year {removed_year} is gone from _years")
+
+    # REAL-DATA check: the removed year's rows must actually be gone from the
+    # core c_a table — _family_map's bookkeeping (below) never gets touched
+    # for surviving years by the removal DELETE, so it can't by itself prove
+    # actual over/under-deletion of real rows.
+    core_remaining = _core_family_row_count(staging, removed_year)
+    if core_remaining is None:
+        ok = False
+        report.append("✗ could not confirm removal — c_a table missing or unreadable in staging")
+    elif core_remaining > 0:
+        ok = False
+        report.append(f"✗ removed year {removed_year} still has {core_remaining:,} rows in c_a")
+    else:
+        report.append(f"✓ removed year {removed_year} has 0 rows in c_a")
+
+    old_years = _years(live)
+    expected_years = [y for y in old_years if y != removed_year]
+    if set(new_years) != set(expected_years):
+        ok = False
+        report.append(f"✗ surviving years {sorted(new_years)} do not match expected "
+                      f"{sorted(expected_years)} — more than the removed year changed")
+
+    if not new_years:
+        ok = False
+        report.append("✗ no years remain after removal — the database would be empty")
+
+    staging_by_year = _family_year_counts(staging)
+    live_by_year = _family_year_counts(live)
+    mismatches = [y for y in expected_years if staging_by_year.get(y) != live_by_year.get(y)]
+    if mismatches:
+        ok = False
+        for y in mismatches:
+            report.append(f"✗ surviving year {y} bookkeeping row count changed: "
+                          f"{live_by_year.get(y)} -> {staging_by_year.get(y)}")
+    elif expected_years:
+        report.append("✓ surviving years' bookkeeping row counts consistent")
+
+    assoc = _associates_latest(staging)
+    if assoc is None:
+        ok = False
+        report.append("✗ could not compute national associate's total after removal")
+    elif not (600_000 <= assoc <= 1_400_000):
+        ok = False
+        report.append(f"✗ national associate's total {assoc:,} outside sane range "
+                      "(600k–1.4M) after removal — likely an aggregation problem")
+    else:
+        report.append(f"✓ national associate's total {assoc:,} (sane) after removal")
+
+    return ok, report
+
+
+def _activate_staging(job_id: int, staging: Path,
+                      done_message: str = "Import succeeded and is now live.") -> None:
+    """Atomic swap: back up live -> .db.prev, move staging -> live, bump
+    data_version, invalidate the semantic cache. Shared swap tail used by
+    BOTH build_check_swap (import/integrate) and run_deintegrate (year
+    removal) — the only difference between callers is what happened before
+    this point (a full rebuild vs. an offline in-place delete + VACUUM)."""
+    s = get_settings()
+    _update_overall_phase(job_id, "swapping", "Swapping the staging database into place…")
+    if s.ipeds_db_path.exists():
+        shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
+    shutil.move(str(staging), str(s.ipeds_db_path))
+    _log(job_id, "Swapped staging → live ipeds.db")
+
+    con = connect()
+    try:
+        dv = int((con.execute(
+            "SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
+        set_meta(con, "data_version", str(dv + 1))
+        con.commit()
+    finally:
+        con.close()
+    invalidate_cache()
+    _log(job_id, "Bumped data_version and cleared semantic cache.")
+    _update_overall_phase(job_id, "done", done_message)
+
+
 def build_check_swap(job_id: int, data_dir: Path) -> bool:
     """The core rebuild pipeline, shared by run_import (an uploaded .accdb
     staged into `data_dir`) and run_integrate (a temp work dir holding a whole
@@ -320,8 +490,31 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
         [sys.executable, str(build), "--data-dir", str(data_dir),
          "--out", str(staging)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in proc.stdout:  # stream loader output (incl. collision warnings)
-        _log(job_id, line.rstrip())
+    # Stream loader output (incl. collision warnings) into the human log —
+    # except ##PROGRESS## marker lines, which are parsed into
+    # progress["rebuild"] for the determinate rebuild bar and kept OUT of the
+    # log (they're not meant for a human to read). Writes are throttled to
+    # once per integer-pct change so hundreds of tables don't mean hundreds
+    # of DB writes.
+    rebuild_total = 0
+    rebuild_done = 0
+    last_pct = None
+    for line in proc.stdout:
+        line = line.rstrip()
+        m = PROGRESS_MARKER_RE.match(line)
+        if m or line.startswith("##PROGRESS##"):
+            if m:
+                key, val = m.group(1), int(m.group(2))
+                if key == "tables_total":
+                    rebuild_total, rebuild_done = val, 0
+                elif key == "tables_done":
+                    rebuild_done = val
+                pct = int(rebuild_done * 100 / rebuild_total) if rebuild_total else 0
+                if pct != last_pct:
+                    last_pct = pct
+                    _update_rebuild_progress(job_id, rebuild_total, rebuild_done)
+            continue
+        _log(job_id, line)
     proc.wait()
     if proc.returncode != 0:
         _set_status(job_id, "failed", f"Loader exited with code {proc.returncode}.")
@@ -343,25 +536,9 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
         staging.unlink(missing_ok=True)
         return False
 
-    # Atomic swap: back up live, move staging into place.
-    _update_overall_phase(job_id, "swapping", "Swapping the staging database into place…")
-    if s.ipeds_db_path.exists():
-        shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
-    shutil.move(str(staging), str(s.ipeds_db_path))
-    _log(job_id, "Swapped staging → live ipeds.db")
-
-    # Bump data_version + clear the now-stale semantic cache.
-    con = connect()
-    try:
-        dv = int((con.execute(
-            "SELECT value FROM meta WHERE key='data_version'").fetchone() or [1])[0])
-        set_meta(con, "data_version", str(dv + 1))
-        con.commit()
-    finally:
-        con.close()
-    invalidate_cache()
-    _log(job_id, "Bumped data_version and cleared semantic cache.")
-    _update_overall_phase(job_id, "done", "Import succeeded and is now live.")
+    # Atomic swap + data_version bump + semantic-cache invalidation (shared
+    # with run_deintegrate — see _activate_staging).
+    _activate_staging(job_id, staging)
     _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
     return True
 
@@ -594,3 +771,140 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
         _set_status(job_id, "failed", f"Unexpected error: {e}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def run_deintegrate(job_id: int, start_year: int) -> None:
+    """Remove one already-integrated year from the live ipeds.db (the
+    "trashcan"). This is an in-place DELETE + VACUUM on a COPY of live — NOT
+    a rebuild (it never invokes scripts/build_ipeds_db.py or touches the
+    network): copy live -> staging, DELETE that year's rows from EVERY base
+    table that carries a `year` column (every family table plus the
+    bookkeeping tables _family_map/_years/valuesets/vartable/tables),
+    special-case _column_presence's CSV `years` field, VACUUM to reclaim the
+    removed year's space, run deintegrate_checks (never integrity_checks —
+    see its docstring for why), and only then activate staging via the same
+    swap tail build_check_swap uses. A column that was present ONLY in the
+    removed year is left behind as an all-NULL physical column on its family
+    table (harmless to queries — nothing selects it into existence — and
+    `_column_presence` is still correctly pruned so callers/metadata don't
+    advertise it as present).
+
+    Entirely offline — no NCES, no network. Intended to run in a background
+    thread; NEVER propagates (mirrors run_import's catch-all -> status
+    'failed'). Live is never mutated in place, and the staging file is always
+    removed on the way out, success or failure.
+
+    `start_year` is the NCES/catalog start year (the UI's key); the DB
+    `_years.year` value the loader actually stores is `start_year + 1`.
+    """
+    s = get_settings()
+    end_year = start_year + 1
+    live = Path(s.ipeds_db_path)
+    staging = s.ipeds_db_path.with_name("ipeds_staging.db")
+    try:
+        _set_status(job_id, "running")
+
+        if not live.exists() or end_year not in _years(live):
+            msg = f"Year {end_year} is not integrated."
+            _log(job_id, f"ERROR: {msg}")
+            _set_status(job_id, "failed", msg)
+            return
+        if len(_years(live)) <= 1:
+            msg = ("Can't remove the only integrated year — the database "
+                  "would be empty.")
+            _log(job_id, f"ERROR: {msg}")
+            _set_status(job_id, "failed", msg)
+            return
+
+        # Disk-headroom preflight BEFORE copying: need room for the live-db
+        # copy plus VACUUM's own temp rebuild — roughly 2x the live db size,
+        # padded by the same safety factor run_integrate's estimator uses.
+        live_bytes = live.stat().st_size
+        needed = live_bytes * 2 * s.nces_disk_safety_factor
+        du = shutil.disk_usage(live.parent)
+        if du.free < needed:
+            msg = (f"Not enough disk space to remove this year: need ~"
+                  f"{_human_bytes(needed)}, have ~{_human_bytes(du.free)} free.")
+            _log(job_id, f"ERROR: {msg}")
+            _set_status(job_id, "failed", msg)
+            return
+
+        year_label = f"{start_year}-{str(end_year)[2:]}"
+        _update_overall_phase(job_id, "removing", f"Removing year {year_label}…")
+        _log(job_id, f"Removing year {year_label} (end_year={end_year})…")
+        shutil.copy2(str(live), str(staging))
+
+        survey_year_token = f"{start_year}-{str(end_year)[2:]}"
+        con = sqlite3.connect(staging)
+        try:
+            tables = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for t in tables:
+                # Table names come from our own sqlite_master (first-party,
+                # never attacker-controlled) — quote-escape anyway as
+                # defense-in-depth against an embedded double-quote.
+                qt = '"' + t.replace('"', '""') + '"'
+                cols = [r[1] for r in con.execute(f"PRAGMA table_info({qt})").fetchall()]
+                if "year" in cols:
+                    con.execute(f"DELETE FROM {qt} WHERE year=?", (end_year,))
+            if "_column_presence" in tables:
+                rows = con.execute(
+                    "SELECT rowid, years FROM _column_presence").fetchall()
+                for rowid, years_csv in rows:
+                    tokens = [t for t in (years_csv or "").split(",") if t]
+                    tokens = [t for t in tokens if t != survey_year_token]
+                    if tokens:
+                        con.execute("UPDATE _column_presence SET years=? WHERE rowid=?",
+                                    (",".join(tokens), rowid))
+                    else:
+                        con.execute("DELETE FROM _column_presence WHERE rowid=?", (rowid,))
+            con.commit()
+            con.execute("VACUUM")
+        finally:
+            con.close()
+
+        _set_status(job_id, "checks")
+        _update_overall_phase(job_id, "checking", "Running de-integration checks…")
+        _log(job_id, "Running de-integration checks…")
+        passed, report = deintegrate_checks(staging, live, end_year)
+        report_text = "\n".join(report)
+        _log(job_id, report_text)
+        if not passed:
+            _set_status(job_id, "failed",
+                        "De-integration checks FAILED — live DB untouched.\n\n" + report_text)
+            _update_overall_phase(job_id, "failed",
+                                  "De-integration checks failed — live DB untouched.")
+            return
+
+        _activate_staging(job_id, staging,
+                          done_message=f"Year {year_label} removed and the database is now live.")
+
+        # The swap above is irreversible — the removal has ALREADY succeeded
+        # at this point. Tidying up year_provenance is best-effort bookkeeping:
+        # a failure here must never flip the job to 'failed' (that would
+        # falsely claim "live database was not changed"), just leave a stale
+        # provenance row behind (a cosmetic orphan, not a correctness issue —
+        # _integrated_starts() derives status from live _years, not
+        # year_provenance).
+        try:
+            con2 = connect()
+            try:
+                con2.execute("DELETE FROM year_provenance WHERE start_year=?", (start_year,))
+                con2.commit()
+            finally:
+                con2.close()
+        except Exception as e:  # noqa: BLE001 — best-effort only, see above
+            log.warning("run_deintegrate: could not delete year_provenance row "
+                       "for start_year=%s after a successful swap (job %s): %s: %s",
+                       start_year, job_id, type(e).__name__, e)
+            _log(job_id, f"WARNING: removal succeeded, but could not clean up "
+                        f"year_provenance for start_year={start_year}: {e}")
+
+        _set_status(
+            job_id, "swapped",
+            f"Year {year_label} removed and the database is now live.\n\n" + report_text)
+    except Exception as e:  # noqa: BLE001 — mirror run_import: never propagate
+        _log(job_id, f"ERROR: {type(e).__name__}: {e}")
+        _set_status(job_id, "failed", f"Unexpected error: {e}")
+    finally:
+        staging.unlink(missing_ok=True)

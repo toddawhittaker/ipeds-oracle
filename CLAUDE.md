@@ -91,7 +91,16 @@ integrate; each run is a **full rebuild of the union** of already-integrated and
 newly-picked years (never an incremental merge) through the same staging-DB +
 integrity-checks + atomic-swap pipeline as a manual upload. Fetched `.accdb`
 files land in a transient `NCES_WORK_DIR` scratch dir that's deleted after every
-run, success or failure — never a permanent store. LLM = DeepSeek via **OpenRouter**
+run, success or failure — never a permanent store. An already-integrated year
+can also be removed (the "trashcan"): `importer.run_deintegrate` does a fully
+**offline** copy-live→staging + `DELETE` that year's rows everywhere + `VACUUM`
++ its own `deintegrate_checks` (deliberately not `integrity_checks`, whose
+shrink-detector would falsely fail an intentional removal) + the same
+atomic-swap tail as a rebuild, never touching the network or mutating live in
+place (unlike a rebuild, it never invokes the loader subprocess). A rebuild
+(manual upload or NCES integrate) streams `scripts/build_ipeds_db.py`'s
+`##PROGRESS##` markers into a determinate rebuild-progress bar on the Imports
+tab. LLM = DeepSeek via **OpenRouter**
 (`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
