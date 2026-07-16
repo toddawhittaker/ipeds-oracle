@@ -417,6 +417,27 @@ def test_download_zip_on_progress_total_is_none_without_content_length():
         f"total must be None when no Content-Length was declared, got {calls}"
 
 
+def test_download_zip_progress_total_falls_back_to_known_total():
+    # When the streamed GET omits Content-Length, on_progress's `total` must
+    # fall back to the caller-supplied known_total (the HEAD-probe size) so the
+    # progress % isn't stuck at 0 the whole download.
+    def gen():
+        yield b"x" * 10
+        yield b"y" * 10
+
+    def handler(request):
+        return httpx.Response(200, content=gen())  # chunked, no content-length
+
+    calls = []
+    dest = Path(tempfile.mkdtemp()) / "out.zip"
+    nces.download_zip("https://nces.ed.gov/x.zip", dest, max_bytes=1_000_000,
+                      client=_client(handler), known_total=20,
+                      on_progress=lambda written, total: calls.append((written, total)))
+    assert calls, "on_progress must fire at least once"
+    assert all(total == 20 for _, total in calls), \
+        f"total must fall back to known_total when no Content-Length, got {calls}"
+
+
 def test_download_zip_mid_stream_abort_still_fires_progress_and_cleans_up():
     def gen():
         chunk = b"a" * 100_000
@@ -537,6 +558,24 @@ def test_extract_accdb_rejects_zip_slip_member():
     assert not any(out_dir.iterdir()), "nothing should be extracted from a rejected zip"
 
 
+def test_extract_accdb_extracts_a_member_nested_in_a_folder():
+    # Real NCES zips nest the accdb (and docs) under a top-level folder, e.g.
+    # IPEDS_2020-21_Final/IPEDS202021.accdb. A plain subdirectory must be
+    # ALLOWED (only traversal/absolute/escape is unsafe) and the accdb pulled
+    # out flat into out_dir under its normalized name.
+    d = Path(tempfile.mkdtemp())
+    zpath = d / "IPEDS_2000-01_Final.zip"
+    _make_zip(zpath, {
+        "IPEDS_2000-01_Final/IPEDS200001.accdb": b"nested-accdb-bytes",
+        "IPEDS_2000-01_Final/ReadMe.docx": b"docx-bytes",
+    })
+    out_dir = Path(tempfile.mkdtemp())
+    result = nces.extract_accdb(zpath, out_dir, expected_start_year=2000)
+    assert result == out_dir / "IPEDS200001.accdb", result
+    assert result.read_bytes() == b"nested-accdb-bytes"
+    assert not (out_dir / "IPEDS_2000-01_Final").exists(), "must extract flat, no nested folder"
+
+
 def test_extract_accdb_rejects_zip_bomb_by_declared_size():
     d = Path(tempfile.mkdtemp())
     zpath = d / "z.zip"
@@ -577,8 +616,9 @@ def test_fetch_year_orchestrates_the_three_steps_in_order():
         calls.append(("head", start_year))
         return "Final", nces._zip_url(start_year, "Final"), 12_345
 
-    def fake_download(url, dest, max_bytes, client=None, on_progress=None, deadline_seconds=None):
-        calls.append(("download", url))
+    def fake_download(url, dest, max_bytes, client=None, on_progress=None,
+                      deadline_seconds=None, known_total=None):
+        calls.append(("download", url, known_total))
         if on_progress is not None:
             on_progress(14, 14)  # fetch_year must be able to pass this through
         Path(dest).write_bytes(b"fake-zip-bytes")
@@ -611,13 +651,17 @@ def test_fetch_year_orchestrates_the_three_steps_in_order():
     assert [c[0] for c in calls] == ["head", "download", "extract"], calls
     assert progress_calls == [(14, 14)], \
         "fetch_year must pass its on_progress kwarg through to download_zip"
+    download_call = next(c for c in calls if c[0] == "download")
+    assert download_call[2] == 12_345, \
+        f"fetch_year must thread the HEAD-probe size through as known_total, got {download_call[2]}"
 
 
 def test_fetch_year_works_without_an_on_progress_callback():
     def fake_head(start_year, client=None):
         return "Final", nces._zip_url(start_year, "Final"), 1
 
-    def fake_download(url, dest, max_bytes, client=None, on_progress=None, deadline_seconds=None):
+    def fake_download(url, dest, max_bytes, client=None, on_progress=None,
+                      deadline_seconds=None, known_total=None):
         Path(dest).write_bytes(b"fake-zip-bytes")
         return Path(dest)
 

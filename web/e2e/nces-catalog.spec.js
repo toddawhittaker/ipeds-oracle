@@ -254,9 +254,13 @@ test("per-file progress renders one row per year (label + step); percent is not 
   await expect(row2023).toContainText("2023-24");
   await expect(row2023).toContainText("downloading");
   await expect(row2023).toContainText("50%");
+  // The visual bar fill must track pct — regression guard for the bug where it
+  // sat at 0% the whole download.
+  await expect(row2023.locator(".file-progress-fill")).toHaveAttribute("style", /width:\s*50%/);
 
   await expect(row2024).toContainText("2024-25");
   await expect(row2024).toContainText("queued");
+  await expect(row2024.locator(".file-progress-fill")).toHaveAttribute("style", /width:\s*0%/);
 
   // The overall phase text IS announced… scoped to the active job's own
   // status region (inside .job), NOT a document-wide `.first()` match over
@@ -277,6 +281,8 @@ test("per-file progress renders one row per year (label + step); percent is not 
   await expect(page.getByText("swapped")).toBeVisible();
   await expect(row2023).toContainText("fetched");
   await expect(row2024).toContainText("fetched");
+  // A fetched year's bar is full.
+  await expect(row2023.locator(".file-progress-fill")).toHaveAttribute("style", /width:\s*100%/);
 });
 
 // ---------------------------------------------------------------------------

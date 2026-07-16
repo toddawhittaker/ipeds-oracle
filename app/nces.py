@@ -145,7 +145,8 @@ def probe_catalog(refresh: bool = False, client: httpx.Client | None = None) -> 
 
 
 def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | None = None, *,
-                 on_progress=None, deadline_seconds: float | None = None) -> Path:
+                 on_progress=None, deadline_seconds: float | None = None,
+                 known_total: int | None = None) -> Path:
     """Stream `url` to `dest`, enforcing `max_bytes` both from a declared
     Content-Length (rejected up front) AND from the actual running byte count
     mid-stream (a lying/missing header must not bypass the cap). Refuses to
@@ -187,6 +188,12 @@ def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | No
                 total = declared_n
             else:
                 total = None
+            # For the progress %, fall back to the size learned from the HEAD
+            # probe when the streamed GET omits Content-Length (chunked /
+            # compressed transfer) — otherwise pct is stuck at 0 the whole
+            # download. Display only; the byte caps above/below are unaffected.
+            if total is None:
+                total = known_total
             written = 0
             with dest.open("wb") as f:
                 for chunk in resp.iter_bytes():
@@ -212,13 +219,17 @@ def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | No
 
 
 def _unsafe_member_name(name: str, out_dir: Path) -> bool:
-    """Zip-slip guard: reject any member name with a path separator, a '..'
-    component, or an absolute path, or one that would resolve outside
-    out_dir. IPEDS zips are flat archives, so disallowing any nesting at all
-    is not a functional loss."""
-    if "/" in name or "\\" in name or ".." in name:
+    """Zip-slip guard: reject a member that is an absolute path, uses a
+    backslash separator (non-conformant — refuse rather than guess), contains a
+    '..' traversal component, or resolves outside out_dir. A normal
+    subdirectory is ALLOWED: some NCES zips nest the .accdb under a top-level
+    folder (e.g. 'IPEDS_2020-21_Final/IPEDS202021.accdb'), and we extract by
+    basename into out_dir regardless (see extract_accdb), so nesting is safe."""
+    if "\\" in name:
         return True
-    if PurePosixPath(name).is_absolute():
+    if name.startswith("/") or PurePosixPath(name).is_absolute():
+        return True
+    if ".." in PurePosixPath(name).parts:
         return True
     resolved = (out_dir / name).resolve()
     try:
@@ -285,7 +296,7 @@ def fetch_year(start_year: int, work_dir: Path, *, on_progress=None) -> tuple[Pa
     work_dir.mkdir(parents=True, exist_ok=True)
     s = get_settings()
 
-    release, url, _zip_bytes = head_release(start_year)
+    release, url, head_bytes = head_release(start_year)
     if not release or not url:
         raise ValueError(f"NCES has no Final or Provisional release for start year {start_year}")
 
@@ -293,7 +304,8 @@ def fetch_year(start_year: int, work_dir: Path, *, on_progress=None) -> tuple[Pa
     try:
         download_zip(url, zip_path, max_bytes=s.nces_zip_max_mb * 1024 * 1024,
                      on_progress=on_progress,
-                     deadline_seconds=s.nces_download_deadline_seconds)
+                     deadline_seconds=s.nces_download_deadline_seconds,
+                     known_total=head_bytes)
         accdb_path = extract_accdb(zip_path, work_dir, expected_start_year=start_year,
                                    max_extract_bytes=s.nces_accdb_max_mb * 1024 * 1024)
         return accdb_path, release

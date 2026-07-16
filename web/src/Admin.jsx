@@ -517,13 +517,28 @@ function Imports() {
           </div>
           {progressYears.length > 0 && (
             <div data-testid="import-progress" className="file-progress">
-              {progressYears.map((y) => (
-                <div key={y.start_year} data-year={y.start_year} className="file-progress-row">
-                  <span className="file-progress-year">{y.year_label}</span>
-                  <span className="file-progress-step">{y.step}</span>
-                  <span className="file-progress-pct">{y.pct}%</span>
-                </div>
-              ))}
+              {progressYears.map((y) => {
+                // A fetched year is done (fill full); a failed one shows a full
+                // red bar; downloading tracks the live pct; queued sits at 0.
+                const width = y.step === "fetched" || y.step === "failed"
+                  ? 100 : Math.min(100, Math.max(0, y.pct || 0));
+                return (
+                  <div key={y.start_year} data-year={y.start_year} className="file-progress-row">
+                    <span className="file-progress-year">{y.year_label}</span>
+                    <span className="file-progress-step">{y.step}</span>
+                    <div className="file-progress-bar" role="progressbar"
+                         aria-label={`${y.year_label} download`}
+                         aria-valuemin={0} aria-valuemax={100}
+                         aria-valuenow={y.step === "fetched" ? 100 : (y.pct || 0)}>
+                      <div className="file-progress-fill" data-step={y.step}
+                           style={{ width: `${width}%` }} />
+                    </div>
+                    <span className="file-progress-pct">
+                      {y.step === "failed" ? "—" : `${y.step === "fetched" ? 100 : (y.pct || 0)}%`}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
           {active.report && <pre className="report">{active.report}</pre>}

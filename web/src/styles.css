@@ -387,13 +387,27 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 /* Per-year import progress (Imports -> a running job's progress column). */
 .file-progress { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
 .file-progress-row {
-  display: flex; gap: 10px; align-items: baseline; font-size: 13px;
+  display: flex; gap: 10px; align-items: center; font-size: 13px;
   border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
   background: var(--bg);
 }
 .file-progress-year { font-weight: 600; flex: none; min-width: 70px; }
-.file-progress-step { color: var(--muted); flex: 1; }
-.file-progress-pct { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.file-progress-step { color: var(--muted); flex: none; min-width: 84px; text-transform: capitalize; }
+.file-progress-bar {
+  flex: 1; height: 8px; min-width: 60px; border-radius: 999px;
+  background: var(--line); overflow: hidden;
+}
+.file-progress-fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: var(--accent); transition: width .3s ease;
+}
+.file-progress-fill[data-step="fetched"] { background: var(--ok); }
+.file-progress-fill[data-step="failed"] { background: var(--danger); }
+.file-progress-pct {
+  color: var(--muted); flex: none; min-width: 40px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) { .file-progress-fill { transition: none; } }
 .skill { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
 .skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .tags { display: flex; gap: 6px; }
