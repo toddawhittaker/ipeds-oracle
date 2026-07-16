@@ -80,11 +80,9 @@ cp /path/to/IPEDS*.accdb    srv-data/accdb/        # source files, for re-import
 
 # 3. Configure secrets
 cp .env.example .env
-$EDITOR .env            # OPENROUTER_API_KEY, RESEND_API_KEY, SESSION_SECRET,
-                        # ADMIN_EMAILS, MAIL_FROM, APP_PUBLIC_URL, DOMAIN,
+$EDITOR .env            # LLM_API_KEY, RESEND_API_KEY, ADMIN_EMAILS,
+                        # MAIL_FROM, APP_PUBLIC_URL, DOMAIN,
                         # IPEDS_TAG (pin a release, or leave :latest)
-#   Generate a session secret:
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # 4. Launch — pulls the published image (GHCR is public-read for this repo's
 #    packages; if you made them private, `docker login ghcr.io` first).
@@ -158,13 +156,14 @@ Every setting is listed in [`.env.example`](.env.example); the essentials:
 
 | Key | Purpose |
 |-----|---------|
-| `OPENROUTER_API_KEY` | LLM access (required) |
+| `LLM_API_KEY` | LLM access (required) |
+| `LLM_BASE_URL` | OpenAI-compatible `/chat/completions` endpoint; default OpenRouter (`https://openrouter.ai/api/v1`) |
 | `MODEL_DEFAULT` / `MODEL_ESCALATION` | primary + escalation model (defaults: `deepseek/deepseek-v4-flash` → `deepseek/deepseek-v4-pro`; see below) |
 | `LLM_MAX_TOOL_ITERS` | max agent tool‑call rounds per question (default 12) |
+| `LLM_APP_TITLE` | attribution title sent to the provider (OpenRouter's `X-Title` header) |
 | `RESEND_API_KEY` / `MAIL_FROM` | magic-link + access-request email |
-| `SESSION_SECRET` | signs session cookies (set a long random value) |
 | `ADMIN_EMAILS` | comma-separated bootstrap admins (auto-allowlisted) |
-| `APP_PUBLIC_URL` | base URL for links + OpenRouter attribution |
+| `APP_PUBLIC_URL` | base URL for magic-link/invite emails + the LLM provider's attribution header |
 | `DOMAIN` | hostname Caddy obtains a TLS cert for |
 | `COOKIE_SECURE` | `true` in production (HTTPS) |
 | `SQL_TIMEOUT_SECONDS` | per-query watchdog (default 25) |
@@ -174,16 +173,28 @@ Every setting is listed in [`.env.example`](.env.example); the essentials:
 Secrets live only in `.env` (gitignored) / the container environment — never in
 code.
 
-> **Model routing:** OpenRouter enforces any "Allowed Providers" allowlist on
+> **Model routing:** the app speaks the OpenAI-compatible `/chat/completions`
+> API — `LLM_BASE_URL` selects the provider (default OpenRouter). We default to
+> `deepseek/deepseek-v4-flash` (cheap) and auto-escalate to
+> `deepseek/deepseek-v4-pro` on repeated SQL errors / failed magnitude checks;
+> both pass `eval/eval_nl2sql.py` (flash 3/3 with no escalation, ~3x cheaper per
+> query). If your account can't route them, set `MODEL_DEFAULT`/`MODEL_ESCALATION`
+> to models your provider can. Watch the escalation rate in the admin usage
+> dashboard — if flash escalates on a large fraction of real queries, reconsider
+> the split.
+>
+> **If you're on OpenRouter:** it enforces any "Allowed Providers" allowlist on
 > your account. If a model's live providers aren't on that list you get a 404
 > ("No allowed providers are available") — even for a model whose name matches an
-> allowed provider. We default to `deepseek/deepseek-v4-flash` (cheap) and
-> auto-escalate to `deepseek/deepseek-v4-pro` on repeated SQL errors / failed
-> magnitude checks; both pass `eval/eval_nl2sql.py` (flash 3/3 with no escalation,
-> ~3x cheaper per query). If your account can't route them, either relax the
-> allowlist (add DeepInfra / Novita) or set `MODEL_DEFAULT`/`MODEL_ESCALATION` to a
-> model it can. Watch the escalation rate in the admin usage dashboard — if flash
-> escalates on a large fraction of real queries, reconsider the split.
+> allowed provider. Relax the allowlist (add DeepInfra / Novita) or swap the
+> model ID if your account can't route it.
+>
+> **Caveat:** two OpenRouter extensions to the `/chat/completions` response
+> degrade silently on other providers, by design — neither errors, both just go
+> quiet. The admin Usage tab's **spend** column reads the non-standard
+> `usage.cost` field, so spend reads $0.00 elsewhere (tokens/queries still track
+> correctly). The chat's **thinking** indicator reads the non-standard
+> `message.reasoning` field, so it simply never appears elsewhere.
 
 ## Backups
 
@@ -229,7 +240,7 @@ If the restore looks wrong, the pre-restore snapshot lets you roll straight back
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.lock
-cp .env.example .env && $EDITOR .env        # at least OPENROUTER_API_KEY, ADMIN_EMAILS
+cp .env.example .env && $EDITOR .env        # at least LLM_API_KEY, ADMIN_EMAILS
 .venv/bin/uvicorn app.main:app --reload     # API on :8000
 cd web && npm install && npm run dev         # UI on :5173 (proxies /api → :8000)
 ```
@@ -239,7 +250,7 @@ cd web && npm install && npm run dev         # UI on :5173 (proxies /api → :80
 ```bash
 .venv/bin/python eval/test_sql_guards.py     # SQL safety + timeout (no key needed)
 .venv/bin/python eval/test_backend.py        # auth, admin, skills, cache, CSV (no key)
-.venv/bin/python eval/eval_nl2sql.py         # full NL→SQL accuracy (needs OPENROUTER_API_KEY)
+.venv/bin/python eval/eval_nl2sql.py         # full NL→SQL accuracy (needs LLM_API_KEY)
 ```
 
 `eval/eval_nl2sql.py` doubles as the regression gate when swapping models — it

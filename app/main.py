@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import ROOT, get_settings
+from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.db import init_db
 from app.routers import admin, auth, chat
 
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="IPEDS Query", lifespan=lifespan)
+app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(admin.router)

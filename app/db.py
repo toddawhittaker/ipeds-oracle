@@ -168,7 +168,9 @@ def _seed_rewrite_ddl() -> str:
 # edit or renumber a shipped migration.
 MIGRATIONS: list[tuple[int, str]] = [
     (1, SCHEMA),
-    # Per-request OpenRouter cost (USD), for the admin spend dashboard.
+    # Per-request cost (USD), for the admin spend dashboard. Provider-reported
+    # (usage.cost in the /chat/completions response) and OpenRouter-specific —
+    # on another LLM_BASE_URL provider this column stays 0.
     (2, "ALTER TABLE usage_log ADD COLUMN cost REAL NOT NULL DEFAULT 0;"),
     # Skills become "lessons": a human-readable RULE (the transferable knowledge)
     # is now the primary payload, with the SQL kept only as an optional worked

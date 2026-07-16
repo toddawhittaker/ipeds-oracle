@@ -100,8 +100,9 @@ atomic-swap tail as a rebuild, never touching the network or mutating live in
 place (unlike a rebuild, it never invokes the loader subprocess). A rebuild
 (manual upload or NCES integrate) streams `scripts/build_ipeds_db.py`'s
 `##PROGRESS##` markers into a determinate rebuild-progress bar on the Imports
-tab. LLM = DeepSeek via **OpenRouter**
-(`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
+tab. LLM = DeepSeek via any **OpenAI-compatible** provider (`LLM_BASE_URL`,
+**OpenRouter** by default, through the shared `app/llmhttp.py` transport;
+`v4-flash` default → escalate `v4-pro`) in a tool-calling agent loop, fronted by
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
 force one revision round). Auth = passwordless **magic link**, manual allowlist,
@@ -153,7 +154,7 @@ the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `DEPLOY.md`.
 
 **Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys) bleeds
 into tests — run auth suites with `COOKIE_SECURE=false`, and blank
-`OPENROUTER_API_KEY`/`RESEND_API_KEY` to match CI's key-free environment
+`LLM_API_KEY`/`RESEND_API_KEY` to match CI's key-free environment
 (`run_ci_local.sh` already does this).
 
 **Keep the docs synced.** When a change alters architecture, workflow, config, or

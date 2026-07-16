@@ -7,10 +7,10 @@ the data model and query conventions see [SCHEMA.md](SCHEMA.md).
 ## Stack
 
 - **Backend** — Python 3.12, [FastAPI](https://fastapi.tiangolo.com/), an
-  embedded tool‑calling agent over [OpenRouter](https://openrouter.ai/)
-  (DeepSeek by default). Local, CPU‑only embeddings via
-  [fastembed](https://github.com/qdrant/fastembed) power skill retrieval and the
-  semantic cache.
+  embedded tool‑calling agent over any OpenAI-compatible LLM provider
+  (`LLM_BASE_URL`; [OpenRouter](https://openrouter.ai/) + DeepSeek by default).
+  Local, CPU‑only embeddings via [fastembed](https://github.com/qdrant/fastembed)
+  power skill retrieval and the semantic cache.
 - **Data** — two SQLite databases: `ipeds.db` (the ~1.9 GB survey data, opened
   **read‑only + immutable**) and `app.db` (users, sessions, chats, learned
   skills, usage — the only thing that's written to).
@@ -25,7 +25,8 @@ the data model and query conventions see [SCHEMA.md](SCHEMA.md).
 app/                FastAPI backend
   main.py             app + static serving + startup
   config.py           pydantic-settings (env-driven config)
-  llm.py              the tool-calling agent loop (OpenRouter)
+  llm.py              the tool-calling agent loop
+  llmhttp.py          shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
   prompt.py           system prompt (distilled from SCHEMA.md)
   tools/              run_sql (sandboxed), schema/discovery, skills
   routers/            auth, chat (stream/history/CSV), admin
@@ -54,7 +55,7 @@ only needed to build/rebuild `ipeds.db`).
 ```bash
 # Backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.lock
-cp .env.example .env && $EDITOR .env      # at minimum OPENROUTER_API_KEY, ADMIN_EMAILS
+cp .env.example .env && $EDITOR .env      # at minimum LLM_API_KEY, ADMIN_EMAILS
 .venv/bin/uvicorn app.main:app --reload   # API on http://localhost:8000
 
 # Frontend (separate terminal)
@@ -92,7 +93,7 @@ fixture `ipeds.db`.
 # End-to-end UI (network-mocked; no key, no ipeds.db needed)
 cd web && npm run test:e2e
 
-# Full NL→SQL accuracy (needs OPENROUTER_API_KEY + a real ipeds.db)
+# Full NL→SQL accuracy (needs LLM_API_KEY + a real ipeds.db)
 .venv/bin/python eval/eval_nl2sql.py
 ```
 

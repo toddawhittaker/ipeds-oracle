@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
+from app.llmhttp import PROBE_TIMEOUT, chat_completion
 
 # Shown to the user (Markdown) when a message is refused.
 REFUSAL = (
@@ -84,26 +85,21 @@ async def classify(question: str, history: list[dict] | None = None) -> Verdict:
     """Classify a message as in/out of scope. Fails open (allowed) on any error
     or when the guard is disabled / unconfigured."""
     s = get_settings()
-    if not s.guard_enabled or not s.openrouter_api_key:
+    if not s.guard_enabled or not s.llm_api_key:
         return Verdict(allowed=True)
 
     messages = [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": _build_transcript(question, history)},
     ]
-    payload = {"model": s.model_default, "messages": messages, "temperature": 0.0}
-    headers = {
-        "Authorization": f"Bearer {s.openrouter_api_key}",
-        "HTTP-Referer": s.app_public_url,
-        "X-Title": s.app_title,
-    }
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.post(f"{s.openrouter_base_url}/chat/completions",
-                                  json=payload, headers=headers, timeout=30.0)
-            r.raise_for_status()
-            data = r.json()
-    except httpx.HTTPError:
+            data = await chat_completion(client, model=s.model_default, messages=messages,
+                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+    # ValueError covers a 200 whose body isn't JSON — an endpoint fronted by a proxy
+    # or captive portal answering with HTML. json() raises that, not an HTTPError, so
+    # without it the failure escapes this handler and kills the SSE stream.
+    except (httpx.HTTPError, ValueError):
         return Verdict(allowed=True)  # fail open — system prompt is the backstop
 
     usage = data.get("usage") or {}

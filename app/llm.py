@@ -1,4 +1,5 @@
-"""LLM orchestration: an async tool-calling loop against OpenRouter.
+"""LLM orchestration: an async tool-calling loop against an OpenAI-compatible
+LLM provider (OpenRouter by default; see LLM_BASE_URL).
 
 `stream_agent` yields progress events (tool calls, executed SQL, the final
 answer) so the UI can render live status. `run_agent` drives it to completion
@@ -6,7 +7,7 @@ and returns an AgentResult (used by the eval harness).
 
 The cheap default model handles most turns; if it keeps producing failing SQL,
 the loop escalates to a stronger model for the remainder of the turn. Everything
-is model-agnostic via OpenRouter's OpenAI-compatible API.
+is model-agnostic via the OpenAI-compatible /chat/completions API.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import httpx
 
 from app import critic
 from app.config import get_settings
+from app.llmhttp import DEFAULT_TIMEOUT, chat_completion
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
@@ -49,22 +51,9 @@ class AgentResult:
 async def _chat(client: httpx.AsyncClient, model: str, messages: list[dict],
                 tools: list[dict] | None = None) -> dict:
     s = get_settings()
-    payload: dict = {
-        "model": model, "messages": messages, "temperature": s.llm_temperature,
-    }
-    # Omitting tools entirely forces a plain text answer (more provider-portable
-    # than tool_choice="none") — used for the final synthesis pass.
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    headers = {
-        "Authorization": f"Bearer {s.openrouter_api_key}",
-        "HTTP-Referer": s.app_public_url, "X-Title": s.app_title,
-    }
-    r = await client.post(f"{s.openrouter_base_url}/chat/completions",
-                          json=payload, headers=headers, timeout=120.0)
-    r.raise_for_status()
-    return r.json()
+    return await chat_completion(client, model=model, messages=messages,
+                                 temperature=s.llm_temperature, tools=tools,
+                                 settings=s, timeout=DEFAULT_TIMEOUT)
 
 
 async def stream_agent(question: str, *, history: list[dict] | None = None,
@@ -78,8 +67,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
       {"type":"error", "text":...}
     """
     s = get_settings()
-    if not s.openrouter_api_key:
-        yield {"type": "error", "text": "OPENROUTER_API_KEY is not configured."}
+    if not s.llm_api_key:
+        yield {"type": "error", "text": "The LLM provider is not configured."}
         return
 
     # Per-request sink for the last run_sql result (no shared module state, so
@@ -121,6 +110,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             tool_calls = msg.get("tool_calls") or []
+            # OpenRouter-specific: no other provider returns `reasoning`, so the
+            # thinking events just never fire there. See DEPLOY.md's model routing.
             reasoning = msg.get("reasoning")
             if reasoning:
                 yield {"type": "thinking", "text": reasoning}
@@ -251,7 +242,7 @@ async def generate_title(question: str, answer: str) -> str:
     """Ask the cheap model for a short conversation title. Returns "" on any
     failure so titling never blocks or breaks a chat turn."""
     s = get_settings()
-    if not s.openrouter_api_key:
+    if not s.llm_api_key:
         return ""
     prompt = [
         {"role": "system", "content":

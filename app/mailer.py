@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 
-from app.config import get_settings
+from app.config import PRODUCT_NAME, get_settings
 
 log = logging.getLogger("ipeds.mail")
 
@@ -39,17 +39,17 @@ def send_email(to: str, subject: str, html: str, text: str | None = None) -> boo
 
 def send_magic_link(to: str, link: str) -> bool:
     ttl = get_settings().magic_link_ttl_minutes
-    subject = "Your IPEDS Query sign-in link"
+    subject = f"Your {PRODUCT_NAME} sign-in link"
     html = f"""\
 <div style="font-family:system-ui,sans-serif;max-width:480px">
-  <h2>Sign in to IPEDS Query</h2>
+  <h2>Sign in to {PRODUCT_NAME}</h2>
   <p>Click below to sign in. This link works once and expires in {ttl} minutes.</p>
   <p><a href="{link}" style="display:inline-block;padding:10px 18px;
      background:#2b6cb0;color:#fff;border-radius:6px;text-decoration:none">
      Sign in</a></p>
   <p style="color:#666;font-size:13px">If you didn't request this, ignore it.</p>
 </div>"""
-    text = f"Sign in to IPEDS Query (expires in {ttl} min):\n{link}"
+    text = f"Sign in to {PRODUCT_NAME} (expires in {ttl} min):\n{link}"
     return send_email(to, subject, html, text)
 
 
@@ -59,8 +59,8 @@ def send_access_request(admins: list[str], requester: str, reason: str = "") -> 
     Returns True only if a notification was sent to every admin."""
     if not admins:
         return False
-    subject = f"IPEDS Query — access request from {requester}"
-    body = (f"{requester} just requested access to IPEDS Query.\n\n"
+    subject = f"{PRODUCT_NAME} — access request from {requester}"
+    body = (f"{requester} just requested access to {PRODUCT_NAME}.\n\n"
             f"Reason: {reason or '(none given)'}\n\n"
             "Head to the admin console's Allowlist tab to approve or decline "
             "them — approving emails them a sign-in link automatically.")
@@ -76,13 +76,12 @@ def send_access_approved(to: str, link: str) -> bool:
     s = get_settings()
     ttl = s.magic_link_ttl_minutes
     app_url = s.app_public_url
-    app_title = s.app_title
-    subject = f"Welcome to {app_title} — you're approved 🎓"
+    subject = f"Welcome to {PRODUCT_NAME} — you're approved 🎓"
     html = f"""\
 <div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;
      color:#1a202c;line-height:1.5">
-  <h2 style="margin:0 0 12px">Welcome to {app_title} 🎓</h2>
-  <p>Your access has been approved. {app_title} lets you explore U.S. college and
+  <h2 style="margin:0 0 12px">Welcome to {PRODUCT_NAME} 🎓</h2>
+  <p>Your access has been approved. {PRODUCT_NAME} lets you explore U.S. college and
      university data (IPEDS, collection years 2020-21 through 2024-25) just by
      asking questions in plain English — no SQL and no spreadsheets required.</p>
   <p style="margin:22px 0">
@@ -112,8 +111,8 @@ def send_access_approved(to: str, link: str) -> bool:
      need to sign in.</p>
 </div>"""
     text = (
-        f"Welcome to {app_title} — you're approved!\n\n"
-        f"{app_title} lets you explore U.S. college and university data (IPEDS, "
+        f"Welcome to {PRODUCT_NAME} — you're approved!\n\n"
+        f"{PRODUCT_NAME} lets you explore U.S. college and university data (IPEDS, "
         "collection years 2020-21 through 2024-25) just by asking questions in "
         "plain English.\n\n"
         f"Sign in (this link works once and expires in {ttl} min):\n{link}\n\n"

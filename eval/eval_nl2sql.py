@@ -2,7 +2,7 @@
 
 Runs the full agent against questions with known-good answers (drawn from
 SCHEMA.md §8 + README). Use it to (a) sanity-check the pipeline and (b) gate
-model swaps. Requires OPENROUTER_API_KEY in the environment/.env.
+model swaps. Requires LLM_API_KEY in the environment/.env.
 
     .venv/bin/python eval/eval_nl2sql.py
 
@@ -60,8 +60,8 @@ CASES = [
 
 async def main() -> int:
     s = get_settings()
-    if not s.openrouter_api_key:
-        print("SKIP: OPENROUTER_API_KEY not set — cannot run the LLM eval.")
+    if not s.llm_api_key:
+        print("SKIP: LLM_API_KEY not set — cannot run the LLM eval.")
         print("      Set it in .env, then re-run.")
         return 0
 

@@ -24,7 +24,7 @@ tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
-os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["LLM_API_KEY"] = ""
 os.environ["RESEND_API_KEY"] = ""
 # Uploads must never land in the real repo's data/uploads/ directory.
 os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")

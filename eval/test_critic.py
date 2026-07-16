@@ -28,12 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Set before app.config import (settings are cached).
-os.environ["OPENROUTER_API_KEY"] = "test-key"
+os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_MAX_TOOL_ITERS"] = "6"
 
 import httpx  # noqa: E402
 
-from app import critic, llm  # noqa: E402
+from app import critic, llm, llmhttp  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.critic import Critique, parse_verdict  # noqa: E402
 from app.tools import registry  # noqa: E402
@@ -191,7 +191,7 @@ def test_critique_defaults_to_empty_headline_and_description():
 def test_review_fails_open_without_key():
     orig = critic.get_settings
     critic.get_settings = lambda: types.SimpleNamespace(
-        critic_enabled=True, openrouter_api_key="")
+        critic_enabled=True, llm_api_key="")
     try:
         c = asyncio.run(critic.review("q", ["SELECT 1"], "ans"))
     finally:
@@ -202,7 +202,7 @@ def test_review_fails_open_without_key():
 def test_review_disabled_fails_open():
     orig = critic.get_settings
     critic.get_settings = lambda: types.SimpleNamespace(
-        critic_enabled=False, openrouter_api_key="test-key")
+        critic_enabled=False, llm_api_key="test-key")
     try:
         c = asyncio.run(critic.review("q", ["SELECT 1"], "ans"))
     finally:
@@ -211,15 +211,21 @@ def test_review_disabled_fails_open():
 
 
 def _configured(**overrides):
-    base = dict(critic_enabled=True, openrouter_api_key="test-key",
+    base = dict(critic_enabled=True, llm_api_key="test-key",
                 model_default="deepseek/deepseek-v4-flash",
-                openrouter_base_url="https://openrouter.ai/api/v1",
-                app_public_url="http://localhost:8000", app_title="IPEDS Query")
+                llm_base_url="https://openrouter.ai/api/v1",
+                app_public_url="http://localhost:8000", llm_app_title="IPEDS Query")
     base.update(overrides)
     return types.SimpleNamespace(**base)
 
 
 class _FakeAsyncClient:
+    """Records every call's url/json/headers/timeout on the class-level
+    `calls` list (reset by `_with_fake_transport`), so PROBE_TIMEOUT and the
+    request URL/headers are actually verified, not just ignored."""
+
+    calls: list = []
+
     def __init__(self, item):
         self._item = item
 
@@ -230,6 +236,8 @@ class _FakeAsyncClient:
         return False
 
     async def post(self, url, json=None, headers=None, timeout=None):
+        _FakeAsyncClient.calls.append({"url": url, "json": json,
+                                       "headers": headers, "timeout": timeout})
         if isinstance(self._item, BaseException):
             raise self._item
         return self._item
@@ -241,6 +249,7 @@ def _json_response(data, status=200):
 
 
 def _with_fake_transport(item, fn):
+    _FakeAsyncClient.calls = []
     orig_settings, orig_client = critic.get_settings, critic.httpx.AsyncClient
     critic.get_settings = _configured
     critic.httpx.AsyncClient = lambda *a, **k: _FakeAsyncClient(item)
@@ -283,6 +292,45 @@ def test_review_transport_error_fails_open():
         httpx.ConnectError("refused"),
         lambda: asyncio.run(critic.review("q", ["SELECT 1"], "ans")))
     assert c.ok is True, "transport error must fail open"
+
+
+def test_review_non_json_200_response_fails_open():
+    """A provider can return HTTP 200 with a non-JSON body — an HTML error
+    page, captive portal, reverse-proxy index, or CDN interstitial. Most
+    plausible now that LLM_BASE_URL is operator-configurable to any
+    OpenAI-compatible endpoint: a misconfigured URL hitting the wrong host is
+    the single most likely new failure mode.
+
+    r.json() raises json.JSONDecodeError, a ValueError subclass that is NOT an
+    httpx.HTTPError, so `except httpx.HTTPError` alone does not catch it. This
+    must still fail OPEN (ok=True) — the critic is an enhancement and must
+    never drop or block an answer, per this module's own docstring."""
+    non_json_response = httpx.Response(
+        200, text="<html><body>502 Bad Gateway</body></html>",
+        request=httpx.Request("POST", "http://x/chat/completions"))
+    c = _with_fake_transport(
+        non_json_response,
+        lambda: asyncio.run(critic.review("q", ["SELECT 1"], "ans")))
+    assert c.ok is True, \
+        "a 200 response with a non-JSON body must fail open, not raise"
+
+
+def test_review_posts_url_headers_and_probe_timeout():
+    """review() must route through the shared llmhttp transport helper with
+    PROBE_TIMEOUT (30s), matching the guard's probe call — not
+    DEFAULT_TIMEOUT (120s), which is reserved for full agent turns."""
+    resp = _json_response({
+        "choices": [{"message": {"content": "OK"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    _with_fake_transport(resp, lambda: asyncio.run(critic.review("q", ["SELECT 1"], "ans")))
+    call = _FakeAsyncClient.calls[-1]
+    assert call["url"] == "https://openrouter.ai/api/v1/chat/completions", call["url"]
+    assert call["headers"]["Authorization"] == "Bearer test-key", call["headers"]
+    assert call["headers"]["HTTP-Referer"] == "http://localhost:8000", call["headers"]
+    assert call["headers"]["X-Title"] == "IPEDS Query", call["headers"]
+    assert call["timeout"] == llmhttp.PROBE_TIMEOUT, call["timeout"]
+    assert call["timeout"] == 30.0, call["timeout"]
 
 
 # --- agent-loop integration ----------------------------------------------------
@@ -550,6 +598,10 @@ def run():
     check("review OK verdict (live transport)", test_review_ok_verdict_live)
     check("review REVISE verdict (live transport)", test_review_revise_verdict_live)
     check("review transport error fails open", test_review_transport_error_fails_open)
+    check("review non-JSON 200 body fails open, does not raise",
+          test_review_non_json_200_response_fails_open)
+    check("review posts url/headers/PROBE_TIMEOUT via llmhttp",
+          test_review_posts_url_headers_and_probe_timeout)
     check("OK verdict returns the draft unchanged",
           test_ok_verdict_returns_draft_unchanged)
     check("REVISE verdict triggers exactly one revision",
