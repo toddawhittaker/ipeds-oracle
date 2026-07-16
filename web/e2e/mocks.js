@@ -127,7 +127,7 @@ export async function mockConversation(page, id, messages) {
  * POST /api/chat/stream -> SSE stream of {type,...} events.
  * Emits, in order: conversation -> status -> sql* -> answer -> done.
  * The final `done` carries `message_id`/`user_message_id` (the app reads these
- * to attach ids that unlock feedback/CSV/copy — see Chat.jsx submit()).
+ * to attach ids that unlock CSV/copy — see Chat.jsx submit()).
  * `answer` should be markdown containing a GFM table so specs can assert the
  * rendered <table>.
  */
@@ -152,16 +152,6 @@ export async function mockStreamChat(page, {
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });
   });
-}
-
-/** POST /api/chat/messages/:id/feedback {value} -> 200. Returns captured POST bodies. */
-export async function mockFeedback(page) {
-  const posts = [];
-  await page.route("**/api/chat/messages/*/feedback", async (route) => {
-    posts.push(route.request().postDataJSON());
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
-  });
-  return { posts };
 }
 
 /** GET/POST /api/admin/allowlist. Returns captured POST bodies. */
@@ -195,7 +185,14 @@ export async function mockUsage(page, data) {
   });
 }
 
-/** GET /api/admin/skills -> [{id,question,canonical_sql,notes,verified,upvotes,downvotes,hits}]. */
+/**
+ * GET /api/admin/skills ->
+ * [{id,question,headline,lesson,canonical_sql,notes,verified,upvotes,downvotes,hits,
+ *   created_by}].
+ * `headline` is the short generalized rule title that now leads the admin UI
+ * (see web/e2e/admin-lessons.spec.js); `lesson` is the longer generalized
+ * description, collapsed behind a "Details" `<details>`.
+ */
 export async function mockSkills(page, rows) {
   await page.route("**/api/admin/skills", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });

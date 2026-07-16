@@ -1,8 +1,13 @@
 """Chat router contract (app/routers/chat.py): streaming turns, the semantic
 cache-hit shortcut, edit/rerun (replacing an old exchange in place),
-conversation list/get/delete, feedback (a thumbs-up promotes a skill), the
+conversation list/get/delete, critic-driven lesson recording, the
 fresh-deploy no-data guard (admin/non-admin wording, no agent run, no
 conversation created), and the CSV export's error branches.
+
+The 👍/👎 feedback feature (and its `promote_from_message` lesson path) was
+removed — the critic is now the sole lesson source. `POST
+/messages/{id}/feedback` must 404 (route gone), and `get_conversation` no
+longer selects a `feedback` column.
 
 No LLM/API key needed: guard.classify is patched to always allow, and
 chat_router.stream_agent is replaced per-test with a canned async generator
@@ -290,7 +295,8 @@ def test_critic_revision_records_a_lesson():
             yield {"type": "done", "result": AgentResult(
                 answer="corrected answer", model_used="test-model", error=None,
                 sql_log=["SELECT SUM(x) FROM c_a"], critic_revised=True,
-                critic_issue="no majornum=1 filter; double count")}
+                critic_headline="Add majornum=1.",
+                critic_description="no majornum=1 filter; double count")}
 
         orig_agent = chat_router.stream_agent
         orig_block = skills.retrieve_skills_block
@@ -302,7 +308,8 @@ def test_critic_revision_records_a_lesson():
         skills.cache_lookup = lambda q: None
         skills.cache_store = lambda *a, **k: None
         skills.record_lesson_from_critic = \
-            lambda q, sql, issue: captured.update(q=q, sql=sql, issue=issue)
+            lambda q, sql, headline, description: captured.update(
+                q=q, sql=sql, headline=headline, description=description)
         try:
             r = c.post("/api/chat/stream", json={"question": "national bachelor total"})
         finally:
@@ -315,7 +322,8 @@ def test_critic_revision_records_a_lesson():
         assert r.status_code == 200, r.text
         assert captured.get("q") == "national bachelor total", captured
         assert captured.get("sql") == "SELECT SUM(x) FROM c_a", captured
-        assert "majornum" in captured.get("issue", ""), captured
+        assert captured.get("headline") == "Add majornum=1.", captured
+        assert "majornum" in captured.get("description", ""), captured
 
 
 def test_critic_lesson_not_recorded_on_followup_turn():
@@ -327,7 +335,8 @@ def test_critic_lesson_not_recorded_on_followup_turn():
             yield {"type": "answer", "text": "ans"}
             yield {"type": "done", "result": AgentResult(
                 answer="ans", model_used="test-model", error=None,
-                sql_log=["SELECT 1"], critic_revised=True, critic_issue="a rule")}
+                sql_log=["SELECT 1"], critic_revised=True,
+                critic_headline="A headline.", critic_description="a rule")}
 
         orig_agent = chat_router.stream_agent
         orig_block = skills.retrieve_skills_block
@@ -386,54 +395,29 @@ def test_conversation_crud():
 
 
 # ---------------------------------------------------------------------------
-# feedback: thumbs-up promotes a skill, thumbs-down doesn't, 404 for unknown
+# feedback removed: the endpoint must be gone (404), and get_conversation must
+# no longer surface a `feedback` column on any message.
 # ---------------------------------------------------------------------------
 
-def test_feedback_thumbs_up_promotes_skill():
+def test_feedback_route_removed_404s():
     with TestClient(app) as c:
         _login(c)
-        r = _post_turn(c, "nursing degrees per year", answer_text="lots",
-                       sql_log=["SELECT 1 AS nursing_total"])
-        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
-        msg_id = done["message_id"]
-
-        promoted = {}
-        orig_promote = skills.promote_from_message
-        skills.promote_from_message = (
-            lambda q, sql: promoted.update(question=q, sql=sql))
-        try:
-            fb = c.post(f"/api/chat/messages/{msg_id}/feedback", json={"value": 1})
-        finally:
-            skills.promote_from_message = orig_promote
-        assert fb.status_code == 200 and fb.json()["feedback"] == 1, fb.text
-        assert promoted.get("sql") == "SELECT 1 AS nursing_total", promoted
-        assert promoted.get("question") == "nursing degrees per year", promoted
+        r = c.post("/api/chat/messages/1/feedback", json={"value": 1})
+        assert r.status_code == 404, \
+            f"POST /messages/{{id}}/feedback must be gone (route removed), got {r.status_code}"
 
 
-def test_feedback_thumbs_down_does_not_promote():
+def test_get_conversation_no_longer_exposes_feedback_field():
     with TestClient(app) as c:
         _login(c)
-        r = _post_turn(c, "another question", answer_text="an answer",
-                       sql_log=["SELECT 2"])
-        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
-        msg_id = done["message_id"]
-
-        called = {"hit": False}
-        orig_promote = skills.promote_from_message
-        skills.promote_from_message = lambda q, sql: called.__setitem__("hit", True)
-        try:
-            fb = c.post(f"/api/chat/messages/{msg_id}/feedback", json={"value": -1})
-        finally:
-            skills.promote_from_message = orig_promote
-        assert fb.status_code == 200 and fb.json()["feedback"] == -1, fb.text
-        assert called["hit"] is False, "thumbs-down must not promote a skill"
-
-
-def test_feedback_unknown_message_404():
-    with TestClient(app) as c:
-        _login(c)
-        r = c.post("/api/chat/messages/999999/feedback", json={"value": 1})
-        assert r.status_code == 404, r.text
+        r = _post_turn(c, "a question with no feedback field", answer_text="an answer",
+                       sql_log=["SELECT 1"])
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+        rows = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assert rows, rows
+        for row in rows:
+            assert "feedback" not in row, \
+                f"get_conversation must not select the vestigial feedback column: {row}"
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +546,9 @@ def run():
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
-    check("thumbs-up feedback promotes a skill", test_feedback_thumbs_up_promotes_skill)
-    check("thumbs-down feedback does not promote a skill",
-          test_feedback_thumbs_down_does_not_promote)
-    check("feedback on an unknown message 404s", test_feedback_unknown_message_404)
+    check("POST .../feedback is removed (404)", test_feedback_route_removed_404s)
+    check("get_conversation no longer exposes a feedback field",
+          test_get_conversation_no_longer_exposes_feedback_field)
     check("no-data guard: admin sees Admin->Imports wording and stream_agent never runs",
           test_no_data_guard_admin_wording_and_skips_agent)
     check("no-data guard: non-admin sees wait-for-administrator wording, agent never runs",

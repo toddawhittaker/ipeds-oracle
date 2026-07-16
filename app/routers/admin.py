@@ -10,10 +10,10 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 import app.nces as nces
-from app import estimate, importer
+from app import estimate, importer, skills
 from app.auth import mint_login_link, require_admin
 from app.config import get_settings
 from app.db import connect
@@ -459,9 +459,9 @@ def list_skills():
         # so the rows that need action must be at the top, not buried under the
         # verified library.
         rows = con.execute(
-            "SELECT id, question, lesson, canonical_sql, notes, upvotes, downvotes, "
-            "hits, verified, created_by, created_at FROM skills ORDER BY verified ASC, "
-            "created_at DESC, id DESC LIMIT 500").fetchall()
+            "SELECT id, question, headline, lesson, canonical_sql, notes, upvotes, "
+            "downvotes, hits, verified, created_by, created_at FROM skills "
+            "ORDER BY verified ASC, created_at DESC, id DESC LIMIT 500").fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()
@@ -469,9 +469,10 @@ def list_skills():
 
 class SkillUpdate(BaseModel):
     verified: bool | None = None
-    lesson: str | None = None
-    notes: str | None = None
-    canonical_sql: str | None = None
+    headline: str | None = Field(default=None, max_length=300)
+    lesson: str | None = Field(default=None, max_length=4000)
+    notes: str | None = Field(default=None, max_length=4000)
+    canonical_sql: str | None = Field(default=None, max_length=8000)
 
 
 @router.patch("/skills/{skill_id}")
@@ -479,6 +480,8 @@ def update_skill(skill_id: int, body: SkillUpdate):
     sets, vals = [], []
     if body.verified is not None:
         sets.append("verified=?"); vals.append(int(body.verified))
+    if body.headline is not None:
+        sets.append("headline=?"); vals.append(body.headline)
     if body.lesson is not None:
         sets.append("lesson=?"); vals.append(body.lesson)
     if body.notes is not None:
@@ -487,9 +490,21 @@ def update_skill(skill_id: int, body: SkillUpdate):
         sets.append("canonical_sql=?"); vals.append(body.canonical_sql)
     if not sets:
         return {"ok": True}
-    vals.append(skill_id)
     con = connect()
     try:
+        # The embedding derives from headline+lesson (app.skills._embed_source),
+        # so editing either one makes the stored vector stale — recompute it in
+        # the same request. A verify-only PATCH (the only edit the UI does
+        # today) touches neither field and skips this entirely.
+        if body.headline is not None or body.lesson is not None:
+            row = con.execute(
+                "SELECT headline, lesson FROM skills WHERE id=?", (skill_id,)).fetchone()
+            new_headline = body.headline if body.headline is not None else (row["headline"] or "")
+            new_lesson = body.lesson if body.lesson is not None else (row["lesson"] or "")
+            v = skills.embed(skills._embed_source(new_headline, new_lesson))
+            sets.append("embedding=?")
+            vals.append(skills._to_blob(v) if v is not None else None)
+        vals.append(skill_id)
         con.execute(f"UPDATE skills SET {', '.join(sets)} WHERE id=?", vals)
         con.commit()
     finally:

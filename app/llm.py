@@ -36,8 +36,9 @@ class AgentResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0  # summed OpenRouter cost (USD) across the turn's calls
-    critic_revised: bool = False  # the critic flagged the draft and forced a revision
-    critic_issue: str = ""        # the critic's finding (captured as a candidate lesson)
+    critic_revised: bool = False    # the critic flagged the draft and forced a revision
+    critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
+    critic_description: str = ""    # the critic's finding, description (candidate lesson body)
     error: str | None = None
 
     @property
@@ -144,12 +145,13 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         # Capture the clean draft + the SQL count NOW, before the
                         # revision round, so we can tell a real correction (it runs
                         # new SQL) from a rebuttal (it doesn't) once it returns.
-                        res.critic_issue = crit.issue
+                        res.critic_headline = crit.headline
+                        res.critic_description = crit.description
                         draft_answer = answer
                         sql_count_at_critique = len(res.sql_log)
                         yield {"type": "status", "text": "Double-checking the result…"}
-                        messages.append({"role": "user",
-                                         "content": critic.revision_instruction(crit.issue)})
+                        messages.append({"role": "user", "content": critic.revision_instruction(
+                            crit.headline, crit.description)})
                         continue
                 # If a revision round ran (draft_answer is set), decide what to
                 # emit. A genuine correction both re-queries AND lands on a

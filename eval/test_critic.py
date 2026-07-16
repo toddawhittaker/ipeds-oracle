@@ -1,7 +1,12 @@
 """Post-answer critic contract (app/critic.py) + its wiring into the agent loop.
 
 - parse_verdict reads the reviewer STRICTLY-toward-OK: revise only on an explicit
-  REVISE, everything ambiguous/empty is OK (don't disturb a good draft).
+  REVISE, everything ambiguous/empty is OK (don't disturb a good draft). A
+  REVISE verdict now carries a STRUCTURED headline + description (HEADLINE:/
+  DESCRIPTION: labels, parsed case-insensitively); an unlabeled REVISE falls
+  back to a truncated headline + the whole remainder as the description; a bare
+  REVISE with nothing after it still fails toward a non-empty fallback. Never
+  throws.
 - review() fails OPEN (ok=True) when disabled, unconfigured, or on a transport
   error, so the critic can never drop or block an answer.
 - In stream_agent: a REVISE verdict drives exactly ONE revision round; an OK
@@ -49,8 +54,8 @@ def check(name, fn):
 # --- parse_verdict -------------------------------------------------------------
 
 def test_parse_ok():
-    ok, issue = parse_verdict("OK")
-    assert ok is True and issue == "", (ok, issue)
+    ok, headline, description = parse_verdict("OK")
+    assert ok is True and headline == "" and description == "", (ok, headline, description)
 
 
 def test_parse_ok_lowercase_and_noise():
@@ -60,36 +65,85 @@ def test_parse_ok_lowercase_and_noise():
 
 def test_parse_empty_is_ok():
     # a garbled/empty reply must not disturb the draft
-    assert parse_verdict("")[0] is True
-    assert parse_verdict("   ")[0] is True
+    assert parse_verdict("") == (True, "", "")
+    assert parse_verdict("   ") == (True, "", "")
 
 
-def test_parse_revise_extracts_reason():
-    ok, issue = parse_verdict(
-        "REVISE: cipcode LIKE '51.%' double-counts; use an exact 6-digit code")
+def test_parse_structured_revise_extracts_headline_and_description():
+    reply = (
+        "REVISE\n"
+        "HEADLINE: Filter on an exact 6-digit CIP code, not a rollup.\n"
+        "DESCRIPTION: cipcode LIKE '51.%' sums the 2-/4-/6-digit rollup rows "
+        "together with the leaf code, overcounting; match the exact 6-digit "
+        "code instead."
+    )
+    ok, headline, description = parse_verdict(reply)
     assert ok is False, ok
-    assert "double-counts" in issue and issue.lower().startswith("cipcode"), issue
+    assert headline == "Filter on an exact 6-digit CIP code, not a rollup.", headline
+    assert description.startswith("cipcode LIKE '51.%'"), description
 
 
-def test_parse_revise_case_insensitive():
-    ok, issue = parse_verdict("revise: magnitude looks 4x too high")
-    assert ok is False and "magnitude" in issue, (ok, issue)
+def test_parse_structured_revise_labels_are_case_insensitive():
+    reply = ("revise\nheadline: Use majornum=1.\n"
+             "description: Second majors double-count otherwise.")
+    ok, headline, description = parse_verdict(reply)
+    assert ok is False, ok
+    assert headline == "Use majornum=1.", headline
+    assert description == "Second majors double-count otherwise.", description
 
 
-def test_parse_revise_without_colon_gets_default_issue():
-    ok, issue = parse_verdict("REVISE")
-    assert ok is False and issue, (ok, issue)
+def test_parse_structured_revise_is_order_independent():
+    # DESCRIPTION before HEADLINE must still parse cleanly: the DESCRIPTION
+    # capture must stop at the next label instead of swallowing it.
+    reply = (
+        "REVISE\n"
+        "DESCRIPTION: use cipcode='99' for national totals\n"
+        "HEADLINE: prefer the grand-total row"
+    )
+    ok, headline, description = parse_verdict(reply)
+    assert ok is False, ok
+    assert headline == "prefer the grand-total row", headline
+    assert "HEADLINE" not in description, \
+        f"description must not swallow the following HEADLINE label: {description!r}"
+    assert description == "use cipcode='99' for national totals", description
 
 
-# --- build_review_messages / revision_instruction ------------------------------
+def test_parse_malformed_revise_falls_back_to_description_and_truncated_headline():
+    blob = ("cipcode LIKE '51.%' double-counts because the rollup rows resum the "
+            "same total as the leaf 6-digit code; match the exact code instead of "
+            "a prefix.")
+    ok, headline, description = parse_verdict(f"REVISE: {blob}")
+    assert ok is False, ok
+    assert description == blob, description
+    assert headline, "an unlabeled REVISE must still produce a non-empty headline"
+    assert len(headline) <= 90, f"headline should be truncated to ~80 chars: {headline!r}"
+    assert len(headline) < len(description), \
+        "the fallback headline must be a shorter truncation, not the whole description"
+    assert blob.startswith(headline.rstrip()), \
+        f"the fallback headline must be a prefix of the description, got {headline!r}"
 
-def test_system_prompt_asks_for_a_readable_self_contained_revise_explanation():
-    # The REVISE explanation is stored as a lesson AND shown to admins, so the
-    # prompt must ask for plain-English prose, not cryptic shorthand. Kept
-    # minimal — pinning stable substrings, not the exact wording.
-    assert "self-contained" in critic._SYSTEM, critic._SYSTEM
-    assert "not cryptic shorthand" in critic._SYSTEM, critic._SYSTEM
-    assert "reusable rule" in critic._SYSTEM, critic._SYSTEM
+
+def test_parse_bare_revise_gets_a_nonempty_fallback():
+    ok, headline, description = parse_verdict("REVISE")
+    assert ok is False, ok
+    assert headline and description, (headline, description)
+
+
+def test_parse_never_throws_on_garbage():
+    for garbage in (None, 12345, "REVISE\nHEADLINE\nDESCRIPTION", "REVISE:", "revise:::::"):
+        try:
+            parse_verdict(garbage)  # noqa: F841 -- just must not raise
+        except Exception as e:  # noqa: BLE001
+            raise AssertionError(f"parse_verdict raised on {garbage!r}: {e}") from e
+
+
+# --- _SYSTEM / build_review_messages / revision_instruction --------------------
+
+def test_system_prompt_pins_key_substrings():
+    required = ("self-contained", "not cryptic shorthand", "reusable rule",
+                "HEADLINE", "DESCRIPTION")
+    for s in required:
+        assert s in critic._SYSTEM, (s, critic._SYSTEM)
 
 
 def test_build_messages_includes_artifacts():
@@ -111,10 +165,25 @@ def test_build_messages_truncates_long_answer():
     assert user.count("x") <= 2000, user.count("x")
 
 
-def test_revision_instruction_carries_issue():
-    msg = critic.revision_instruction("magnitude 4x too high")
-    assert "magnitude 4x too high" in msg
+def test_revision_instruction_carries_headline_and_description():
+    msg = critic.revision_instruction(
+        "Magnitude looks 4x too high.", "Because CIP rollups double-count, filter exactly.")
+    assert "Magnitude looks 4x too high." in msg
+    assert "Because CIP rollups double-count, filter exactly." in msg
     assert "run_sql" in msg  # tells the model it may re-query
+
+
+def test_revision_instruction_keeps_anti_leak_hardening():
+    msg = critic.revision_instruction("H", "D")
+    assert "Output ONLY the final answer" in msg, msg
+    assert "Never mention the reviewer" in msg, msg
+
+
+# --- Critique dataclass ----------------------------------------------------------
+
+def test_critique_defaults_to_empty_headline_and_description():
+    c = Critique(ok=True)
+    assert c.headline == "" and c.description == "", c
 
 
 # --- review(): fail-open + live transport --------------------------------------
@@ -190,19 +259,23 @@ def test_review_ok_verdict_live():
     c = _with_fake_transport(
         resp, lambda: asyncio.run(critic.review("q", ["SELECT 1"], "ans")))
     assert c.ok is True, c
+    assert c.headline == "" and c.description == "", c
     assert c.prompt_tokens == 40 and c.completion_tokens == 1, c
     assert c.cost == 0.0002, c
 
 
 def test_review_revise_verdict_live():
     resp = _json_response({
-        "choices": [{"message": {"content": "REVISE: no majornum=1, double count"}}],
+        "choices": [{"message": {"content":
+            "REVISE\nHEADLINE: Add majornum=1.\n"
+            "DESCRIPTION: no majornum=1 filter, double counts second majors."}}],
         "usage": {"prompt_tokens": 50, "completion_tokens": 8},
     })
     c = _with_fake_transport(
         resp, lambda: asyncio.run(critic.review("q", ["SELECT SUM(ctotalt) FROM c_a"], "ans")))
     assert c.ok is False, c
-    assert "majornum" in c.issue, c.issue
+    assert c.headline == "Add majornum=1.", c.headline
+    assert "majornum" in c.description, c.description
 
 
 def test_review_transport_error_fails_open():
@@ -216,11 +289,6 @@ def test_review_transport_error_fails_open():
 
 def _run(question):
     return asyncio.run(llm.run_agent(question))
-
-
-def _restore():
-    # tests reassign these module globals; reset between cases
-    pass
 
 
 def test_ok_verdict_returns_draft_unchanged():
@@ -249,6 +317,7 @@ def test_ok_verdict_returns_draft_unchanged():
         llm.critic.review = critic.review
     assert res.answer == "Final: 1,234.", res.answer
     assert res.critic_revised is False, res.critic_revised
+    assert res.critic_headline == "" and res.critic_description == "", res
     assert calls["critic"] == 1, "critic should run once on a SQL-backed answer"
 
 
@@ -280,7 +349,8 @@ def test_revise_verdict_triggers_one_revision():
 
     async def fake_review(question, sql_log, answer):
         calls["critic"] += 1
-        return Critique(ok=False, issue="missing majornum=1; ~4x overcount")
+        return Critique(ok=False, headline="Add majornum=1.",
+                        description="missing majornum=1; ~4x overcount")
 
     llm._chat = fake_chat
     llm.critic.review = fake_review
@@ -291,6 +361,8 @@ def test_revise_verdict_triggers_one_revision():
         llm.critic.review = critic.review
     assert res.answer == "Corrected: 1,000,000.", res.answer
     assert res.critic_revised is True, res.critic_revised
+    assert res.critic_headline == "Add majornum=1.", res.critic_headline
+    assert "majornum" in res.critic_description, res.critic_description
     assert calls["critic"] == 1, "critic must run at most once per turn"
     # run_sql, draft, revision-round run_sql, corrected answer
     assert calls["chat"] == 4, calls
@@ -323,7 +395,7 @@ def test_rebuttal_without_new_sql_reemits_clean_draft():
 
     async def fake_review(question, sql_log, answer):
         calls["critic"] += 1
-        return Critique(ok=False, issue="cstotlt may overcount")
+        return Critique(ok=False, headline="Verify cstotlt.", description="cstotlt may overcount")
 
     llm._chat = fake_chat
     llm.critic.review = fake_review
@@ -373,7 +445,7 @@ def test_requery_confirming_same_answer_is_not_a_revision():
 
     async def fake_review(question, sql_log, answer):
         calls["critic"] += 1
-        return Critique(ok=False, issue="magnitude looks high")
+        return Critique(ok=False, headline="Check magnitude.", description="magnitude looks high")
 
     llm._chat = fake_chat
     llm.critic.review = fake_review
@@ -408,7 +480,8 @@ def test_revision_message_reaches_the_model():
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
     async def fake_review(question, sql_log, answer):
-        return Critique(ok=False, issue="use cipcode='99' for the national total")
+        return Critique(ok=False, headline="Use cipcode='99'.",
+                        description="use cipcode='99' for the national total")
 
     llm._chat = fake_chat
     llm.critic.review = fake_review
@@ -418,7 +491,8 @@ def test_revision_message_reaches_the_model():
     finally:
         llm.critic.review = critic.review
     joined = " ".join(m.get("content") or "" for m in captured["msgs"])
-    assert "reviewer flagged" in joined and "cipcode='99'" in joined, joined
+    assert "reviewer flagged" in joined, joined
+    assert "Use cipcode='99'." in joined and "cipcode='99' for the national total" in joined, joined
 
 
 def test_no_sql_answer_skips_critic():
@@ -430,7 +504,7 @@ def test_no_sql_answer_skips_critic():
 
     async def fake_review(question, sql_log, answer):
         calls["critic"] += 1
-        return Critique(ok=False, issue="should not be called")
+        return Critique(ok=False, headline="should not run", description="should not be called")
 
     llm._chat = fake_chat
     llm.critic.review = fake_review
@@ -447,19 +521,30 @@ def run():
     print("post-answer critic:")
     check("parse OK", test_parse_ok)
     check("parse OK with lowercase/noise", test_parse_ok_lowercase_and_noise)
-    check("parse empty/garbled -> OK", test_parse_empty_is_ok)
-    check("parse REVISE extracts the reason", test_parse_revise_extracts_reason)
-    check("parse REVISE is case-insensitive", test_parse_revise_case_insensitive)
-    check("parse bare REVISE gets a default issue",
-          test_parse_revise_without_colon_gets_default_issue)
-    check("_SYSTEM asks for a readable, self-contained REVISE explanation",
-          test_system_prompt_asks_for_a_readable_self_contained_revise_explanation)
+    check("parse empty/garbled -> OK, empty headline/description", test_parse_empty_is_ok)
+    check("parse structured REVISE extracts HEADLINE/DESCRIPTION",
+          test_parse_structured_revise_extracts_headline_and_description)
+    check("parse structured REVISE labels are case-insensitive",
+          test_parse_structured_revise_labels_are_case_insensitive)
+    check("parse structured REVISE is order-independent (DESCRIPTION before HEADLINE)",
+          test_parse_structured_revise_is_order_independent)
+    check("parse malformed REVISE falls back to description + truncated headline",
+          test_parse_malformed_revise_falls_back_to_description_and_truncated_headline)
+    check("parse bare REVISE gets a non-empty fallback",
+          test_parse_bare_revise_gets_a_nonempty_fallback)
+    check("parse_verdict never throws on garbage input", test_parse_never_throws_on_garbage)
+    check("_SYSTEM pins self-contained/not-cryptic/reusable-rule/HEADLINE/DESCRIPTION",
+          test_system_prompt_pins_key_substrings)
     check("build_review_messages includes question/SQL/answer",
           test_build_messages_includes_artifacts)
     check("build_review_messages truncates a long answer",
           test_build_messages_truncates_long_answer)
-    check("revision_instruction carries the issue",
-          test_revision_instruction_carries_issue)
+    check("revision_instruction carries the headline and description",
+          test_revision_instruction_carries_headline_and_description)
+    check("revision_instruction keeps the anti-leak hardening",
+          test_revision_instruction_keeps_anti_leak_hardening)
+    check("Critique defaults headline/description to ''",
+          test_critique_defaults_to_empty_headline_and_description)
     check("review fails open without a key", test_review_fails_open_without_key)
     check("review fails open when disabled", test_review_disabled_fails_open)
     check("review OK verdict (live transport)", test_review_ok_verdict_live)

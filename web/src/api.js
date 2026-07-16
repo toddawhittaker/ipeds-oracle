@@ -27,8 +27,6 @@ export const api = {
   conversations: () => j("GET", "/api/chat/conversations"),
   conversation: (id) => j("GET", `/api/chat/conversations/${id}`),
   deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
-  feedback: (msgId, value) =>
-    j("POST", `/api/chat/messages/${msgId}/feedback`, { value }),
   csvUrl: (msgId) => `/api/chat/messages/${msgId}/download.csv`,
 
   // admin

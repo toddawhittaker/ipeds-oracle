@@ -190,6 +190,13 @@ MIGRATIONS: list[tuple[int, str]] = [
     # old text, so a seed an admin has edited is left untouched. Lesson text is
     # not embedded (embeddings key off the question), so no re-embed is needed.
     (6, _seed_rewrite_ddl()),
+    # Generalized structured lessons: a short HEADLINE (the rule title) now
+    # leads each lesson, alongside the existing `lesson` column (repurposed as
+    # the longer generalized description). Nullable — backfilled by the
+    # idempotent Python passes `upgrade_seed_lessons`/`reembed_skills_if_needed`
+    # at startup (app/main.py lifespan), since a pure-SQL migration can't
+    # recompute embeddings.
+    (7, "ALTER TABLE skills ADD COLUMN headline TEXT;"),
 ]
 
 

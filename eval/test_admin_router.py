@@ -1,8 +1,9 @@
 """Admin router contract (app/routers/admin.py): the import pipeline's HTTP
 surface (bad extension, single-import lock conflict, a mocked success run,
 job listing/detail), the allowlist approval-email failure branch, the usage
-dashboard's since>until swap, skills PATCH/DELETE, and the server-logs
-endpoint.
+dashboard's since>until swap, skills GET/PATCH/DELETE (incl. the `headline`
+field and PATCH re-embedding when headline/lesson change), and the
+server-logs endpoint.
 
 The heavy importer.run_import is mocked (a fast fake that just marks the job
 row 'swapped') and threading.Thread is replaced with a synchronous stand-in so
@@ -11,6 +12,7 @@ loader, mdbtools, or sleep/poll needed. Allowlist add/remove and the
 oversized-upload 413 path are already covered by eval/test_backend.py and
 eval/test_security.py.
 """
+import hashlib
 import os
 import sys
 import tempfile
@@ -31,6 +33,7 @@ os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
 
+import numpy as np  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import mailer  # noqa: E402
@@ -41,9 +44,22 @@ mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = (
     lambda to, link: captured.__setitem__("approved_link", link) or True)
 
+from app import skills  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import admin as admin_router  # noqa: E402
+
+
+def _fake_embed(text):
+    """Deterministic bag-of-words vector (8 dims, L2-normalized) — mirrors
+    eval/test_skills.py's helper, kept local since each eval/ suite is a
+    self-contained, dependency-light script."""
+    v = np.zeros(8, dtype=np.float32)
+    for w in text.lower().split():
+        b = int(hashlib.md5(w.encode()).hexdigest(), 16) % 8
+        v[b] += 1.0
+    n = np.linalg.norm(v)
+    return (v / n) if n else v
 
 FAILURES = []
 
@@ -646,6 +662,83 @@ def test_usage_since_after_until_is_swapped():
         assert body["since"] <= body["until"], body
 
 
+def test_skills_get_includes_headline_field():
+    with TestClient(app) as c:
+        _login(c)
+        rows = c.get("/api/admin/skills").json()
+        assert rows, "expected at least the seed rows"
+        assert "headline" in rows[0], f"skills list must expose the headline field: {rows[0]}"
+
+
+def test_skills_patch_headline_or_lesson_reembeds():
+    with TestClient(app) as c:
+        _login(c)
+        before = c.get("/api/admin/skills").json()
+        skill_id = before[0]["id"]
+
+        new_headline = "New generalized headline for the rule."
+        new_lesson = "New generalized description explaining the rule in full."
+        captured = {}
+
+        def _capturing(text):
+            captured["text"] = text
+            return _fake_embed(text)
+
+        orig_embed = skills.embed
+        skills.embed = _capturing
+        try:
+            r = c.patch(f"/api/admin/skills/{skill_id}",
+                       json={"headline": new_headline, "lesson": new_lesson})
+        finally:
+            skills.embed = orig_embed
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+        assert captured.get("text") == skills._embed_source(new_headline, new_lesson), captured
+
+        after = next(s for s in c.get("/api/admin/skills").json() if s["id"] == skill_id)
+        assert after["headline"] == new_headline, after
+        assert after["lesson"] == new_lesson, after
+
+        con = connect()
+        emb = con.execute("SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()[0]
+        con.close()
+        got = skills._from_blob(emb)
+        want = _fake_embed(skills._embed_source(new_headline, new_lesson))
+        assert np.allclose(got, want), (got, want)
+
+
+def test_skills_patch_verify_only_does_not_reembed():
+    with TestClient(app) as c:
+        _login(c)
+        before = c.get("/api/admin/skills").json()
+        skill_id = before[0]["id"]
+        con = connect()
+        emb_before = con.execute(
+            "SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()[0]
+        con.close()
+
+        called = {"n": 0}
+
+        def _tracking(text):
+            called["n"] += 1
+            return _fake_embed(text)
+
+        orig_embed = skills.embed
+        skills.embed = _tracking
+        try:
+            r = c.patch(f"/api/admin/skills/{skill_id}", json={"verified": True})
+        finally:
+            skills.embed = orig_embed
+        assert r.status_code == 200, r.text
+        assert called["n"] == 0, "a verify-only PATCH must not recompute the embedding"
+
+        con = connect()
+        emb_after = con.execute(
+            "SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()[0]
+        con.close()
+        assert emb_after == emb_before, "embedding must be untouched by a verify-only PATCH"
+
+
 def test_skills_patch_updates_fields_and_noop_with_empty_body():
     with TestClient(app) as c:
         _login(c)
@@ -759,6 +852,10 @@ def run():
           test_cannot_demote_self)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
+    check("skills GET includes the headline field", test_skills_get_includes_headline_field)
+    check("skills PATCH headline/lesson re-embeds", test_skills_patch_headline_or_lesson_reembeds)
+    check("skills PATCH verify-only does not re-embed",
+          test_skills_patch_verify_only_does_not_reembed)
     check("skills PATCH updates fields; empty body is a no-op",
           test_skills_patch_updates_fields_and_noop_with_empty_body)
     check("skills DELETE removes the row", test_skills_delete_removes_the_row)

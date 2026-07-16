@@ -4,12 +4,11 @@ import {
   mockConversations,
   mockConversation,
   mockStreamChat,
-  mockFeedback,
 } from "./mocks.js";
 
 // Flow 3: chat happy path. Signed in, empty conversation list, ask a
 // question, watch it stream, then confirm the `done` event's message_id
-// (see Chat.jsx submit()) attaches the id that unlocks feedback + CSV download.
+// (see Chat.jsx submit()) attaches the id that unlocks the CSV download.
 const CONV_ID = 42;
 const MSG_ID = 7;
 const SQL = "SELECT stabbr, SUM(x) AS total FROM c_a WHERE cipcode='51.3801' AND awlevel=3 GROUP BY stabbr";
@@ -17,14 +16,13 @@ const ANSWER_MD =
   "Here are Associate's degrees in Registered Nursing by state:\n\n" +
   "| State | Total |\n| --- | --- |\n| CA | 100 |\n| NY | 50 |\n";
 
-test("asking a question streams a markdown answer with a table, exposes the SQL log, and unlocks feedback + CSV after reload", async ({ page }) => {
+test("asking a question streams a markdown answer with a table, exposes the SQL log, and unlocks CSV after reload", async ({ page }) => {
   await mockMe(page, { email: "user@franklin.edu", is_admin: false });
   const convos = await mockConversations(page, []);
   await mockStreamChat(page, { conversationId: CONV_ID, sql: [SQL], answer: ANSWER_MD, messageId: MSG_ID });
-  const feedback = await mockFeedback(page);
 
   // The stream's `done` event carries message_id; the app attaches it to the
-  // assistant message so the 👍/👎 buttons and CSV link render — no reload needed.
+  // assistant message so the CSV link renders — no reload needed.
   await mockConversation(page, CONV_ID, [
     { role: "user", content: "Associate's degrees in Registered Nursing by state" },
     { role: "assistant", id: MSG_ID, content: ANSWER_MD, sql_log: [SQL] },
@@ -76,17 +74,27 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await page.getByRole("button", { name: "Copy Markdown" }).click();
   await expect(page.getByRole("button", { name: "Bar", exact: true }))
     .toHaveAttribute("aria-pressed", "true");
+});
 
-  // The done event's message_id unlocks the feedback controls.
-  // exact: true — "Helpful" is otherwise a substring match of "Not helpful".
-  const upvote = page.getByTitle("Helpful", { exact: true });
-  const downvote = page.getByTitle("Not helpful");
-  await expect(upvote).toBeVisible();
-  await expect(downvote).toBeVisible();
+// Regression: the 👍/👎 feedback feature (buttons + POST .../feedback) was
+// removed entirely — the critic is now the sole lesson source.
+test("the 👍/👎 feedback buttons no longer render on an assistant answer", async ({ page }) => {
+  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockConversations(page, []);
+  await mockStreamChat(page, { conversationId: CONV_ID, sql: [SQL], answer: ANSWER_MD, messageId: MSG_ID });
+  await mockConversation(page, CONV_ID, [
+    { role: "user", content: "Associate's degrees in Registered Nursing by state" },
+    { role: "assistant", id: MSG_ID, content: ANSWER_MD, sql_log: [SQL] },
+  ]);
 
-  await upvote.click();
+  await page.goto("/");
+  await page.getByPlaceholder("Ask about IPEDS data…").fill(
+    "Associate's degrees in Registered Nursing by state"
+  );
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("table")).toBeVisible();
 
-  await expect.poll(() => feedback.posts.length).toBe(1);
-  expect(feedback.posts[0]).toEqual({ value: 1 });
-  await expect(upvote).toHaveClass(/\bon\b/);
+  await expect(page.getByTitle("Helpful", { exact: true })).toHaveCount(0);
+  await expect(page.getByTitle("Not helpful")).toHaveCount(0);
+  await expect(page.locator("button.vote")).toHaveCount(0);
 });

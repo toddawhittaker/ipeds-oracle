@@ -124,7 +124,7 @@ function ThinkingTrace({ items }) {
 export default function Chat({ me }) {
   const [convos, setConvos] = useState([]);
   const [convId, setConvId] = useState(null);
-  const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, feedback?, status?}
+  const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, status?}
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -308,12 +308,6 @@ export default function Chat({ me }) {
     }
   }
 
-  async function vote(msg, value) {
-    if (!msg.id) return;
-    await api.feedback(msg.id, value);
-    setMessages((m) => m.map((x) => x.id === msg.id ? { ...x, feedback: value } : x));
-  }
-
   return (
     <div className="chat" ref={chatRef}>
       <aside className={"sidebar" + (collapsed ? " collapsed" : "") + (resizing ? " resizing" : "")}
@@ -473,17 +467,6 @@ export default function Chat({ me }) {
                                 title="Copy the answer as rich HTML (paste into email/Word)">
                           {copied === `${i}:html` ? "Copied!" : "Copy HTML"}
                         </button>
-                      </>
-                    )}
-                    {m.id && (
-                      <>
-                        <span className="spacer" />
-                        <button className={"vote" + (m.feedback === 1 ? " on" : "")}
-                                onClick={() => vote(m, 1)} title="Helpful"
-                                aria-label="Helpful" aria-pressed={m.feedback === 1}>👍</button>
-                        <button className={"vote" + (m.feedback === -1 ? " on" : "")}
-                                onClick={() => vote(m, -1)} title="Not helpful"
-                                aria-label="Not helpful" aria-pressed={m.feedback === -1}>👎</button>
                       </>
                     )}
                   </div>

@@ -143,18 +143,27 @@ def test_malformed_tool_json_does_not_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. HIGH — 👍-promoted skills must be admin-gated before retrieval
-#    (app/skills.py promote_from_message + retrieve_skills_block)
+# 4. HIGH — critic-emitted lessons must be admin-gated before retrieval
+#    (app/skills.py record_lesson_from_critic + retrieve_skills_block)
+#
+# Originally pinned against the now-removed 👍-feedback path
+# (promote_from_message); the thumbs feature was ripped out and the critic is
+# now the SOLE lesson source, so this retargets the same unverified-gate
+# security invariant onto record_lesson_from_critic — a real critic-sourced
+# lesson must still start unverified and be excluded from retrieval until an
+# admin approves it.
 # ---------------------------------------------------------------------------
 _SKILL4_Q = "how many underwater basket-weaving certificates were awarded in Guam last year"
 _SKILL4_SQL = "SELECT 1 AS placeholder_contract_4"
+_SKILL4_HEADLINE = "Filter to the exact award, not a rollup."
+_SKILL4_DESCRIPTION = "a placeholder rule for contract test 4"
 _skill4_state: dict = {}
 
 
 def _setup_promoted_skill() -> None:
     """Runs once, before the two check()s below, so both assertions are
     independently visible even if the first one fails."""
-    skills.promote_from_message(_SKILL4_Q, _SKILL4_SQL)
+    skills.record_lesson_from_critic(_SKILL4_Q, _SKILL4_SQL, _SKILL4_HEADLINE, _SKILL4_DESCRIPTION)
     con = connect()
     try:
         row = con.execute(
@@ -163,14 +172,14 @@ def _setup_promoted_skill() -> None:
     finally:
         con.close()
     if row is None:
-        raise AssertionError("promote_from_message did not create a skill row")
+        raise AssertionError("record_lesson_from_critic did not create a skill row")
     _skill4_state["id"] = row["id"]
     _skill4_state["verified"] = row["verified"]
 
 
 def test_promoted_skill_starts_unverified() -> None:
     assert _skill4_state.get("verified") == 0, (
-        "a feedback-promoted skill must start UNVERIFIED (verified=0) pending "
+        "a critic-emitted lesson must start UNVERIFIED (verified=0) pending "
         f"admin review; got verified={_skill4_state.get('verified')!r}")
 
 
@@ -362,7 +371,7 @@ def run() -> None:
          test_malformed_tool_json_does_not_raise)
 
     print("\n4. skill promotion admin-gating")
-    check("setup: promote_from_message creates a skill row", _setup_promoted_skill)
+    check("setup: record_lesson_from_critic creates a skill row", _setup_promoted_skill)
     check("promoted skill starts verified=0", test_promoted_skill_starts_unverified)
     check("unverified skill excluded from retrieval", test_unverified_skill_excluded_from_retrieval)
     check("admin-verified skill becomes retrievable", test_admin_verified_skill_becomes_retrievable)

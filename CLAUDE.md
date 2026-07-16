@@ -105,11 +105,15 @@ tab. LLM = DeepSeek via **OpenRouter**
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
 force one revision round). Auth = passwordless **magic link**, manual allowlist,
-email via **Resend**. Self-learning = a library of **lessons** (a human-readable
-rule + optional SQL example) retrieved as guidance and **emitted by the critic**
-when it catches a mistake (feedback/critic lessons start unverified → admin
-approves; deduped on save; `SKILLS_ENABLED=0/1` gates the on/off eval A/B) +
-semantic answer cache.
+email via **Resend**. Self-learning = a library of **lessons** — each a short
+generalized **headline** + a longer generalized **description** (collapsible in
+the admin UI) + a commented SQL worked example — retrieved as guidance and
+**emitted by the critic** (the sole lesson source: it phrases a caught mistake
+as a headline+description in one call, reused as both the revision feedback and
+the stored lesson) when it catches a mistake (lessons start unverified → admin
+approves; deduped on save; embedding key = headline+description, never the
+question; `SKILLS_ENABLED=0/1` gates the on/off eval A/B) + semantic answer
+cache.
 **Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
 
 ## How we work (operating rules — follow these)
