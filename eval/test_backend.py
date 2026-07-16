@@ -45,6 +45,22 @@ def run():
         assert me.status_code == 200 and me.json()["is_admin"], me.text
         print("  ✓ magic-link login (POST verify) + admin session")
 
+        # --- /me has_data (fresh-deploy no-data detection) -------------------
+        assert isinstance(me.json().get("has_data"), bool), \
+            f"/me must include a boolean has_data flag: {me.text}"
+        print("  ✓ /me includes a boolean has_data flag")
+
+        from app.routers import auth as auth_router
+        orig_has_data = auth_router.has_ipeds_data
+        auth_router.has_ipeds_data = lambda: False
+        try:
+            me_nodata = c.get("/api/auth/me")
+        finally:
+            auth_router.has_ipeds_data = orig_has_data
+        assert me_nodata.status_code == 200, me_nodata.text
+        assert me_nodata.json().get("has_data") is False, me_nodata.text
+        print("  ✓ /me reports has_data=False when patched to the no-data state")
+
         # reused token must fail (already consumed by the POST above)
         c2 = TestClient(app)
         assert c2.post("/api/auth/verify", json={"token": token}).status_code == 400

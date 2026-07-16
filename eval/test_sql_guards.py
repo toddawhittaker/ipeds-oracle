@@ -1,11 +1,20 @@
 """Smoke test for the read-only SQL engine: guards, a real query, and timeout."""
+import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.tools.sql import SQLTimeoutError, SQLValidationError, run_sql, validate_sql
+from app.tools.sql import (
+    SQLTimeoutError,
+    SQLValidationError,
+    has_ipeds_data,
+    ipeds_years,
+    run_sql,
+    validate_sql,
+)
 
 
 def expect_reject(sql):
@@ -55,5 +64,60 @@ except SQLTimeoutError as e:
     dt = time.time() - t0
     print(f"  ✓ interrupted after {dt:.1f}s: {e}")
     assert dt < 6, "watchdog did not fire promptly"
+
+print("\n== ipeds_years / has_ipeds_data: fresh-deploy 'no data' probes ==")
+# Non-raising probes for the "no dataset loaded yet" state. Built entirely on
+# tiny throwaway sqlite files under a tempdir -- never the real ipeds.db, and
+# never mdbtools.
+_probe_tmp = Path(tempfile.mkdtemp())
+
+missing_path = _probe_tmp / "does_not_exist.db"
+assert ipeds_years(missing_path) == [], \
+    f"a missing db file must yield [], got {ipeds_years(missing_path)}"
+assert has_ipeds_data(missing_path) is False, "a missing db file must yield has_data=False"
+print("  ✓ missing db file -> ipeds_years=[] / has_ipeds_data=False")
+
+empty_path = _probe_tmp / "empty.db"
+empty_path.write_bytes(b"")
+assert ipeds_years(empty_path) == [], \
+    f"a 0-byte file must yield [], got {ipeds_years(empty_path)}"
+assert has_ipeds_data(empty_path) is False, "a 0-byte file must yield has_data=False"
+print("  ✓ 0-byte file -> ipeds_years=[] / has_ipeds_data=False")
+
+garbage_path = _probe_tmp / "garbage.db"
+garbage_path.write_bytes(b"this is not a sqlite database, just plain garbage bytes" * 50)
+assert ipeds_years(garbage_path) == [], \
+    f"a non-sqlite garbage file must yield [], got {ipeds_years(garbage_path)}"
+assert has_ipeds_data(garbage_path) is False, "a garbage file must yield has_data=False"
+print("  ✓ garbage (non-sqlite) file -> ipeds_years=[] / has_ipeds_data=False")
+
+no_years_table_path = _probe_tmp / "no_years_table.db"
+_con = sqlite3.connect(str(no_years_table_path))
+_con.execute("CREATE TABLE hd (unitid INTEGER)")
+_con.commit()
+_con.close()
+assert ipeds_years(no_years_table_path) == [], \
+    "a real sqlite file with no _years table must yield []"
+assert has_ipeds_data(no_years_table_path) is False, \
+    "a real sqlite file with no _years table must yield has_data=False"
+print("  ✓ sqlite file with no _years table -> ipeds_years=[] / has_ipeds_data=False")
+
+fixture_path = _probe_tmp / "fixture.db"
+_con = sqlite3.connect(str(fixture_path))
+_con.execute("CREATE TABLE _years (year INTEGER)")
+_con.executemany("INSERT INTO _years(year) VALUES (?)", [(2024,), (2023,), (2025,)])
+_con.commit()
+_con.close()
+years = ipeds_years(fixture_path)
+assert years == [2023, 2024, 2025], f"expected sorted [2023, 2024, 2025], got {years}"
+assert has_ipeds_data(fixture_path) is True, "a fixture with rows must yield has_data=True"
+print(f"  ✓ fixture _years table -> ipeds_years={years} / has_ipeds_data=True")
+
+# default (no db_path arg) must resolve against settings.ipeds_db_path, exactly
+# like run_sql's default -- not silently require the caller to pass a path.
+default_years = ipeds_years()
+assert isinstance(default_years, list), \
+    f"ipeds_years() with no args must return a list, got {type(default_years)}"
+print(f"  ✓ ipeds_years() with no db_path arg returns a list ({len(default_years)} year(s))")
 
 print("\nALL SQL-GUARD TESTS PASSED")

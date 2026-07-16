@@ -121,7 +121,7 @@ function ThinkingTrace({ items }) {
   );
 }
 
-export default function Chat() {
+export default function Chat({ me }) {
   const [convos, setConvos] = useState([]);
   const [convId, setConvId] = useState(null);
   const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, feedback?, status?}
@@ -361,7 +361,19 @@ export default function Chat() {
         <h1 className="sr-only">Chat</h1>
         <div className="messages thin-scroll">
           <div className="messages-inner">
-          {messages.length === 0 && (
+          {messages.length === 0 && !me?.has_data && (
+            <div className="empty">
+              <h2>No IPEDS data loaded yet</h2>
+              <p>
+                {me?.is_admin
+                  ? "No IPEDS data is loaded yet. Head to the Admin → Imports tab "
+                    + "to load a year, then come back to ask questions."
+                  : "No IPEDS data is loaded yet. An administrator needs to load "
+                    + "a dataset before you can ask questions — please check back soon."}
+              </p>
+            </div>
+          )}
+          {messages.length === 0 && me?.has_data && (
             <div className="empty">
               <p className="muted">
                 Ask a question about IPEDS data — degrees awarded, enrollment,
@@ -376,10 +388,11 @@ export default function Chat() {
                 ))}
               </div>
               <div className="privacy-warning" role="note">
-                <strong>⚠️ Do not enter proprietary or confidential Franklin
-                information.</strong> To keep costs down, this tool uses DeepSeek,
-                which may train on the data you submit. Ask only about public IPEDS
-                data — <strong>no</strong> student records, internal figures, or
+                <strong>⚠️ Do not enter proprietary or confidential
+                information.</strong> This tool sends your questions to a
+                third-party AI service that may use submitted data to improve
+                its models. Ask only about public IPEDS data —{" "}
+                <strong>no</strong> student records, internal figures, or
                 other non-public information.
               </div>
             </div>

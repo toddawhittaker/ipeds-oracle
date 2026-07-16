@@ -16,11 +16,24 @@ from app import guard, skills
 from app.auth import current_user
 from app.db import connect
 from app.llm import generate_title, stream_agent
-from app.tools.sql import SQLValidationError, run_sql
+from app.tools.sql import SQLValidationError, ipeds_years, run_sql
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 HISTORY_TURNS = 6  # prior messages fed back to the model for context
+
+# Fresh-deploy "no data" guard wording (module-level constants for testability
+# -- see chat_stream). Admin wording routes to Admin -> Imports; non-admin
+# wording just asks them to wait, and must never mention the admin-only UI.
+NO_DATA_ADMIN = (
+    "No IPEDS dataset is loaded yet. Open Admin → Imports to fetch a year "
+    "from NCES (or upload an .accdb). Once a year is integrated, you can ask "
+    "data questions here."
+)
+NO_DATA_USER = (
+    "No IPEDS dataset is loaded yet. An administrator needs to load data "
+    "before questions can be answered — please check back soon."
+)
 
 
 class ChatRequest(BaseModel):
@@ -47,6 +60,20 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "Empty question.")
+
+    # Fresh-deploy "no data" guard: before touching app.db or the agent at
+    # all, bail out with a friendly notice if there's no ipeds.db dataset
+    # loaded yet. Creates no conversation, persists nothing, runs no agent.
+    if not ipeds_years():
+        msg = NO_DATA_ADMIN if bool(user["is_admin"]) else NO_DATA_USER
+
+        async def _no_data_gen():
+            yield _sse({"type": "answer", "text": msg})
+            yield _sse({"type": "done", "no_data": True})
+
+        return StreamingResponse(_no_data_gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache",
+                                          "X-Accel-Buffering": "no"})
 
     con = connect()
     is_new = not req.conversation_id

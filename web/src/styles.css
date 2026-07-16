@@ -117,6 +117,11 @@ input, textarea, button { font-family: inherit; }
 }
 .login button[type=submit] { background: var(--accent); color: #fff; border: none; padding: 10px; border-radius: 8px; }
 .notice { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+/* A call-to-action notice (e.g. the fresh-deploy "no dataset loaded yet"
+   banner) should stand out from an ordinary status notice -- an accent left
+   border on top of .notice's existing AA-safe background/text tokens, so it
+   stays readable in both themes without introducing a new color pairing. */
+.notice-cta { border-left: 3px solid var(--accent); padding-left: 12px; }
 .errbound { max-width: 440px; width: 100%; text-align: center; }
 .errbound h1 { margin: 0 0 10px; color: var(--accent); font-size: 20px; }
 .errbound button { margin-top: 16px; background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 8px; }

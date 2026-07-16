@@ -213,7 +213,16 @@ def import_job(job_id: int):
 
 def _integrated_starts() -> set[int]:
     """Already-integrated start years, derived from the live ipeds.db's
-    ending years (empty if it doesn't exist yet — e.g. a brand new deploy)."""
+    ending years (empty if it doesn't exist yet -- e.g. a brand new deploy).
+
+    NOTE: kept calling `importer._years(...)` (a bare module attribute) rather
+    than the newer `app.tools.sql.ipeds_years()` non-raising probe, even
+    though the two are functionally equivalent -- eval/test_admin_router.py's
+    `_patch_catalog`/`_patch_years` helpers monkeypatch
+    `admin_router.importer._years` and document that the router must call it
+    "through the module ... for these patches to take effect." Switching to
+    `ipeds_years()` would silently break that (untouched-by-this-feature)
+    test contract. See the no-data-onboarding implementer's report."""
     s = get_settings()
     if not Path(s.ipeds_db_path).exists():
         return set()

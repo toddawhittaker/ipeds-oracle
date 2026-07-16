@@ -8,7 +8,16 @@
 //
 // Contracts mirrored here come from web/src/api.js and web/src/Chat.jsx.
 
-/** GET /api/auth/me -> 200 {email,is_admin} when signed in, or 401 (logged out) when user is null. */
+/**
+ * GET /api/auth/me -> 200 {email,is_admin,has_data} when signed in, or 401
+ * (logged out) when user is null.
+ *
+ * `has_data` defaults to `true` when the caller's `user` object doesn't
+ * specify it, so every existing spec (written before the no-data/onboarding
+ * feature existed) keeps rendering Chat/Admin normally without having to be
+ * touched. Pass `has_data: false` explicitly to exercise the fresh-deploy
+ * no-data state (see web/e2e/no-data-onboarding.spec.js).
+ */
 export async function mockMe(page, user) {
   await page.route("**/api/auth/me", async (route) => {
     if (user == null) {
@@ -21,7 +30,7 @@ export async function mockMe(page, user) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(user),
+        body: JSON.stringify({ has_data: true, ...user }),
       });
     }
   });

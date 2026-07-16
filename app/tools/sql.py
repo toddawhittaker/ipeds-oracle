@@ -115,6 +115,32 @@ def _connect_ro(db_path: Path) -> sqlite3.Connection:
     return con
 
 
+def ipeds_years(db_path: Path | None = None) -> list[int]:
+    """Ending years present in ipeds.db, or [] when there's no dataset yet
+    (file missing / unreadable / no `_years` table). A non-raising probe for
+    the fresh-deploy "no data" state -- never creates the file (mode=ro), and
+    never lets a corrupt/garbage file bubble up as an exception."""
+    db_path = get_settings().ipeds_db_path if db_path is None else db_path
+    if not Path(db_path).exists():
+        return []
+    con = None
+    try:
+        con = _connect_ro(db_path)
+        rows = con.execute("SELECT year FROM _years ORDER BY year").fetchall()
+        return [r[0] for r in rows]
+    except sqlite3.Error:
+        # Covers OperationalError ("unable to open database file", "no such
+        # table: _years") and DatabaseError (a 0-byte/garbage non-sqlite file).
+        return []
+    finally:
+        if con is not None:
+            con.close()
+
+
+def has_ipeds_data(db_path: Path | None = None) -> bool:
+    return bool(ipeds_years(db_path))
+
+
 def run_sql(sql: str, *, limit: int | None = None,
             timeout: float | None = None,
             db_path: Path | None = None) -> QueryResult:
