@@ -92,6 +92,48 @@ The same "pick one level" rule applies to **`awlevel`**: codes 1–8 & 17–21 a
 real, mutually-exclusive levels; 12–15 are rollup totals — never sum a real level
 together with a rollup.
 
+### ⚠️ Nested totals / rollups beyond completions (same trap, other surveys)
+The completions "pick ONE level, never sum a rollup together with its parts" rule
+recurs across surveys: many tables carry a categorical key whose codes mix a grand
+total with its own components, so a blanket `SUM` of the measure over all rows
+multi-counts. Look the key up in `valuesets` and filter to the single total (or
+single level) you mean. When in doubt, the `drv*` derived family already holds the
+clean total/rate. Verified national figures (year 2024) to sanity-check against:
+
+- **Fall enrollment `ef` / `efa` — key `eflevel`.** Codes nest: `10` All students
+  (19.7M = true total) = `20` Undergraduate (16.4M) + `50` Graduate (3.3M); `20` =
+  `30` degree/cert-seeking (14.1M) + `40` non-degree (2.4M); and so on. `SUM(eftotal)`
+  over ALL `eflevel` rows = 81.0M ≈ **4.1× overcount**. Total enrollment ⇒ filter
+  `eflevel=10`.
+- **12-month enrollment `effy` — key `effylev`.** `1` All students (25.3M) = `2`
+  Undergraduate (21.2M) + `4` Graduate (4.1M). The family ALSO carries detail rows
+  at `effylev=-2` (broken out by `lstudy`); a blanket `SUM(efytotlt)` ≈ 155M (~6×).
+  12-month headcount ⇒ filter `effylev=1`.
+- **Graduation rates `gr` — key `grtype` is NOT additive.** `grtype` holds
+  overlapping cohort *definitions* (revised cohort, adjusted = revised − exclusions,
+  completers-within-150%, transfer-outs) and sub-cohorts, keyed further by
+  `chrtstat` / `cohort` / `section`. Never `SUM(grtotlt)` across `grtype`. Prefer
+  derived `drvgr` for rates; computing by hand, use the adjusted-cohort code as the
+  denominator and completers-within-150% as the numerator.
+- **Finance `f_f1a` / `f_f2` / `f_f3` — three DISJOINT forms, DIFFERENT columns.**
+  Each institution files exactly one form by control (public-GASB / FASB /
+  for-profit; pairwise `unitid` overlap = 0), and there is **no shared total
+  column**: total revenues = `f1d01` (f_f1a) vs `f2d16` (f_f2) vs `f3d09` (f_f3). A
+  sector-wide or national finance total must **UNION all three**, each with its own
+  variable — querying only `f_f1a` returns $500B and silently drops ~39% of the
+  ~$813B national total. Prefer derived `drvf` for common per-institution indicators.
+- **Staff `s_oc` / `eap` — occupation key nests, plus `ftpt` / `facstat`.**
+  `s_oc.occupcat=100` and `eap.eapcat=10000` (both "All staff") sit above nested
+  occupation subtotals (200 ⊃ 210 ⊃ 211–215…); `ftpt` also nests (`1` All staff =
+  `2` Full-time + `3` Part-time; `4` Graduate assistants is separate). Total staff
+  headcount ⇒ `occupcat=100 AND ftpt=1` (= 4.0M, year 2024); never `SUM(hrtotlt)`
+  across `occupcat` or `ftpt`. Prefer derived `drvhr`.
+- **Outcome Measures `om` — key `omchrt` nests on TWO axes.** Entry status: `10`
+  first-time-FT + `20` first-time-PT + `30` non-first-time-FT + `40` non-first-time-PT
+  = `50` **Total entering** (adjusted cohort 6.4M); and Pell: within each, `x1`
+  Pell + `x2` non-Pell = `x0`. So `SUM(omachrt)` / `SUM(omawdn*)` across `omchrt`
+  ≈ 4× over. Total entering cohort ⇒ `omchrt=50`; prefer derived `drvom`.
+
 ---
 
 ## 3. Discovery (look anything up from within the DB)
@@ -145,36 +187,36 @@ totals) — often the quickest source for common indicators.
 - `flags` — response status per survey component; `drvic` — derived cost of attendance; `customcgids` — custom comparison groups; `icmission` — mission statement text
 
 **Fall Enrollment** — *Fall snapshot*
-- `ef` — by gender × attendance × level; `efa` — adds race/ethnicity
+- `ef` — by gender × attendance × level; `efa` — adds race/ethnicity. ⚠️ `eflevel` nests totals — filter one level, e.g. `eflevel=10` for grand total (see §2)
 - `efa_dist` — distance-education status; `efb` — by age; `efc` — residence/migration of first-time freshmen
 - `efcp` — by major field × race × gender *(2021,2023,2025)*; `efd` — entering class, retention, student-faculty ratio; `drvef` — derived
 
 **12-month Enrollment** — *unduplicated over the year*
-- `effy` — 12-month unduplicated headcount; `effy_dist` — by distance ed; `effy_hs` — dual-enrolled HS students *(2024-2025)*
+- `effy` — 12-month unduplicated headcount (⚠️ `effylev=1` = total; don't blanket-`SUM`, see §2); `effy_dist` — by distance ed; `effy_hs` — dual-enrolled HS students *(2024-2025)*
 - `efia` — 12-month instructional activity (contact/credit hours → FTE); `drvef12` — derived
 
 **Graduation Rates**
-- `gr` — 150% graduation rates (4-yr cohort 2017 / 2-yr cohort 2020); `gr200` — 200% rates
+- `gr` — 150% graduation rates (4-yr cohort 2017 / 2-yr cohort 2020) — ⚠️ `grtype` not additive, prefer `drvgr` (see §2); `gr200` — 200% rates
 - `gr_l2` — less-than-2-year institutions; `gr_pell_ssl` — Pell/Stafford recipients; `gr_gender` — gender-unknown revisions *(2023-2024)*; `drvgr` — derived rates
 
 **Outcome Measures**
 - `om` — award/enrollment at 4/6/8 years for entering cohorts (all undergrads, incl. part-time/non-first-time); `drvom` — derived rates
 
 **Admissions and Test Scores**
-- `adm` — applications, admits, enrollees, SAT/ACT ranges (non-open-admission institutions); `drvadm` — selectivity & yield
+- `adm` — applications, admits, enrollees, SAT/ACT ranges. ⚠️ **non-open-admission reporters only** (~1/3 of institutions — NOT the universe); men+women ≠ total (gender-unknown component), but `enrlft`+`enrlpt` = `enrlt`; `drvadm` — selectivity & yield
 
 **Student Financial Aid**
-- `sfa` — student financial aid, combined *(2024-25 only)*; `sfa_p1`,`sfa_p2` — parts 1 & 2 of the same survey *(2021-2024, before the merge)*
+- `sfa` — student financial aid, combined *(2024-25 only — ⚠️ empty for earlier years; use `sfa_p1`/`sfa_p2` there)*; `sfa_p1`,`sfa_p2` — parts 1 & 2 of the same survey *(2021-2024, before the merge)*. ⚠️ measure suffix = metric: `_n` count · `_p` percent · `_t` total $ · `_a` average $ (see §7)
 - `sfav` — military/veterans benefits; look in all of these for aid amounts/recipients
 
 **Cost** *(new 2024-25 only)*
-- `cost1` — total cost of attendance detail; `cost2_financialaid` — aid detail; `cost2_netprice` — average net price by income band; `drvcost` — derived
+- `cost1` — total cost of attendance detail; `cost2_financialaid` — aid detail; `cost2_netprice` — average net price by income band (⚠️ bands + populations are separate COLUMNS, and values lag — see §7); `drvcost` — derived
 
 **Finance** — *fiscal year (lags ~1 yr)*
-- `f_f1a` — public (GASB); `f_f2` — private-nonprofit / public-FASB; `f_f3` — private for-profit (institutions appear in exactly one by control); `drvf` — derived finance
+- `f_f1a` — public (GASB); `f_f2` — private-nonprofit / public-FASB; `f_f3` — private for-profit (institutions appear in exactly one by control; ⚠️ different total columns per form — UNION all three for a sector/national total, see §2); `drvf` — derived finance
 
 **Human Resources** — *Fall*
-- `eap` — staff by occupation, faculty/tenure status; `s_is` — full-time instructional by rank/tenure/race/gender; `s_sis` — instructional by rank/tenure; `s_oc` — all staff by occupation/race/gender; `s_nh` — new hires
+- `eap` — staff by occupation, faculty/tenure status; `s_is` — full-time instructional by rank/tenure/race/gender; `s_sis` — instructional by rank/tenure; `s_oc` — all staff by occupation/race/gender (⚠️ `occupcat`/`ftpt` nest — filter the All-staff codes, don't `SUM`, see §2); `s_nh` — new hires
 - `sal_is` — salaries, full-time instructional; `sal_nis` — salaries, noninstructional; `drvhr` — derived
 
 **Academic Libraries**
@@ -253,6 +295,25 @@ Look up any other code with the *Discovery* valuesets query.
    IPEDS already computes (grad rate, admit yield, net price, FTE).
 6. `_years`, `_family_map`, `_column_presence` (which columns exist in which
    years — schema drift) are helper tables, not survey data.
+7. **Financial-aid `sfa*` suffixes encode the metric:** `_N` = number of
+   recipients, `_P` = percent of the cohort, `_T` = **total dollars**, `_A` =
+   **average dollars** per recipient (e.g. `pgrnt_n` is a headcount, `pgrnt_t` is a
+   dollar total). Headline aid variables describe the **full-time first-time**
+   undergraduate cohort; other cohorts use the `udg*`/`undg*` prefixes. The combined
+   `sfa` table exists only from 2024-25 on — use `sfa_p1`/`sfa_p2` for earlier years.
+8. **Not every survey is the full universe.** `adm` covers only non-open-admission
+   reporters (~1/3 of institutions) — don't treat its counts as national totals or
+   assume a missing institution has zero. When a table has men/women AND total
+   columns, the total may exceed men+women (a gender-unknown/unreported bucket) —
+   read the total column, don't reconstruct it.
+9. **Net price (`cost2_netprice`) — one row per institution, but split across
+   COLUMNS.** Net price is broken out by income band (`npis41`…`npis45`, brackets
+   0–30k … 110k+) and by population (`npis4*`/`npt4*` = all Title-IV recipients vs
+   `npist*`/`npgrn*` = grant/scholarship recipients) — bands are subpopulations, not
+   additive; pick the one column you mean. The trailing digit is a **year index**
+   (`0`/`1`/`2` = a 3-year panel) and the values **lag** (the 2024-25 file reports
+   ~2021-22…2023-24), so a `year=2025` row carries earlier-year dollars — confirm
+   the exact year via `vartable`.
 
 ---
 
@@ -292,6 +353,25 @@ all cipcodes, which would overcount ~4× (see §2).
 SELECT year, SUM(ctotalt) AS associates
 FROM c_a WHERE awlevel=3 AND majornum=1 AND cipcode='99'
 GROUP BY year ORDER BY year;
+```
+
+**"Total fall enrollment nationally, most recent year."** Use the `eflevel=10`
+total line — never `SUM` across `eflevel` (≈4× overcount, see §2).
+```sql
+SELECT year, SUM(eftotal) AS enrolled
+FROM ef WHERE eflevel=10 AND year=(SELECT MAX(year) FROM _years)
+GROUP BY year;
+```
+
+**"Total revenues of U.S. higher education, most recent fiscal year."** Sum all
+three finance forms, each with its own total-revenue variable (see §2); querying
+one form alone undercounts badly.
+```sql
+SELECT
+    (SELECT SUM(f1d01) FROM f_f1a WHERE year=(SELECT MAX(year) FROM _years))  -- public / GASB
+  + (SELECT SUM(f2d16) FROM f_f2  WHERE year=(SELECT MAX(year) FROM _years))  -- private-NP / FASB
+  + (SELECT SUM(f3d09) FROM f_f3  WHERE year=(SELECT MAX(year) FROM _years))  -- for-profit
+  AS total_revenues;
 ```
 
 **"What variables are in the admissions table?"** → use the *Discovery* query
