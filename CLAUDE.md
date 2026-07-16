@@ -164,10 +164,12 @@ image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*
 git tag** publishes `:vX.Y.Z` + `:latest`. Production is **pull-on-the-box** —
 the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `DEPLOY.md`.
 
-**Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys) bleeds
-into tests — run auth suites with `COOKIE_SECURE=false`, and blank
-`LLM_API_KEY`/`RESEND_API_KEY` to match CI's key-free environment
-(`run_ci_local.sh` already does this).
+**Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys,
+`EMAIL_DOMAIN=…`) bleeds into tests — run auth suites with `COOKIE_SECURE=false`,
+and blank `LLM_API_KEY`/`RESEND_API_KEY`/`EMAIL_DOMAIN` to match CI's key-free
+environment (`run_ci_local.sh` already does this). **Any new setting that changes
+behavior has to be blanked there too** — CI has no `.env`, so a bleed fails only
+on the developer's box, which is also the only place the merge gate runs.
 
 **Keep the docs synced.** When a change alters architecture, workflow, config, or
 commands, update `CLAUDE.md` (and `CONTRIBUTING.md`/`DEPLOY.md`) in the *same*

@@ -137,10 +137,15 @@ just the slow e2e job with `SKIP_E2E=1`. This is the real merge gate — branch
 protection isn't available on this repo's plan, so a red CI check can otherwise
 land on `main`.
 
-> If a real production `.env` (with `COOKIE_SECURE=true`) is present, the
-> auth‑dependent suites can't hold the session cookie over http — run them with
-> `COOKIE_SECURE=false .venv/bin/python eval/test_backend.py`. CI has no `.env`,
-> so it just works there.
+> A real production `.env` bleeds into the suites two ways. With
+> `COOKIE_SECURE=true` the auth‑dependent suites can't hold the session cookie
+> over http; with a real `EMAIL_DOMAIN`, `test_backend.py`'s out‑of‑domain
+> `stranger@x.com` is refused an access request and the suite fails. Run them
+> with both neutralized:
+> `COOKIE_SECURE=false EMAIL_DOMAIN= .venv/bin/python eval/test_backend.py`.
+> CI has no `.env`, so it just works there — which is exactly why a bleed like
+> this only ever breaks the local gate. `scripts/run_ci_local.sh` blanks these
+> for you; add any new behavior‑changing setting to that list.
 
 ## Lint & format
 
