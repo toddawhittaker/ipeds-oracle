@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     cookie_secure: bool = Field(default=False)     # True in production (HTTPS)
     cookie_name: str = Field(default="ipeds_session")
     admin_emails: str = Field(default="")          # comma-separated bootstrap admins
+    # The institution's email domain, e.g. "yourschool.edu". Restricts who may file
+    # an ACCESS REQUEST, and supplies the login form's placeholder hint. It does NOT
+    # gate sign-in: the allowlist is the sole authority there, so an allowlisted
+    # address outside this domain still gets its link. Empty = no restriction.
+    email_domain: str = Field(default="")
     # Rate limit on POST /api/auth/request (magic-link / access-request spam).
     auth_rate_window_seconds: float = Field(default=900.0)  # 15-minute sliding window
     auth_rate_max_per_email: int = Field(default=5)

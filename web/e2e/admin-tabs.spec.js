@@ -13,18 +13,18 @@ import {
 // and assert its mocked content renders; also submit the add-allowlist form
 // and assert the POST fired with the expected body.
 test("admin tabs render mocked content and the add-allowlist form posts", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
 
   const allowlist = await mockAllowlist(page, [
-    { email: "user@franklin.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
-  await mockAccessRequests(page, [{ id: 1, email: "newperson@franklin.edu" }]);
+  await mockAccessRequests(page, [{ id: 1, email: "newperson@example.edu" }]);
   await mockUsage(page, {
     since: 0, until: 1, bucket: "day",
     totals: { queries: 123, tokens: 45678, spend: 0.42, cache_hits: 12, escalations: 3, failures: 1 },
     series: [{ t: "2026-07-13", queries: 10, tokens: 2000, spend: 0.02 }],
-    top_users: [{ email: "user@franklin.edu", queries: 50, tokens: 12000, spend: 0.1 }],
+    top_users: [{ email: "user@example.edu", queries: 50, tokens: 12000, spend: 0.1 }],
   });
   await mockSkills(page, [
     {
@@ -52,16 +52,16 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   // this happy-path spec's flow linear; the Skills-unmount crash regression
   // itself is covered separately below.
   await expect(page.getByRole("heading", { name: "Pending access requests" })).toBeVisible();
-  await expect(page.getByText("newperson@franklin.edu")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "user@franklin.edu" })).toBeVisible();
+  await expect(page.getByText("newperson@example.edu")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
 
-  await page.getByPlaceholder("email").fill("newuser@franklin.edu");
+  await page.getByPlaceholder("email").fill("newuser@example.edu");
   await page.getByPlaceholder("note (optional)").fill("added via e2e");
   await page.getByRole("button", { name: "Add" }).click();
 
   await expect.poll(() => allowlist.posts.length).toBe(1);
   expect(allowlist.posts[0]).toEqual({
-    email: "newuser@franklin.edu",
+    email: "newuser@example.edu",
     note: "added via e2e",
     is_admin: false,
   });
@@ -75,7 +75,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   // the first (summary stat) occurrence rather than asserting a unique match.
   await expect(page.getByText("123", { exact: true })).toBeVisible();
   await expect(page.getByText("Queries", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("cell", { name: "user@franklin.edu" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
 
   // Skills last — do not navigate away from it (see known-bug test below).
   await page.getByRole("button", { name: "Skills" }).click();
@@ -102,7 +102,7 @@ test("regression: navigating away from the Skills tab and back does not crash th
   const pageErrors = [];
   page.on("pageerror", (err) => pageErrors.push(err));
 
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAllowlist(page, []);
   await mockAccessRequests(page, []);

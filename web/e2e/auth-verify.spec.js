@@ -11,16 +11,16 @@ import {
 // the token to consume it. A GET/prefetch of the link therefore never burns it.
 test.describe("auth / verify (magic-link confirm)", () => {
   test("confirms the account, then signs in on click", async ({ page }) => {
-    await mockVerifyInfo(page, "prof@franklin.edu");
+    await mockVerifyInfo(page, "prof@example.edu");
     const verify = await mockVerify(page, { is_admin: false });
     // After sign-in the page reloads to "/"; be ready to render signed-in.
-    await mockMe(page, { email: "prof@franklin.edu", is_admin: false });
+    await mockMe(page, { email: "prof@example.edu", is_admin: false });
     await mockConversations(page, []);
 
     await page.goto("/verify?token=tok-abc-123");
 
     // Names the account and shows a confirm button (no auto-consume).
-    await expect(page.getByText("prof@franklin.edu")).toBeVisible();
+    await expect(page.getByText("prof@example.edu")).toBeVisible();
     const signIn = page.getByRole("button", { name: "Sign in" });
     await expect(signIn).toBeVisible();
 
@@ -38,7 +38,7 @@ test.describe("auth / verify (magic-link confirm)", () => {
 
     // …and we land in the signed-in app shell.
     await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
-    await expect(page.getByText("prof@franklin.edu")).toBeVisible();
+    await expect(page.getByText("prof@example.edu")).toBeVisible();
   });
 
   test("shows an error for an invalid or expired link", async ({ page }) => {

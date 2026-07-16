@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr
 
 from app import auth
 from app.auth import current_user
+from app.config import get_settings
 from app.ratelimit import client_ip, enforce_auth_rate_limit
 from app.tools.sql import has_ipeds_data
 
@@ -21,6 +22,14 @@ class LoginRequest(BaseModel):
 
 class VerifyRequest(BaseModel):
     token: str
+
+
+@router.get("/config")
+def public_config():
+    # Unauthenticated on purpose: the login form renders before any session exists
+    # and needs the domain to build its placeholder hint. Expose NOTHING else here —
+    # the institution's email domain is public, the rest of the settings are not.
+    return {"email_domain": get_settings().email_domain}
 
 
 @router.post("/request")

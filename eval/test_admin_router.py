@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["OPENROUTER_API_KEY"] = ""
 os.environ["RESEND_API_KEY"] = ""
@@ -73,7 +73,7 @@ def check(name, fn):
         print(f"  ✗ {name}: {e}")
 
 
-def _login(c, email="admin@franklin.edu"):
+def _login(c, email="admin@example.edu"):
     c.post("/api/auth/request", json={"email": email})
     token = captured["link"].split("token=")[1]
     assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
@@ -596,7 +596,7 @@ def test_allowlist_add_approval_email_failure_is_logged_not_raised():
         admin_router.send_access_approved = _boom
         try:
             r = c.post("/api/admin/allowlist",
-                       json={"email": "newperson@franklin.edu"})
+                       json={"email": "newperson@example.edu"})
         finally:
             admin_router.send_access_approved = orig_send
         assert r.status_code == 200, r.text
@@ -612,7 +612,7 @@ def _is_admin(c, email):
 def test_promote_makes_user_admin_immediately_on_live_session():
     with TestClient(app) as c:
         _login(c)
-        c.post("/api/admin/allowlist", json={"email": "prof@franklin.edu"})
+        c.post("/api/admin/allowlist", json={"email": "prof@example.edu"})
         # prof signs in as a normal (non-admin) user
         prof = TestClient(app)
         ptok = captured["approved_link"].split("token=")[1]
@@ -620,7 +620,7 @@ def test_promote_makes_user_admin_immediately_on_live_session():
         assert prof.get("/api/auth/me").json()["is_admin"] is False
         assert prof.get("/api/admin/allowlist").status_code == 403  # not admin yet
 
-        r = c.patch("/api/admin/allowlist/prof@franklin.edu", json={"is_admin": True})
+        r = c.patch("/api/admin/allowlist/prof@example.edu", json={"is_admin": True})
         assert r.status_code == 200 and r.json()["is_admin"] is True, r.text
         # is_admin is read live, so prof's EXISTING session is now admin
         assert prof.get("/api/auth/me").json()["is_admin"] is True
@@ -630,12 +630,12 @@ def test_promote_makes_user_admin_immediately_on_live_session():
 def test_demote_admin_when_another_exists():
     with TestClient(app) as c:
         _login(c)
-        c.post("/api/admin/allowlist", json={"email": "prof2@franklin.edu"})
-        c.patch("/api/admin/allowlist/prof2@franklin.edu", json={"is_admin": True})
-        assert _is_admin(c, "prof2@franklin.edu") is True
-        r = c.patch("/api/admin/allowlist/prof2@franklin.edu", json={"is_admin": False})
+        c.post("/api/admin/allowlist", json={"email": "prof2@example.edu"})
+        c.patch("/api/admin/allowlist/prof2@example.edu", json={"is_admin": True})
+        assert _is_admin(c, "prof2@example.edu") is True
+        r = c.patch("/api/admin/allowlist/prof2@example.edu", json={"is_admin": False})
         assert r.status_code == 200 and r.json()["is_admin"] is False, r.text
-        assert _is_admin(c, "prof2@franklin.edu") is False
+        assert _is_admin(c, "prof2@example.edu") is False
 
 
 def test_patch_admin_404_for_non_allowlisted():
@@ -647,10 +647,10 @@ def test_patch_admin_404_for_non_allowlisted():
 
 def test_cannot_demote_self():
     with TestClient(app) as c:
-        _login(c)  # signed in as admin@franklin.edu
-        r = c.patch("/api/admin/allowlist/admin@franklin.edu", json={"is_admin": False})
+        _login(c)  # signed in as admin@example.edu
+        r = c.patch("/api/admin/allowlist/admin@example.edu", json={"is_admin": False})
         assert r.status_code == 400, r.text
-        assert _is_admin(c, "admin@franklin.edu") is True  # guard left them admin
+        assert _is_admin(c, "admin@example.edu") is True  # guard left them admin
 
 
 def test_usage_since_after_until_is_swapped():

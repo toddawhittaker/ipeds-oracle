@@ -69,7 +69,6 @@ def build(out_path: Path) -> None:
     # --- hd: institution directory, used by the LIKE/REPLACE probes ---------
     cur.execute("CREATE TABLE hd (unitid INTEGER, instnm TEXT)")
     institutions = [
-        "Franklin University",
         "Ohio State University",
         "Columbus State Community College",
         "University of Update Falls",     # matches LIKE '%update%' probe

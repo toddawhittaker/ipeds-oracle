@@ -114,6 +114,9 @@ jobs:
       - name: Auth rate-limit tests
         run: python eval/test_rate_limit.py
 
+      - name: EMAIL_DOMAIN access-request gate tests
+        run: python eval/test_access_gate.py
+
       - name: app.db migration tests
         run: python eval/test_migrations.py
 

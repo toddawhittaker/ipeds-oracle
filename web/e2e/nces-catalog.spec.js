@@ -50,7 +50,7 @@ const CATALOG = {
 };
 
 async function openImportsTab(page) {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockImportJobs(page, []);
   await page.goto("/");

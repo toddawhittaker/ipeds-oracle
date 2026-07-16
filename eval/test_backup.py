@@ -37,13 +37,13 @@ def _make_app_db(path: Path, marker: str):
 
 def test_backup_captures_data():
     d = Path(tempfile.mkdtemp())
-    _make_app_db(d / "app.db", "todd@franklin.edu")
+    _make_app_db(d / "app.db", "todd@example.edu")
     dest = make_backup(d / "app.db", d / "backups")
     assert dest.exists(), "no backup file written"
     con = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
     email = con.execute("SELECT email FROM users").fetchone()[0]
     con.close()
-    assert email == "todd@franklin.edu", email
+    assert email == "todd@example.edu", email
 
 
 def test_prune_keeps_newest_n():

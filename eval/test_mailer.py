@@ -18,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "boss@franklin.edu"
-os.environ["ACCESS_REQUEST_TO"] = "requests@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "boss@example.edu"
+os.environ["ACCESS_REQUEST_TO"] = "requests@example.edu"
 
 from app import auth, mailer  # noqa: E402
 from app.db import connect, init_db  # noqa: E402
@@ -72,17 +72,17 @@ def test_admin_recipients_includes_all_admins_deduped():
     try:
         # A second admin promoted at runtime, and a non-admin who must be excluded.
         con.execute("INSERT INTO users(email, is_admin, created_at) "
-                    "VALUES ('dean@franklin.edu', 1, 0) "
+                    "VALUES ('dean@example.edu', 1, 0) "
                     "ON CONFLICT(email) DO UPDATE SET is_admin=1")
         con.execute("INSERT INTO users(email, is_admin, created_at) "
-                    "VALUES ('student@franklin.edu', 0, 0) "
+                    "VALUES ('student@example.edu', 0, 0) "
                     "ON CONFLICT(email) DO NOTHING")
         con.commit()
         recips = auth.admin_recipients(con)
-        assert "boss@franklin.edu" in recips, recips        # bootstrap admin
-        assert "dean@franklin.edu" in recips, recips         # runtime admin
-        assert "requests@franklin.edu" in recips, recips     # access_request_to
-        assert "student@franklin.edu" not in recips, recips  # non-admin excluded
+        assert "boss@example.edu" in recips, recips        # bootstrap admin
+        assert "dean@example.edu" in recips, recips         # runtime admin
+        assert "requests@example.edu" in recips, recips     # access_request_to
+        assert "student@example.edu" not in recips, recips  # non-admin excluded
         assert len(recips) == len(set(recips)), f"duplicates: {recips}"
     finally:
         con.close()
@@ -94,9 +94,9 @@ def test_send_access_request_fans_out_to_every_admin():
     try:
         mailer.send_email = lambda to, *a, **k: sent.append(to) or True
         ok = mailer.send_access_request(
-            ["a@franklin.edu", "b@franklin.edu"], "new@person.com")
+            ["a@example.edu", "b@example.edu"], "new@person.com")
         assert ok is True, "expected True when all sends succeed"
-        assert sent == ["a@franklin.edu", "b@franklin.edu"], sent
+        assert sent == ["a@example.edu", "b@example.edu"], sent
     finally:
         mailer.send_email = orig
 

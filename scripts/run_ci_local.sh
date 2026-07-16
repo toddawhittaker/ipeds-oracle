@@ -83,6 +83,7 @@ BACKEND_SUITES=(
   test_backend.py
   test_security.py
   test_rate_limit.py
+  test_access_gate.py
   test_migrations.py
   test_result_isolation.py
   test_backup.py

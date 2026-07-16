@@ -27,7 +27,7 @@ import {
 //     (role="progressbar", aria-valuemin/max/now=pct, "X / Y tables" text).
 
 async function openImportsTab(page) {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockImportJobs(page, []);
   await page.goto("/");
