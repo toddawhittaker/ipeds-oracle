@@ -333,7 +333,8 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
    independent of whatever it's sitting on — e.g. a .year-card.selected's
    --selected-tint background, against which the accent/warn badge text
    otherwise falls below AA (see styles review M2). */
-.badge { padding: 2px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); background: var(--panel); }
+/* Same rule as .tag: a status badge is a label and never wraps its own text. */
+.badge { padding: 2px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); background: var(--panel); white-space: nowrap; }
 .badge.swapped, .badge.passed { color: var(--ok); border-color: var(--ok); }
 .badge.failed { color: var(--danger); border-color: var(--danger); }
 .badge.running, .badge.checks, .badge.pending { color: var(--accent); border-color: var(--accent); }
@@ -463,9 +464,19 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .rebuild-progress { margin: 10px 0; }
 .rebuild-progress-label { margin-bottom: 4px; }
 .skill { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
-.skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-.tags { display: flex; gap: 6px; }
-.tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+/* wrap: if a viewport is too narrow for headline + pills side by side, the
+   whole pill group drops to its own line. Without it, .tags being flex:none
+   would push the row into horizontal overflow — which this app clips rather
+   than scrolls (html,body{overflow:hidden}). */
+.skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+/* A pill is a label, not a paragraph: its text must never wrap. Flex items
+   shrink by default, so a long headline next to them squeezed each pill until
+   its own text broke onto a second line (19px -> 34px tall). flex:none keeps
+   the group at its natural width — the headline is the flexible half and wraps
+   instead — and flex-wrap lets whole pills move to a new line if a narrow
+   viewport genuinely leaves no room. */
+.tags { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 /* "unverified" is a neutral not-yet-reviewed state, not an error — amber, not
    the red reserved for destructive/failed things. Both themes pass AA. */
