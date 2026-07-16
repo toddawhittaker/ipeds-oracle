@@ -128,6 +128,11 @@ clean total/rate. Verified national figures (year 2024) to sanity-check against:
   `2` Full-time + `3` Part-time; `4` Graduate assistants is separate). Total staff
   headcount ⇒ `occupcat=100 AND ftpt=1` (= 4.0M, year 2024); never `SUM(hrtotlt)`
   across `occupcat` or `ftpt`. Prefer derived `drvhr`.
+- **Outcome Measures `om` — key `omchrt` nests on TWO axes.** Entry status: `10`
+  first-time-FT + `20` first-time-PT + `30` non-first-time-FT + `40` non-first-time-PT
+  = `50` **Total entering** (adjusted cohort 6.4M); and Pell: within each, `x1`
+  Pell + `x2` non-Pell = `x0`. So `SUM(omachrt)` / `SUM(omawdn*)` across `omchrt`
+  ≈ 4× over. Total entering cohort ⇒ `omchrt=50`; prefer derived `drvom`.
 
 ---
 
@@ -205,7 +210,7 @@ totals) — often the quickest source for common indicators.
 - `sfav` — military/veterans benefits; look in all of these for aid amounts/recipients
 
 **Cost** *(new 2024-25 only)*
-- `cost1` — total cost of attendance detail; `cost2_financialaid` — aid detail; `cost2_netprice` — average net price by income band; `drvcost` — derived
+- `cost1` — total cost of attendance detail; `cost2_financialaid` — aid detail; `cost2_netprice` — average net price by income band (⚠️ bands + populations are separate COLUMNS, and values lag — see §7); `drvcost` — derived
 
 **Finance** — *fiscal year (lags ~1 yr)*
 - `f_f1a` — public (GASB); `f_f2` — private-nonprofit / public-FASB; `f_f3` — private for-profit (institutions appear in exactly one by control; ⚠️ different total columns per form — UNION all three for a sector/national total, see §2); `drvf` — derived finance
@@ -301,6 +306,14 @@ Look up any other code with the *Discovery* valuesets query.
    assume a missing institution has zero. When a table has men/women AND total
    columns, the total may exceed men+women (a gender-unknown/unreported bucket) —
    read the total column, don't reconstruct it.
+9. **Net price (`cost2_netprice`) — one row per institution, but split across
+   COLUMNS.** Net price is broken out by income band (`npis41`…`npis45`, brackets
+   0–30k … 110k+) and by population (`npis4*`/`npt4*` = all Title-IV recipients vs
+   `npist*`/`npgrn*` = grant/scholarship recipients) — bands are subpopulations, not
+   additive; pick the one column you mean. The trailing digit is a **year index**
+   (`0`/`1`/`2` = a 3-year panel) and the values **lag** (the 2024-25 file reports
+   ~2021-22…2023-24), so a `year=2025` row carries earlier-year dollars — confirm
+   the exact year via `vartable`.
 
 ---
 
