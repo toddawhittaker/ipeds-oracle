@@ -792,6 +792,14 @@ function ruleName(s) {
 function Skills() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("");
+  const [editingId, setEditingId] = useState(null);   // at most one card at a time
+  const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
+  // Focus returns to the "edit" button when the editor closes (a11y). We can't
+  // hold the clicked node like Chat.jsx does: opening the editor unmounts that
+  // button, so the captured node is detached and focusing it silently no-ops.
+  // Keep a per-lesson ref map instead and re-find the freshly mounted button.
+  const editBtnRefs = useRef({});   // skill id -> its "edit" button node
+  const headlineRef = useRef(null);
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
   const pending = rows.filter((r) => !r.verified).length;
@@ -801,6 +809,38 @@ function Skills() {
       setStatus(verified ? "Lesson verified." : "Lesson moved back to unverified.");
       load();
     });
+
+  function startEdit(s) {
+    setEditingId(s.id);
+    setDraft({
+      headline: s.headline || "",
+      lesson: s.lesson || s.notes || "",
+      canonical_sql: s.canonical_sql || "",
+    });
+    requestAnimationFrame(() => headlineRef.current?.focus?.());
+  }
+  function closeEdit(id) {
+    setEditingId(null);
+    // rAF runs after React has committed the re-render, so the ref map now
+    // holds the newly mounted button rather than the one we just tore down.
+    requestAnimationFrame(() => editBtnRefs.current[id]?.focus?.());
+  }
+  // A lesson with neither headline nor description has nothing to embed against,
+  // so retrieval could never surface it — block the save rather than store a
+  // rule that's dead on arrival.
+  const draftIsEmpty = !draft.headline.trim() && !draft.lesson.trim();
+  function saveEdit(s) {
+    if (draftIsEmpty) return;
+    api.patchSkill(s.id, {
+      headline: draft.headline.trim(),
+      lesson: draft.lesson.trim(),
+      canonical_sql: draft.canonical_sql.trim(),
+    }).then(() => {
+      setStatus("Lesson updated.");
+      closeEdit(s.id);
+      load();
+    });
+  }
   const reject = (s) => {
     // Confirm only when there's curated/used data to lose — a fresh unreviewed
     // proposal (verified=false, no votes/hits) can be dismissed without nagging.
@@ -847,6 +887,35 @@ function Skills() {
               <span className="tag">hits {s.hits}</span>
             </span>
           </div>
+          {editingId === s.id ? (
+            <div className="lesson-edit"
+                 onKeyDown={(e) => { if (e.key === "Escape") closeEdit(s.id); }}>
+              <label className="lesson-field">
+                <span className="muted small">Headline</span>
+                <input ref={headlineRef} type="text" maxLength={300} value={draft.headline}
+                       onChange={(e) => setDraft({ ...draft, headline: e.target.value })} />
+              </label>
+              <label className="lesson-field">
+                <span className="muted small">Description</span>
+                <textarea rows={4} maxLength={4000} value={draft.lesson}
+                          onChange={(e) => setDraft({ ...draft, lesson: e.target.value })} />
+              </label>
+              <label className="lesson-field">
+                <span className="muted small">Example query</span>
+                <textarea rows={6} maxLength={8000} className="mono" value={draft.canonical_sql}
+                          onChange={(e) => setDraft({ ...draft, canonical_sql: e.target.value })} />
+              </label>
+              <div className="msg-actions">
+                <button className="btn-verify" disabled={draftIsEmpty}
+                        onClick={() => saveEdit(s)}>Save</button>
+                <button className="link" onClick={() => closeEdit(s.id)}>Cancel</button>
+                {draftIsEmpty && (
+                  <span className="muted small">Give it a headline or description to save.</span>
+                )}
+              </div>
+            </div>
+          ) : (
+          <>
           {showDescription && (
             <details className="lesson-desc">
               <summary className="muted small">Details</summary>
@@ -868,9 +937,14 @@ function Skills() {
               <button className="btn-verify" aria-label={`Verify lesson: ${ruleName(s)}`}
                       onClick={() => setVerified(s, true)}>Verify</button>
             )}
+            <button className="link" aria-label={`Edit lesson: ${ruleName(s)}`}
+                    ref={(el) => { editBtnRefs.current[s.id] = el; }}
+                    onClick={() => startEdit(s)}>edit</button>
             <button className="link danger" aria-label={`Reject lesson: ${ruleName(s)}`}
                     onClick={() => reject(s)}>reject</button>
           </div>
+          </>
+          )}
         </div>
         );
       })}
