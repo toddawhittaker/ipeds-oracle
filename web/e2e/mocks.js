@@ -36,6 +36,21 @@ export async function mockMe(page, user) {
   });
 }
 
+/**
+ * GET /api/auth/config -> {email_domain}. Unauthenticated; Login.jsx polls
+ * this on mount to build its "you@<domain>" placeholder hint (falling back to
+ * the generic FALLBACK_HINT when email_domain is empty or the call fails).
+ */
+export async function mockAuthConfig(page, emailDomain = "") {
+  await page.route("**/api/auth/config", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ email_domain: emailDomain }),
+    });
+  });
+}
+
 /** POST /api/auth/request {email} -> 200 {message}. */
 export async function mockRequestLink(page, message = "Check your email for a sign-in link.") {
   await page.route("**/api/auth/request", async (route) => {
@@ -74,7 +89,7 @@ export async function mockVerify(page, { status = 200, is_admin = false } = {}) 
     calls.push(route.request().postDataJSON());
     if (status === 200) {
       await route.fulfill({ status: 200, contentType: "application/json",
-        body: JSON.stringify({ email: "user@franklin.edu", is_admin }) });
+        body: JSON.stringify({ email: "user@example.edu", is_admin }) });
     } else {
       await route.fulfill({ status, contentType: "application/json",
         body: JSON.stringify({ detail: "invalid" }) });

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # isolate app.db before importing settings
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 # Tiny import cap so the oversized-upload test can trip it with a small payload.
 os.environ["MAX_UPLOAD_MB"] = "1"
 # This suite logs in many times as the same few addresses; keep the per-email /
@@ -97,21 +97,21 @@ def test_path_traversal_blocked() -> None:
 # ---------------------------------------------------------------------------
 def test_deauthorization_revokes_session_and_admin() -> None:
     with TestClient(app) as admin_c, TestClient(app) as prof_c:
-        _login(admin_c, "admin@franklin.edu")
+        _login(admin_c, "admin@example.edu")
 
         # admin adds prof, granting admin too (so we can also check is_admin clears)
         r = admin_c.post("/api/admin/allowlist",
-                         json={"email": "prof@franklin.edu", "note": "colleague",
+                         json={"email": "prof@example.edu", "note": "colleague",
                                "is_admin": True})
         assert r.status_code == 200, r.text
 
         # prof logs in via the real magic-link flow
-        _login(prof_c, "prof@franklin.edu")
+        _login(prof_c, "prof@example.edu")
         me = prof_c.get("/api/auth/me")
         assert me.status_code == 200 and me.json().get("is_admin") is True, me.text
 
         # admin revokes prof's access
-        d = admin_c.delete("/api/admin/allowlist/prof@franklin.edu")
+        d = admin_c.delete("/api/admin/allowlist/prof@example.edu")
         assert d.status_code == 200, d.text
 
         # prof's EXISTING session must now be rejected
@@ -123,7 +123,7 @@ def test_deauthorization_revokes_session_and_admin() -> None:
     con = connect()
     try:
         row = con.execute("SELECT is_admin FROM users WHERE email=?",
-                          ("prof@franklin.edu",)).fetchone()
+                          ("prof@example.edu",)).fetchone()
     finally:
         con.close()
     assert row is not None and row["is_admin"] == 0, (
@@ -234,7 +234,7 @@ def test_cache_not_served_when_history_present() -> None:
         return
 
     with TestClient(app) as c:
-        _login(c, "admin@franklin.edu")
+        _login(c, "admin@example.edu")
         me = c.get("/api/auth/me").json()
 
         con = connect()
@@ -290,7 +290,7 @@ def test_import_rejects_oversized_upload() -> None:
     # truncates or a crash. The rejected upload must also leave no import lock
     # held (a later import must still be able to start).
     with TestClient(app) as c:
-        _login(c, "admin@franklin.edu")
+        _login(c, "admin@example.edu")
         oversized = b"\0" * (2 * 1024 * 1024)  # 2 MB > 1 MB cap
         r = c.post(
             "/api/admin/import",
@@ -318,7 +318,7 @@ def test_get_verify_does_not_consume_token() -> None:
     # page. Only a deliberate POST consumes it and signs the user in. Otherwise
     # a scanner following the emailed link would burn the link before the user.
     with TestClient(app) as c:
-        r = c.post("/api/auth/request", json={"email": "admin@franklin.edu"})
+        r = c.post("/api/auth/request", json={"email": "admin@example.edu"})
         assert r.status_code == 200, r.text
         link = captured["link"]
         # Emailed link points at the SPA confirm route, not the consuming API GET.
@@ -333,7 +333,7 @@ def test_get_verify_does_not_consume_token() -> None:
 
         # Token is still live: the non-consuming peek names the account…
         info = c.get(f"/api/auth/verify-info?token={token}")
-        assert info.status_code == 200 and info.json()["email"] == "admin@franklin.edu", (
+        assert info.status_code == 200 and info.json()["email"] == "admin@example.edu", (
             f"verify-info should name the pending account, got {info.status_code}: {info.text}")
 
         # …and the deliberate POST consumes it and signs in.

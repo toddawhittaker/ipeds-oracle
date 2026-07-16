@@ -3,6 +3,7 @@ import AxeBuilder from "@axe-core/playwright";
 import {
   mockMe,
   mockRequestLink,
+  mockAuthConfig,
   mockConversations,
   mockConversation,
   mockStreamChat,
@@ -26,7 +27,7 @@ const ANSWER_MD =
 // wait for the streamed answer + follow-up conversation fetch (which attaches
 // the message id) to land, same sequencing as chat-happy-path.spec.js.
 async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
   const convos = await mockConversations(page, []);
   await mockStreamChat(page, { conversationId: convId, sql: [SQL], answer: ANSWER_MD, messageId: msgId });
   await mockConversation(page, convId, [
@@ -45,7 +46,7 @@ async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
 
 test.describe("conversation list items", () => {
   test("are real buttons reachable by accessible name; active one gets aria-current", async ({ page }) => {
-    await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, [
       { id: 1, title: "CA nursing associate's degrees" },
       { id: 2, title: "CS bachelor's degrees" },
@@ -80,6 +81,7 @@ test.describe("streamed answer live region", () => {
 test.describe("labeled inputs", () => {
   test("Login email field is reachable via role+label", async ({ page }) => {
     await mockMe(page, null);
+    await mockAuthConfig(page, "");
     await page.goto("/");
 
     await expect(page.getByRole("textbox", { name: /email/i })).toBeVisible();
@@ -87,7 +89,7 @@ test.describe("labeled inputs", () => {
   });
 
   test("Chat composer is reachable by its label", async ({ page }) => {
-    await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, []);
     await page.goto("/");
 
@@ -95,7 +97,7 @@ test.describe("labeled inputs", () => {
   });
 
   test("Admin allowlist email input is reachable by label", async ({ page }) => {
-    await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+    await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
     await mockAccessRequests(page, []);
@@ -109,7 +111,7 @@ test.describe("labeled inputs", () => {
 
 test.describe("tabs selected state", () => {
   test("active primary nav tab and active Admin subtab expose aria-current", async ({ page }) => {
-    await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+    await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
     await mockAccessRequests(page, []);
@@ -150,7 +152,7 @@ test.describe("result table region", () => {
 
 test.describe("Admin landmark + login alert", () => {
   test("Admin view has a main landmark", async ({ page }) => {
-    await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+    await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
     await mockAccessRequests(page, []);
@@ -163,10 +165,11 @@ test.describe("Admin landmark + login alert", () => {
 
   test("Login notice becomes an alert after a link request", async ({ page }) => {
     await mockMe(page, null);
+    await mockAuthConfig(page, "");
     await mockRequestLink(page, "Check your email for a sign-in link.");
 
     await page.goto("/");
-    await page.getByPlaceholder("you@franklin.edu").fill("admin@franklin.edu");
+    await page.getByPlaceholder("you@yourschool.edu").fill("admin@example.edu");
     await page.getByRole("button", { name: "Email me a sign-in link" }).click();
 
     await expect(page.getByRole("alert")).toHaveText("Check your email for a sign-in link.");
@@ -181,6 +184,7 @@ test.describe("Admin landmark + login alert", () => {
 test.describe("axe smoke scan", () => {
   test("Login screen has no critical violations", async ({ page }) => {
     await mockMe(page, null);
+    await mockAuthConfig(page, "");
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "IPEDS Query" })).toBeVisible();
 
@@ -190,7 +194,7 @@ test.describe("axe smoke scan", () => {
   });
 
   test("Chat screen has no critical violations", async ({ page }) => {
-    await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, []);
     await page.goto("/");
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();

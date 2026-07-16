@@ -17,7 +17,7 @@ const ANSWER_MD =
   "| State | Total |\n| --- | --- |\n| CA | 100 |\n| NY | 50 |\n";
 
 test("asking a question streams a markdown answer with a table, exposes the SQL log, and unlocks CSV after reload", async ({ page }) => {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
   const convos = await mockConversations(page, []);
   await mockStreamChat(page, { conversationId: CONV_ID, sql: [SQL], answer: ANSWER_MD, messageId: MSG_ID });
 
@@ -79,7 +79,7 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
 // Regression: the 👍/👎 feedback feature (buttons + POST .../feedback) was
 // removed entirely — the critic is now the sole lesson source.
 test("the 👍/👎 feedback buttons no longer render on an assistant answer", async ({ page }) => {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
   await mockConversations(page, []);
   await mockStreamChat(page, { conversationId: CONV_ID, sql: [SQL], answer: ANSWER_MD, messageId: MSG_ID });
   await mockConversation(page, CONV_ID, [

@@ -21,7 +21,7 @@ import httpx  # noqa: E402
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -158,7 +158,7 @@ def test_classify_transport_error_fails_open_with_live_key():
 
 
 def _login(c):
-    c.post("/api/auth/request", json={"email": "admin@franklin.edu"})
+    c.post("/api/auth/request", json={"email": "admin@example.edu"})
     token = captured["link"].split("token=")[1]
     assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
 

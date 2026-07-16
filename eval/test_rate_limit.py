@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 # Tight, deterministic limits for the test.
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "3"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "5"
@@ -34,7 +34,7 @@ from app.main import app
 
 init_db()  # ensure app.db schema exists before any direct DB setup below
 
-ALLOW = "admin@franklin.edu"
+ALLOW = "admin@example.edu"
 FAILURES = []
 
 

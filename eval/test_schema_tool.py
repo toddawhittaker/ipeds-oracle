@@ -18,7 +18,7 @@ tmp = tempfile.mkdtemp()
 IPEDS_DB_PATH = Path(tmp) / "ipeds.db"
 os.environ["IPEDS_DB_PATH"] = str(IPEDS_DB_PATH)
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 
 
 def _build_fixture(path: Path) -> None:

@@ -1,16 +1,16 @@
 import { test, expect } from "@playwright/test";
 import { mockMe, mockConversations } from "./mocks.js";
 
-// The empty chat screen: the (generic, non-Franklin-specific) third-party-LLM
+// The empty chat screen: the (generic, deployment-agnostic) third-party-LLM
 // privacy warning, clickable example prompts that fill the composer, and the
 // keyboard-resizable sidebar.
 test("empty chat: privacy warning, example chips fill the composer, sidebar resizes", async ({ page }) => {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
   await mockConversations(page, []);
   await page.goto("/");
 
   // The warning must call out proprietary/confidential info and the
-  // third-party AI service, without hardcoding "Franklin" or "DeepSeek" or
+  // third-party AI service, without hardcoding the institution's name or "DeepSeek" or
   // any cost-savings framing.
   await expect(
     page.getByText(/Do not enter proprietary or confidential information/i),

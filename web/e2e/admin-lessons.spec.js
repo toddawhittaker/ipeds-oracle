@@ -7,7 +7,7 @@ import { mockMe, mockConversations, mockSkills } from "./mocks.js";
 // example stays collapsed under its own "Example query", the source is
 // shown, and an unverified critic-proposed lesson can be approved.
 test("lessons view leads with the headline, collapses description and SQL separately, verifies", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockSkills(page, [
     {
@@ -64,7 +64,7 @@ test("lessons view leads with the headline, collapses description and SQL separa
 });
 
 test("rejecting a verified lesson asks for confirmation before deleting", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockSkills(page, [
     {

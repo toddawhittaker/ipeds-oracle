@@ -374,7 +374,7 @@ def test_rebuttal_without_new_sql_reemits_clean_draft():
     # rebuttal and re-emit the ORIGINAL clean draft, with critic_revised False
     # so no spurious lesson gets recorded downstream.
     calls = {"chat": 0, "critic": 0}
-    clean_draft = "Franklin awarded 2,183 in 2024."
+    clean_draft = "Example awarded 2,183 in 2024."
     rebuttal = ("The reviewer's concern is understandable but does not apply here. "
                 "I verified from the survey dictionary that cstotlt is correct.")
 

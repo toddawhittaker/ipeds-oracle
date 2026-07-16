@@ -42,6 +42,17 @@ def admin_recipients(con: sqlite3.Connection) -> list[str]:
     return seen
 
 
+def may_request_access(email: str) -> bool:
+    """True when `email` is allowed to file an access request. `EMAIL_DOMAIN`, when
+    set, keeps unsolicited requests to the institution's own addresses so a stranger
+    can't burn Resend quota or flood the admins' inboxes. Empty = no restriction.
+    Sign-in is NOT gated by this — see `request_login`."""
+    domain = get_settings().email_domain.strip().lower().lstrip("@")
+    if not domain:
+        return True
+    return email.rsplit("@", 1)[-1] == domain
+
+
 def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     """Insert a single-use login token for `email` and return its verify URL.
     The caller commits. Reused by the login flow and by admin approval."""
@@ -58,7 +69,11 @@ def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
 def request_login(email: str, base_url: str) -> dict:
     """Start a login. Returns a neutral message either way (never reveals whether
     an address is on the allowlist). Allowlisted → emails a link; otherwise →
-    files an access request and notifies the admin."""
+    files an access request and notifies the admin.
+
+    An allowlisted address ALWAYS gets its link, whatever its domain — the allowlist
+    is the sole authority on sign-in, so a cross-domain admin or contractor keeps
+    working on an `EMAIL_DOMAIN`-configured deployment."""
     email = email.strip().lower()
     con = connect()
     try:
@@ -66,7 +81,7 @@ def request_login(email: str, base_url: str) -> dict:
             link = mint_login_link(con, email, base_url)
             con.commit()
             send_magic_link(email, link)
-        else:
+        elif may_request_access(email):
             con.execute(
                 "INSERT INTO access_requests(email, created_at) VALUES (?,?)",
                 (email, time.time()))
@@ -74,6 +89,9 @@ def request_login(email: str, base_url: str) -> dict:
             admins = admin_recipients(con)
             if admins:
                 send_access_request(admins, email)
+        # An out-of-domain stranger falls through: nothing stored, nothing sent —
+        # but it still returns the message below verbatim. Saying anything else
+        # would reveal which domains the deployment serves.
     finally:
         con.close()
     return {"message": "If that address is approved, a sign-in link is on its "

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["OPENROUTER_API_KEY"] = ""
 os.environ["RESEND_API_KEY"] = ""
@@ -77,16 +77,16 @@ def _job_row(job_id):
 # ---------------------------------------------------------------------------
 
 def test_create_job_row():
-    jid = create_job("IPEDS202526.accdb", "admin@franklin.edu")
+    jid = create_job("IPEDS202526.accdb", "admin@example.edu")
     row = _job_row(jid)
     assert row["filename"] == "IPEDS202526.accdb", row
     assert row["status"] == "pending", row
-    assert row["created_by"] == "admin@franklin.edu", row
+    assert row["created_by"] == "admin@example.edu", row
     assert row["created_at"] > 0, row
 
 
 def test_log_appends_lines_in_order():
-    jid = create_job("IPEDS202526.accdb", "admin@franklin.edu")
+    jid = create_job("IPEDS202526.accdb", "admin@example.edu")
     _log(jid, "line one")
     _log(jid, "line two")
     row = _job_row(jid)
@@ -94,7 +94,7 @@ def test_log_appends_lines_in_order():
 
 
 def test_set_status_without_report_leaves_report_untouched():
-    jid = create_job("IPEDS202526.accdb", "admin@franklin.edu")
+    jid = create_job("IPEDS202526.accdb", "admin@example.edu")
     _set_status(jid, "running", "initial report")
     _set_status(jid, "checks")  # no report arg
     row = _job_row(jid)
@@ -103,7 +103,7 @@ def test_set_status_without_report_leaves_report_untouched():
 
 
 def test_set_status_with_report_overwrites():
-    jid = create_job("IPEDS202526.accdb", "admin@franklin.edu")
+    jid = create_job("IPEDS202526.accdb", "admin@example.edu")
     _set_status(jid, "failed", "boom")
     row = _job_row(jid)
     assert row["status"] == "failed", row
@@ -479,7 +479,7 @@ def test_run_import_preflight_failure_no_swap():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.preflight = lambda p: (False, "bad file, rejected")
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -505,7 +505,7 @@ def test_run_import_loader_failure_restores_data_dir():
     importer.preflight = lambda p: (True, "Preflight OK")
     importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output line"])
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -542,7 +542,7 @@ def test_run_import_integrity_checks_failure_no_swap():
     importer.subprocess.Popen = _fake_popen
     importer.integrity_checks = lambda staging_, live_: (False, ["✗ bad magnitude"])
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -574,7 +574,7 @@ def test_run_import_unexpected_exception_is_caught():
     importer.preflight = lambda p: (True, "Preflight OK")
     importer.subprocess.Popen = _boom
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -605,7 +605,7 @@ def test_run_import_backs_up_existing_staged_accdb():
     # Fail fast right after the staging copy so we don't need a fake loader.
     importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output"])
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -649,7 +649,7 @@ def test_run_import_success_swaps_and_bumps_data_version():
     importer.subprocess.Popen = _fake_popen
     importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -734,7 +734,7 @@ def test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = fake_build_check_swap
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         # Selecting 2024 (already integrated -> must not duplicate) and 2025 (new).
         run_integrate(jid, [2024, 2025])
     finally:
@@ -769,7 +769,7 @@ def test_run_integrate_cleans_up_temp_dir_on_success():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = lambda jid, ddir: None
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2025])
     finally:
         importer.get_settings = orig_settings
@@ -823,7 +823,7 @@ def test_run_integrate_enforces_total_size_cap():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = fake_build_check_swap
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         # union = sorted({2024} | {2026}) = [2024, 2026].
         run_integrate(jid, [2026])
     finally:
@@ -867,7 +867,7 @@ def test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = _boom
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])  # must not raise back out to the caller
     finally:
         importer.get_settings = orig_settings
@@ -900,7 +900,7 @@ def test_run_integrate_fetch_failure_of_newly_selected_year_preserves_wording():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.nces.fetch_year = fake_fetch_year
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -934,7 +934,7 @@ def test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wordin
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.nces.fetch_year = fake_fetch_year
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -993,7 +993,7 @@ def test_run_integrate_refuses_when_disk_headroom_insufficient():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = fake_build_check_swap
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -1048,7 +1048,7 @@ def test_run_integrate_proceeds_when_disk_headroom_sufficient():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = fake_build_check_swap
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -1093,7 +1093,7 @@ def test_run_integrate_writes_progress_json_reaching_done_on_success():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = lambda jid, ddir: True
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -1137,7 +1137,7 @@ def test_run_integrate_writes_progress_json_reaching_failed_on_error():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.nces.fetch_year = fake_fetch_year
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
@@ -1187,7 +1187,7 @@ def test_run_import_records_manual_provenance_on_success():
     importer.subprocess.Popen = _fake_popen
     importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -1215,7 +1215,7 @@ def test_run_import_no_provenance_written_on_preflight_failure():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.preflight = lambda p: (False, "bad file, rejected")
     try:
-        jid = create_job(upload.name, "admin@franklin.edu")
+        jid = create_job(upload.name, "admin@example.edu")
         run_import(jid, upload)
     finally:
         importer.get_settings = orig_settings
@@ -1246,7 +1246,7 @@ def test_run_integrate_records_nces_provenance_for_every_union_year_on_success()
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = lambda jid, ddir: True
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         # union = sorted({2023,2024} | {2020}) = [2020, 2023, 2024]
         run_integrate(jid, [2020])
     finally:
@@ -1298,7 +1298,7 @@ def test_run_integrate_no_provenance_written_when_swap_fails():
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = lambda jid, ddir: False  # a handled failure, no swap
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2099])
     finally:
         importer.get_settings = orig_settings
@@ -1429,7 +1429,7 @@ def test_run_deintegrate_happy_path_removes_year_and_swaps():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.shutil.disk_usage = _ample_disk_usage
     try:
-        jid = create_job(f"deintegrate:{removed_start_year}", "admin@franklin.edu")
+        jid = create_job(f"deintegrate:{removed_start_year}", "admin@example.edu")
         run_deintegrate(jid, removed_start_year)
     finally:
         importer.get_settings = orig_settings
@@ -1480,7 +1480,7 @@ def test_run_deintegrate_refuses_removing_the_only_integrated_year():
     orig_settings = importer.get_settings
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     try:
-        jid = create_job("deintegrate:2024", "admin@franklin.edu")
+        jid = create_job("deintegrate:2024", "admin@example.edu")
         run_deintegrate(jid, 2024)
     finally:
         importer.get_settings = orig_settings
@@ -1502,7 +1502,7 @@ def test_run_deintegrate_refuses_a_non_integrated_year():
     orig_settings = importer.get_settings
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     try:
-        jid = create_job("deintegrate:2030", "admin@franklin.edu")
+        jid = create_job("deintegrate:2030", "admin@example.edu")
         run_deintegrate(jid, 2030)  # end_year 2031 was never integrated
     finally:
         importer.get_settings = orig_settings
@@ -1525,7 +1525,7 @@ def test_run_deintegrate_refuses_when_disk_headroom_insufficient():
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.shutil.disk_usage = _tiny_disk_usage
     try:
-        jid = create_job("deintegrate:2023", "admin@franklin.edu")
+        jid = create_job("deintegrate:2023", "admin@example.edu")
         run_deintegrate(jid, 2023)
     finally:
         importer.get_settings = orig_settings
@@ -1570,7 +1570,7 @@ def test_deintegrate_checks_passes_for_a_healthy_removal():
 # ---------------------------------------------------------------------------
 
 def test_update_rebuild_progress_computes_pct_and_preserves_siblings():
-    jid = create_job("integrate", "admin@franklin.edu")
+    jid = create_job("integrate", "admin@example.edu")
     importer._set_progress(jid, {
         "overall": {"phase": "downloading", "message": "x"},
         "years": {"2024": {"start_year": 2024}},
@@ -1620,7 +1620,7 @@ def test_build_check_swap_parses_progress_markers_and_keeps_them_out_of_the_log(
     importer.subprocess.Popen = _fake_popen
     importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
     try:
-        jid = create_job("integrate", "admin@franklin.edu")
+        jid = create_job("integrate", "admin@example.edu")
         build_check_swap(jid, data_dir)
     finally:
         importer.get_settings = orig_settings

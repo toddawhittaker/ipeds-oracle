@@ -5,9 +5,9 @@ Two things live in this repo, and most sessions are one or the other:
 1. A **data-analysis assistant** that answers natural-language questions about
    U.S. colleges/universities against `ipeds.db` (IPEDS = the U.S. Dept. of
    Education's census of postsecondary institutions).
-2. A **private web app** (FastAPI + React) that puts that assistant in front of
-   approved Franklin University colleagues. **This is the active software
-   project** — most code work is here.
+2. A **private web app** (FastAPI + React) that puts that assistant in front of an
+   institution's approved colleagues. **This is the active software project** —
+   most code work is here.
 
 Work out which you're doing and read the matching half below.
 
@@ -105,7 +105,10 @@ tab. LLM = DeepSeek via **OpenRouter**
 a topical **guardrail** and backstopped by a deterministic SQL **linter** +
 a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
 force one revision round). Auth = passwordless **magic link**, manual allowlist,
-email via **Resend**. Self-learning = a library of **lessons** — each a short
+email via **Resend**; the allowlist is the sole authority on sign-in, while
+optional `EMAIL_DOMAIN` keeps *access requests* to the institution's own domain
+(and feeds the login form's hint via unauthenticated `GET /api/auth/config`).
+Self-learning = a library of **lessons** — each a short
 generalized **headline** + a longer generalized **description** (collapsible in
 the admin UI) + a commented SQL worked example — retrieved as guidance and
 **emitted by the critic** (the sole lesson source: it phrases a caught mistake

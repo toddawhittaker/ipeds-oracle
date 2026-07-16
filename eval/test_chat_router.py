@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
-os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
+os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["OPENROUTER_API_KEY"] = ""
 os.environ["RESEND_API_KEY"] = ""
@@ -66,7 +66,7 @@ async def _always_allow(question, history=None):
 guard.classify = _always_allow
 
 
-def _login(c, email="admin@franklin.edu"):
+def _login(c, email="admin@example.edu"):
     c.post("/api/auth/request", json={"email": email})
     token = captured["link"].split("token=")[1]
     assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
@@ -141,13 +141,13 @@ def test_stream_unknown_conversation_id_404():
 
 def test_stream_conversation_not_owned_by_caller_404():
     with TestClient(app) as c:
-        _login(c, "admin@franklin.edu")
+        _login(c, "admin@example.edu")
         r = _post_turn(c, "first question in admin's conversation")
         events = _parse_sse(r.text)
         conv_id = next(e["id"] for e in events if e["type"] == "conversation")
 
         # A second user must not be able to post into admin's conversation.
-        c.post("/api/admin/allowlist", json={"email": "other@franklin.edu"})
+        c.post("/api/admin/allowlist", json={"email": "other@example.edu"})
         approved_link = captured["approved_link"]
         atok = approved_link.split("token=")[1]
         c2 = TestClient(app)
@@ -458,7 +458,7 @@ def _exploding_agent(question, *, history=None, skills_block=""):
 
 def test_no_data_guard_admin_wording_and_skips_agent():
     with TestClient(app) as c:
-        _login(c, "admin@franklin.edu")
+        _login(c, "admin@example.edu")
         orig_years = chat_router.ipeds_years
         orig_agent = chat_router.stream_agent
         chat_router.ipeds_years = lambda: []
@@ -484,8 +484,8 @@ def test_no_data_guard_admin_wording_and_skips_agent():
 
 def test_no_data_guard_non_admin_wording_and_skips_agent():
     with TestClient(app) as c:
-        _login(c, "admin@franklin.edu")
-        c.post("/api/admin/allowlist", json={"email": "nodata-user@franklin.edu"})
+        _login(c, "admin@example.edu")
+        c.post("/api/admin/allowlist", json={"email": "nodata-user@example.edu"})
         token = captured["approved_link"].split("token=")[1]
         c2 = TestClient(app)
         assert c2.post("/api/auth/verify", json={"token": token}).status_code == 200

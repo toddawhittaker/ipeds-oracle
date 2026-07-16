@@ -30,7 +30,7 @@ const NO_DATA_CATALOG = {
 };
 
 test("admin + has_data:false lands on Admin/Imports with the no-dataset CTA", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true, has_data: false });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true, has_data: false });
   await mockConversations(page, []);
   await mockImportCatalog(page, NO_DATA_CATALOG);
   await mockImportJobs(page, []);
@@ -52,7 +52,7 @@ test("admin + has_data:false lands on Admin/Imports with the no-dataset CTA", as
 });
 
 test("non-admin + has_data:false sees the Chat no-data notice, no example chips", async ({ page }) => {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false, has_data: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false, has_data: false });
   await mockConversations(page, []);
 
   await page.goto("/");
@@ -70,7 +70,7 @@ test("non-admin + has_data:false sees the Chat no-data notice, no example chips"
 });
 
 test("admin + has_data:false clicking to Chat sees the admin-flavored no-data notice", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true, has_data: false });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true, has_data: false });
   await mockConversations(page, []);
   await mockImportCatalog(page, NO_DATA_CATALOG);
   await mockImportJobs(page, []);
@@ -100,7 +100,7 @@ test("an integrate reaching 'swapped' re-fetches /me and clears the Chat no-data
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        email: "admin@franklin.edu", is_admin: true, has_data: meCalls > 1,
+        email: "admin@example.edu", is_admin: true, has_data: meCalls > 1,
       }),
     });
   });

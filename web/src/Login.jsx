@@ -8,16 +8,27 @@ const EXAMPLES = [
   "Which states awarded the most Master's degrees in Education?",
 ];
 
+// Shown until the server tells us the institution's domain, and if it never does.
+const FALLBACK_HINT = "you@yourschool.edu";
+
 export default function Login() {
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState(null);
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [hint, setHint] = useState(FALLBACK_HINT);
   const noticeRef = useRef(null);
 
   useEffect(() => {
     if (ok) noticeRef.current?.focus();
   }, [ok]);
+
+  useEffect(() => {
+    // A hint only — the field stays usable if this never resolves.
+    api.publicConfig()
+      .then((c) => { if (c.email_domain) setHint(`you@${c.email_domain}`); })
+      .catch(() => {});
+  }, []);
 
   async function submit(e) {
     e.preventDefault();
@@ -50,7 +61,7 @@ export default function Login() {
             <label htmlFor="login-email" className="sr-only">Email</label>
             <input
               id="login-email"
-              type="email" required placeholder="you@franklin.edu" autoComplete="email"
+              type="email" required placeholder={hint} autoComplete="email"
               value={email} onChange={(e) => setEmail(e.target.value)}
             />
             <button type="submit" disabled={busy}>

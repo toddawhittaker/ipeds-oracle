@@ -15,10 +15,10 @@ test("login screen shows the wordmark with an accessible name", async ({ page })
 });
 
 test("chat top bar shows the wordmark", async ({ page }) => {
-  await mockMe(page, { email: "user@franklin.edu", is_admin: false });
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
   await mockConversations(page, []);
   await page.goto("/");
-  await expect(page.getByText("user@franklin.edu")).toBeVisible();
+  await expect(page.getByText("user@example.edu")).toBeVisible();
   await expect(page.getByRole("img", { name: "IPEDS Query" })).toBeVisible();
 });
 

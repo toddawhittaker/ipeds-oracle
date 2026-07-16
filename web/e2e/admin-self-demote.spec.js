@@ -4,11 +4,11 @@ import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./
 // The signed-in admin can promote/demote others, but their OWN admin row is a
 // non-interactive "✓ admin (you)" label — you can't demote yourself from the UI.
 test("admin cannot demote themselves from the allowlist UI", async ({ page }) => {
-  await mockMe(page, { email: "admin@franklin.edu", is_admin: true });
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAllowlist(page, [
-    { email: "admin@franklin.edu", note: "owner", is_admin: true, last_login: 1700000000 },
-    { email: "colleague@franklin.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "admin@example.edu", note: "owner", is_admin: true, last_login: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
   await mockAccessRequests(page, []);
 
