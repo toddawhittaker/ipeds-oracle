@@ -266,7 +266,7 @@ def test_cache_not_served_when_history_present() -> None:
             con.close()
 
         # Ask the SAME question again, but in that existing (history-bearing)
-        # conversation. Without an OPENROUTER_API_KEY configured, the real
+        # conversation. Without an LLM_API_KEY configured, the real
         # agent path deterministically yields a config error instead of
         # hanging or calling the network — so if the cache is (wrongly)
         # consulted, the marker answer comes back instead of that error.

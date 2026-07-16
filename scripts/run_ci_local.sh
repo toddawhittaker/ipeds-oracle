@@ -57,13 +57,13 @@ export APP_DB_PATH="$CI_DIR/app.db"
 # the ones that change behavior to reproduce CI's key-free environment:
 #   * COOKIE_SECURE=false — a prod true drops the Secure cookie under the http
 #     TestClient -> spurious "Not signed in".
-#   * OPENROUTER_API_KEY blank — with a key present the chat/agent suites take
+#   * LLM_API_KEY blank — with a key present the chat/agent suites take
 #     the LIVE path and hit the fixture's absent tables (e.g. _family_map);
 #     CI (no key) takes the deterministic short path.
 #   * RESEND_API_KEY blank — so the mailer logs the link instead of sending
 #     REAL email through Resend during tests.
 export COOKIE_SECURE=false
-export OPENROUTER_API_KEY=""
+export LLM_API_KEY=""
 export RESEND_API_KEY=""
 
 # Fresh app.db each run so migration/backup suites start from a known state.
@@ -88,6 +88,7 @@ BACKEND_SUITES=(
   test_result_isolation.py
   test_backup.py
   test_agent_loop.py
+  test_llmhttp.py
   test_logbuffer.py
   test_mailer.py
   test_guard.py

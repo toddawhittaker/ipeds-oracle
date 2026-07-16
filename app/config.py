@@ -15,6 +15,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Repo root (…/ipeds). config.py lives in app/, so parents[1] is the root.
 ROOT = Path(__file__).resolve().parents[1]
 
+# The product's display name — used anywhere copy needs a human-facing name
+# (transactional emails, the FastAPI app title) instead of a per-install
+# setting. config.py is the only app/ module that imports nothing from app,
+# so importing this constant elsewhere never risks a cycle.
+PRODUCT_NAME = "IPEDS Query"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -37,9 +43,9 @@ class Settings(BaseSettings):
     # (success or failure) — never a permanent store.
     nces_work_dir: Path = Field(default=ROOT / "data" / "work")
 
-    # --- LLM (OpenRouter, OpenAI-compatible) -------------------------------
-    openrouter_api_key: str = Field(default="")
-    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    # --- LLM (any OpenAI-compatible provider; OpenRouter by default) -------
+    llm_api_key: str = Field(default="")
+    llm_base_url: str = Field(default="https://openrouter.ai/api/v1")
     model_default: str = Field(default="deepseek/deepseek-v4-flash")
     model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
@@ -51,9 +57,13 @@ class Settings(BaseSettings):
     # judges the result for likely aggregation/magnitude errors and, if flagged,
     # drives ONE revision round. Adds a call per data answer. Set false to disable.
     critic_enabled: bool = Field(default=True)
-    # public URL + title used for OpenRouter attribution headers (optional)
+    # public URL used both as the magic-link/invite base (app/mailer.py,
+    # app/routers/admin.py) and as the LLM provider attribution header
+    # (dual-purpose). `llm_app_title` is the attribution title only; it
+    # defaults to PRODUCT_NAME but is a separate, overridable setting because
+    # provider attribution headers are optional in general.
     app_public_url: str = Field(default="http://localhost:8000")
-    app_title: str = Field(default="IPEDS Query")
+    llm_app_title: str = Field(default=PRODUCT_NAME)
 
     # --- Query safety ------------------------------------------------------
     sql_timeout_seconds: float = Field(default=25.0)

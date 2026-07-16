@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // e2e tests drive the real built/dev UI and mock every /api/** call at the
-// network layer (see e2e/mocks.js). No backend, no OPENROUTER_API_KEY, no
+// network layer (see e2e/mocks.js). No backend, no LLM_API_KEY, no
 // ipeds.db is required to run this suite.
 export default defineConfig({
   testDir: "./e2e",

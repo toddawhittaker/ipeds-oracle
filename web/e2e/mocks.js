@@ -4,7 +4,7 @@
 // (Vite dev, see playwright.config.js); nothing here talks to a live backend.
 // Every helper takes the Playwright `page` and installs a `page.route(...)`
 // interceptor that fulfills a canned response, so specs stay deterministic
-// with no OPENROUTER_API_KEY and no ipeds.db.
+// with no LLM_API_KEY and no ipeds.db.
 //
 // Contracts mirrored here come from web/src/api.js and web/src/Chat.jsx.
 

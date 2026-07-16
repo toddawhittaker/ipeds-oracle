@@ -9,7 +9,7 @@ name: CI
 #                    layer (web/e2e/mocks.js); no backend process is started.
 #
 # NOT run here: eval/eval_nl2sql.py asserts known-good national totals against the
-# real database and needs OPENROUTER_API_KEY. Run it locally against the real
+# real database and needs LLM_API_KEY. Run it locally against the real
 # ipeds.db when swapping models — see eval/ and SCHEMA.md.
 
 on:
@@ -129,6 +129,9 @@ jobs:
       - name: agent tool-loop tests
         run: python eval/test_agent_loop.py
 
+      - name: shared LLM transport tests (provider-neutral chat_completion)
+        run: python eval/test_llmhttp.py
+
       - name: log-buffer secret-scrubbing tests
         run: python eval/test_logbuffer.py
 
@@ -233,7 +236,7 @@ jobs:
           # No ipeds.db/keys — the app lazily opens the query DB and fails open
           # without an LLM key, so /api/health must answer on a bare boot.
           docker run -d --name smoke -p 8000:8000 \
-            -e COOKIE_SECURE=false -e OPENROUTER_API_KEY= -e RESEND_API_KEY= \
+            -e COOKIE_SECURE=false -e LLM_API_KEY= -e RESEND_API_KEY= \
             ipeds-ai:smoke
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/api/health | grep -q '"ok":true'; then

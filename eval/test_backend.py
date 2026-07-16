@@ -24,10 +24,16 @@ mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = lambda to, link: captured.__setitem__("approved_link", link) or True
 
 from app import skills
+from app.config import PRODUCT_NAME
 from app.main import app
 
 
 def run():
+    # The FastAPI app title is the fixed PRODUCT_NAME constant, not an
+    # institution-configurable setting (that was renamed app_title -> gone).
+    assert app.title == PRODUCT_NAME, app.title
+    print(f"  ✓ FastAPI app title == PRODUCT_NAME ({PRODUCT_NAME!r})")
+
     with TestClient(app) as c:
         # --- auth round trip -----------------------------------------------
         assert c.get("/api/auth/me").status_code == 401

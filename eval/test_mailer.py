@@ -22,6 +22,7 @@ os.environ["ADMIN_EMAILS"] = "boss@example.edu"
 os.environ["ACCESS_REQUEST_TO"] = "requests@example.edu"
 
 from app import auth, mailer  # noqa: E402
+from app.config import PRODUCT_NAME  # noqa: E402
 from app.db import connect, init_db  # noqa: E402
 
 FAILURES = []
@@ -34,6 +35,12 @@ def check(name, fn):
     except AssertionError as e:
         FAILURES.append(name)
         print(f"  ✗ {name}: {e}")
+    except Exception as e:  # noqa: BLE001 -- a surviving `s.app_title` read
+        # raises AttributeError here (the fake settings deliberately has no
+        # such attribute) — report it as a named failure rather than crashing
+        # the whole run, but it's still a hard, loud failure either way.
+        FAILURES.append(name)
+        print(f"  ✗ {name}: {type(e).__name__}: {e}")
 
 
 def test_send_email_swallows_provider_errors():
@@ -112,6 +119,49 @@ def test_send_access_request_empty_is_falsey_noop():
         mailer.send_email = orig
 
 
+def _settings_with_no_app_title(**overrides):
+    """A settings stand-in carrying everything mailer.py legitimately needs
+    (ttl, public URL) but DELIBERATELY missing `app_title` — PRODUCT_NAME is a
+    fixed constant now, not institution-configurable, so mailer.py must never
+    read `s.app_title` again. If it still does, this SimpleNamespace raises
+    AttributeError instead of silently supplying a stale/wrong value."""
+    base = dict(magic_link_ttl_minutes=15, app_public_url="https://ipeds.example.edu")
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+def test_all_three_emails_use_the_product_name_constant():
+    """send_magic_link, send_access_request, and send_access_approved must all
+    reference the fixed PRODUCT_NAME constant — not a per-install app_title
+    setting, which no longer exists on Settings after this change."""
+    orig_get_settings, orig_send_email = mailer.get_settings, mailer.send_email
+    sent = {}
+
+    def fake_send_email(to, subject, html, text=None):
+        sent[to] = {"subject": subject, "html": html, "text": text}
+        return True
+
+    mailer.get_settings = _settings_with_no_app_title
+    mailer.send_email = fake_send_email
+    try:
+        mailer.send_magic_link("signin@example.com", "https://x/verify?token=abc")
+        magic = sent["signin@example.com"]
+        assert PRODUCT_NAME in magic["subject"], magic["subject"]
+
+        mailer.send_access_request(["admin@example.edu"], "new@person.com")
+        req = sent["admin@example.edu"]
+        assert PRODUCT_NAME in req["subject"], req["subject"]
+
+        mailer.send_access_approved("approved@example.com", "https://x/verify?token=abc")
+        appr = sent["approved@example.com"]
+        assert PRODUCT_NAME in appr["subject"], appr["subject"]
+        assert PRODUCT_NAME in appr["html"], appr["html"]
+        assert PRODUCT_NAME in appr["text"], appr["text"]
+    finally:
+        mailer.get_settings = orig_get_settings
+        mailer.send_email = orig_send_email
+
+
 def run():
     print("mailer contract:")
     check("send_email swallows provider errors (returns False)",
@@ -123,6 +173,8 @@ def run():
           test_send_access_request_fans_out_to_every_admin)
     check("send_access_request with no admins is a falsey no-op",
           test_send_access_request_empty_is_falsey_noop)
+    check("all three emails use the fixed PRODUCT_NAME constant, never s.app_title",
+          test_all_three_emails_use_the_product_name_constant)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

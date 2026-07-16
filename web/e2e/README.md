@@ -3,7 +3,7 @@
 End-to-end browser tests for the React UI in `web/src`. These drive the real
 app (via Vite dev server) but intercept every `/api/**` request with
 `page.route(...)` (see `mocks.js`), so the suite runs deterministically with
-**no `OPENROUTER_API_KEY` and no `ipeds.db`** — no backend process is started.
+**no `LLM_API_KEY` and no `ipeds.db`** — no backend process is started.
 
 ## Running
 

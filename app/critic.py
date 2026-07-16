@@ -37,6 +37,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
+from app.llmhttp import PROBE_TIMEOUT, chat_completion
 
 _SYSTEM = (
     "You are a strict reviewer checking an IPEDS (U.S. postsecondary education) "
@@ -189,26 +190,16 @@ async def review(question: str, sql_log: list[str], answer: str) -> Critique:
     """Review a draft answer. Fails open (ok=True) when disabled, unconfigured,
     or on any transport error."""
     s = get_settings()
-    if not s.critic_enabled or not s.openrouter_api_key:
+    if not s.critic_enabled or not s.llm_api_key:
         return Critique(ok=True)
 
-    payload = {
-        "model": s.model_default,
-        "messages": build_review_messages(question, sql_log, answer),
-        "temperature": 0.0,
-    }
-    headers = {
-        "Authorization": f"Bearer {s.openrouter_api_key}",
-        "HTTP-Referer": s.app_public_url,
-        "X-Title": s.app_title,
-    }
+    messages = build_review_messages(question, sql_log, answer)
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.post(f"{s.openrouter_base_url}/chat/completions",
-                                  json=payload, headers=headers, timeout=30.0)
-            r.raise_for_status()
-            data = r.json()
-    except httpx.HTTPError:
+            data = await chat_completion(client, model=s.model_default, messages=messages,
+                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+    # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
+    except (httpx.HTTPError, ValueError):
         return Critique(ok=True)  # fail open — never drop an answer over the critic
 
     usage = data.get("usage") or {}

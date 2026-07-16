@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Must be set before app.config is imported (settings are cached).
-os.environ["OPENROUTER_API_KEY"] = "test-key"
+os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_MAX_TOOL_ITERS"] = "3"
 
 import httpx  # noqa: E402
@@ -269,7 +269,7 @@ def test_chat_transport_generic_http_error_surfaces_as_agent_error():
 
 def test_generate_title_no_key_returns_empty():
     orig_get_settings = llm.get_settings
-    llm.get_settings = lambda: types.SimpleNamespace(openrouter_api_key="")
+    llm.get_settings = lambda: types.SimpleNamespace(llm_api_key="")
     try:
         title = asyncio.run(llm.generate_title("q", "a"))
     finally:

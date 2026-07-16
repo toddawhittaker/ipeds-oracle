@@ -34,7 +34,7 @@ captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
 
-from app import guard  # noqa: E402
+from app import guard, llmhttp  # noqa: E402
 from app.guard import Verdict, _allowed_from_reply  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import chat as chat_router  # noqa: E402
@@ -65,7 +65,7 @@ def test_reply_parsing():
 
 
 def test_classify_fails_open_without_key():
-    # No OPENROUTER_API_KEY in this env -> allowed, no network call.
+    # No LLM_API_KEY in this env -> allowed, no network call.
     v = asyncio.run(guard.classify("give me a recipe for key lime pie"))
     assert v.allowed is True, "classify must fail open when unconfigured"
 
@@ -73,7 +73,7 @@ def test_classify_fails_open_without_key():
 # ---------------------------------------------------------------------------
 # LIVE classify() path — a key IS configured, so classify() must actually
 # build the request and interpret a real HTTP response (or fail open on a
-# transport error). Rather than touching the real OPENROUTER_API_KEY/env
+# transport error). Rather than touching the real LLM_API_KEY/env
 # (which would break the "fails open without a key" contract above),
 # guard.get_settings is monkeypatched per-test to simulate a configured key,
 # and guard.httpx.AsyncClient is monkeypatched to a fake transport returning
@@ -82,16 +82,22 @@ def test_classify_fails_open_without_key():
 # ---------------------------------------------------------------------------
 
 def _configured_settings(**overrides):
-    base = dict(guard_enabled=True, openrouter_api_key="test-key",
+    base = dict(guard_enabled=True, llm_api_key="test-key",
                model_default="deepseek/deepseek-v4-flash",
-               openrouter_base_url="https://openrouter.ai/api/v1",
-               app_public_url="http://localhost:8000", app_title="IPEDS Query")
+               llm_base_url="https://openrouter.ai/api/v1",
+               app_public_url="http://localhost:8000", llm_app_title="IPEDS Query")
     base.update(overrides)
     return types.SimpleNamespace(**base)
 
 
 class _FakeAsyncClient:
-    """Returns (or raises) one canned item for every POST; ignores request args."""
+    """Returns (or raises) one canned item for every POST, and RECORDS every
+    call's url/json/headers/timeout on the class-level `calls` list (reset by
+    `_with_fake_transport` before each use) — this is what asserts the base
+    URL, Authorization/attribution headers, and PROBE_TIMEOUT actually reach
+    the transport, a surface that was previously untested here."""
+
+    calls: list = []
 
     def __init__(self, item):
         self._item = item
@@ -103,6 +109,8 @@ class _FakeAsyncClient:
         return False
 
     async def post(self, url, json=None, headers=None, timeout=None):
+        _FakeAsyncClient.calls.append({"url": url, "json": json,
+                                       "headers": headers, "timeout": timeout})
         if isinstance(self._item, BaseException):
             raise self._item
         return self._item
@@ -114,6 +122,7 @@ def _json_response(data, status=200):
 
 
 def _with_fake_transport(item, fn):
+    _FakeAsyncClient.calls = []
     orig_settings, orig_client_cls = guard.get_settings, guard.httpx.AsyncClient
     guard.get_settings = _configured_settings
     guard.httpx.AsyncClient = lambda *a, **k: _FakeAsyncClient(item)
@@ -155,6 +164,49 @@ def test_classify_transport_error_fails_open_with_live_key():
         httpx.ConnectError("connection refused"),
         lambda: asyncio.run(guard.classify("How many degrees were awarded?")))
     assert v.allowed is True, "a transport error must fail open, not refuse"
+
+
+def test_classify_non_json_200_response_fails_open():
+    """A provider can return HTTP 200 with a non-JSON body — an HTML error
+    page, captive portal, reverse-proxy index, or CDN interstitial. Most
+    plausible now that LLM_BASE_URL is operator-configurable to any
+    OpenAI-compatible endpoint: a misconfigured URL hitting the wrong host is
+    the single most likely new failure mode.
+
+    r.json() raises json.JSONDecodeError, a ValueError subclass that is NOT an
+    httpx.HTTPError, so `except httpx.HTTPError` alone does not catch it. This
+    must still fail OPEN (allowed=True) like every other classify() error path
+    — not raise and kill the caller's request (app/routers/chat.py calls
+    guard.classify with no try/except, so an uncaught exception here would
+    kill the SSE stream mid-flight)."""
+    non_json_response = httpx.Response(
+        200, text="<html><body>502 Bad Gateway</body></html>",
+        request=httpx.Request("POST", "http://x/chat/completions"))
+    v = _with_fake_transport(
+        non_json_response,
+        lambda: asyncio.run(guard.classify("How many degrees were awarded?")))
+    assert v.allowed is True, \
+        "a 200 response with a non-JSON body must fail open, not raise"
+
+
+def test_classify_posts_url_headers_and_probe_timeout():
+    """classify() must route through the shared llmhttp transport helper with
+    PROBE_TIMEOUT (30s) — the guard is a cheap probe call, not a full agent
+    turn (which uses DEFAULT_TIMEOUT=120s). Also pins that the base URL and
+    Authorization/attribution headers actually reach the POST call, which
+    nothing asserted before this suite recorded them."""
+    resp = _json_response({
+        "choices": [{"message": {"content": "IN_SCOPE"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    _with_fake_transport(resp, lambda: asyncio.run(guard.classify("q")))
+    call = _FakeAsyncClient.calls[-1]
+    assert call["url"] == "https://openrouter.ai/api/v1/chat/completions", call["url"]
+    assert call["headers"]["Authorization"] == "Bearer test-key", call["headers"]
+    assert call["headers"]["HTTP-Referer"] == "http://localhost:8000", call["headers"]
+    assert call["headers"]["X-Title"] == "IPEDS Query", call["headers"]
+    assert call["timeout"] == llmhttp.PROBE_TIMEOUT, call["timeout"]
+    assert call["timeout"] == 30.0, call["timeout"]
 
 
 def _login(c):
@@ -228,6 +280,10 @@ def run():
           test_classify_out_of_scope_reply_with_live_key)
     check("classify (live key): transport error fails open",
           test_classify_transport_error_fails_open_with_live_key)
+    check("classify (live key): non-JSON 200 body fails open, does not raise",
+          test_classify_non_json_200_response_fails_open)
+    check("classify (live key): posts url/headers/PROBE_TIMEOUT via llmhttp",
+          test_classify_posts_url_headers_and_probe_timeout)
     check("out-of-scope message refused, agent never runs",
           test_out_of_scope_refused_without_calling_agent)
     check("in-scope message reaches the agent", test_in_scope_reaches_agent)

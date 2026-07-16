@@ -1,4 +1,4 @@
-"""Tool definitions exposed to the LLM (OpenAI/OpenRouter function-calling
+"""Tool definitions exposed to the LLM (OpenAI-compatible function-calling
 format) and a dispatcher that runs them. These are embedded tools — same
 functions can later be re-exported over MCP without change.
 """

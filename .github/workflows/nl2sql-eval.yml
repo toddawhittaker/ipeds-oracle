@@ -4,11 +4,11 @@ name: NL→SQL eval (manual)
 # known-good answers (CA public CS bachelor's = 7,679, …) to catch regressions
 # when swapping models. Deliberately NOT part of PR CI because it needs two
 # things GitHub-hosted runners don't have:
-#   1. OPENROUTER_API_KEY (a paid secret), and
+#   1. LLM_API_KEY (a paid secret), and
 #   2. the real ~1.9 GB ipeds.db (the CI fixture has no real data).
 #
 # Trigger it by hand (Actions → this workflow → Run workflow) once you've added
-# the OPENROUTER_API_KEY repo secret. To actually execute (not skip), run it on a
+# the LLM_API_KEY repo secret. To actually execute (not skip), run it on a
 # runner that has ipeds.db present in the workspace root — e.g. pass a
 # self-hosted runner label in the `runner` input, or add a step that fetches the
 # db from R2. With no key or no db it exits green with an explanation.
@@ -29,15 +29,15 @@ jobs:
     name: NL→SQL accuracy vs known answers
     runs-on: ${{ inputs.runner }}
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Preflight — secret + real db present?
         id: pre
         run: |
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "::notice::OPENROUTER_API_KEY not set — skipping the NL→SQL eval."
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::notice::LLM_API_KEY not set — skipping the NL→SQL eval."
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ ! -f ipeds.db ]; then

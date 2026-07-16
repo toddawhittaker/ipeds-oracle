@@ -56,7 +56,7 @@ with them.
 - `eval/test_backend.py` — auth, admin, skills retrieval, semantic cache, CSV
   (no API key).
 - `eval/eval_nl2sql.py` — full NL→SQL accuracy vs. known answers (CA public CS
-  bachelor's = 7,679, etc.); needs `OPENROUTER_API_KEY`; regression gate for
+  bachelor's = 7,679, etc.); needs `LLM_API_KEY`; regression gate for
   model swaps.
 - **Playwright e2e** (`web/` UI) — end-to-end browser tests of real user flows:
   login (magic-link, using a dev/console token path or a seeded session), asking
