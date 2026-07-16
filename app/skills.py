@@ -24,6 +24,7 @@ import numpy as np
 
 from app.config import get_settings
 from app.db import connect, data_version
+from app.seeds import SEED_EXAMPLES
 
 log = logging.getLogger("ipeds.skills")
 _model = None
@@ -288,34 +289,11 @@ def invalidate_cache() -> None:
 
 
 def seed_from_schema_examples() -> int:
-    """Seed the skill library with the SCHEMA.md §8 / README worked examples."""
-    seeds = [
-        ("Top 20 institutions granting Associate's degrees in Registered Nursing "
-         "(CIP 51.3801) per year over the last 3 years",
-         "WITH grads AS (\n"
-         "  SELECT year, unitid, SUM(ctotalt) AS awards FROM c_a\n"
-         "  WHERE cipcode='51.3801' AND awlevel=3 AND majornum=1\n"
-         "    AND year > (SELECT MAX(year)-3 FROM _years)\n"
-         "  GROUP BY year, unitid)\n"
-         ",ranked AS (SELECT *, RANK() OVER (PARTITION BY year ORDER BY awards DESC)"
-         " rk FROM grads)\n"
-         "SELECT r.year, r.rk, ic.instnm, ic.stabbr, r.awards\n"
-         "FROM ranked r JOIN institutions_current ic USING (unitid)\n"
-         "WHERE r.rk<=20 ORDER BY r.year DESC, r.rk;",
-         "Exact 6-digit CIP; constant year bound; RANK per year."),
-        ("How many bachelor's degrees in Computer Science (11.0701) did California "
-         "public universities award in the most recent year?",
-         "SELECT SUM(c.ctotalt) AS cs_bachelors FROM c_a c\n"
-         "JOIN hd h ON h.unitid=c.unitid AND h.year=c.year\n"
-         "WHERE c.cipcode='11.0701' AND c.awlevel=5 AND c.majornum=1\n"
-         "  AND c.year=(SELECT MAX(year) FROM _years) AND h.stabbr='CA' AND h.control=1;",
-         "Year-matched hd join; control=1 public; awlevel=5 bachelor's."),
-        ("National total of associate's degrees per year, all programs",
-         "SELECT year, SUM(ctotalt) AS associates FROM c_a\n"
-         "WHERE awlevel=3 AND majornum=1 AND cipcode='99'\n"
-         "GROUP BY year ORDER BY year;",
-         "Use grand-total CIP '99' — never sum all cipcodes (overcounts ~4x)."),
-    ]
+    """Seed the skill library with the SCHEMA.md §8 / README worked examples.
+
+    The seed data (question, SQL, human-readable lesson) lives in app.seeds, a
+    dependency-free leaf module shared with db migration 6 so a fresh install and
+    an upgraded one carry identical lesson text."""
     n = 0
     con = connect()
     try:
@@ -324,8 +302,9 @@ def seed_from_schema_examples() -> int:
         con.close()
     if have:
         return 0
-    for q, sql, note in seeds:
-        # `note` is the rule → it's the lesson; the SQL is the worked example.
-        save_skill(q, sql, notes=note, lesson=note, created_by="seed", verified=True)
+    for q, sql, lesson in SEED_EXAMPLES:
+        # The lesson is the rule (shown to admins + fed to the LLM); the SQL is
+        # the worked example. notes mirrors the lesson for back-compat.
+        save_skill(q, sql, notes=lesson, lesson=lesson, created_by="seed", verified=True)
         n += 1
     return n

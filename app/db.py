@@ -10,6 +10,7 @@ import sqlite3
 import time
 
 from app.config import get_settings
+from app.seeds import SEED_LESSON_REWRITES
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -142,6 +143,23 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _sql_quote(s: str) -> str:
+    """Escape a Python string for embedding as a single-quoted SQL literal."""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _seed_rewrite_ddl() -> str:
+    """Build migration 6's UPDATE statements from the shared seed-rewrite map, so
+    the frozen migration text and the live seeds can never drift. Only rows still
+    bearing the exact original terse lesson are touched (admin edits are safe)."""
+    stmts = [
+        f"UPDATE skills SET lesson={_sql_quote(new)}, notes={_sql_quote(new)} "
+        f"WHERE created_by='seed' AND lesson={_sql_quote(old)};"
+        for old, new in SEED_LESSON_REWRITES
+    ]
+    return "\n".join(stmts)
+
+
 # Ordered schema migrations, keyed by an increasing integer version tracked in
 # `PRAGMA user_version`. Migration 1 is the full baseline schema — every
 # statement is CREATE ... IF NOT EXISTS, so it is a safe no-op on a database that
@@ -166,6 +184,12 @@ MIGRATIONS: list[tuple[int, str]] = [
     # Structured per-year JSON progress for a running import job (polled by
     # the Imports tab's per-file progress rows).
     (5, "ALTER TABLE import_jobs ADD COLUMN progress TEXT;"),
+    # Rewrite the original terse seed lessons ("Year-matched hd join; control=1
+    # public; …") into full human-readable sentences so an admin reading the
+    # lessons list understands them. Matches on created_by='seed' AND the exact
+    # old text, so a seed an admin has edited is left untouched. Lesson text is
+    # not embedded (embeddings key off the question), so no re-embed is needed.
+    (6, _seed_rewrite_ddl()),
 ]
 
 
