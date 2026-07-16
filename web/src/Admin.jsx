@@ -27,7 +27,7 @@ const TERMINAL_JOB_STATUSES = ["failed", "swapped"];
 export default function Admin({ me }) {
   const [tab, setTab] = useState("allowlist");
   return (
-    <main className="admin">
+    <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
         {["allowlist", "imports", "usage", "skills", "logs"].map((t) => (
@@ -544,7 +544,7 @@ function Imports() {
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
             <summary>Log</summary>
-            <pre className="log">{active.log || "…"}</pre>
+            <pre className="log thin-scroll">{active.log || "…"}</pre>
           </details>
         </div>
       )}

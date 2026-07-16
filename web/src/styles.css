@@ -44,6 +44,12 @@
 .thin-scroll::-webkit-scrollbar-corner { background: transparent; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The app shell (.app) is exactly viewport height and owns its own inner
+   scroll regions (.admin / .messages), so the document root itself must never
+   scroll. Clipping .app alone doesn't stop it — the viewport scrollport still
+   reserves room for a nested overflow:auto child's content in Chromium — so we
+   pin the root scroller here. */
+html, body { overflow: hidden; }
 body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   background: var(--bg); color: var(--text); font-size: 15px;
@@ -59,7 +65,12 @@ input, textarea, button { font-family: inherit; }
 }
 
 /* layout */
-.app { height: 100%; display: flex; flex-direction: column; }
+/* overflow:hidden pins the shell to the viewport so the PAGE never scrolls —
+   only inner regions (.admin / .messages) scroll. Without it, a nested
+   overflow:auto child's clipped content still inflates the root scrollHeight in
+   Chromium, giving a phantom whole-page scrollbar (topbar included) on top of
+   the inner one. */
+.app { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   display: flex; align-items: center; gap: 20px; padding: 10px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel);
@@ -286,7 +297,11 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .chart-export-src { position: absolute; left: -99999px; top: 0; width: 600px; height: 300px; opacity: 0; pointer-events: none; }
 
 /* admin */
-.admin { flex: 1; overflow: auto; padding: 20px; }
+/* min-height:0 is REQUIRED so this flex child can shrink below its content and
+   scroll internally (like .chat). Without it, tall admin content grows .app
+   past the viewport — the whole page (topbar included) scrolls AND .admin
+   scrolls (double scrollbars), with phantom blank space below the content. */
+.admin { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 .subtabs { display: flex; gap: 6px; margin-bottom: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; }
 .panel h3 { margin-top: 0; }
