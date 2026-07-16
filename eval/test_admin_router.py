@@ -153,27 +153,62 @@ def test_import_job_not_found_404():
 
 _FAKE_CATALOG = [
     {"start_year": 2022, "year_label": "2022-23", "year": 2023,
-     "available": True, "release": "Final"},
+     "available": True, "release": "Final", "zip_bytes": 100_000_000},
     {"start_year": 2023, "year_label": "2023-24", "year": 2024,
-     "available": True, "release": "Final"},
+     "available": True, "release": "Final", "zip_bytes": 110_000_000},
     {"start_year": 2024, "year_label": "2024-25", "year": 2025,
-     "available": True, "release": "Provisional"},
+     "available": True, "release": "Provisional", "zip_bytes": 120_000_000},
     {"start_year": 2025, "year_label": "2025-26", "year": 2026,
-     "available": False, "release": None},
+     "available": False, "release": None, "zip_bytes": None},
 ]
 
 
-def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025)):
+def _fake_disk_usage(total=100_000_000_000, used=40_000_000_000, free=60_000_000_000):
+    import types as _types
+    return lambda path: _types.SimpleNamespace(total=total, used=used, free=free)
+
+
+def _seed_provenance(rows):
+    """rows: list of (start_year, end_year, release, source). Returns a
+    restore callable that deletes exactly these rows afterward."""
+    con = connect()
+    try:
+        for start_year, end_year, release, source in rows:
+            con.execute(
+                "INSERT OR REPLACE INTO year_provenance"
+                "(start_year, end_year, release, source, updated_at) "
+                "VALUES (?,?,?,?,0)", (start_year, end_year, release, source))
+        con.commit()
+    finally:
+        con.close()
+
+    def _restore():
+        con2 = connect()
+        try:
+            for start_year, *_ in rows:
+                con2.execute("DELETE FROM year_provenance WHERE start_year=?", (start_year,))
+            con2.commit()
+        finally:
+            con2.close()
+    return _restore
+
+
+def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025), disk_usage=None):
     """integrated_years mirrors importer._years()'s return (ending years);
-    already-integrated start_years = {y-1 for y in integrated_years}."""
+    already-integrated start_years = {y-1 for y in integrated_years}.
+    disk_usage, if given, monkeypatches admin_router.shutil.disk_usage for a
+    deterministic "disk" block in the /import/catalog response."""
     orig_probe = admin_router.nces.probe_catalog
     orig_years = admin_router.importer._years
+    orig_disk = admin_router.shutil.disk_usage
     admin_router.nces.probe_catalog = lambda refresh=False: catalog
     admin_router.importer._years = lambda path: list(integrated_years)
+    admin_router.shutil.disk_usage = disk_usage or _fake_disk_usage()
 
     def _restore():
         admin_router.nces.probe_catalog = orig_probe
         admin_router.importer._years = orig_years
+        admin_router.shutil.disk_usage = orig_disk
     return _restore
 
 
@@ -201,6 +236,21 @@ def test_import_catalog_marks_integrated_vs_selectable():
         assert by_year[2022]["status"] == "final", by_year[2022]
         assert by_year[2022]["year"] == 2023, by_year[2022]
         assert by_year[2022]["year_label"] == "2022-23", by_year[2022]
+        assert by_year[2022]["zip_bytes"] == 100_000_000, by_year[2022]
+
+        assert "disk" in body, body
+        disk = body["disk"]
+        assert disk["free_bytes"] == 60_000_000_000, disk
+        assert disk["total_bytes"] == 100_000_000_000, disk
+        assert disk["used_bytes"] == 40_000_000_000, disk
+
+        assert "calibration" in body, body
+        calib = body["calibration"]
+        for key in ("expand_factor", "default_per_year_db_mb", "bandwidth_mbps",
+                   "build_seconds_per_year", "safety_factor", "per_year_db_bytes",
+                   "live_db_bytes", "already_integrated_count"):
+            assert key in calib, f"calibration missing {key!r}: {calib}"
+        assert calib["already_integrated_count"] == 2, calib  # {2023, 2024}
 
         # 2023, 2024 are already integrated (importer._years -> [2024, 2025]).
         assert by_year[2023]["integrated"] is True, by_year[2023]
@@ -216,6 +266,84 @@ def test_import_catalog_marks_integrated_vs_selectable():
         assert by_year[2025]["available"] is False, by_year[2025]
         assert by_year[2025]["selectable"] is False, by_year[2025]
         assert by_year[2025]["status"] == "unknown", by_year[2025]
+
+
+def test_import_catalog_marks_provisional_integrated_as_update_when_final_now_available():
+    # 2023 was integrated as Provisional (per year_provenance); the catalog
+    # now shows it available as Final -> status="update", selectable=True
+    # (re-integrable to pick up the Final release), even though `integrated`
+    # stays True.
+    restore_prov = _seed_provenance([(2023, 2024, "Provisional", "nces")])
+    with TestClient(app) as c:
+        _login(c)
+        restore_cat = _patch_catalog()  # 2023's catalog entry has release="Final"
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore_cat()
+            restore_prov()
+
+        assert r.status_code == 200, r.text
+        by_year = {e["start_year"]: e for e in r.json()["years"]}
+        assert by_year[2023]["integrated"] is True, by_year[2023]
+        assert by_year[2023]["status"] == "update", by_year[2023]
+        assert by_year[2023]["selectable"] is True, by_year[2023]
+
+
+def test_import_catalog_final_integrated_as_final_is_not_an_update():
+    # 2024 was integrated already as Final (per year_provenance) and the
+    # catalog's current release is ALSO Final (_FAKE_CATALOG) — no newer
+    # release exists, so this must stay a plain "integrated", not "update".
+    restore_prov = _seed_provenance([(2023, 2024, "Final", "nces")])
+    with TestClient(app) as c:
+        _login(c)
+        restore_cat = _patch_catalog()
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore_cat()
+            restore_prov()
+
+        by_year = {e["start_year"]: e for e in r.json()["years"]}
+        assert by_year[2023]["status"] == "integrated", by_year[2023]
+        assert by_year[2023]["selectable"] is False, by_year[2023]
+
+
+def test_import_catalog_unknown_provenance_integrated_year_stays_integrated():
+    # An integrated year with NO year_provenance row at all (e.g. imported
+    # before this feature existed, or a manual upload) must never crash and
+    # must never be reported as "update" — provenance is simply unknown.
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog()  # no _seed_provenance call at all
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore()
+        assert r.status_code == 200, r.text
+        by_year = {e["start_year"]: e for e in r.json()["years"]}
+        assert by_year[2023]["status"] == "integrated", by_year[2023]
+        assert by_year[2023]["selectable"] is False, by_year[2023]
+        assert by_year[2024]["status"] == "integrated", by_year[2024]
+        assert by_year[2024]["selectable"] is False, by_year[2024]
+
+
+def test_import_catalog_null_release_provenance_stays_integrated_never_crashes():
+    # A NULL release in year_provenance (manual import, source='manual') must
+    # be treated the same as "unknown provenance" — never "update", never a 500.
+    restore_prov = _seed_provenance([(2023, 2024, None, "manual")])
+    with TestClient(app) as c:
+        _login(c)
+        restore_cat = _patch_catalog()
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore_cat()
+            restore_prov()
+        assert r.status_code == 200, r.text
+        by_year = {e["start_year"]: e for e in r.json()["years"]}
+        assert by_year[2023]["status"] == "integrated", by_year[2023]
+        assert by_year[2023]["selectable"] is False, by_year[2023]
 
 
 def test_import_catalog_requires_admin():
@@ -284,6 +412,29 @@ def test_integrate_rejects_already_integrated_year():
         finally:
             restore()
         assert r.status_code == 400, r.text
+
+
+def test_integrate_accepts_reselecting_an_update_year():
+    # 2023 was integrated as Provisional; the catalog now offers Final ->
+    # status="update", and POST /import/integrate must ACCEPT re-selecting it
+    # (unlike a plain already-integrated year, which stays rejected — see
+    # test_integrate_rejects_already_integrated_year above).
+    restore_prov = _seed_provenance([(2023, 2024, "Provisional", "nces")])
+    with TestClient(app) as c:
+        _login(c)
+        restore_cat = _patch_catalog()
+        orig_thread = admin_router.threading.Thread
+        orig_run_integrate = admin_router.importer.run_integrate
+        admin_router.threading.Thread = _SyncThread
+        admin_router.importer.run_integrate = _run_integrate_success
+        try:
+            r = c.post("/api/admin/import/integrate", json={"years": [2023]})
+        finally:
+            restore_cat()
+            restore_prov()
+            admin_router.threading.Thread = orig_thread
+            admin_router.importer.run_integrate = orig_run_integrate
+        assert r.status_code == 200, r.text
 
 
 def test_integrate_rejects_unavailable_year():
@@ -453,14 +604,24 @@ def run():
           test_import_success_creates_and_completes_a_job)
     check("import job detail 404s for an unknown job id",
           test_import_job_not_found_404)
-    check("import catalog marks already-integrated vs. selectable years",
+    check("import catalog marks integrated/selectable years + zip_bytes/disk/calibration",
           test_import_catalog_marks_integrated_vs_selectable)
+    check("import catalog marks a Provisional-integrated year as 'update' when Final is now out",
+          test_import_catalog_marks_provisional_integrated_as_update_when_final_now_available)
+    check("import catalog: Final-integrated-as-Final is not an 'update'",
+          test_import_catalog_final_integrated_as_final_is_not_an_update)
+    check("import catalog: unknown provenance on an integrated year stays 'integrated'",
+          test_import_catalog_unknown_provenance_integrated_year_stays_integrated)
+    check("import catalog: NULL-release provenance stays 'integrated', never crashes",
+          test_import_catalog_null_release_provenance_stays_integrated_never_crashes)
     check("import catalog requires admin",
           test_import_catalog_requires_admin)
     check("integrate requires admin",
           test_integrate_requires_admin)
     check("integrate success creates a job",
           test_integrate_success_creates_a_job)
+    check("integrate accepts re-selecting an 'update' year",
+          test_integrate_accepts_reselecting_an_update_year)
     check("integrate rejects an out-of-range year",
           test_integrate_rejects_out_of_range_year)
     check("integrate rejects an already-integrated year",

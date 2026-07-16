@@ -89,6 +89,59 @@ def test_migration_3_adds_lesson_and_backfills_from_notes():
     assert lesson == "use cipcode=99 for totals", lesson
 
 
+def test_migration_4_adds_year_provenance_table():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 3])
+    tables = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "year_provenance" not in tables, tables
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    tables = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "year_provenance" in tables, tables
+    cols = _cols(con, "year_provenance")
+    for c in ("start_year", "end_year", "release", "source", "updated_at"):
+        assert c in cols, f"year_provenance missing column {c!r}: {cols}"
+    # release must be nullable (NULL = unknown / manual import).
+    con.execute("INSERT INTO year_provenance(start_year, end_year, release, source, "
+               "updated_at) VALUES (2025, 2026, NULL, 'manual', 0)")
+    row = con.execute("SELECT release FROM year_provenance WHERE start_year=2025").fetchone()
+    assert row[0] is None, row
+    # start_year is the primary key -> a duplicate insert without a conflict
+    # clause must raise (pins the schema's uniqueness constraint).
+    try:
+        con.execute("INSERT INTO year_provenance(start_year, end_year, release, "
+                   "source, updated_at) VALUES (2025, 2026, 'Final', 'nces', 1)")
+        raise AssertionError("expected a UNIQUE/PK violation on duplicate start_year")
+    except sqlite3.IntegrityError:
+        pass
+
+
+def test_migration_5_adds_import_jobs_progress_column():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 4])
+    assert "progress" not in _cols(con, "import_jobs"), _cols(con, "import_jobs")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "progress" in _cols(con, "import_jobs"), _cols(con, "import_jobs")
+    # New column must be nullable (existing rows aren't backfilled with JSON).
+    con.execute("INSERT INTO import_jobs(filename, status, created_at, updated_at) "
+               "VALUES ('x', 'pending', 0, 0)")
+    row = con.execute("SELECT progress FROM import_jobs WHERE filename='x'").fetchone()
+    assert row[0] is None, row
+
+
+def test_fresh_db_advances_to_version_5_with_both_new_objects():
+    con = sqlite3.connect(":memory:")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == 5, f"expected user_version 5 after adding migrations 4+5, got {v}"
+    tables = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "year_provenance" in tables, tables
+    assert "progress" in _cols(con, "import_jobs"), _cols(con, "import_jobs")
+
+
 def test_real_init_db_sets_baseline_and_bootstraps():
     init_db()
     con = connect()
@@ -115,6 +168,12 @@ def run():
           test_existing_preversion_db_advances_safely)
     check("migration 3 adds skills.lesson + backfills from notes",
           test_migration_3_adds_lesson_and_backfills_from_notes)
+    check("migration 4 adds the year_provenance table (nullable release, PK start_year)",
+          test_migration_4_adds_year_provenance_table)
+    check("migration 5 adds import_jobs.progress (nullable)",
+          test_migration_5_adds_import_jobs_progress_column)
+    check("fresh db advances to user_version 5 with both new objects",
+          test_fresh_db_advances_to_version_5_with_both_new_objects)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()

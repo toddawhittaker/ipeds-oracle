@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     nces_zip_max_mb: int = Field(default=512)     # per-year compressed download cap
     nces_accdb_max_mb: int = Field(default=3072)  # per-year uncompressed extract cap
     nces_total_max_mb: int = Field(default=51200)  # ceiling across one integrate run's union
+    # Disk/time preflight estimator (app/estimate.py) calibration knobs — the
+    # "how much room/time will this integrate take" math the Imports tab's
+    # disk meter and importer.run_integrate's pre-fetch refusal both read.
+    nces_accdb_expand_factor: float = Field(default=3.0)  # uncompressed .accdb vs. zip size
+    nces_est_bandwidth_mbps: float = Field(default=10.0)  # assumed download speed
+    nces_est_build_seconds_per_year: float = Field(default=60.0)  # rebuild time per union year
+    nces_default_per_year_db_mb: int = Field(default=380)  # fallback when live_db_bytes is unknown
+    nces_download_deadline_seconds: float = Field(default=1800.0)  # per-transfer wall-clock cap
+    nces_disk_safety_factor: float = Field(default=1.2)  # pad the estimated need by this much
+    nces_probe_concurrency: int = Field(default=5)  # concurrent HEAD probes in probe_catalog
+    nces_download_concurrency: int = Field(default=5)  # concurrent fetches in run_integrate
 
     # --- Server logs -------------------------------------------------------
     log_retention_days: int = Field(default=30)  # older log rows are pruned

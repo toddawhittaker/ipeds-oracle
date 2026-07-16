@@ -205,6 +205,13 @@ export async function mockImportJobs(page, rows) {
  * `sequence` on each successive poll (the app polls every 2s until the
  * status is one of passed/failed/swapped — see web/src/Admin.jsx `watch()`);
  * once `sequence` is exhausted, the last entry is returned forever.
+ *
+ * A `progress` field on any sequence entry is passed through verbatim — per
+ * the real API contract it's a JSON STRING (mirrors `sql_log` on chat
+ * messages) that the app JSON.parses; shape: {overall:{phase,message},
+ * years:{"<start_year>":{start_year,year_label,step,downloaded_bytes,
+ * total_bytes,pct}}}. See web/e2e/nces-catalog.spec.js's per-file-progress
+ * test for a worked example.
  */
 export async function mockImportJobPoll(page, jobId, sequence) {
   let i = 0;
@@ -217,7 +224,15 @@ export async function mockImportJobPoll(page, jobId, sequence) {
 
 /**
  * GET /api/admin/import/catalog -> {probed_at, partial, years:[{start_year,
- * year, year_label, status, integrated, available, release, selectable}]}.
+ * year, year_label, status, integrated, available, release, selectable,
+ * zip_bytes}], disk:{free_bytes,total_bytes,used_bytes}, calibration:{
+ * expand_factor,default_per_year_db_mb,bandwidth_mbps,build_seconds_per_year,
+ * safety_factor,per_year_db_bytes,live_db_bytes,already_integrated_count}}.
+ * `status` gains an "update" value (already-integrated but a newer release
+ * is now out) alongside the existing integrated/final/provisional/unknown.
+ * This helper is a pure passthrough — every field on `data` (however you
+ * shape it) is forwarded verbatim, so callers control zip_bytes/disk/
+ * calibration/status directly rather than this helper synthesizing them.
  */
 export async function mockImportCatalog(page, data) {
   await page.route("**/api/admin/import/catalog", async (route) => {

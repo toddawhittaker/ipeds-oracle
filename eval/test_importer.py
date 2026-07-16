@@ -9,10 +9,12 @@ preflight/subprocess/integrity_checks monkeypatched so every branch
 (preflight failure, loader failure, checks failure, unexpected exception,
 and full success+swap) runs deterministically and fast.
 """
+import json
 import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import types
 from pathlib import Path
 
@@ -418,7 +420,11 @@ class _FakeProc:
         pass
 
 
-def _fake_settings(ipeds_db_path, data_dir, *, nces_total_max_mb=51200):
+def _fake_settings(ipeds_db_path, data_dir, *, nces_total_max_mb=51200,
+                   nces_accdb_expand_factor=3.0, nces_est_bandwidth_mbps=10.0,
+                   nces_est_build_seconds_per_year=60.0, nces_default_per_year_db_mb=380,
+                   nces_download_deadline_seconds=1800.0, nces_disk_safety_factor=1.2,
+                   nces_probe_concurrency=5, nces_download_concurrency=5):
     """Stand-in for app.config.Settings used across the importer tests.
 
     Mirrors every nces_* field the real Settings defines (see app/config.py)
@@ -427,7 +433,12 @@ def _fake_settings(ipeds_db_path, data_dir, *, nces_total_max_mb=51200):
     root the test already controls — so run_integrate's temp work dir lands
     (and gets cleaned up) inside the test's own tmpdir, just like the old
     fallback did. nces_total_max_mb is overridable so a test can force the
-    union size-cap enforcement path."""
+    union size-cap enforcement path. The eight nces_est_*/nces_disk_*/
+    nces_*_concurrency knobs back the disk/time estimator (app/estimate.py)
+    and the concurrent probe/download pools — every test that exercises
+    run_integrate's disk-headroom check or concurrent fetch path needs these
+    present with sane defaults, hence they're kwargs here (not hidden extras)
+    so a test can override just the one it cares about."""
     return types.SimpleNamespace(
         ipeds_db_path=ipeds_db_path,
         data_dir=data_dir,
@@ -436,6 +447,14 @@ def _fake_settings(ipeds_db_path, data_dir, *, nces_total_max_mb=51200):
         nces_zip_max_mb=512,
         nces_accdb_max_mb=3072,
         nces_total_max_mb=nces_total_max_mb,
+        nces_accdb_expand_factor=nces_accdb_expand_factor,
+        nces_est_bandwidth_mbps=nces_est_bandwidth_mbps,
+        nces_est_build_seconds_per_year=nces_est_build_seconds_per_year,
+        nces_default_per_year_db_mb=nces_default_per_year_db_mb,
+        nces_download_deadline_seconds=nces_download_deadline_seconds,
+        nces_disk_safety_factor=nces_disk_safety_factor,
+        nces_probe_concurrency=nces_probe_concurrency,
+        nces_download_concurrency=nces_download_concurrency,
     )
 
 
@@ -690,13 +709,15 @@ def test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year
     _live_with_years(live, [2024, 2025])
 
     fetched = []
+    fetched_lock = threading.Lock()
 
-    def fake_fetch_year(start_year, work_dir):
-        fetched.append(start_year)
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        with fetched_lock:
+            fetched.append(start_year)
         Path(work_dir).mkdir(parents=True, exist_ok=True)
         p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
         p.write_bytes(b"fake")
-        return p
+        return p, "Final"
 
     swap_calls = []
 
@@ -731,12 +752,12 @@ def test_run_integrate_cleans_up_temp_dir_on_success():
 
     work_dir_holder = {}
 
-    def fake_fetch_year(start_year, work_dir):
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
         work_dir_holder["path"] = Path(work_dir)
         Path(work_dir).mkdir(parents=True, exist_ok=True)
         p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
         p.write_bytes(b"fake")
-        return p
+        return p, "Final"
 
     orig_settings = importer.get_settings
     orig_fetch = importer.nces.fetch_year
@@ -758,21 +779,31 @@ def test_run_integrate_cleans_up_temp_dir_on_success():
 
 
 def test_run_integrate_enforces_total_size_cap():
+    # NOTE: fetch_year now runs CONCURRENTLY (a thread pool, width
+    # nces_download_concurrency), so this no longer asserts an exact fetch
+    # count of 1 — several fetches may legitimately be in flight before the
+    # shared running total is noticed to have exceeded the cap. What must
+    # still hold, deterministically, regardless of thread scheduling: the
+    # cap trips (the fake sizes sum well past it), the job ends 'failed'
+    # with a cap-related message, build_check_swap never runs, the live db
+    # is untouched, and the temp work dir is still cleaned up.
     d = Path(tempfile.mkdtemp())
     live = d / "ipeds.db"
     data_dir = d / "data"
     _live_with_years(live, [2025])  # already-integrated start year -> {2024}
 
     fetched = []
+    fetched_lock = threading.Lock()
     work_dir_holder = {}
 
-    def fake_fetch_year(start_year, work_dir):
-        fetched.append(start_year)
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        with fetched_lock:
+            fetched.append(start_year)
         work_dir_holder["path"] = Path(work_dir)
         Path(work_dir).mkdir(parents=True, exist_ok=True)
         p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
         p.write_bytes(b"fake-bytes-bigger-than-the-cap")
-        return p
+        return p, "Final"
 
     swap_called = {"hit": False}
 
@@ -782,23 +813,22 @@ def test_run_integrate_enforces_total_size_cap():
     orig_settings = importer.get_settings
     orig_fetch = importer.nces.fetch_year
     orig_swap = importer.build_check_swap
-    # A 0 MB cap means the very first fetched file already exceeds it,
-    # regardless of exactly how many bytes the fake file contains.
+    # A 0 MB cap means every fetched file — individually or summed — already
+    # exceeds it, regardless of exactly how many bytes the fake file
+    # contains or how many fetches race ahead of the cap check.
     importer.get_settings = lambda: _fake_settings(live, data_dir, nces_total_max_mb=0)
     importer.nces.fetch_year = fake_fetch_year
     importer.build_check_swap = fake_build_check_swap
     try:
         jid = create_job("integrate", "admin@franklin.edu")
-        # union = sorted({2024} | {2026}) = [2024, 2026]; must abort after
-        # the first fetch, before ever fetching the second year.
+        # union = sorted({2024} | {2026}) = [2024, 2026].
         run_integrate(jid, [2026])
     finally:
         importer.get_settings = orig_settings
         importer.nces.fetch_year = orig_fetch
         importer.build_check_swap = orig_swap
 
-    assert len(fetched) == 1, \
-        f"must abort after the first fetch once the cap is exceeded, got {fetched}"
+    assert len(fetched) >= 1, "at least one year must have been fetched"
     assert swap_called["hit"] is False, \
         "build_check_swap must never run once the union size cap is exceeded"
     row = _job_row(jid)
@@ -817,12 +847,12 @@ def test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises():
 
     work_dir_holder = {}
 
-    def fake_fetch_year(start_year, work_dir):
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
         work_dir_holder["path"] = Path(work_dir)
         Path(work_dir).mkdir(parents=True, exist_ok=True)
         p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
         p.write_bytes(b"fake")
-        return p
+        return p, "Final"
 
     def _boom(jid, ddir):
         raise RuntimeError("integrity checks blew up")
@@ -846,6 +876,438 @@ def test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises():
         "the temp work dir must be removed even when build_check_swap raises"
     row = _job_row(jid)
     assert row["status"] == "failed", row
+
+
+def test_run_integrate_fetch_failure_of_newly_selected_year_preserves_wording():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated start year -> {2024}
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if start_year == 2026:  # the newly-selected year
+            raise RuntimeError("NCES returned a 500")
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    report = row["report"] or ""
+    assert "newly-selected" in report, report
+    assert "2026-27" in report, report
+    assert "Live database unchanged" in report, report
+    assert live.exists(), "live db must survive a fetch failure"
+
+
+def test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wording():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated start year -> {2024}
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if start_year == 2024:  # already integrated
+            raise RuntimeError("NCES withdrew the file")
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    report = row["report"] or ""
+    assert "already-integrated" in report, report
+    assert "2024-25" in report, report
+
+
+# ---------------------------------------------------------------------------
+# Disk-headroom preflight refusal — run_integrate must compute the
+# needed-vs-free estimate BEFORE fetching anything, and refuse (fail the job,
+# never call fetch_year or build_check_swap, leave the live db + work dir
+# untouched) when free space is insufficient. shutil.disk_usage is
+# monkeypatched as a bare module attribute on importer.shutil, mirroring the
+# subprocess.Popen/preflight convention used throughout this file.
+# ---------------------------------------------------------------------------
+
+def test_run_integrate_refuses_when_disk_headroom_insufficient():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2024, 2025])
+    original_live_bytes = live.read_bytes()
+
+    fetch_called = {"hit": False}
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        fetch_called["hit"] = True
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"should never be fetched")
+        return p, "Final"
+
+    swap_called = {"hit": False}
+
+    def fake_build_check_swap(jid, ddir):
+        swap_called["hit"] = True
+        return True
+
+    def fake_disk_usage(path):
+        # Effectively no free space at all: whatever the estimator computes
+        # as "needed", 1 byte free can never cover it.
+        return types.SimpleNamespace(total=1_000_000_000_000,
+                                     used=999_999_999_999, free=1)
+
+    orig_settings = importer.get_settings
+    orig_disk_usage = importer.shutil.disk_usage
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.shutil.disk_usage = fake_disk_usage
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = fake_build_check_swap
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.shutil.disk_usage = orig_disk_usage
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert fetch_called["hit"] is False, \
+        "fetch_year must never run when the disk-headroom preflight refuses"
+    assert swap_called["hit"] is False, \
+        "build_check_swap must never run when the disk-headroom preflight refuses"
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    report = (row["report"] or "").lower()
+    assert "disk" in report or "space" in report, row["report"]
+    assert live.read_bytes() == original_live_bytes, "live db must be untouched"
+    work_dir = Path(data_dir).parent / "work" / f"integrate_{jid}"
+    assert not work_dir.exists(), "the temp work dir must not be left behind"
+
+
+def test_run_integrate_proceeds_when_disk_headroom_sufficient():
+    # The mirror-image check: an ample disk_usage must NOT trip the refusal —
+    # otherwise the preflight would be a false-positive block on every run.
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    swap_called = {"hit": False}
+
+    def fake_build_check_swap(jid, ddir):
+        swap_called["hit"] = True
+        return True
+
+    def fake_disk_usage(path):
+        return types.SimpleNamespace(total=10_000_000_000_000,
+                                     used=1_000_000_000_000,
+                                     free=9_000_000_000_000)  # 9 TB free
+
+    orig_settings = importer.get_settings
+    orig_disk_usage = importer.shutil.disk_usage
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.shutil.disk_usage = fake_disk_usage
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = fake_build_check_swap
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.shutil.disk_usage = orig_disk_usage
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    assert swap_called["hit"] is True, \
+        "build_check_swap must run when there's ample disk headroom"
+
+
+# ---------------------------------------------------------------------------
+# run_integrate — structured per-year JSON progress (import_jobs.progress)
+# ---------------------------------------------------------------------------
+
+def _progress(job_id):
+    row = _job_row(job_id)
+    raw = row["progress"]
+    assert raw, "import_jobs.progress must be populated"
+    return json.loads(raw)
+
+
+def test_run_integrate_writes_progress_json_reaching_done_on_success():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated -> {2024}; select 2026
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if on_progress is not None:
+            on_progress(1000, 2000)
+            on_progress(2000, 2000)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = lambda jid, ddir: True
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    progress = _progress(jid)
+    assert "overall" in progress and "years" in progress, progress
+    assert progress["overall"]["phase"] == "done", progress["overall"]
+    assert "message" in progress["overall"], progress["overall"]
+
+    years = progress["years"]
+    assert set(years.keys()) == {"2024", "2026"}, years
+    for sy_str, entry in years.items():
+        for key in ("start_year", "year_label", "step",
+                   "downloaded_bytes", "total_bytes", "pct"):
+            assert key in entry, f"year {sy_str} entry missing {key!r}: {entry}"
+        assert entry["step"] in (
+            "queued", "downloading", "extracting", "fetched", "failed"), entry
+        assert entry["start_year"] == int(sy_str), entry
+    # both years succeeded -> both should have reached a post-fetch step.
+    assert all(e["step"] in ("fetched", "extracting") for e in years.values()), years
+
+
+def test_run_integrate_writes_progress_json_reaching_failed_on_error():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated -> {2024}; select 2026
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if start_year == 2026:
+            raise RuntimeError("boom")
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+
+    progress = _progress(jid)
+    assert progress["overall"]["phase"] == "failed", progress["overall"]
+    years = progress["years"]
+    assert years["2026"]["step"] == "failed", years["2026"]
+
+
+# ---------------------------------------------------------------------------
+# Provenance (app.db year_provenance) — written only after a successful swap.
+# run_import: source='manual', release=NULL. run_integrate: source='nces',
+# release taken from each fetched year's actual release.
+# ---------------------------------------------------------------------------
+
+def _provenance_rows():
+    con = db_connect()
+    try:
+        rows = con.execute(
+            "SELECT start_year, end_year, release, source FROM year_provenance "
+            "ORDER BY start_year").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def test_run_import_records_manual_provenance_on_success():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d)  # IPEDS202526.accdb -> start_year 2025, end_year 2026
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    try:
+        jid = create_job(upload.name, "admin@franklin.edu")
+        run_import(jid, upload)
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    assert _job_row(jid)["status"] == "swapped"
+    rows = [r for r in _provenance_rows() if r["start_year"] == 2025]
+    assert len(rows) == 1, _provenance_rows()
+    row = rows[0]
+    assert row["end_year"] == 2026, row
+    assert row["release"] is None, row
+    assert row["source"] == "manual", row
+
+
+def test_run_import_no_provenance_written_on_preflight_failure():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, name="IPEDS209899.accdb")  # a start_year unlikely to collide
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (False, "bad file, rejected")
+    try:
+        jid = create_job(upload.name, "admin@franklin.edu")
+        run_import(jid, upload)
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+
+    assert _job_row(jid)["status"] == "failed"
+    assert not any(r["start_year"] == 2098 for r in _provenance_rows()), _provenance_rows()
+
+
+def test_run_integrate_records_nces_provenance_for_every_union_year_on_success():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2024, 2025])  # already-integrated -> {2023, 2024}
+
+    releases = {2023: "Final", 2024: "Final", 2020: "Provisional"}
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, releases[start_year]
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = lambda jid, ddir: True
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        # union = sorted({2023,2024} | {2020}) = [2020, 2023, 2024]
+        run_integrate(jid, [2020])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    rows = {r["start_year"]: r for r in _provenance_rows()
+           if r["start_year"] in (2020, 2023, 2024)}
+    assert set(rows) == {2020, 2023, 2024}, rows
+    for sy, expected_release in releases.items():
+        assert rows[sy]["release"] == expected_release, rows[sy]
+        assert rows[sy]["source"] == "nces", rows[sy]
+        assert rows[sy]["end_year"] == sy + 1, rows[sy]
+
+
+def test_run_integrate_no_provenance_written_when_swap_fails():
+    # This suite shares ONE real app.db across the whole process (see
+    # scripts/coverage_check.sh / run_ci_local.sh, which run this file's
+    # run() as a single process) — other tests in this file legitimately
+    # write real year_provenance rows for years 2020-2026 on their own
+    # successful swaps. A blanket "no row exists at all for these
+    # start_years" assertion is therefore order-dependent and NOT a valid
+    # test of THIS test's behavior. Instead: (1) snapshot whatever rows
+    # already exist for 2024/2099 before this run, and assert they are
+    # BYTE-IDENTICAL after (nothing added or modified for these years), and
+    # (2) use a release string no other test ever writes, so even if some
+    # future test coincidentally shares these start_years, a regression that
+    # writes provenance on a FAILED swap is still caught unambiguously.
+    SENTINEL_RELEASE = "SENTINEL-NEVER-RECORDED-ON-FAILED-SWAP"
+
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated -> {2024}
+
+    before = {r["start_year"]: r for r in _provenance_rows() if r["start_year"] in (2024, 2099)}
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, SENTINEL_RELEASE
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_swap = importer.build_check_swap
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.build_check_swap = lambda jid, ddir: False  # a handled failure, no swap
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        run_integrate(jid, [2099])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.build_check_swap = orig_swap
+
+    after = {r["start_year"]: r for r in _provenance_rows() if r["start_year"] in (2024, 2099)}
+    assert after == before, (
+        "run_integrate must not add or modify any year_provenance row for "
+        f"2024/2099 when build_check_swap fails: before={before}, after={after}")
+    assert not any(r["release"] == SENTINEL_RELEASE for r in _provenance_rows()), \
+        "the sentinel release must never have been recorded anywhere on a failed swap"
 
 
 def run():
@@ -921,6 +1383,26 @@ def run():
           test_run_integrate_enforces_total_size_cap)
     check("run_integrate: cleans up the temp work dir when build_check_swap raises",
           test_run_integrate_cleans_up_temp_dir_when_build_check_swap_raises)
+    check("run_integrate: fetch failure of a newly-selected year preserves wording",
+          test_run_integrate_fetch_failure_of_newly_selected_year_preserves_wording)
+    check("run_integrate: fetch failure of an already-integrated year preserves wording",
+          test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wording)
+    check("run_integrate: refuses (no fetch/swap) when disk headroom is insufficient",
+          test_run_integrate_refuses_when_disk_headroom_insufficient)
+    check("run_integrate: proceeds normally when disk headroom is sufficient",
+          test_run_integrate_proceeds_when_disk_headroom_sufficient)
+    check("run_integrate: writes progress JSON reaching phase=done on success",
+          test_run_integrate_writes_progress_json_reaching_done_on_success)
+    check("run_integrate: writes progress JSON reaching phase=failed on error",
+          test_run_integrate_writes_progress_json_reaching_failed_on_error)
+    check("run_import: records manual provenance (source=manual, release=NULL) on success",
+          test_run_import_records_manual_provenance_on_success)
+    check("run_import: writes no provenance row on preflight failure",
+          test_run_import_no_provenance_written_on_preflight_failure)
+    check("run_integrate: records nces provenance for every union year on success",
+          test_run_integrate_records_nces_provenance_for_every_union_year_on_success)
+    check("run_integrate: writes no provenance when the swap fails",
+          test_run_integrate_no_provenance_written_when_swap_fails)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

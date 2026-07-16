@@ -18,6 +18,7 @@ import re
 import shutil
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -59,9 +60,11 @@ def _client(timeout: float) -> httpx.Client:
 
 def head_release(
     start_year: int, client: httpx.Client | None = None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, int | None]:
     """HEAD the Final release, falling back to Provisional. Returns
-    (release, url) for whichever exists, or (None, None) if neither does (this
+    (release, url, zip_bytes) for whichever exists — zip_bytes is the HEAD
+    response's declared Content-Length as an int, or None if the server
+    didn't send one — or (None, None, None) if neither release exists (this
     includes a start_year outside _zip_url's valid range — simply nothing to
     find, not an error). Refuses to trust a redirect that resolves off
     NCES_HOST (that DOES raise — it's a security-relevant condition, not a
@@ -73,15 +76,17 @@ def head_release(
             try:
                 url = _zip_url(start_year, release)
             except ValueError:
-                return None, None
+                return None, None, None
             resp = c.head(url, follow_redirects=True)
             resolved_host = resp.url.host
             if resolved_host != NCES_HOST:
                 raise ValueError(
                     f"redirect for {url} resolved off {NCES_HOST} (to {resolved_host})")
             if resp.status_code == 200:
-                return release, url
-        return None, None
+                declared = resp.headers.get("content-length")
+                zip_bytes = int(declared) if declared is not None and declared.isdigit() else None
+                return release, url, zip_bytes
+        return None, None, None
     finally:
         if own_client:
             c.close()
@@ -97,10 +102,25 @@ def _clear_catalog_cache() -> None:
     _catalog_cache["data"] = None
 
 
+def _probe_one(start_year: int, client: httpx.Client) -> dict:
+    release, _url, zip_bytes = head_release(start_year, client=client)
+    return {
+        "start_year": start_year,
+        "year_label": f"{start_year}-{str(start_year + 1)[-2:]}",
+        "year": start_year + 1,
+        "available": release is not None,
+        "release": release,
+        "zip_bytes": zip_bytes,
+    }
+
+
 def probe_catalog(refresh: bool = False, client: httpx.Client | None = None) -> list[dict]:
     """One entry per NCES start year [EARLIEST_START_YEAR .. current_year+1],
-    each shaped {start_year, year_label, year, available, release}. Cached
-    in-process for ~1h; refresh=True bypasses the cache."""
+    each shaped {start_year, year_label, year, available, release, zip_bytes}.
+    Probes run CONCURRENTLY (a ThreadPoolExecutor, width
+    settings.nces_probe_concurrency) but the returned list is always re-sorted
+    ascending by start_year, regardless of completion order. Cached in-process
+    for ~1h; refresh=True bypasses the cache."""
     now = time.time()
     if not refresh and _catalog_cache["data"] is not None and \
             _catalog_cache["at"] is not None and \
@@ -108,19 +128,13 @@ def probe_catalog(refresh: bool = False, client: httpx.Client | None = None) -> 
         return _catalog_cache["data"]
 
     current_year = datetime.now().year
+    years = list(range(EARLIEST_START_YEAR, current_year + 2))
     own_client = client is None
     c = client or _client(get_settings().nces_http_timeout_seconds)
-    entries: list[dict] = []
     try:
-        for start_year in range(EARLIEST_START_YEAR, current_year + 2):
-            release, _url = head_release(start_year, client=c)
-            entries.append({
-                "start_year": start_year,
-                "year_label": f"{start_year}-{str(start_year + 1)[-2:]}",
-                "year": start_year + 1,
-                "available": release is not None,
-                "release": release,
-            })
+        with ThreadPoolExecutor(max_workers=get_settings().nces_probe_concurrency) as ex:
+            futures = {sy: ex.submit(_probe_one, sy, c) for sy in years}
+            entries = [futures[sy].result() for sy in years]
     finally:
         if own_client:
             c.close()
@@ -130,17 +144,29 @@ def probe_catalog(refresh: bool = False, client: httpx.Client | None = None) -> 
     return entries
 
 
-def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | None = None) -> Path:
+def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | None = None, *,
+                 on_progress=None, deadline_seconds: float | None = None) -> Path:
     """Stream `url` to `dest`, enforcing `max_bytes` both from a declared
     Content-Length (rejected up front) AND from the actual running byte count
     mid-stream (a lying/missing header must not bypass the cap). Refuses to
     trust a redirect that resolves off `NCES_HOST` (mirrors head_release).
-    Deletes any partial file on failure."""
+    Deletes any partial file on failure.
+
+    `on_progress(written, total)`, if given, is called with CUMULATIVE bytes
+    after every chunk (`total` is the declared Content-Length, or None if the
+    server didn't send one). `deadline_seconds`, if given, enforces a
+    per-transfer wall-clock cap — checked against `time.monotonic()` (a
+    module-attribute reference, `nces.time.monotonic`, so tests can
+    monkeypatch it deterministically) — and aborts the stream (raising) just
+    like the byte cap does. `deadline_seconds=None` (the default) means no
+    deadline at all; `fetch_year` is the caller that passes the
+    `settings.nces_download_deadline_seconds` default through."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     own_client = client is None
     c = client or _client(get_settings().nces_http_timeout_seconds)
     try:
+        start = time.monotonic() if deadline_seconds is not None else None
         with c.stream("GET", url) as resp:
             resp.raise_for_status()
             resolved_host = resp.url.host
@@ -148,6 +174,7 @@ def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | No
                 raise ValueError(
                     f"redirect for {url} resolved off {NCES_HOST} (to {resolved_host})")
             declared = resp.headers.get("content-length")
+            total: int | None
             if declared is not None:
                 try:
                     declared_n = int(declared)
@@ -157,10 +184,19 @@ def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | No
                     raise ValueError(
                         f"declared Content-Length {declared_n} exceeds the "
                         f"{max_bytes}-byte cap for {url}")
+                total = declared_n
+            else:
+                total = None
             written = 0
             with dest.open("wb") as f:
                 for chunk in resp.iter_bytes():
+                    if deadline_seconds is not None and \
+                            (time.monotonic() - start) > deadline_seconds:
+                        raise TimeoutError(
+                            f"download of {url} exceeded the {deadline_seconds}s deadline")
                     written += len(chunk)
+                    if on_progress is not None:
+                        on_progress(written, total)
                     if written > max_bytes:
                         raise ValueError(
                             f"download of {url} exceeded the {max_bytes}-byte "
@@ -240,22 +276,26 @@ def extract_accdb(zip_path: Path, out_dir: Path, expected_start_year: int,
     return out_path
 
 
-def fetch_year(start_year: int, work_dir: Path) -> Path:
+def fetch_year(start_year: int, work_dir: Path, *, on_progress=None) -> tuple[Path, str]:
     """Orchestrate head_release -> download_zip -> extract_accdb for one
-    start year. Returns the path to the extracted .accdb (deleting the zip
-    afterward), or raises if NCES has neither release for the year."""
+    start year. Returns (accdb_path, release) (deleting the zip afterward),
+    or raises if NCES has neither release for the year. `on_progress`, if
+    given, is threaded straight through to download_zip."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     s = get_settings()
 
-    release, url = head_release(start_year)
+    release, url, _zip_bytes = head_release(start_year)
     if not release or not url:
         raise ValueError(f"NCES has no Final or Provisional release for start year {start_year}")
 
     zip_path = work_dir / f"nces_download_{start_year}.zip"
     try:
-        download_zip(url, zip_path, max_bytes=s.nces_zip_max_mb * 1024 * 1024)
-        return extract_accdb(zip_path, work_dir, expected_start_year=start_year,
-                             max_extract_bytes=s.nces_accdb_max_mb * 1024 * 1024)
+        download_zip(url, zip_path, max_bytes=s.nces_zip_max_mb * 1024 * 1024,
+                     on_progress=on_progress,
+                     deadline_seconds=s.nces_download_deadline_seconds)
+        accdb_path = extract_accdb(zip_path, work_dir, expected_start_year=start_year,
+                                   max_extract_bytes=s.nces_accdb_max_mb * 1024 * 1024)
+        return accdb_path, release
     finally:
         zip_path.unlink(missing_ok=True)

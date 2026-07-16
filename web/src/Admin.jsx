@@ -1,6 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
+import { estimateIntegrate } from "./estimate.js";
+
+function humanBytes(n) {
+  if (n == null || !isFinite(n)) return "?";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = Math.abs(n);
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function humanSeconds(s) {
+  if (s == null || !isFinite(s)) return "?";
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  const rs = Math.round(s % 60);
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
 
 // Backend _set_status (app/importer.py) only ever emits running/checks/
 // swapped/failed — "passed" is not a real job status.
@@ -137,12 +155,14 @@ function Allowlist({ me }) {
 
 const STATUS_GLYPH = {
   integrated: "✓",
+  update: "↑",
   final: "◆",
   provisional: "◑",
   unknown: "?",
 };
 const STATUS_TEXT = {
   integrated: "Integrated",
+  update: "Update",
   final: "Final",
   provisional: "Provisional",
   unknown: "Can't check",
@@ -180,6 +200,7 @@ function YearCard({ entry, locked, checked, onToggle }) {
         />
       )}
       <StatusBadge status={entry.status} />
+      {checked && <span className="year-card__check" aria-hidden="true">✓</span>}
     </div>
   );
 }
@@ -274,6 +295,54 @@ function Imports() {
   const selectableYears = (catalog?.years || []).filter((y) => y.selectable);
   const yearsNewestFirst = catalog ? catalog.years.slice().reverse() : [];
 
+  // Structured per-year progress from the polled job row (a JSON string per
+  // the API contract — mirrors sql_log on chat messages).
+  const progress = useMemo(() => {
+    if (!active?.progress) return null;
+    try { return JSON.parse(active.progress); } catch { return null; }
+  }, [active]);
+  const progressYears = useMemo(() => {
+    if (!progress?.years) return [];
+    return Object.values(progress.years).sort((a, b) => a.start_year - b.start_year);
+  }, [progress]);
+
+  // Client-side disk/time estimate over the FULL rebuild union — every
+  // already-integrated start year (derived from the catalog's
+  // years[].integrated) UNION the newly-checked start years — mirroring
+  // exactly what run_integrate (app/importer.py) re-downloads: a full rebuild
+  // of the union, never an incremental merge. A year that's both
+  // already-integrated AND checked (a status:"update" re-integration) counts
+  // once in the union, not twice, so it can't inflate the staging-db term.
+  // This is still a UX preview, not the server's authoritative preflight
+  // check — see app/estimate.py / web/src/estimate.js for the shared formula.
+  const diskEstimate = useMemo(() => {
+    if (!catalog?.disk || !catalog?.calibration) return null;
+    const calib = catalog.calibration;
+    const byYear = new Map(catalog.years.map((y) => [y.start_year, y]));
+    const alreadyIntegratedStarts = catalog.years
+      .filter((y) => y.integrated)
+      .map((y) => y.start_year);
+    const unionStarts = Array.from(new Set([...alreadyIntegratedStarts, ...selected]))
+      .sort((a, b) => a - b);
+    const alreadyIntegratedCount = alreadyIntegratedStarts.length;
+    const selectedCount = unionStarts.length - alreadyIntegratedCount;
+    return estimateIntegrate({
+      zipBytes: unionStarts.map((sy) => byYear.get(sy)?.zip_bytes ?? null),
+      alreadyIntegratedCount,
+      selectedCount,
+      liveDbBytes: calib.live_db_bytes,
+      currentIntegratedYearCount: alreadyIntegratedCount,
+      diskFreeBytes: catalog.disk.free_bytes,
+      diskTotalBytes: catalog.disk.total_bytes,
+      expandFactor: calib.expand_factor,
+      defaultPerYearDbMb: calib.default_per_year_db_mb,
+      bandwidthMbps: calib.bandwidth_mbps,
+      buildSecondsPerYear: calib.build_seconds_per_year,
+      safetyFactor: calib.safety_factor,
+    });
+  }, [catalog, selected]);
+  const diskOver = diskEstimate != null && !diskEstimate.sufficient;
+
   async function submitIntegrate() {
     setNotice("");
     setIntegrating(true);
@@ -311,7 +380,7 @@ function Imports() {
         <div ref={noticeRef} tabIndex={-1} className="notice" role="status">{notice}</div>
       )}
       {jobRunning && (
-        <div className="notice" role="status">
+        <div className="notice">
           An import is running… controls are locked until it finishes.
         </div>
       )}
@@ -319,6 +388,7 @@ function Imports() {
       <div className="year-catalog">
         <div className="catalog-legend">
           <span className="legend-item"><StatusBadge status="integrated" /></span>
+          <span className="legend-item"><StatusBadge status="update" /></span>
           <span className="legend-item"><StatusBadge status="final" /></span>
           <span className="legend-item"><StatusBadge status="provisional" /></span>
           <span className="legend-item"><StatusBadge status="unknown" /></span>
@@ -360,7 +430,7 @@ function Imports() {
                       onClick={() => setSelected(new Set())}>
                 Clear selection
               </button>
-              <span role="status" className="muted small">{selected.size} selected</span>
+              <span className="muted small">{selected.size} selected</span>
               <button type="button" disabled={locked} onClick={() => loadCatalog(true)}>
                 ⟳ Refresh
               </button>
@@ -374,8 +444,32 @@ function Imports() {
               ))}
             </div>
 
+            {diskEstimate && (
+              <div className="disk-estimate">
+                <div data-testid="disk-meter" aria-hidden="true"
+                     className={"disk-meter" + (diskOver ? " over" : "")}>
+                  <div className="disk-meter-fill"
+                       style={{ width: `${Math.min(100, (diskEstimate.peakUsedBytes / catalog.disk.total_bytes) * 100)}%` }} />
+                </div>
+                <p id="disk-summary" className="muted small" role="status" aria-live="polite">
+                  Estimated peak disk use: {humanBytes(diskEstimate.peakUsedBytes)} of{" "}
+                  {humanBytes(catalog.disk.total_bytes)} total
+                  ({humanBytes(catalog.disk.free_bytes)} free now)
+                  {diskOver
+                    ? " — not enough free space for this selection."
+                    : " — enough free space."}
+                  {selected.size > 0 && (
+                    <> ~{humanBytes(diskEstimate.totalDownloadBytes)} to download
+                    (~{humanSeconds(diskEstimate.estDownloadSeconds)}),
+                    rebuild ~{humanSeconds(diskEstimate.estBuildSeconds)}.</>
+                  )}
+                </p>
+              </div>
+            )}
+
             <div className="integrate-bar">
-              <button type="button" disabled={locked || selected.size === 0}
+              <button type="button" disabled={locked || selected.size === 0 || diskOver}
+                      aria-describedby={diskOver ? "disk-summary" : undefined}
                       onClick={submitIntegrate}>
                 Integrate selected ({selected.size})
               </button>
@@ -406,7 +500,21 @@ function Imports() {
                 &nbsp;integrating start year{activeYears.length > 1 ? "s" : ""}: {activeYears.join(", ")}
               </span>
             )}
+            {progress?.overall && (
+              <span className="muted small">&nbsp;— {progress.overall.message}</span>
+            )}
           </div>
+          {progressYears.length > 0 && (
+            <div data-testid="import-progress" className="file-progress">
+              {progressYears.map((y) => (
+                <div key={y.start_year} data-year={y.start_year} className="file-progress-row">
+                  <span className="file-progress-year">{y.year_label}</span>
+                  <span className="file-progress-step">{y.step}</span>
+                  <span className="file-progress-pct">{y.pct}%</span>
+                </div>
+              ))}
+            </div>
+          )}
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
             <summary>Log</summary>
