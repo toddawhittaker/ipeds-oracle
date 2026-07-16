@@ -4,9 +4,15 @@
   REVISE, everything ambiguous/empty is OK (don't disturb a good draft).
 - review() fails OPEN (ok=True) when disabled, unconfigured, or on a transport
   error, so the critic can never drop or block an answer.
-- In stream_agent: a REVISE verdict drives exactly ONE revision round and the
-  corrected answer is returned; an OK verdict returns the draft untouched; the
-  critic runs at most once and never on a no-SQL (refusal) answer.
+- In stream_agent: a REVISE verdict drives exactly ONE revision round; an OK
+  verdict returns the draft untouched; the critic runs at most once and never
+  on a no-SQL (refusal) answer.
+- The revision round is judged by whether the model ran a NEW run_sql after
+  the critique: if so, its new answer is a genuine correction and streams
+  through with critic_revised=True; if it just argues back with no new SQL,
+  the loop discards that rebuttal and re-emits the ORIGINAL pre-critique draft
+  verbatim with critic_revised=False (no leaked reviewer meta-commentary, no
+  spurious lesson).
 """
 import asyncio
 import os
@@ -238,6 +244,9 @@ def test_ok_verdict_returns_draft_unchanged():
 
 
 def test_revise_verdict_triggers_one_revision():
+    # Genuine correction: critic flags the draft, the model re-runs SQL, THEN
+    # answers. Sequence: (1) run_sql -> (2) draft -> critic REVISE ->
+    # (3) run_sql again -> (4) "Corrected: 1,000,000."
     calls = {"chat": 0, "critic": 0}
 
     async def fake_chat(client, model, messages, tools=None):
@@ -250,6 +259,13 @@ def test_revise_verdict_triggers_one_revision():
         if calls["chat"] == 2:
             return {"choices": [{"message": {"content": "Draft: 4,000,000 (wrong)."}}],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 3:  # revision round: the model re-queries, no answer yet
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c2", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE majornum=1"}'
+                }}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
         return {"choices": [{"message": {"content": "Corrected: 1,000,000."}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
@@ -267,8 +283,101 @@ def test_revise_verdict_triggers_one_revision():
     assert res.answer == "Corrected: 1,000,000.", res.answer
     assert res.critic_revised is True, res.critic_revised
     assert calls["critic"] == 1, "critic must run at most once per turn"
-    # the revision message must have been fed back before the final answer
-    assert calls["chat"] == 3, calls
+    # run_sql, draft, revision-round run_sql, corrected answer
+    assert calls["chat"] == 4, calls
+
+
+def test_rebuttal_without_new_sql_reemits_clean_draft():
+    # Core regression test for the critic-revision leak: the model argues back
+    # instead of re-querying after a REVISE verdict. The loop must discard the
+    # rebuttal and re-emit the ORIGINAL clean draft, with critic_revised False
+    # so no spurious lesson gets recorded downstream.
+    calls = {"chat": 0, "critic": 0}
+    clean_draft = "Franklin awarded 2,183 in 2024."
+    rebuttal = ("The reviewer's concern is understandable but does not apply here. "
+                "I verified from the survey dictionary that cstotlt is correct.")
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(cstotlt) FROM ic_a"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 2:
+            return {"choices": [{"message": {"content": clean_draft}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        # revision round: no tool call, just a rebuttal
+        return {"choices": [{"message": {"content": rebuttal}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    async def fake_review(question, sql_log, answer):
+        calls["critic"] += 1
+        return Critique(ok=False, issue="cstotlt may overcount")
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = critic.review
+    assert res.answer == clean_draft, res.answer
+    assert res.critic_revised is False, res.critic_revised
+    lowered = res.answer.lower()
+    for leak in ("reviewer", "i verified", "does not apply"):
+        assert leak not in lowered, (leak, res.answer)
+
+
+def test_requery_confirming_same_answer_is_not_a_revision():
+    # Finding 2 (verify-by-requery false alarm): the critic flags a false alarm,
+    # the model DOES re-run SQL (sql_log grows) but the re-query only confirms
+    # the original number. That's "re-queried and confirmed," not a correction,
+    # so critic_revised must stay False and the answer must be the same draft
+    # text (no spurious lesson recorded downstream).
+    calls = {"chat": 0, "critic": 0}
+    draft = "Ohio awarded 12,345 nursing degrees."
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='
+                                 '\'51.3801\' AND stabbr=\'OH\'"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 2:
+            return {"choices": [{"message": {"content": draft}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 3:  # revision round: model re-queries to double-check
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c2", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='
+                                 '\'51.3801\' AND stabbr=\'OH\' AND majornum=1"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        # confirms the same number, verbatim
+        return {"choices": [{"message": {"content": draft}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    async def fake_review(question, sql_log, answer):
+        calls["critic"] += 1
+        return Critique(ok=False, issue="magnitude looks high")
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = critic.review
+    assert res.answer == draft, res.answer
+    assert res.critic_revised is False, res.critic_revised
+    assert calls["critic"] == 1, "critic must run at most once per turn"
+    # run_sql, draft, revision-round run_sql, confirmed (same) answer
+    assert calls["chat"] == 4, calls
 
 
 def test_revision_message_reaches_the_model():
@@ -349,6 +458,10 @@ def run():
           test_ok_verdict_returns_draft_unchanged)
     check("REVISE verdict triggers exactly one revision",
           test_revise_verdict_triggers_one_revision)
+    check("a rebuttal with no new SQL re-emits the clean draft (leak regression)",
+          test_rebuttal_without_new_sql_reemits_clean_draft)
+    check("a requery confirming the same answer is not a revision",
+          test_requery_confirming_same_answer_is_not_a_revision)
     check("the revision message reaches the model",
           test_revision_message_reaches_the_model)
     check("a no-SQL (refusal) answer skips the critic",

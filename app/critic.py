@@ -101,14 +101,22 @@ def build_review_messages(question: str, sql_log: list[str], answer: str) -> lis
 
 
 def revision_instruction(issue: str) -> str:
-    """The message fed back into the agent loop to drive a single revision."""
+    """The message fed back into the agent loop to drive a single revision.
+
+    Hardened against leaking reviewer-directed meta-commentary into the answer:
+    the model is told to emit ONLY the user-facing answer. This is a soft
+    guardrail; in the common single-revision path stream_agent also re-emits the
+    clean pre-critique draft when this round runs no new run_sql, so a rebuttal
+    can't reach the user there even if the model ignores the instruction."""
     return (
         "An automated reviewer flagged a likely problem with your draft answer: "
         f"{issue}\n\n"
         "Re-check it. If the reviewer is right, fix your SQL and re-run it with "
         "run_sql, then give the corrected final answer. If you are confident the "
-        "original is correct, briefly verify and restate it. Do not mention this "
-        "review to the user."
+        "original is correct, restate it cleanly.\n\n"
+        "Output ONLY the final answer the user should see, exactly as if this "
+        "review never happened. Never mention the reviewer, this review, or your "
+        "verification steps, and never address the reviewer."
     )
 
 
