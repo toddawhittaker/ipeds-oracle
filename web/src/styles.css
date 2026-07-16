@@ -14,7 +14,14 @@
 :root[data-theme="dark"] {
   --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
   --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
-  --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
+  /* --danger lightened from #e06a5c to #e5776a: the darker value only gave
+     4.29:1 against --user (the .requests pending-access-request panel's
+     background, WCAG 1.4.3 needs 4.5:1). #e5776a clears every background
+     --danger is used on (--user 4.82, --panel 5.59, --bg 6.14), so
+     lightening it is globally safe rather than a one-off exception. Fixed
+     via the token, not opacity — opacity composites the label toward
+     whatever's behind it and has failed an a11y pass on this repo before. */
+  --user: #232c38; --danger: #e5776a; --ok: #4cc38a; --warn: #e0a94a;
   --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
   --on-fg: #10151b; /* dark text on the lighter dark-theme --accent (contrast-safe) */
   /* Dark-mode equivalent — dark enough that --text (near-white) still reads
@@ -25,7 +32,7 @@
   :root:not([data-theme]) {
     --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
     --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
-    --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
+    --user: #232c38; --danger: #e5776a; --ok: #4cc38a; --warn: #e0a94a;
     --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
     --on-fg: #10151b;
     --selected-tint: #2a3a4d;

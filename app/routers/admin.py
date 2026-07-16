@@ -14,7 +14,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 import app.nces as nces
 from app import estimate, importer, skills
-from app.auth import mint_login_link, require_admin
+from app.auth import canon_email, mint_login_link, require_admin
 from app.config import get_settings
 from app.db import connect
 from app.mailer import send_access_approved
@@ -60,8 +60,13 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
         if body.is_admin:
             con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
                         "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
+        # Widened to include 'denied': allowlisting is an explicit override, so
+        # convert any prior denial to 'approved' too (not just a stale pending
+        # row) — see the deny endpoint's docstring below for why leaving a
+        # denied row un-converted would let routine allowlist offboarding
+        # silently re-block someone no admin meant to re-deny.
         con.execute("UPDATE access_requests SET status='approved' "
-                    "WHERE email=? AND status='pending'", (email,))
+                    "WHERE email=? AND status IN ('pending','denied')", (email,))
         # Newly approved/added people get a ready-to-use sign-in link so they can
         # get in without having to know to request one again.
         if newly_added:
@@ -130,14 +135,56 @@ def remove_allowlist(email: str):
 
 @router.get("/access-requests")
 def access_requests():
+    """Pending access requests, collapsed one row per address. Both outcomes
+    (approve and deny) are per-address and flip EVERY pending row for that
+    address, so a list showing each raw row would render duplicate
+    Approve/Reject pairs for one person, all doing the identical thing.
+    MIN(id) gives a stable React key; MAX(created_at) is the most recent
+    request, which is what the DESC sort should mean; MAX(reason) is a no-op
+    in practice (request_login's INSERT never sets reason) but is used rather
+    than relying on SQLite's bare-column-in-GROUP-BY behavior."""
     con = connect()
     try:
         rows = con.execute(
-            "SELECT id, email, reason, status, created_at FROM access_requests "
-            "WHERE status='pending' ORDER BY created_at DESC").fetchall()
+            "SELECT MIN(id) AS id, email, MAX(reason) AS reason, status, "
+            "MAX(created_at) AS created_at "
+            "FROM access_requests WHERE status='pending' "
+            "GROUP BY email ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()
+
+
+@router.post("/access-requests/{email}/deny")
+def deny_access_request(email: str):
+    """Deny every pending request sharing `email`'s CANONICAL address (see
+    app.auth.canon_email) and block that whole group from filing new ones
+    (app.auth.is_denied). Keyed on the canonical address, not a row id or the
+    raw address: an address can have several pending rows (request_login
+    never dedupes) across +tag/case variants that all reach the same
+    mailbox, and denying only the exact string typed in would leave those
+    variants — and hence the underlying mailbox — un-denied and bypassable.
+
+    The row is UPDATEd, never deleted — its persistence IS the block.
+    Reversible by adding the (raw) address to the allowlist, which converts
+    the denied rows back to 'approved' (see add_allowlist)."""
+    email = email.strip().lower()
+    target = canon_email(email)
+    con = connect()
+    try:
+        # COALESCE fallback matches app.auth.is_denied's — see that function's
+        # docstring for why (canon_email is populated for every row this app
+        # writes; the fallback only covers a row that predates that).
+        cur = con.execute(
+            "UPDATE access_requests SET status='denied' "
+            "WHERE status='pending' AND COALESCE(canon_email, LOWER(email))=?",
+            (target,))
+        con.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "No pending access request for that address.")
+    finally:
+        con.close()
+    return {"ok": True, "email": email}
 
 
 # --- Data import --------------------------------------------------------------

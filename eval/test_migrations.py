@@ -194,13 +194,84 @@ def test_migration_7_adds_headline_column():
     assert "headline" not in _cols(con, "skills"), _cols(con, "skills")
     v = _apply_migrations(con, MIGRATIONS)
     assert v == max(m[0] for m in MIGRATIONS), v
-    assert v == 7, f"expected migration 7 to be the current baseline, got {v}"
+    assert v == 9, f"expected migration 9 to be the current baseline, got {v}"
     assert "headline" in _cols(con, "skills"), _cols(con, "skills")
     # New column must be nullable (existing rows aren't backfilled by the DDL).
     con.execute("INSERT INTO skills(question, canonical_sql, created_at) "
                "VALUES ('q', 'SELECT 1', 0)")
     row = con.execute("SELECT headline FROM skills WHERE question='q'").fetchone()
     assert row[0] is None, row
+
+
+def test_access_requests_email_index_exists():
+    """Migration 8: is_denied() (app/auth.py) runs a per-address lookup on
+    access_requests on EVERY unauthenticated POST /api/auth/request, and the
+    table is attacker-growable (an unauth caller can insert rows), so the
+    lookup must be indexed rather than a full scan."""
+    con = sqlite3.connect(":memory:")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    idx_names = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_access_requests_email" in idx_names, \
+        f"expected idx_access_requests_email among {idx_names}"
+
+    # Re-applying against an already-migrated db must be a safe no-op.
+    v2 = _apply_migrations(con, MIGRATIONS)
+    assert v2 == v, f"expected version to stay {v}, got {v2}"
+    idx_names_after = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_access_requests_email" in idx_names_after, idx_names_after
+
+
+def test_migration_9_adds_canon_email_column_index_and_backfills():
+    """FIX ROUND -- Defect 2 (HIGH, security review, CONFIRMED): exact-string
+    matching is fail-OPEN for a denylist (an attacker bypasses a denial by
+    adding "+anything" to their address). The fix stores a CANONICAL form
+    (lowercase + a `+tag` local-part suffix stripped -- dots are deliberately
+    NOT stripped, see the behavioral tests in eval/test_admin_router.py) in a
+    new indexed `canon_email` column, backfilled for pre-existing rows.
+
+    Seeds a row directly at the pre-migration-9 schema (simulating real
+    production data written before this migration existed) and confirms the
+    migration both adds the column/index AND backfills that row correctly.
+    Only the BACKFILL is pinned here (a schema-level, migration-owned
+    concern) -- whether/how a freshly-inserted row gets its canon_email
+    populated going forward is an application-level concern tested through
+    the real endpoints in eval/test_admin_router.py and
+    eval/test_access_gate.py, not here."""
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 8])
+    assert "canon_email" not in _cols(con, "access_requests"), _cols(con, "access_requests")
+    con.execute(
+        "INSERT INTO access_requests(email, status, created_at) VALUES (?,?,?)",
+        ("mallory+old@example.edu", "pending", 0))
+    con.commit()
+
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert v == 9, f"expected migration 9 to be the current baseline, got {v}"
+    assert "canon_email" in _cols(con, "access_requests"), _cols(con, "access_requests")
+
+    idx_names = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert any("canon_email" in n for n in idx_names), \
+        f"expected an index on access_requests.canon_email among {idx_names}"
+
+    row = con.execute(
+        "SELECT canon_email FROM access_requests WHERE email='mallory+old@example.edu'"
+    ).fetchone()
+    assert row[0] == "mallory@example.edu", (
+        f"a pre-existing row's canon_email must be BACKFILLED to the "
+        f"canonical form (lowercase, +tag stripped), got {row[0]!r}")
+
+    # Re-applying against an already-migrated db must be a safe no-op.
+    v2 = _apply_migrations(con, MIGRATIONS)
+    assert v2 == v, f"expected version to stay {v}, got {v2}"
+    row_after = con.execute(
+        "SELECT canon_email FROM access_requests WHERE email='mallory+old@example.edu'"
+    ).fetchone()
+    assert row_after[0] == "mallory@example.edu", row_after
 
 
 def test_real_init_db_sets_baseline_and_bootstraps():
@@ -241,6 +312,10 @@ def run():
           test_migration_6_is_idempotent_and_noop_on_fresh_db)
     check("migration 7 adds skills.headline (nullable)",
           test_migration_7_adds_headline_column)
+    check("migration 8 adds idx_access_requests_email (idempotent re-apply)",
+          test_access_requests_email_index_exists)
+    check("migration 9 adds access_requests.canon_email + index, backfills existing rows",
+          test_migration_9_adds_canon_email_column_index_and_backfills)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()

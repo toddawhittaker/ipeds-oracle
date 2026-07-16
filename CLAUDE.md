@@ -110,7 +110,18 @@ a post-answer **critic** (both catch IPEDS aggregation errors; the critic can
 force one revision round). Auth = passwordless **magic link**, manual allowlist,
 email via **Resend**; the allowlist is the sole authority on sign-in, while
 optional `EMAIL_DOMAIN` keeps *access requests* to the institution's own domain
-(and feeds the login form's hint via unauthenticated `GET /api/auth/config`).
+(and feeds the login form's hint via unauthenticated `GET /api/auth/config`). An
+admin can **deny** an access request, which permanently blocks that address —
+and every `+tag`/case variant of it, matched on a canonical form stored in
+`access_requests.canon_email` (lowercased, `+tag` stripped, dots left alone
+since they can be a different real person) — from filing new ones (no row, no
+admin email), while returning the exact same neutral response as every other
+path; every branch's outbound send is scheduled via `BackgroundTasks` rather
+than sent inline, so denial is never an enumeration oracle by response body
+**or** by wall-clock (a synchronous Resend call on only some branches was a
+measured 400x+ timing oracle). Allowlisting a denied address always un-blocks
+it (converts its `denied` row to `approved`, so removing it from the allowlist
+later can't resurrect the block).
 Self-learning = a library of **lessons** — each a short
 generalized **headline** + a longer generalized **description** (collapsible in
 the admin UI) + a commented SQL worked example — retrieved as guidance and

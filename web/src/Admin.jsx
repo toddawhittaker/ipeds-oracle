@@ -54,6 +54,24 @@ function Allowlist({ me }) {
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [flash, setFlash] = useState("");
+  // Focus target for the visible flash box (a11y): moved here whenever a
+  // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
+  // — without it, an action that unmounts the row the user just activated
+  // (e.g. Reject removing its own .req row on reload) drops focus to <body>.
+  const flashRef = useRef(null);
+  useEffect(() => { if (flash) flashRef.current?.focus(); }, [flash]);
+
+  // aria-live only fires reliably on a genuine DOM mutation, and React bails
+  // out of a re-render entirely when setState is called with the SAME value
+  // (Object.is) — so re-flashing identical text (e.g. rejecting a second
+  // request in a row) would silently announce nothing. Clear first, then set
+  // on the next frame, to force a real mutation every time. Same pattern as
+  // Skills' announce() below (Admin.jsx), reused here rather than invented
+  // fresh.
+  function announce(text) {
+    setFlash("");
+    requestAnimationFrame(() => setFlash(text));
+  }
 
   const load = () => {
     api.allowlist().then(setRows);
@@ -63,7 +81,7 @@ function Allowlist({ me }) {
 
   async function invite(addr, noteText, admin = false) {
     const res = await api.addAllow(addr, noteText, admin).catch(() => ({}));
-    setFlash(res?.invited
+    announce(res?.invited
       ? `Approved — a sign-in link was emailed to ${addr}.`
       : `${addr} added. (No email was sent — the sign-in link is in the server log.)`);
     load();
@@ -75,31 +93,64 @@ function Allowlist({ me }) {
     setEmail(""); setNote(""); setIsAdmin(false);
   }
 
+  async function reject(addr) {
+    if (!window.confirm(
+      `Reject the access request from ${addr}? They won't be able to request ` +
+      `access again unless you add them to the allowlist.`)) return;
+    try {
+      await api.denyAccessRequest(addr);
+      // Set BEFORE load() below removes addr's .req row from the DOM, so
+      // flashRef is already focused by the time that row unmounts (mirrors
+      // Imports' removeYear: "set an interim notice BEFORE ... the very
+      // button the user just activated" unmounts). Naming the address is
+      // fine here — the .req-scoped e2e locator no longer over-matches it.
+      announce(`Rejected the access request from ${addr}.`);
+    } catch {
+      announce(`Could not reject ${addr}.`);
+    }
+    load();
+  }
+
   async function toggleAdmin(r) {
     try {
       await api.setAdmin(r.email, !r.is_admin);
-      setFlash(r.is_admin
+      announce(r.is_admin
         ? `${r.email} is no longer an admin.`
         : `${r.email} is now an admin.`);
     } catch (err) {
       let msg = "Could not update admin status.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      setFlash(msg);
+      announce(msg);
     }
     load();
   }
 
   return (
     <div className="panel">
-      {flash && <div className="notice" role="status">{flash}</div>}
+      {/* Visible box is a focus target (a11y — see flashRef above), not the
+          live region itself: it unmounts/remounts on every announce(), and a
+          brand-new node isn't a reliably-announced shape across screen
+          readers. The ALWAYS-MOUNTED .sr-only region right below is the
+          single source of ARIA announcements (same pattern as Skills'
+          status region further down) — role="status" lives there only, so
+          sighted and screen-reader users each get exactly one announcement
+          instead of two. */}
+      {flash && <div ref={flashRef} tabIndex={-1} className="notice">{flash}</div>}
+      <div className="sr-only" role="status" aria-live="polite">{flash}</div>
       {reqs.length > 0 && (
         <div className="requests">
           <h2>Pending access requests</h2>
           {reqs.map((r) => (
             <div key={r.id} className="req">
               <span>{r.email}</span>
-              <button onClick={() => invite(r.email, "approved request", false)}>
+              <button aria-label={`Approve the access request from ${r.email}`}
+                      onClick={() => invite(r.email, "approved request", false)}>
                 Approve
+              </button>
+              <button className="link danger"
+                      aria-label={`Reject the access request from ${r.email}`}
+                      onClick={() => reject(r.email)}>
+                Reject
               </button>
             </div>
           ))}

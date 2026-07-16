@@ -244,6 +244,33 @@ export async function mockImportJobPoll(page, jobId, sequence) {
 }
 
 /**
+ * POST /api/admin/access-requests/{email}/deny -> {ok:true, email} (or a
+ * non-200 httpStatus, e.g. 404/500). Captures the exact (decoded) email
+ * parsed out of the request URL for every call, so a spec can assert
+ * precisely which pending row's Reject button fired the request
+ * (web/src/api.js: denyAccessRequest(email) ->
+ * POST /api/admin/access-requests/${encodeURIComponent(email)}/deny).
+ */
+export async function mockDenyAccessRequest(page, { httpStatus = 200, detail } = {}) {
+  const calls = [];
+  await page.route("**/api/admin/access-requests/*/deny", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const url = new URL(route.request().url());
+    const parts = url.pathname.split("/");
+    const email = decodeURIComponent(parts[parts.length - 2]);
+    calls.push(email);
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, email }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "Could not reject that address." }) });
+    }
+  });
+  return { calls };
+}
+
+/**
  * GET /api/admin/import/catalog -> {probed_at, partial, years:[{start_year,
  * year, year_label, status, integrated, available, release, selectable,
  * zip_bytes}], disk:{free_bytes,total_bytes,used_bytes}, calibration:{

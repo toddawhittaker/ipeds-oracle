@@ -38,6 +38,8 @@ export const api = {
   setAdmin: (email, is_admin) =>
     j("PATCH", `/api/admin/allowlist/${encodeURIComponent(email)}`, { is_admin }),
   accessRequests: () => j("GET", "/api/admin/access-requests"),
+  denyAccessRequest: (email) =>
+    j("POST", `/api/admin/access-requests/${encodeURIComponent(email)}/deny`),
   usage: (since, until) => {
     const p = new URLSearchParams();
     if (since) p.set("since", String(Math.floor(since)));

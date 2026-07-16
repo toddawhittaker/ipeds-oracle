@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 
@@ -33,11 +33,14 @@ def public_config():
 
 
 @router.post("/request")
-def request_link(body: LoginRequest, request: Request):
+def request_link(body: LoginRequest, request: Request, tasks: BackgroundTasks):
     email = str(body.email).strip().lower()
     enforce_auth_rate_limit(email, client_ip(request))
     base = str(request.base_url)
-    return auth.request_login(email, base)
+    # tasks is threaded through to request_login so it can schedule its
+    # outbound email (fire-and-forget) rather than send it inline — see that
+    # function's docstring for why every branch must do this, not just some.
+    return auth.request_login(email, base, tasks)
 
 
 @router.get("/verify")
