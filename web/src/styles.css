@@ -464,24 +464,37 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .rebuild-progress { margin: 10px 0; }
 .rebuild-progress-label { margin-bottom: 4px; }
 .skill { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
-/* wrap: if a viewport is too narrow for headline + pills side by side, the
-   whole pill group drops to its own line. Without it, .tags being flex:none
-   would push the row into horizontal overflow — which this app clips rather
-   than scrolls (html,body{overflow:hidden}). */
-.skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 /* A pill is a label, not a paragraph: its text must never wrap. Flex items
    shrink by default, so a long headline next to them squeezed each pill until
    its own text broke onto a second line (19px -> 34px tall). flex:none keeps
-   the group at its natural width — the headline is the flexible half and wraps
-   instead — and flex-wrap lets whole pills move to a new line if a narrow
-   viewport genuinely leaves no room. */
-.tags { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+   the group at its natural width and pinned to the top-right; the headline is
+   the flexible half and wraps beside it. */
+.tags { display: flex; gap: 6px; flex: none; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 /* "unverified" is a neutral not-yet-reviewed state, not an error — amber, not
    the red reserved for destructive/failed things. Both themes pass AA. */
 .tag.warn { color: var(--warn); border-color: var(--warn); }
-.lesson-rule { font-weight: 600; line-height: 1.4; }
+/* The flexible half: takes the space the pills don't need and wraps into as
+   many lines as it likes. min-width:0 is load-bearing — a flex item defaults
+   to min-width:auto, refusing to shrink below its longest word, which is what
+   pushed the row into horizontal overflow on a narrow viewport. overflow-wrap
+   then breaks a word too long to fit rather than letting it spill. */
+.lesson-rule { font-weight: 600; line-height: 1.4; flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+/* Pills stay on the top line and the headline wraps beside them at any width
+   where that's legible. Below the app's existing 560px breakpoint (see
+   .examples-grid) ~240px of pills would leave the headline a sliver, so there
+   the group drops to its own line rather than clip — html,body{overflow:hidden}
+   means an overflowing row is lost, not scrollable. MUST stay below the .tags
+   rule it overrides: a media query adds no specificity, so `.tags{flex:none}`
+   would otherwise win on source order. */
+@media (max-width: 559.98px) {
+  .skill-head { flex-wrap: wrap; }
+  /* Alone on their own line here, so letting the GROUP shrink and wrap is
+     safe — .tag's nowrap still means whole pills move, never broken text. */
+  .tags { margin-left: auto; flex: 0 1 auto; flex-wrap: wrap; }
+}
 .lesson-desc { margin-top: 10px; }
 .lesson-desc summary { cursor: pointer; }
 .lesson-desc p { margin: 6px 0 0; }
