@@ -12,8 +12,10 @@ Two things live in this repo, and most sessions are one or the other:
 Work out which you're doing and read the matching half below.
 
 ## Layout
-- `ipeds.db` — **the** dataset: SQLite, ~1.9 GB, every IPEDS survey table stacked
-  across collection years **2020-21 … 2024-25**. Opened **read-only** by the app.
+- `ipeds.db` — **the** dataset: SQLite, every IPEDS survey table stacked across
+  **whichever collection years the deployment loaded** (each institution picks its
+  own via Admin → Imports; `SELECT year FROM _years` is the authoritative list —
+  never assume a range). Opened **read-only** by the app.
 - `SCHEMA.md` — **read before writing any query.** Data model, conventions,
   family catalog, code references, query patterns, worked NL→SQL examples.
 - `app/` — FastAPI backend. `web/` — Vite/React SPA. `eval/` — test suites.
