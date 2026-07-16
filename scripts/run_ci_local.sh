@@ -62,9 +62,13 @@ export APP_DB_PATH="$CI_DIR/app.db"
 #     CI (no key) takes the deterministic short path.
 #   * RESEND_API_KEY blank — so the mailer logs the link instead of sending
 #     REAL email through Resend during tests.
+#   * EMAIL_DOMAIN blank — a real domain gates access requests to that domain,
+#     so test_backend.py's out-of-domain stranger@x.com never records a request
+#     row and the suite fails locally while GitHub (no .env) stays green.
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
 export RESEND_API_KEY=""
+export EMAIL_DOMAIN=""
 
 # Fresh app.db each run so migration/backup suites start from a known state.
 rm -f "$APP_DB_PATH"

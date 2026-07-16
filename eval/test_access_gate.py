@@ -30,7 +30,13 @@ os.environ["ACCESS_REQUEST_TO"] = ""
 # dedicated suite in test_rate_limit.py).
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
-os.environ.pop("EMAIL_DOMAIN", None)
+# Explicit empty string, NOT os.environ.pop(...): popping only removes the OS
+# env var, so pydantic-settings falls through to whatever EMAIL_DOMAIN a real
+# .env supplies (e.g. a deployment's own franklin.edu) instead of the
+# Field(default="") this suite means to simulate. An explicit "" always wins
+# over .env, giving the same effective empty-domain behavior these tests
+# actually care about.
+os.environ["EMAIL_DOMAIN"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -57,11 +63,16 @@ def check(name, fn):
 
 def _set_domain(domain):
     """Set (or clear) EMAIL_DOMAIN and bust the settings cache so the change
-    takes effect on the next get_settings() call."""
-    if domain:
-        os.environ["EMAIL_DOMAIN"] = domain
-    else:
-        os.environ.pop("EMAIL_DOMAIN", None)
+    takes effect on the next get_settings() call.
+
+    "Clear" sets an explicit empty string rather than os.environ.pop(...):
+    popping only removes the OS env var, leaving pydantic-settings to fall
+    through to a real .env's EMAIL_DOMAIN (if one is set on this box) instead
+    of producing the Field(default="") state this is meant to simulate. An
+    explicit "" always wins over .env and reproduces the same effective
+    empty-domain behavior.
+    """
+    os.environ["EMAIL_DOMAIN"] = domain or ""
     get_settings.cache_clear()
 
 
