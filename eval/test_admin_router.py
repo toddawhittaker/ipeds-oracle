@@ -461,6 +461,115 @@ def test_integrate_conflicts_while_one_already_running():
             restore()
 
 
+# ---------------------------------------------------------------------------
+# DELETE /import/year/{start_year} — remove an integrated year ("trashcan").
+#
+# admin_router.importer.run_deintegrate does not exist yet (FEATURE A is not
+# implemented) — _patch_attr below is a TDD-safe monkeypatch: it never
+# AttributeErrors reading a not-yet-existing module attribute, and correctly
+# removes the attribute again on restore if it wasn't there to begin with.
+# ---------------------------------------------------------------------------
+
+def _patch_attr(module, name, value):
+    had = hasattr(module, name)
+    orig = getattr(module, name, None)
+    setattr(module, name, value)
+
+    def _restore():
+        if had:
+            setattr(module, name, orig)
+        else:
+            delattr(module, name)
+    return _restore
+
+
+def _patch_years(integrated_years):
+    """Monkeypatch admin_router.importer._years (a bare module attribute,
+    same convention as _patch_catalog above) so _integrated_starts() ->
+    {y - 1 for y in integrated_years} without touching a real ipeds.db."""
+    orig = admin_router.importer._years
+    admin_router.importer._years = lambda path: list(integrated_years)
+
+    def _restore():
+        admin_router.importer._years = orig
+    return _restore
+
+
+def test_deintegrate_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.delete("/api/admin/import/year/2023")
+        assert r.status_code == 401, r.text
+
+
+def test_deintegrate_conflicts_while_one_already_running():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_years([2024, 2025])  # integrated starts {2023, 2024}
+        assert admin_router._import_lock.acquire(blocking=False)
+        try:
+            r = c.delete("/api/admin/import/year/2023")
+            assert r.status_code == 409, r.text
+        finally:
+            admin_router._import_lock.release()
+            restore()
+
+
+def test_deintegrate_rejects_a_non_integrated_year():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_years([2024, 2025])  # integrated starts {2023, 2024}
+        try:
+            r = c.delete("/api/admin/import/year/1999")  # never integrated
+            assert r.status_code == 400, r.text
+        finally:
+            restore()
+
+
+def test_deintegrate_rejects_removing_the_only_integrated_year():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_years([2025])  # only one integrated start: {2024}
+        try:
+            r = c.delete("/api/admin/import/year/2024")
+            assert r.status_code == 400, r.text
+        finally:
+            restore()
+
+
+def _run_deintegrate_success(job_id, start_year):
+    con = connect()
+    try:
+        con.execute("UPDATE import_jobs SET status='swapped', report=? WHERE id=?",
+                    ("mock deintegrate ok", job_id))
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_deintegrate_success_creates_a_job():
+    with TestClient(app) as c:
+        _login(c)
+        restore_years = _patch_years([2024, 2025])  # integrated starts {2023, 2024}
+        orig_thread = admin_router.threading.Thread
+        admin_router.threading.Thread = _SyncThread
+        restore_run = _patch_attr(admin_router.importer, "run_deintegrate",
+                                  _run_deintegrate_success)
+        try:
+            r = c.delete("/api/admin/import/year/2023")
+        finally:
+            restore_years()
+            admin_router.threading.Thread = orig_thread
+            restore_run()
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "job_id" in body, body
+        assert body["status"] == "pending", body
+
+        detail = c.get(f"/api/admin/import/jobs/{body['job_id']}")
+        assert detail.status_code == 200 and detail.json()["status"] == "swapped", detail.text
+
+
 def test_allowlist_add_approval_email_failure_is_logged_not_raised():
     with TestClient(app) as c:
         _login(c)
@@ -630,6 +739,14 @@ def run():
           test_integrate_rejects_unavailable_year)
     check("integrate conflicts (409) while one is already running",
           test_integrate_conflicts_while_one_already_running)
+    check("deintegrate requires admin", test_deintegrate_requires_admin)
+    check("deintegrate conflicts (409) while one is already running",
+          test_deintegrate_conflicts_while_one_already_running)
+    check("deintegrate rejects a non-integrated year",
+          test_deintegrate_rejects_a_non_integrated_year)
+    check("deintegrate rejects removing the only integrated year",
+          test_deintegrate_rejects_removing_the_only_integrated_year)
+    check("deintegrate success creates a job", test_deintegrate_success_creates_a_job)
     check("allowlist add logs (not raises) an approval-email failure",
           test_allowlist_add_approval_email_failure_is_logged_not_raised)
     check("promote makes a user admin immediately on their live session",

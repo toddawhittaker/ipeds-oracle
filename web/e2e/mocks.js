@@ -260,3 +260,27 @@ export async function mockIntegrate(page, { jobId = 1, status = "pending", httpS
   });
   return { posts };
 }
+
+/**
+ * DELETE /api/admin/import/year/{start_year} -> {job_id, status} (or a
+ * non-200 `httpStatus`, e.g. 400/409). Captures the exact start_year parsed
+ * out of the request URL for every call, so a spec can assert precisely which
+ * year's trashcan button fired the request (web/src/api.js:
+ * deintegrateYear(startYear) -> DELETE /api/admin/import/year/${startYear}).
+ */
+export async function mockDeintegrate(page, { jobId = 1, status = "pending", httpStatus = 200, detail } = {}) {
+  const calls = [];
+  await page.route("**/api/admin/import/year/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    const url = new URL(route.request().url());
+    calls.push(Number(url.pathname.split("/").pop()));
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ job_id: jobId, status }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "An import is already running. Wait for it to finish." }) });
+    }
+  });
+  return { calls };
+}

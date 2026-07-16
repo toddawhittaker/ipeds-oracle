@@ -54,6 +54,7 @@ export const api = {
   importCatalog: (refresh = false) =>
     j("GET", "/api/admin/import/catalog" + (refresh ? "?refresh=1" : "")),
   integrateYears: (years) => j("POST", "/api/admin/import/integrate", { years }),
+  deintegrateYear: (startYear) => j("DELETE", `/api/admin/import/year/${startYear}`),
   logs: (limit = 200, level = "", q = "", since = null, until = null) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (level) p.set("level", level);

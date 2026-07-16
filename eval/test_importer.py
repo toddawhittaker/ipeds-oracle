@@ -37,11 +37,14 @@ from app.importer import (  # noqa: E402
     _log,
     _restore_data_dir,
     _set_status,
+    _update_rebuild_progress,
     _years,
     build_check_swap,
     create_job,
+    deintegrate_checks,
     integrity_checks,
     preflight,
+    run_deintegrate,
     run_import,
     run_integrate,
 )
@@ -1310,6 +1313,331 @@ def test_run_integrate_no_provenance_written_when_swap_fails():
         "the sentinel release must never have been recorded anywhere on a failed swap"
 
 
+# ---------------------------------------------------------------------------
+# run_deintegrate / deintegrate_checks — remove-an-integrated-year ("trashcan")
+#
+# Fixture covers every table shape run_deintegrate must touch: c_a/hd/
+# valuesets/vartable (each carrying a `year` column, enumerated via
+# sqlite_master + PRAGMA table_info), the bookkeeping tables _years/
+# _family_map (also carry `year`), and the year-LESS _column_presence (whose
+# `years` field is a CSV of survey_year tokens, e.g. "2023-24,2024-25" — a
+# token is removed from each row, and a row whose CSV becomes empty is
+# dropped entirely). `years` passed to the fixture builder are DB `_years.year`
+# END years; the corresponding start_year is always year-1, matching the
+# loader's own survey_year convention (see scripts/build_ipeds_db.py
+# discover_files/derive_family).
+# ---------------------------------------------------------------------------
+
+def _deintegrate_fixture(path, *, years, assoc_by_year=None, include_column_presence=True):
+    if path.exists():
+        path.unlink()
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE _years (survey_year TEXT, year INTEGER PRIMARY KEY)")
+    con.execute("CREATE TABLE _family_map (src_table TEXT, family TEXT, "
+                "survey_year TEXT, year INTEGER, n_rows INTEGER)")
+    con.execute("CREATE TABLE c_a (year INTEGER, ctotalt INTEGER, awlevel INTEGER, "
+                "majornum INTEGER, cipcode TEXT)")
+    con.execute("CREATE TABLE hd (unitid INTEGER, year INTEGER)")
+    con.execute("CREATE TABLE valuesets (tablename TEXT, varname TEXT, "
+                "codevalue TEXT, year INTEGER)")
+    con.execute("CREATE TABLE vartable (varname TEXT, datatype TEXT, year INTEGER)")
+    if include_column_presence:
+        con.execute("CREATE TABLE _column_presence (family TEXT, column_name TEXT, years TEXT)")
+
+    assoc_by_year = assoc_by_year or {}
+    survey_years = []
+    for y in years:
+        sy = y - 1
+        token = f"{sy}-{str(y)[2:]}"
+        survey_years.append(token)
+        con.execute("INSERT INTO _years VALUES (?,?)", (token, y))
+        assoc = assoc_by_year.get(y, 800_000)
+        con.execute("INSERT INTO c_a VALUES (?,?,?,?,?)", (y, assoc, 3, 1, "99"))
+        con.execute("INSERT INTO c_a VALUES (?,?,?,?,?)", (y, 3000, 1, 1, "01.0000"))
+        for i in range(3):
+            con.execute("INSERT INTO hd VALUES (?,?)", (100_000 + i + y, y))
+        con.execute("INSERT INTO valuesets VALUES (?,?,?,?)", ("C_A", "AWLEVEL", "3", y))
+        con.execute("INSERT INTO vartable VALUES (?,?,?)", ("awlevel", "N", y))
+        for fam, n in (("c_a", 8000), ("hd", 3000), ("valuesets", 1000), ("vartable", 500)):
+            con.execute("INSERT INTO _family_map VALUES (?,?,?,?,?)",
+                        (fam.upper() + str(y), fam, token, y, n))
+    if include_column_presence:
+        # A column present in every seeded year, and one present ONLY in the
+        # first (soon-to-be-removed, in the tests below) year — the latter
+        # row must vanish entirely once its only token is stripped.
+        con.execute("INSERT INTO _column_presence VALUES (?,?,?)",
+                    ("c_a", "ctotalt", ",".join(survey_years)))
+        con.execute("INSERT INTO _column_presence VALUES (?,?,?)",
+                    ("c_a", "only_in_first_year", survey_years[0]))
+    con.commit()
+    con.close()
+
+
+def _seed_provenance_row(start_year, end_year, release="Final", source="nces"):
+    con = db_connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO year_provenance"
+            "(start_year, end_year, release, source, updated_at) VALUES (?,?,?,?,0)",
+            (start_year, end_year, release, source))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _provenance_row_exists(start_year):
+    con = db_connect()
+    try:
+        return con.execute("SELECT 1 FROM year_provenance WHERE start_year=?",
+                           (start_year,)).fetchone() is not None
+    finally:
+        con.close()
+
+
+def _data_version():
+    con = db_connect()
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='data_version'").fetchone()
+        return int(row[0]) if row else 1
+    finally:
+        con.close()
+
+
+def _ample_disk_usage(path):
+    return types.SimpleNamespace(total=1_000_000_000_000, used=100_000_000_000,
+                                 free=900_000_000_000)
+
+
+def _tiny_disk_usage(path):
+    return types.SimpleNamespace(total=1_000_000_000_000, used=999_999_999_999, free=1)
+
+
+def test_run_deintegrate_happy_path_removes_year_and_swaps():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _deintegrate_fixture(live, years=[2024, 2025])  # remove start 2023, keep 2024
+    original_live_bytes = live.read_bytes()
+    removed_start_year = 2023
+    surviving_end_year = 2025
+
+    _seed_provenance_row(removed_start_year, removed_start_year + 1)
+    dv_before = _data_version()
+
+    orig_settings = importer.get_settings
+    orig_disk_usage = importer.shutil.disk_usage
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.shutil.disk_usage = _ample_disk_usage
+    try:
+        jid = create_job(f"deintegrate:{removed_start_year}", "admin@franklin.edu")
+        run_deintegrate(jid, removed_start_year)
+    finally:
+        importer.get_settings = orig_settings
+        importer.shutil.disk_usage = orig_disk_usage
+
+    row = _job_row(jid)
+    assert row["status"] == "swapped", row
+    assert live.read_bytes() != original_live_bytes, "live db must have been swapped"
+
+    assert _years(live) == [surviving_end_year], _years(live)
+
+    con = sqlite3.connect(live)
+    try:
+        removed_fam_rows = con.execute(
+            "SELECT COUNT(*) FROM _family_map WHERE year=?",
+            (removed_start_year + 1,)).fetchone()[0]
+        assert removed_fam_rows == 0, "removed year's _family_map rows must be gone"
+        surviving_fam_rows = con.execute(
+            "SELECT COUNT(*) FROM _family_map WHERE year=?",
+            (surviving_end_year,)).fetchone()[0]
+        assert surviving_fam_rows == 4, surviving_fam_rows  # c_a/hd/valuesets/vartable
+
+        cp = dict(con.execute(
+            "SELECT column_name, years FROM _column_presence").fetchall())
+        assert "only_in_first_year" not in cp, \
+            "a _column_presence row whose CSV became empty must be deleted"
+        assert cp["ctotalt"] == "2024-25", cp  # lost the removed year's token only
+    finally:
+        con.close()
+
+    assert not _provenance_row_exists(removed_start_year), \
+        "year_provenance row for the removed start year must be deleted"
+    assert _data_version() == dv_before + 1, (dv_before, _data_version())
+
+    staging = live.with_name("ipeds_staging.db")
+    assert not staging.exists(), "staging db must be removed after the swap"
+    assert live.with_suffix(".db.prev").exists(), \
+        "a .db.prev backup of the pre-removal live db must exist"
+
+
+def test_run_deintegrate_refuses_removing_the_only_integrated_year():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _deintegrate_fixture(live, years=[2025])
+    original_live_bytes = live.read_bytes()
+
+    orig_settings = importer.get_settings
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    try:
+        jid = create_job("deintegrate:2024", "admin@franklin.edu")
+        run_deintegrate(jid, 2024)
+    finally:
+        importer.get_settings = orig_settings
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert "only" in (row["report"] or "").lower(), row
+    assert live.read_bytes() == original_live_bytes, "live db must be untouched"
+    assert not live.with_name("ipeds_staging.db").exists()
+
+
+def test_run_deintegrate_refuses_a_non_integrated_year():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _deintegrate_fixture(live, years=[2024, 2025])
+    original_live_bytes = live.read_bytes()
+
+    orig_settings = importer.get_settings
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    try:
+        jid = create_job("deintegrate:2030", "admin@franklin.edu")
+        run_deintegrate(jid, 2030)  # end_year 2031 was never integrated
+    finally:
+        importer.get_settings = orig_settings
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert "not integrated" in (row["report"] or "").lower(), row
+    assert live.read_bytes() == original_live_bytes, "live db must be untouched"
+
+
+def test_run_deintegrate_refuses_when_disk_headroom_insufficient():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _deintegrate_fixture(live, years=[2024, 2025])
+    original_live_bytes = live.read_bytes()
+
+    orig_settings = importer.get_settings
+    orig_disk_usage = importer.shutil.disk_usage
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.shutil.disk_usage = _tiny_disk_usage
+    try:
+        jid = create_job("deintegrate:2023", "admin@franklin.edu")
+        run_deintegrate(jid, 2023)
+    finally:
+        importer.get_settings = orig_settings
+        importer.shutil.disk_usage = orig_disk_usage
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    report = (row["report"] or "").lower()
+    assert "disk" in report or "space" in report, row["report"]
+    assert live.read_bytes() == original_live_bytes, "live db must be untouched"
+    assert not live.with_name("ipeds_staging.db").exists(), \
+        "no staging file must be left behind on a disk-headroom refusal"
+
+
+def test_deintegrate_checks_fails_if_removed_year_still_present():
+    d = Path(tempfile.mkdtemp())
+    live = d / "live.db"
+    staging = d / "staging.db"
+    _deintegrate_fixture(live, years=[2024, 2025])
+    _deintegrate_fixture(staging, years=[2024, 2025])  # "removal" that removed nothing
+    ok, report = deintegrate_checks(staging, live, 2024)
+    text = "\n".join(report)
+    assert ok is False, text
+
+
+def test_deintegrate_checks_passes_for_a_healthy_removal():
+    d = Path(tempfile.mkdtemp())
+    live = d / "live.db"
+    staging = d / "staging.db"
+    _deintegrate_fixture(live, years=[2024, 2025])
+    _deintegrate_fixture(staging, years=[2025])  # 2024 correctly removed
+    ok, report = deintegrate_checks(staging, live, 2024)
+    text = "\n".join(report)
+    assert ok is True, text
+
+
+# ---------------------------------------------------------------------------
+# build_check_swap — ##PROGRESS## marker parsing into progress["rebuild"]
+# (the rebuild progress bar). Marker lines must be parsed for
+# tables_total=/tables_done= and NEVER written into the human-readable log;
+# non-marker lines are logged exactly as before.
+# ---------------------------------------------------------------------------
+
+def test_update_rebuild_progress_computes_pct_and_preserves_siblings():
+    jid = create_job("integrate", "admin@franklin.edu")
+    importer._set_progress(jid, {
+        "overall": {"phase": "downloading", "message": "x"},
+        "years": {"2024": {"start_year": 2024}},
+    })
+
+    _update_rebuild_progress(jid, tables_total=4, tables_done=0)
+    p = json.loads(_job_row(jid)["progress"])
+    assert p["rebuild"] == {"tables_total": 4, "tables_done": 0, "pct": 0}, p
+    assert p["overall"]["phase"] == "downloading", p  # sibling preserved
+    assert p["years"]["2024"]["start_year"] == 2024, p  # sibling preserved
+
+    _update_rebuild_progress(jid, tables_total=4, tables_done=2)
+    p = json.loads(_job_row(jid)["progress"])
+    assert p["rebuild"] == {"tables_total": 4, "tables_done": 2, "pct": 50}, p
+
+    _update_rebuild_progress(jid, tables_total=3, tables_done=1)
+    p = json.loads(_job_row(jid)["progress"])
+    assert p["rebuild"] == {"tables_total": 3, "tables_done": 1, "pct": 33}, p
+
+
+def test_build_check_swap_parses_progress_markers_and_keeps_them_out_of_the_log():
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    live.write_bytes(b"old-live-content")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        lines = [
+            "Found 1 files: 2024-25",
+            "##PROGRESS## tables_total=3",
+            "  loaded C2024_A                 -> c_a                     5000 rows",
+            "##PROGRESS## tables_done=1",
+            "  loaded HD2024                  -> hd                      3000 rows",
+            "##PROGRESS## tables_done=2",
+            "  loaded valueSets2024           -> valuesets                1000 rows",
+            "##PROGRESS## tables_done=3",
+        ]
+        return _FakeProc(0, lines)
+
+    orig_settings = importer.get_settings
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    try:
+        jid = create_job("integrate", "admin@franklin.edu")
+        build_check_swap(jid, data_dir)
+    finally:
+        importer.get_settings = orig_settings
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    row = _job_row(jid)
+    progress = json.loads(row["progress"])
+    assert progress["rebuild"] == {"tables_total": 3, "tables_done": 3, "pct": 100}, progress
+
+    log = row["log"] or ""
+    assert "##PROGRESS##" not in log, log
+    assert "loaded C2024_A" in log, log
+    assert "loaded HD2024" in log, log
+    assert "loaded valueSets2024" in log, log
+
+
 def run():
     print("importer contract:")
     check("create_job writes a pending row", test_create_job_row)
@@ -1403,6 +1731,22 @@ def run():
           test_run_integrate_records_nces_provenance_for_every_union_year_on_success)
     check("run_integrate: writes no provenance when the swap fails",
           test_run_integrate_no_provenance_written_when_swap_fails)
+    check("run_deintegrate: happy path removes the year and swaps",
+          test_run_deintegrate_happy_path_removes_year_and_swaps)
+    check("run_deintegrate: refuses removing the only integrated year",
+          test_run_deintegrate_refuses_removing_the_only_integrated_year)
+    check("run_deintegrate: refuses a non-integrated year",
+          test_run_deintegrate_refuses_a_non_integrated_year)
+    check("run_deintegrate: refuses when disk headroom is insufficient",
+          test_run_deintegrate_refuses_when_disk_headroom_insufficient)
+    check("deintegrate_checks: fails if the removed year is still present",
+          test_deintegrate_checks_fails_if_removed_year_still_present)
+    check("deintegrate_checks: passes for a healthy removal",
+          test_deintegrate_checks_passes_for_a_healthy_removal)
+    check("_update_rebuild_progress computes pct and preserves sibling progress keys",
+          test_update_rebuild_progress_computes_pct_and_preserves_siblings)
+    check("build_check_swap parses ##PROGRESS## markers, keeps them out of the log",
+          test_build_check_swap_parses_progress_markers_and_keeps_them_out_of_the_log)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

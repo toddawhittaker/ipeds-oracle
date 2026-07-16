@@ -176,7 +176,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function YearCard({ entry, locked, checked, onToggle }) {
+function YearCard({ entry, locked, checked, onToggle, onRemove }) {
   // The whole card is the toggle (no separate checkbox) — but it still carries
   // full checkbox semantics for keyboard + screen-reader users: role=checkbox,
   // aria-checked, tabbable, and Space/Enter toggle. Non-selectable cards
@@ -194,24 +194,52 @@ function YearCard({ entry, locked, checked, onToggle }) {
     }
   };
 
+  // Only an already-integrated (or update — integrated as Provisional, Final
+  // now out) year can be removed, and never while a job is running. The
+  // trashcan is a real <button>, a SIBLING of the role=checkbox tile (not
+  // nested inside it) — a click never toggles selection, so no
+  // stopPropagation gymnastics are needed, and screen readers/keyboard users
+  // get an unambiguous, independently-focusable control.
+  const removable = (entry.status === "integrated" || entry.status === "update") && !locked;
+
   return (
-    <div
-      className={cls}
-      data-year={entry.start_year}
-      data-status={entry.status}
-      role={interactive ? "checkbox" : undefined}
-      aria-checked={interactive ? checked : undefined}
-      aria-label={interactive ? label : undefined}
-      aria-disabled={!entry.selectable || locked ? "true" : undefined}
-      tabIndex={interactive ? 0 : undefined}
-      onClick={interactive ? toggle : undefined}
-      onKeyDown={interactive ? onKeyDown : undefined}
-    >
-      <div className="year-card__top">
-        <span className="year-label">{entry.year_label}</span>
-        {checked && <span className="year-card__check" aria-hidden="true">✓</span>}
+    <div className="year-card-wrap">
+      <div
+        className={cls}
+        data-year={entry.start_year}
+        data-status={entry.status}
+        role={interactive ? "checkbox" : undefined}
+        aria-checked={interactive ? checked : undefined}
+        aria-label={interactive ? label : undefined}
+        aria-disabled={!entry.selectable || locked ? "true" : undefined}
+        tabIndex={interactive ? 0 : undefined}
+        onClick={interactive ? toggle : undefined}
+        onKeyDown={interactive ? onKeyDown : undefined}
+      >
+        <div className="year-card__top">
+          <span className="year-label">{entry.year_label}</span>
+          {checked && <span className="year-card__check" aria-hidden="true">✓</span>}
+        </div>
+        <StatusBadge status={entry.status} />
       </div>
-      <StatusBadge status={entry.status} />
+      {removable && (
+        <button type="button" className="year-remove"
+                aria-label={`Remove ${entry.year_label} from the database`}
+                title={`Remove ${entry.year_label} from the database`}
+                onClick={() => onRemove(entry)}>
+          {/* A monochrome inline SVG (not the 🗑 emoji) so `currentColor`
+              actually tracks --muted/--danger below — a color emoji glyph
+              ignores CSS color entirely, which would make the muted->danger
+              hover channel a no-op and leave contrast nondeterministic. */}
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"
+               fill="none" stroke="currentColor" strokeWidth="1.4"
+               strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 4.5h10M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5" />
+            <path d="M4 4.5 4.6 13a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.5" />
+            <path d="M6.7 7v4.5M9.3 7v4.5" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -262,17 +290,38 @@ function Imports() {
       if (TERMINAL_JOB_STATUSES.includes(job.status)) {
         clearInterval(poll.current);
         loadJobs();
+        // Derive wording from the job's own filename (set by the router:
+        // "deintegrate:{start_year}" for a removal, "integrate:{years}" or
+        // an IPEDS{YYYY}{YY}.accdb name otherwise) so the notice reads right
+        // even when reached via "view" on a past job, not just a fresh
+        // submit — no separate "action kind" state to keep in sync.
+        const isRemoval = (job.filename || "").startsWith("deintegrate:");
         if (job.status === "swapped") {
           setSelected(new Set());
           loadCatalog(true);
-          const yrs = activeYearsRef.current;
-          const what = yrs && yrs.length
-            ? `${yrs.length > 1 ? "years" : "year"} ${yrs
-                .map((y) => `${y}-${String(y + 1).slice(-2)}`).join(", ")}`
-            : (job.filename || "the file");
-          setNotice(`Integration complete — ${what} added to the live database.`);
+          // For a removal, the year comes straight from the job's own
+          // filename ("deintegrate:{start_year}") — NOT activeYearsRef,
+          // which is null whenever this job is reached via "view" on a past
+          // job or the 409 watch-someone-else's-job path, and would
+          // otherwise fall back to the raw filename ("deintegrate:2024").
+          let what;
+          if (isRemoval) {
+            const sy = parseInt(job.filename.slice("deintegrate:".length), 10);
+            what = Number.isFinite(sy) ? `year ${sy}-${String(sy + 1).slice(-2)}` : "the year";
+          } else {
+            const yrs = activeYearsRef.current;
+            what = yrs && yrs.length
+              ? `${yrs.length > 1 ? "years" : "year"} ${yrs
+                  .map((y) => `${y}-${String(y + 1).slice(-2)}`).join(", ")}`
+              : (job.filename || "the file");
+          }
+          setNotice(isRemoval
+            ? `Removal complete — ${what} removed from the live database.`
+            : `Integration complete — ${what} added to the live database.`);
         } else if (job.status === "failed") {
-          setNotice("Import failed — the live database was not changed.");
+          setNotice(isRemoval
+            ? "Removal failed — the live database was not changed."
+            : "Import failed — the live database was not changed.");
         }
       }
     };
@@ -377,6 +426,32 @@ function Imports() {
     }
   }
 
+  async function removeYear(entry) {
+    if (!window.confirm(
+      `Remove ${entry.year_label} from the live database? This rebuilds the database ` +
+      "without that year and can't be undone.")) return;
+    // Set an interim notice BEFORE watch() flips `locked` (which unmounts the
+    // very trashcan button the user just activated) — otherwise notice stays
+    // empty right when focus needs somewhere to land, and the
+    // focus-to-notice effect above never fires, dropping focus to <body>.
+    setNotice(`Removing ${entry.year_label}…`);
+    try {
+      const body = await api.deintegrateYear(entry.start_year);
+      setActiveYears(null);
+      watch(body.job_id);
+    } catch (err) {
+      let msg = "Could not start the removal.";
+      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      setNotice(msg);
+      if (/already running/i.test(msg)) {
+        // Someone else's import/removal is mid-flight — find it and watch it.
+        const list = await api.importJobs().catch(() => []);
+        const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
+        if (runningJob) watch(runningJob.id);
+      }
+    }
+  }
+
   return (
     <div className="panel">
       <h2>Load IPEDS years</h2>
@@ -451,7 +526,8 @@ function Imports() {
               {yearsNewestFirst.map((y) => (
                 <YearCard key={y.start_year} entry={y} locked={locked}
                           checked={selected.has(y.start_year)}
-                          onToggle={(checked) => toggleYear(y.start_year, checked)} />
+                          onToggle={(checked) => toggleYear(y.start_year, checked)}
+                          onRemove={removeYear} />
               ))}
             </div>
 
@@ -541,6 +617,21 @@ function Imports() {
               })}
             </div>
           )}
+          {progress?.rebuild?.tables_total && !TERMINAL_JOB_STATUSES.includes(active.status) ? (
+            <div data-testid="rebuild-progress" className="rebuild-progress">
+              <div className="rebuild-progress-label muted small">
+                Rebuilding database — {progress.rebuild.tables_done} / {progress.rebuild.tables_total} tables
+              </div>
+              <div className="file-progress-bar" role="progressbar"
+                   aria-label="Rebuild progress"
+                   aria-valuemin={0} aria-valuemax={100}
+                   aria-valuenow={Math.min(100, Math.max(0, progress.rebuild.pct || 0))}
+                   aria-valuetext={`${progress.rebuild.tables_done} of ${progress.rebuild.tables_total} tables`}>
+                <div className="file-progress-fill"
+                     style={{ width: `${Math.min(100, Math.max(0, progress.rebuild.pct || 0))}%` }} />
+              </div>
+            </div>
+          ) : null}
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
             <summary>Log</summary>
