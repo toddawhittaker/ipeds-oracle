@@ -40,10 +40,21 @@ def contains_number(target: int, tol: float = 0.0):
 # Matches an integer that is itself immediately (within a few filler words,
 # e.g. "collection"/"of data") followed by "year"/"years" — i.e. the integer
 # is being used to *count years*, not just any digit string that happens to
-# appear near the word "year(s)" elsewhere in the sentence (a bare two-digit
-# year fragment like the "21" in "2020-21" never sits directly in front of
-# "year(s)", so it can't satisfy this).
-_YEAR_COUNT_RE = re.compile(r"(\d+)\s*\*{0,2}\s*(?:[a-zA-Z]+\s+){0,3}years?\b", re.IGNORECASE)
+# appear near the word "year(s)" elsewhere in the sentence. That alone is
+# NOT sufficient, though: a hyphenated academic-year span like "2020-21" (or
+# the en-dash form "2020–21") can be followed by "academic years"/"reporting
+# years" in ordinary prose, and the tail integer of that span ("21") would
+# otherwise satisfy "<n> ... year(s)" just like a real count does. The
+# invariant that actually distinguishes a count from a span tail: an integer
+# that is immediately preceded by "<digit><hyphen-or-en-dash>" (no space) is
+# the second half of a year span, never a standalone count — so such
+# candidates are excluded via negative lookbehind, once per dash variant
+# (Python's fixed-width-lookbehind requirement is why these are two
+# assertions rather than one alternation).
+_YEAR_COUNT_RE = re.compile(
+    r"(?<!\d-)(?<!\d–)(\d+)\s*\*{0,2}\s*(?:[a-zA-Z]+\s+){0,3}years?\b",
+    re.IGNORECASE,
+)
 
 
 def contains_year_count(target: int):
@@ -102,9 +113,11 @@ def year_count_case():
     # reaches 20 or 21 (a full ~21-year NCES backfill is on the roadmap),
     # that bare year fragment can equal n and make a WRONG answer (one that
     # merely spells out the year range but cites the old count) pass. Use
-    # contains_year_count instead, which requires n to appear directly in
-    # front of "year(s)" — a year-range fragment like "21" in "2020-21"
-    # never sits next to that word, so it can't collide.
+    # contains_year_count instead: it requires n to sit directly in front of
+    # "year(s)" AND excludes any candidate that is itself the tail of a
+    # hyphenated/en-dash year span (e.g. the "21" in "2020-21 academic
+    # years") — the latter alone isn't enough, since ordinary prose does put
+    # a span's tail right next to the word "years".
     return (
         "How many collection years of data are in the database?",
         f"{n} years ({years[0]}–{years[-1]})",
