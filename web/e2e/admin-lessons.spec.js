@@ -95,6 +95,62 @@ test("rejecting a verified lesson asks for confirmation before deleting", async 
   expect(deleted).toBe(false);
 });
 
+// Regression: `.skill-head` is a flex row holding the headline (.lesson-rule)
+// and the pill group (.tags). Neither .tags nor .tag used to opt out of flex
+// shrinking, so a long enough headline squeezed the pill group until each
+// pill's own text wrapped onto a second line (measured: 19px -> 34px tall). A
+// pill is a label, not a paragraph — its text must never break.
+test("pills never wrap onto a second line, even when a long headline squeezes them", async ({ page }) => {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockSkills(page, [
+    {
+      // Short headline: pills sit at their natural, un-squeezed width — the
+      // single-line baseline the long-headline card is compared against.
+      id: 30, question: "q-short", headline: "Short headline.",
+      lesson: "Short description.", canonical_sql: "SELECT 1", notes: "",
+      verified: false, created_by: "seed", upvotes: 0, downvotes: 0, hits: 0,
+    },
+    {
+      // Real seed #3 headline (from SCHEMA.md's worked examples) — long
+      // enough to actually squeeze the pill group at this viewport, which is
+      // what makes this a genuine regression test rather than a vacuous one.
+      id: 31, question: "q-long",
+      headline: "For a national or all-programs total, use the grand-total "
+        + "row cipcode='99', never SUM across CIP codes.",
+      lesson: "Long description.", canonical_sql: "SELECT 1", notes: "",
+      verified: false, created_by: "seed", upvotes: 0, downvotes: 0, hits: 0,
+    },
+  ]);
+  await page.route("**/api/admin/skills/*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("button", { name: "Skills" }).click();
+
+  const shortCard = page.locator(".skill").filter({ hasText: "Short headline." });
+  const longCard = page.locator(".skill").filter({ hasText: "For a national or all-programs total" });
+  const shortPill = shortCard.locator("span.tag", { hasText: "from seed" });
+  const longPill = longCard.locator("span.tag", { hasText: "from seed" });
+  await expect(shortPill).toBeVisible();
+  await expect(longPill).toBeVisible();
+
+  // States the intent directly and cheaply, but isn't the assertion that
+  // actually catches the bug (see the height comparison below).
+  await expect(longPill).toHaveCSS("white-space", "nowrap");
+
+  // The assertion that actually catches it: compare the squeezed card's pill
+  // height against a known-single-line baseline from the short-headline
+  // card. Deliberately NOT comparing height to getComputedStyle().lineHeight
+  // — that resolves to the literal string "normal" here, so parseFloat(...)
+  // is NaN and every numeric comparison against it is silently false, making
+  // the test pass even on a visibly wrapped (two-line) pill.
+  const shortBox = await shortPill.boundingBox();
+  const longBox = await longPill.boundingBox();
+  expect(longBox.height).toBeCloseTo(shortBox.height, 0);
+});
+
 // --- Lesson editor (backlog: a critic-proposed lesson with no rule text
 // can never be given one without an edit affordance). Backend is already
 // complete (PATCH /api/admin/skills/{id}); these tests pin the not-yet-built
