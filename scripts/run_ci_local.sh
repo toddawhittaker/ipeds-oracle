@@ -51,24 +51,11 @@ step "Lint: eslint (web)"
 # =========================================================================
 export IPEDS_DB_PATH="$CI_DIR/ipeds.db"
 export APP_DB_PATH="$CI_DIR/app.db"
-# CI runs with NO .env; a local prod .env (loaded by app/config.py via an
-# absolute path, so CWD tricks don't help) bleeds real settings into the tests.
-# OS env vars take precedence over the .env file in pydantic-settings, so blank
-# the ones that change behavior to reproduce CI's key-free environment:
-#   * COOKIE_SECURE=false — a prod true drops the Secure cookie under the http
-#     TestClient -> spurious "Not signed in".
-#   * LLM_API_KEY blank — with a key present the chat/agent suites take
-#     the LIVE path and hit the fixture's absent tables (e.g. _family_map);
-#     CI (no key) takes the deterministic short path.
-#   * RESEND_API_KEY blank — so the mailer logs the link instead of sending
-#     REAL email through Resend during tests.
-#   * EMAIL_DOMAIN blank — a real domain gates access requests to that domain,
-#     so test_backend.py's out-of-domain stranger@x.com never records a request
-#     row and the suite fails locally while GitHub (no .env) stays green.
-export COOKIE_SECURE=false
-export LLM_API_KEY=""
-export RESEND_API_KEY=""
-export EMAIL_DOMAIN=""
+# Blank the settings a local prod .env would otherwise bleed into the tests.
+# The list and the reasoning live in ci_env.sh — one copy, shared with
+# coverage_check.sh, which CI also invokes on its own.
+# shellcheck source=scripts/ci_env.sh
+source "$REPO_ROOT/scripts/ci_env.sh"
 
 # Fresh app.db each run so migration/backup suites start from a known state.
 rm -f "$APP_DB_PATH"

@@ -25,7 +25,8 @@ COV="$REPO_ROOT/.venv/bin/coverage"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
 
 # Match CI's key-free environment (a real .env would send suites down live paths).
-export COOKIE_SECURE=false LLM_API_KEY="" RESEND_API_KEY=""
+# shellcheck source=scripts/ci_env.sh
+source "$REPO_ROOT/scripts/ci_env.sh"
 
 CI_DIR="$REPO_ROOT/.ci"
 mkdir -p "$CI_DIR"
