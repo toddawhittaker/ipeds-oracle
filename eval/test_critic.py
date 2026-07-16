@@ -83,6 +83,15 @@ def test_parse_revise_without_colon_gets_default_issue():
 
 # --- build_review_messages / revision_instruction ------------------------------
 
+def test_system_prompt_asks_for_a_readable_self_contained_revise_explanation():
+    # The REVISE explanation is stored as a lesson AND shown to admins, so the
+    # prompt must ask for plain-English prose, not cryptic shorthand. Kept
+    # minimal — pinning stable substrings, not the exact wording.
+    assert "self-contained" in critic._SYSTEM, critic._SYSTEM
+    assert "not cryptic shorthand" in critic._SYSTEM, critic._SYSTEM
+    assert "reusable rule" in critic._SYSTEM, critic._SYSTEM
+
+
 def test_build_messages_includes_artifacts():
     msgs = critic.build_review_messages(
         "How many nursing degrees?",
@@ -443,6 +452,8 @@ def run():
     check("parse REVISE is case-insensitive", test_parse_revise_case_insensitive)
     check("parse bare REVISE gets a default issue",
           test_parse_revise_without_colon_gets_default_issue)
+    check("_SYSTEM asks for a readable, self-contained REVISE explanation",
+          test_system_prompt_asks_for_a_readable_self_contained_revise_explanation)
     check("build_review_messages includes question/SQL/answer",
           test_build_messages_includes_artifacts)
     check("build_review_messages truncates a long answer",

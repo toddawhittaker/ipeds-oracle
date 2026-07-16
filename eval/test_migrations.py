@@ -18,6 +18,7 @@ os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@franklin.edu"
 
 from app.db import MIGRATIONS, _apply_migrations, connect, init_db
+from app.seeds import SEED_LESSON_REWRITES
 
 FAILURES = []
 
@@ -132,14 +133,55 @@ def test_migration_5_adds_import_jobs_progress_column():
     assert row[0] is None, row
 
 
-def test_fresh_db_advances_to_version_5_with_both_new_objects():
+def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
-    assert v == 5, f"expected user_version 5 after adding migrations 4+5, got {v}"
+    expected = max(m[0] for m in MIGRATIONS)
+    assert v == expected, f"expected baseline user_version {expected}, got {v}"
     tables = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "year_provenance" in tables, tables
     assert "progress" in _cols(con, "import_jobs"), _cols(con, "import_jobs")
+
+
+def test_migration_6_rewrites_terse_seed_lessons():
+    # Bring a db up to version 5 (skills table exists, pre-rewrite), insert one
+    # row still bearing an OLD terse seed lesson and one admin-edited row whose
+    # lesson isn't in the rewrite map, then apply migration 6 and confirm only
+    # the terse row is rewritten (lesson AND notes), the edited row is untouched.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 5])
+    old_text, new_text = SEED_LESSON_REWRITES[0]
+    con.execute(
+        "INSERT INTO skills(question, canonical_sql, notes, lesson, created_by, "
+        "created_at) VALUES ('q1', 'SELECT 1', ?, ?, 'seed', 0)",
+        (old_text, old_text))
+    edited_text = "An admin rewrote this seed lesson to say something else entirely."
+    con.execute(
+        "INSERT INTO skills(question, canonical_sql, notes, lesson, created_by, "
+        "created_at) VALUES ('q2', 'SELECT 1', ?, ?, 'seed', 0)",
+        (edited_text, edited_text))
+    con.commit()
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    row1 = con.execute("SELECT lesson, notes FROM skills WHERE question='q1'").fetchone()
+    assert row1[0] == new_text, row1[0]
+    assert row1[1] == new_text, row1[1]
+    row2 = con.execute("SELECT lesson, notes FROM skills WHERE question='q2'").fetchone()
+    assert row2[0] == edited_text, "admin-edited seed lesson must not be rewritten"
+    assert row2[1] == edited_text, "admin-edited seed notes must not be rewritten"
+
+
+def test_migration_6_is_idempotent_and_noop_on_fresh_db():
+    # A fresh install has no skills rows yet (seeding happens AFTER migrations),
+    # so migration 6 must be a harmless no-op, and re-applying must not error.
+    con = sqlite3.connect(":memory:")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    count = con.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+    assert count == 0, "fresh db should have no skills rows before seeding"
+    v2 = _apply_migrations(con, MIGRATIONS)  # re-apply: must not error, no-op
+    assert v2 == v, f"expected version to stay {v}, got {v2}"
 
 
 def test_real_init_db_sets_baseline_and_bootstraps():
@@ -172,8 +214,12 @@ def run():
           test_migration_4_adds_year_provenance_table)
     check("migration 5 adds import_jobs.progress (nullable)",
           test_migration_5_adds_import_jobs_progress_column)
-    check("fresh db advances to user_version 5 with both new objects",
-          test_fresh_db_advances_to_version_5_with_both_new_objects)
+    check("fresh db advances to the baseline version with all new objects",
+          test_fresh_db_advances_to_baseline_version_with_all_new_objects)
+    check("migration 6 rewrites terse seed lessons, leaves admin edits alone",
+          test_migration_6_rewrites_terse_seed_lessons)
+    check("migration 6 is idempotent and a no-op on a fresh (unseeded) db",
+          test_migration_6_is_idempotent_and_noop_on_fresh_db)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()

@@ -23,6 +23,7 @@ import numpy as np  # noqa: E402
 from app import skills  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import connect, init_db  # noqa: E402
+from app.seeds import SEED_EXAMPLES, SEED_LESSON_REWRITES  # noqa: E402
 
 get_settings.cache_clear()
 init_db()
@@ -240,6 +241,62 @@ def test_dedup_backfills_empty_lesson():
     assert lesson == "the real rule", f"empty rule should be backfilled, got {lesson!r}"
 
 
+# --- seed data (app.seeds) ------------------------------------------------------
+
+def test_seed_lessons_are_human_readable_and_match_rewrites():
+    # Readability: each seed lesson must be a real sentence an admin can read,
+    # not terse shorthand — proxy on length, prose shape, and sentence-ending.
+    assert len(SEED_EXAMPLES) == 3, len(SEED_EXAMPLES)
+    for _question, _sql, lesson in SEED_EXAMPLES:
+        assert len(lesson) >= 80, f"lesson too short to be a sentence: {lesson!r}"
+        assert lesson.endswith("."), f"lesson should end with a period: {lesson!r}"
+        assert any(w.islower() and len(w) > 2 for w in lesson.split()), \
+            f"lesson doesn't read as prose: {lesson!r}"
+
+    # Drift guard: the migration's rewrite map must target the SAME text the
+    # seeds actually ship with, or a future edit to one without the other would
+    # silently desync migration 6 from a fresh install's seed text.
+    assert len(SEED_LESSON_REWRITES) == len(SEED_EXAMPLES)
+    for i, (_old, new) in enumerate(SEED_LESSON_REWRITES):
+        assert new == SEED_EXAMPLES[i][2], \
+            f"rewrite[{i}] new text must equal SEED_EXAMPLES[{i}][2]"
+
+    # The OLD strings are frozen migration match keys — hard-coded here so
+    # nobody can accidentally change them (which would break migration 6 on an
+    # already-seeded database).
+    frozen_olds = [
+        "Exact 6-digit CIP; constant year bound; RANK per year.",
+        "Year-matched hd join; control=1 public; awlevel=5 bachelor's.",
+        "Use grand-total CIP '99' — never sum all cipcodes (overcounts ~4x).",
+    ]
+    actual_olds = [old for old, _new in SEED_LESSON_REWRITES]
+    assert actual_olds == frozen_olds, actual_olds
+
+
+def test_seed_from_schema_examples_inserts_verified_seed_rows():
+    _reset()
+    n = skills.seed_from_schema_examples()
+    assert n == len(SEED_EXAMPLES), n
+    assert _count(created_by="seed") == len(SEED_EXAMPLES)
+    con = connect()
+    rows = con.execute(
+        "SELECT lesson, notes, verified FROM skills WHERE created_by='seed'").fetchall()
+    con.close()
+    lessons = {r["lesson"] for r in rows}
+    assert lessons == {ex[2] for ex in SEED_EXAMPLES}, lessons
+    for r in rows:
+        assert r["verified"] == 1, "seed rows must start verified"
+        assert r["notes"] == r["lesson"], "notes must mirror the lesson"
+
+
+def test_seed_from_schema_examples_is_noop_when_table_not_empty():
+    _reset()
+    skills.seed_from_schema_examples()
+    n = skills.seed_from_schema_examples()  # table is no longer empty
+    assert n == 0, "seeding must only ever run once, on an empty table"
+    assert _count() == len(SEED_EXAMPLES), "a second seed call must not add rows"
+
+
 def test_cache_lookup_disabled_when_skills_off():
     orig = skills.get_settings
     skills.get_settings = lambda: type("S", (), {"skills_enabled": False})()
@@ -271,6 +328,12 @@ def run():
           test_critic_lesson_not_collapsed_into_verified_seed)
     check("dedup does not cross sources", test_dedup_does_not_cross_sources)
     check("dedup backfills an empty rule", test_dedup_backfills_empty_lesson)
+    check("seed lessons are human-readable and match the migration rewrite map",
+          test_seed_lessons_are_human_readable_and_match_rewrites)
+    check("seed_from_schema_examples inserts verified seed rows",
+          test_seed_from_schema_examples_inserts_verified_seed_rows)
+    check("seed_from_schema_examples is a no-op when the table isn't empty",
+          test_seed_from_schema_examples_is_noop_when_table_not_empty)
     check("cache lookup is gated by skills_enabled", test_cache_lookup_disabled_when_skills_off)
     print()
     if FAILURES:
