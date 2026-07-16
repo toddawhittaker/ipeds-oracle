@@ -37,6 +37,34 @@ def contains_number(target: int, tol: float = 0.0):
     return check
 
 
+# Matches an integer that is itself immediately (within a few filler words,
+# e.g. "collection"/"of data") followed by "year"/"years" — i.e. the integer
+# is being used to *count years*, not just any digit string that happens to
+# appear near the word "year(s)" elsewhere in the sentence (a bare two-digit
+# year fragment like the "21" in "2020-21" never sits directly in front of
+# "year(s)", so it can't satisfy this).
+_YEAR_COUNT_RE = re.compile(r"(\d+)\s*\*{0,2}\s*(?:[a-zA-Z]+\s+){0,3}years?\b", re.IGNORECASE)
+
+
+def contains_year_count(target: int):
+    """Check that `target` appears as the *count of years* in the answer,
+    not merely as some integer that happens to appear in the text.
+
+    Purpose-built for the "how many collection years" case: contains_number
+    alone is not safe here because a hyphenated academic-year literal like
+    "2020-21" tokenizes (via _nums) into a bare two-digit integer (21), which
+    can collide with the derived count once the dataset grows past ~20 years
+    (a full ~21-year NCES backfill is on the roadmap). That collision makes a
+    wrong answer that merely spells out the year range score as a false pass
+    the moment n reaches 20 or 21. Anchoring on "<n> ... year(s)" instead of
+    "<n> appears anywhere" avoids that regardless of how large n gets.
+    """
+    def check(res):
+        found = {int(m) for m in _YEAR_COUNT_RE.findall(res.answer)}
+        return target in found
+    return check
+
+
 # (question, human-readable expectation, check function)
 CASES = [
     (
@@ -67,17 +95,20 @@ def year_count_case():
     if not years:
         return None
     n = len(years)
-    # Exact match on the small year-count integer discriminates cleanly here:
-    # the answer text also contains the year literals themselves (e.g. 2019,
-    # 2020, 25, 2024, 2025 for "2019–20 through 2024–25"), but those are all
-    # >= 20 while n is a single-digit count, so contains_number(n) with
-    # tol=0 can't accidentally match a year instead of the count — and a
-    # wrong answer citing the old count (e.g. "5 collection years,
-    # 2021–2025") correctly fails since 5 != n.
+    # contains_number(n) alone is NOT safe here: the answer text also
+    # contains the year literals themselves (e.g. "2019, 2020, 25, 2024,
+    # 2025" for "2019–20 through 2024–25"), and a hyphenated academic year
+    # like "2020-21" tokenizes into a bare two-digit integer (21). Once n
+    # reaches 20 or 21 (a full ~21-year NCES backfill is on the roadmap),
+    # that bare year fragment can equal n and make a WRONG answer (one that
+    # merely spells out the year range but cites the old count) pass. Use
+    # contains_year_count instead, which requires n to appear directly in
+    # front of "year(s)" — a year-range fragment like "21" in "2020-21"
+    # never sits next to that word, so it can't collide.
     return (
         "How many collection years of data are in the database?",
         f"{n} years ({years[0]}–{years[-1]})",
-        contains_number(n),
+        contains_year_count(n),
     )
 
 
