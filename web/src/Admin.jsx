@@ -177,30 +177,41 @@ function StatusBadge({ status }) {
 }
 
 function YearCard({ entry, locked, checked, onToggle }) {
-  const disabled = !entry.selectable || locked;
+  // The whole card is the toggle (no separate checkbox) — but it still carries
+  // full checkbox semantics for keyboard + screen-reader users: role=checkbox,
+  // aria-checked, tabbable, and Space/Enter toggle. Non-selectable cards
+  // (already-integrated / unknown) are inert static tiles, not controls.
+  const interactive = entry.selectable && !locked;
   const label = `Integrate ${entry.year_label} (${entry.release})`;
   const cls = ["year-card", entry.status, checked ? "selected" : "", locked ? "locked" : ""]
     .filter(Boolean).join(" ");
+
+  const toggle = () => { if (interactive) onToggle(!checked); };
+  const onKeyDown = (e) => {
+    if (interactive && (e.key === " " || e.key === "Enter")) {
+      e.preventDefault();  // Space would otherwise scroll the page
+      onToggle(!checked);
+    }
+  };
 
   return (
     <div
       className={cls}
       data-year={entry.start_year}
       data-status={entry.status}
-      aria-disabled={disabled ? "true" : undefined}
+      role={interactive ? "checkbox" : undefined}
+      aria-checked={interactive ? checked : undefined}
+      aria-label={interactive ? label : undefined}
+      aria-disabled={!entry.selectable || locked ? "true" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onClick={interactive ? toggle : undefined}
+      onKeyDown={interactive ? onKeyDown : undefined}
     >
-      <div className="year-label">{entry.year_label}</div>
-      {entry.selectable && (
-        <input
-          type="checkbox"
-          aria-label={label}
-          checked={checked}
-          disabled={locked}
-          onChange={(e) => onToggle(e.target.checked)}
-        />
-      )}
+      <div className="year-card__top">
+        <span className="year-label">{entry.year_label}</span>
+        {checked && <span className="year-card__check" aria-hidden="true">✓</span>}
+      </div>
       <StatusBadge status={entry.status} />
-      {checked && <span className="year-card__check" aria-hidden="true">✓</span>}
     </div>
   );
 }

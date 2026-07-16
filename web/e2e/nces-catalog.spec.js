@@ -90,16 +90,16 @@ test("selecting years updates the 'Integrate selected (N)' button, disabled at 0
   await expect(submit).toHaveText("Integrate selected (0)");
   await expect(submit).toBeDisabled();
 
-  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await expect(submit).toHaveText("Integrate selected (1)");
   await expect(submit).toBeEnabled();
 
-  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await expect(submit).toHaveText("Integrate selected (2)");
 
   // Unchecking back to zero must re-disable it.
-  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).uncheck();
-  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).uncheck();
+  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
+  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await expect(submit).toHaveText("Integrate selected (0)");
   await expect(submit).toBeDisabled();
 });
@@ -113,8 +113,8 @@ test("submitting selected years POSTs the right start_year list and job progress
   ]);
   await openImportsTab(page);
 
-  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).check();
-  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
+  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
 
   await expect.poll(() => integrate.posts.length).toBe(1);
@@ -129,7 +129,7 @@ test("a 409 response shows the already-running notice", async ({ page }) => {
   await mockIntegrate(page, { httpStatus: 409 });
   await openImportsTab(page);
 
-  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
 
   await expect(page.getByText(/already running/i)).toBeVisible();
@@ -187,17 +187,17 @@ test("disk meter grows as years are checked and turns over + disables submit pas
   await expect(submit).toBeDisabled();
 
   // 1 selected (718,150,656 needed < 1,000,000,000 free): still fine.
-  await page.getByRole("checkbox", { name: "Integrate 2030-31 (Final)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2030-31 (Final)" }).click();
   await expect(meter).not.toHaveClass(/over/);
   await expect(submit).toBeEnabled();
 
   // 2 selected (1,436,301,312 needed > 1,000,000,000 free): now over.
-  await page.getByRole("checkbox", { name: "Integrate 2031-32 (Provisional)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2031-32 (Provisional)" }).click();
   await expect(meter).toHaveClass(/over/);
   await expect(submit).toBeDisabled();
 
   // Backing off to 1 selected must clear the "over" state again.
-  await page.getByRole("checkbox", { name: "Integrate 2031-32 (Provisional)" }).uncheck();
+  await page.getByRole("checkbox", { name: "Integrate 2031-32 (Provisional)" }).click();
   await expect(meter).not.toHaveClass(/over/);
   await expect(submit).toBeEnabled();
 });
@@ -243,8 +243,8 @@ test("per-file progress renders one row per year (label + step); percent is not 
   await mockImportJobPoll(page, 77, PROGRESS_SEQUENCE);
   await openImportsTab(page);
 
-  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).check();
-  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).check();
+  await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
+  await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
 
   const progressPanel = page.getByTestId("import-progress");
@@ -313,7 +313,7 @@ test("an 'update' status card shows an Update badge and is re-selectable", async
   await expect(checkbox).toBeVisible();
 
   const submit = page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ });
-  await checkbox.check();
+  await checkbox.click();
   await expect(submit).toHaveText("Integrate selected (1)");
 
   // A plain (non-update) integrated card must still have no checkbox at all.
@@ -342,12 +342,34 @@ test("selecting a card adds .selected + a check glyph; focusing alone does not s
   await expect(card.locator(".year-card__check")).toHaveCount(0);
 
   // Checking DOES select it: class + check glyph both appear.
-  await checkbox.check();
+  await checkbox.click();
   await expect(card).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
   await expect(card.locator(".year-card__check")).toHaveCount(1);
 
   // Unchecking removes both again.
-  await checkbox.uncheck();
+  await checkbox.click();
   await expect(card).not.toHaveClass(/(?:^|\s)selected(?:\s|$)/);
   await expect(card.locator(".year-card__check")).toHaveCount(0);
+});
+
+// The card is the toggle now (no native checkbox), so a keyboard user must be
+// able to focus it and flip selection with Space or Enter — the checkbox
+// semantics we preserved via role=checkbox + aria-checked.
+test("a selectable card toggles with Space/Enter and exposes aria-checked", async ({ page }) => {
+  await mockImportCatalog(page, CATALOG);
+  await openImportsTab(page);
+
+  const card = page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" });
+  await expect(card).toHaveAttribute("aria-checked", "false");
+
+  await card.focus();
+  await page.keyboard.press(" ");
+  await expect(card).toHaveAttribute("aria-checked", "true");
+  await expect(card).toHaveClass(/(?:^|\s)selected(?:\s|$)/);
+
+  await page.keyboard.press(" ");
+  await expect(card).toHaveAttribute("aria-checked", "false");
+
+  await page.keyboard.press("Enter");
+  await expect(card).toHaveAttribute("aria-checked", "true");
 });
