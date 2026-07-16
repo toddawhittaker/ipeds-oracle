@@ -28,7 +28,9 @@ output/
 !.env.example
 
 # --- Node / frontend ---
-node_modules/
+# No trailing slash: that form matches only directories, so a *symlink* named
+# node_modules slips past it and gets committed.
+node_modules
 web/dist/
 *.tsbuildinfo
 
@@ -42,7 +44,7 @@ web/playwright-report/
 # --- Python ---
 __pycache__/
 *.py[cod]
-.venv/
+.venv
 venv/
 env/
 .ipynb_checkpoints/
