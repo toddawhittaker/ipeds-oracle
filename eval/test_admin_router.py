@@ -707,6 +707,50 @@ def test_skills_patch_headline_or_lesson_reembeds():
         assert np.allclose(got, want), (got, want)
 
 
+def test_skills_patch_embed_failure_preserves_existing_embedding():
+    """Regression (code review on the lesson-editor PR): skills.embed() returns
+    None when fastembed didn't load. update_skill() used to write that straight
+    through as `embedding=NULL` — permanently unretrievable, since
+    reembed_skills_if_needed() bails out for good once the source-version
+    marker is set, so nothing ever backfills it. A previously-good lesson,
+    edited on a box where the embed model isn't available, must keep its
+    stale-but-working vector rather than lose retrieval forever."""
+    with TestClient(app) as c:
+        _login(c)
+        before = c.get("/api/admin/skills").json()
+        skill_id = before[0]["id"]
+        con = connect()
+        emb_before = con.execute(
+            "SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()[0]
+        con.close()
+        assert emb_before is not None, "fixture skill must start with a real embedding"
+
+        orig_embed = skills.embed
+        skills.embed = lambda text: None  # simulates fastembed unavailable
+        try:
+            r = c.patch(f"/api/admin/skills/{skill_id}",
+                       json={"headline": "New headline while embed is down.",
+                             "lesson": "New description while embed is down."})
+        finally:
+            skills.embed = orig_embed
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+        # The text fields still update even though the embed call failed...
+        after = next(s for s in c.get("/api/admin/skills").json() if s["id"] == skill_id)
+        assert after["headline"] == "New headline while embed is down.", after
+        assert after["lesson"] == "New description while embed is down.", after
+
+        # ...but the embedding column is left exactly as it was, not NULLed.
+        con = connect()
+        emb_after = con.execute(
+            "SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()[0]
+        con.close()
+        assert emb_after is not None, \
+            "a failed embed() must never NULL out an existing embedding"
+        assert emb_after == emb_before, \
+            "embedding must be left byte-for-byte untouched when embed() fails"
+
+
 def test_skills_patch_verify_only_does_not_reembed():
     with TestClient(app) as c:
         _login(c)
@@ -854,6 +898,8 @@ def run():
           test_usage_since_after_until_is_swapped)
     check("skills GET includes the headline field", test_skills_get_includes_headline_field)
     check("skills PATCH headline/lesson re-embeds", test_skills_patch_headline_or_lesson_reembeds)
+    check("skills PATCH preserves an existing embedding when embed() fails (returns None)",
+          test_skills_patch_embed_failure_preserves_existing_embedding)
     check("skills PATCH verify-only does not re-embed",
           test_skills_patch_verify_only_does_not_reembed)
     check("skills PATCH updates fields; empty body is a no-op",

@@ -494,16 +494,23 @@ def update_skill(skill_id: int, body: SkillUpdate):
     try:
         # The embedding derives from headline+lesson (app.skills._embed_source),
         # so editing either one makes the stored vector stale — recompute it in
-        # the same request. A verify-only PATCH (the only edit the UI does
-        # today) touches neither field and skips this entirely.
+        # the same request. A verify-only PATCH touches neither field and skips
+        # this entirely.
         if body.headline is not None or body.lesson is not None:
             row = con.execute(
                 "SELECT headline, lesson FROM skills WHERE id=?", (skill_id,)).fetchone()
             new_headline = body.headline if body.headline is not None else (row["headline"] or "")
             new_lesson = body.lesson if body.lesson is not None else (row["lesson"] or "")
             v = skills.embed(skills._embed_source(new_headline, new_lesson))
-            sets.append("embedding=?")
-            vals.append(skills._to_blob(v) if v is not None else None)
+            # Only write a vector we actually have. embed() returns None when
+            # fastembed didn't load, and NULLing here would drop the lesson out
+            # of retrieval for good — reembed_skills_if_needed() won't rescue it
+            # once the source-version marker is set. A stale vector still
+            # retrieves; NULL never does. Same principle that function already
+            # applies to a rule-less row.
+            if v is not None:
+                sets.append("embedding=?")
+                vals.append(skills._to_blob(v))
         vals.append(skill_id)
         con.execute(f"UPDATE skills SET {', '.join(sets)} WHERE id=?", vals)
         con.commit()

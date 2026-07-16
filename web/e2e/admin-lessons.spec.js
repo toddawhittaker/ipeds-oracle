@@ -169,7 +169,7 @@ test("edit button opens a labelled, prefilled edit form and moves focus to Headl
   await expect(headline).toBeFocused();
 });
 
-test("Save PATCHes exactly {headline, lesson, canonical_sql} trimmed, reloads, announces, and restores focus", async ({ page }) => {
+test("Save PATCHes exactly {headline, lesson, notes, canonical_sql} trimmed, reloads, announces, and restores focus", async ({ page }) => {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
 
@@ -205,9 +205,14 @@ test("Save PATCHes exactly {headline, lesson, canonical_sql} trimmed, reloads, a
   await page.getByRole("button", { name: "Save" }).click();
 
   await expect.poll(() => patchBody).not.toBeNull();
+  // `notes` rides along with `lesson`, kept in sync (see the dedicated
+  // lesson/notes-sync regression tests below): every reader resolves the
+  // description as `lesson || notes`, so writing lesson alone would let a
+  // stale notes value silently resurface later.
   expect(patchBody).toEqual({
     headline: EDITABLE_LESSON.headline,
     lesson: EDITABLE_LESSON.lesson,
+    notes: EDITABLE_LESSON.lesson,
     canonical_sql: EDITABLE_LESSON.canonical_sql,
   });
 
@@ -353,8 +358,95 @@ test("a rule-less lesson (no headline, no description) can be given a headline v
   expect(patchBody).toEqual({
     headline: "New: always filter majornum=1 on completions totals.",
     lesson: "",
+    notes: "",
     canonical_sql: "SELECT 1 -- placeholder",
   });
+});
+
+// --- Regression: clearing a Description must not resurrect stale `notes`
+// text (defect found in code review). `_lesson_text` (app/skills.py) and the
+// card's own render both resolve the description as `lesson || notes`, so
+// writing `lesson` alone on save left a stale, DIFFERENT `notes` value ready
+// to silently resurface — into the card AND the model's prompt — the moment
+// an admin cleared the Description, while the embedding (recomputed from
+// headline+lesson only) no longer matched what was actually served. Every
+// real seed row has both columns populated with genuinely different text
+// (`lesson` is a v2 rewrite, `notes` is older v1-era wording), so this isn't
+// a hypothetical: it's the shape of the live data.
+const STALE_NOTES_LESSON = {
+  id: 11,
+  question: "why did year filtering break",
+  headline: "Use a constant year bound.",
+  lesson: "Compare year against a constant MAX(year)-N bound; never join a "
+    + "DISTINCT year list, which forces a full scan.",
+  notes: "STALE v1 TEXT: join a DISTINCT year list and filter on it.",
+  canonical_sql: "SELECT 1;",
+  verified: true,
+  created_by: "seed",
+  upvotes: 2,
+  downvotes: 0,
+  hits: 5,
+};
+
+test("editing the Description writes the identical trimmed text to both lesson and notes", async ({ page }) => {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockSkills(page, [STALE_NOTES_LESSON]);
+  let patchBody = null;
+  await page.route("**/api/admin/skills/11", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    patchBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("button", { name: "Skills" }).click();
+  await page.getByRole("button", { name: "Edit lesson: Use a constant year bound." }).click();
+
+  // The editor's Description is seeded from `lesson` (not `notes`) whenever
+  // `lesson` is present — confirms which field is authoritative before we
+  // even touch anything.
+  await expect(page.getByLabel("Description")).toHaveValue(STALE_NOTES_LESSON.lesson);
+
+  const newText = "Always compare year against a constant MAX(year)-N bound.";
+  await page.getByLabel("Description").fill(newText);
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await expect.poll(() => patchBody).not.toBeNull();
+  expect(patchBody.lesson).toBe(newText);
+  expect(patchBody.notes).toBe(newText);
+});
+
+test("clearing the Description clears notes too — a stale notes fallback cannot resurrect old guidance", async ({ page }) => {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockSkills(page, [STALE_NOTES_LESSON]);
+  let patchBody = null;
+  await page.route("**/api/admin/skills/11", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    patchBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("button", { name: "Skills" }).click();
+  await page.getByRole("button", { name: "Edit lesson: Use a constant year bound." }).click();
+
+  // Headline is still non-empty, so Save stays enabled even with an empty
+  // Description (draftIsEmpty only trips when BOTH are blank).
+  await page.getByLabel("Description").fill("");
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await expect.poll(() => patchBody).not.toBeNull();
+  // The bug: `lesson` clears but `notes` (still "STALE v1 TEXT: …") is left
+  // behind, and every reader falls back to it the instant `lesson` is empty.
+  // The fix must clear (or otherwise sync) `notes` in the SAME request.
+  expect(patchBody.lesson).toBe("");
+  expect(patchBody.notes).toBe("");
+  expect(patchBody.notes).not.toBe(STALE_NOTES_LESSON.notes);
 });
 
 // Also being changed in this PR: the "unverified" pill (.tag.warn) moves off

@@ -480,13 +480,25 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .lesson-example pre { margin: 6px 0 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
 .lesson-edit { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
 .lesson-field { display: flex; flex-direction: column; gap: 4px; }
+/* Accent border + a fill that differs from the card, matching .edit-box (the
+   chat inline editor). The field sits on --panel, so a --line border would be
+   the only thing marking it as a control at 1.25:1 — under 1.4.11's 3:1. */
 .lesson-field input, .lesson-field textarea {
-  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); border: 1px solid var(--accent);
   border-radius: 8px; padding: 8px 10px; font: inherit; width: 100%; resize: vertical;
 }
 .lesson-field textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .lesson-field input:focus-visible, .lesson-field textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.lesson-edit .btn-verify:disabled { opacity: .5; cursor: not-allowed; }
+/* aria-disabled, not :disabled — the button stays focusable so a screen reader
+   can reach it and read why it won't save. That forfeits WCAG's contrast
+   exemption for genuinely disabled controls, and fading the accent fill can't
+   pass: opacity composites the white label down with it (2.11:1 at .5, 2.77:1
+   even at .65). Demote to a --muted outline instead — 4.83:1 light, 6.48:1
+   dark, and it reads as clearly not-the-primary-action. */
+.lesson-edit .btn-verify[aria-disabled="true"] {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--muted); cursor: not-allowed;
+}
 .job { margin: 14px 0; }
 
 /* logs */
