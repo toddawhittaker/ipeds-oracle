@@ -144,8 +144,13 @@ land on `main`.
 > with both neutralized:
 > `COOKIE_SECURE=false EMAIL_DOMAIN= .venv/bin/python eval/test_backend.py`.
 > CI has no `.env`, so it just works there — which is exactly why a bleed like
-> this only ever breaks the local gate. `scripts/run_ci_local.sh` blanks these
-> for you; add any new behavior‑changing setting to that list.
+> this only ever breaks the local gate. `scripts/ci_env.sh` blanks these for you
+> and is sourced by both `scripts/run_ci_local.sh` and `scripts/coverage_check.sh`
+> — **add any new behavior‑changing setting to `ci_env.sh`**, which is the one
+> list. Keeping a per‑script copy is what let `coverage_check.sh` drift without
+> `EMAIL_DOMAIN`: nothing could catch it, because the pre‑push gate exported the
+> blank before calling it and CI has no `.env` to bleed. It only failed when run
+> directly on a dev box, where it looked like a real test failure.
 
 ## Lint & format
 
