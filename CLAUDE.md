@@ -147,6 +147,16 @@ Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), keep PRs focused (one i
 open a PR, watch `gh pr checks <n> --watch`, merge only when lint · backend · e2e
 · image are all green. End commit messages with the `Co-Authored-By:` trailer.
 
+**Two sessions → use a worktree.** If a second dev/agent session runs in this
+repo, they share one working tree — a `git checkout` in one moves the other's
+branch mid-edit and their servers collide on port 8000. Isolate each with a git
+worktree: `scripts/worktree-add.sh <branch>` (symlinks `.venv`/`node_modules`/
+`.env`/`ipeds.db`, copies `app.db`/`logs.db`, runs the server on a distinct
+port). Before any git write op, `git branch --show-current` + `git status` to see
+whose branch is loaded; **never `git add -A` in a worktree** (PR #48 committed a
+symlinked `.venv` and clobbered `main`). See `CONTRIBUTING.md` → *Running two
+sessions at once*.
+
 **Release/deploy (CI/CD).** CI's **image** job builds + smoke-tests the Docker
 image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*`
 git tag** publishes `:vX.Y.Z` + `:latest`. Production is **pull-on-the-box** —

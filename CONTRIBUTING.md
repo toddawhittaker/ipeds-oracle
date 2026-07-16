@@ -74,6 +74,26 @@ Config is env‑driven via `pydantic-settings`; every setting lives in
 escalating to `deepseek/deepseek-v4-pro`; `LLM_MAX_TOOL_ITERS` caps the agent's
 tool rounds.
 
+### Running two sessions at once (git worktrees)
+
+Two dev/agent sessions in **one clone share a single working tree** — a
+`git checkout` in one silently switches the other's branch mid-edit, and their
+dev servers collide on port 8000. Give each session its own **git worktree**
+(separate directory + branch, same `.git`):
+
+```bash
+scripts/worktree-add.sh feat/my-branch      # ../ipeds-my-branch, port hint 8100
+```
+
+The script symlinks the big shared artifacts (`.venv`, `web/node_modules`,
+`.env`, the 2 GB read‑only `ipeds.db`) and **copies** the small stateful DBs
+(`app.db`, `logs.db`) so each session's writes stay isolated. It refuses to leave
+any symlink that isn't gitignored — **PR #48 clobbered `main` by committing a
+symlinked `.venv`/`node_modules` that slipped past a trailing‑slash `.gitignore`
+pattern, so never `git add -A` in a worktree.** Run each worktree's server on a
+**distinct port** (the script prints the command); remove it when the branch
+merges: `git worktree remove ../ipeds-my-branch`.
+
 ## Tests
 
 The backend suites are dependency‑light plain scripts (they `sys.exit(1)` on
