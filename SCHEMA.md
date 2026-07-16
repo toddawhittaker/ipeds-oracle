@@ -122,6 +122,12 @@ clean total/rate. Verified national figures (year 2024) to sanity-check against:
   sector-wide or national finance total must **UNION all three**, each with its own
   variable — querying only `f_f1a` returns $500B and silently drops ~39% of the
   ~$813B national total. Prefer derived `drvf` for common per-institution indicators.
+- **Staff `s_oc` / `eap` — occupation key nests, plus `ftpt` / `facstat`.**
+  `s_oc.occupcat=100` and `eap.eapcat=10000` (both "All staff") sit above nested
+  occupation subtotals (200 ⊃ 210 ⊃ 211–215…); `ftpt` also nests (`1` All staff =
+  `2` Full-time + `3` Part-time; `4` Graduate assistants is separate). Total staff
+  headcount ⇒ `occupcat=100 AND ftpt=1` (= 4.0M, year 2024); never `SUM(hrtotlt)`
+  across `occupcat` or `ftpt`. Prefer derived `drvhr`.
 
 ---
 
@@ -192,10 +198,10 @@ totals) — often the quickest source for common indicators.
 - `om` — award/enrollment at 4/6/8 years for entering cohorts (all undergrads, incl. part-time/non-first-time); `drvom` — derived rates
 
 **Admissions and Test Scores**
-- `adm` — applications, admits, enrollees, SAT/ACT ranges (non-open-admission institutions); `drvadm` — selectivity & yield
+- `adm` — applications, admits, enrollees, SAT/ACT ranges. ⚠️ **non-open-admission reporters only** (~1/3 of institutions — NOT the universe); men+women ≠ total (gender-unknown component), but `enrlft`+`enrlpt` = `enrlt`; `drvadm` — selectivity & yield
 
 **Student Financial Aid**
-- `sfa` — student financial aid, combined *(2024-25 only)*; `sfa_p1`,`sfa_p2` — parts 1 & 2 of the same survey *(2021-2024, before the merge)*
+- `sfa` — student financial aid, combined *(2024-25 only — ⚠️ empty for earlier years; use `sfa_p1`/`sfa_p2` there)*; `sfa_p1`,`sfa_p2` — parts 1 & 2 of the same survey *(2021-2024, before the merge)*. ⚠️ measure suffix = metric: `_n` count · `_p` percent · `_t` total $ · `_a` average $ (see §7)
 - `sfav` — military/veterans benefits; look in all of these for aid amounts/recipients
 
 **Cost** *(new 2024-25 only)*
@@ -205,7 +211,7 @@ totals) — often the quickest source for common indicators.
 - `f_f1a` — public (GASB); `f_f2` — private-nonprofit / public-FASB; `f_f3` — private for-profit (institutions appear in exactly one by control; ⚠️ different total columns per form — UNION all three for a sector/national total, see §2); `drvf` — derived finance
 
 **Human Resources** — *Fall*
-- `eap` — staff by occupation, faculty/tenure status; `s_is` — full-time instructional by rank/tenure/race/gender; `s_sis` — instructional by rank/tenure; `s_oc` — all staff by occupation/race/gender; `s_nh` — new hires
+- `eap` — staff by occupation, faculty/tenure status; `s_is` — full-time instructional by rank/tenure/race/gender; `s_sis` — instructional by rank/tenure; `s_oc` — all staff by occupation/race/gender (⚠️ `occupcat`/`ftpt` nest — filter the All-staff codes, don't `SUM`, see §2); `s_nh` — new hires
 - `sal_is` — salaries, full-time instructional; `sal_nis` — salaries, noninstructional; `drvhr` — derived
 
 **Academic Libraries**
@@ -284,6 +290,17 @@ Look up any other code with the *Discovery* valuesets query.
    IPEDS already computes (grad rate, admit yield, net price, FTE).
 6. `_years`, `_family_map`, `_column_presence` (which columns exist in which
    years — schema drift) are helper tables, not survey data.
+7. **Financial-aid `sfa*` suffixes encode the metric:** `_N` = number of
+   recipients, `_P` = percent of the cohort, `_T` = **total dollars**, `_A` =
+   **average dollars** per recipient (e.g. `pgrnt_n` is a headcount, `pgrnt_t` is a
+   dollar total). Headline aid variables describe the **full-time first-time**
+   undergraduate cohort; other cohorts use the `udg*`/`undg*` prefixes. The combined
+   `sfa` table exists only from 2024-25 on — use `sfa_p1`/`sfa_p2` for earlier years.
+8. **Not every survey is the full universe.** `adm` covers only non-open-admission
+   reporters (~1/3 of institutions) — don't treat its counts as national totals or
+   assume a missing institution has zero. When a table has men/women AND total
+   columns, the total may exceed men+women (a gender-unknown/unreported bucket) —
+   read the total column, don't reconstruct it.
 
 ---
 
