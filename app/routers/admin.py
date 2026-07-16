@@ -75,7 +75,14 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
             invited = send_access_approved(email, invite_link)
         except Exception as e:  # noqa: BLE001 — approval must not fail if email does
             log.warning("approval email to %s failed: %s", email, e)
-    return {"ok": True, "email": email, "invited": invited}
+    # A failed send means two very different things and the admin has to act
+    # differently in each: with no key configured (dev) the mailer logged the
+    # whole email — link included — to the CONSOLE, so it's recoverable; with a
+    # key configured, the send genuinely failed and the link was never printed
+    # anywhere, so the only way in is for them to request one themselves. Tell
+    # the UI which world it's in rather than making it guess.
+    return {"ok": True, "email": email, "invited": invited,
+            "mail_configured": bool(get_settings().resend_api_key)}
 
 
 class AllowlistAdminPatch(BaseModel):
