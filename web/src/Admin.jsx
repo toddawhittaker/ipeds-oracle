@@ -24,8 +24,8 @@ function humanSeconds(s) {
 // swapped/failed — "passed" is not a real job status.
 const TERMINAL_JOB_STATUSES = ["failed", "swapped"];
 
-export default function Admin({ me }) {
-  const [tab, setTab] = useState("allowlist");
+export default function Admin({ me, initialTab, onDataChanged }) {
+  const [tab, setTab] = useState(initialTab || "allowlist");
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
@@ -39,7 +39,7 @@ export default function Admin({ me }) {
         ))}
       </nav>
       {tab === "allowlist" && <Allowlist me={me} />}
-      {tab === "imports" && <Imports />}
+      {tab === "imports" && <Imports onDataChanged={onDataChanged} />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
       {tab === "logs" && <Logs />}
@@ -244,7 +244,7 @@ function YearCard({ entry, locked, checked, onToggle, onRemove }) {
   );
 }
 
-function Imports() {
+function Imports({ onDataChanged }) {
   const [jobs, setJobs] = useState([]);
   const [active, setActive] = useState(null);
   const [activeYears, setActiveYears] = useState(null);
@@ -299,6 +299,12 @@ function Imports() {
         if (job.status === "swapped") {
           setSelected(new Set());
           loadCatalog(true);
+          // Either an integrate or a de-integrate can change whether ANY
+          // year is loaded at all (e.g. the fresh-deploy first integration,
+          // or removing the last-remaining year) -- re-fetch /me so has_data
+          // (and any admin no-data routing derived from it) stays current
+          // without requiring a full page reload.
+          onDataChanged?.();
           // For a removal, the year comes straight from the job's own
           // filename ("deintegrate:{start_year}") — NOT activeYearsRef,
           // which is null whenever this job is reached via "view" on a past
@@ -354,6 +360,9 @@ function Imports() {
 
   const selectableYears = (catalog?.years || []).filter((y) => y.selectable);
   const yearsNewestFirst = catalog ? catalog.years.slice().reverse() : [];
+  // Fresh-deploy "no data" state: nothing is integrated yet. An additive
+  // banner above the normal catalog UI, not a replacement for it.
+  const noData = catalog != null && !catalog.years.some((y) => y.integrated);
 
   // Structured per-year progress from the polled job row (a JSON string per
   // the API contract — mirrors sql_log on chat messages).
@@ -461,6 +470,14 @@ function Imports() {
         ones you pick, runs integrity + magnitude checks, and only swaps in if
         everything passes. The live database is never touched until then.
       </p>
+
+      {noData && (
+        <div className="notice notice-cta" role="note">
+          No dataset loaded yet — pick one or more years below and choose
+          &quot;Integrate selected&quot; to get started. The first load fetches
+          from NCES and builds the database (this can take a few minutes).
+        </div>
+      )}
 
       {notice && (
         <div ref={noticeRef} tabIndex={-1} className="notice" role="status">{notice}</div>

@@ -1,19 +1,25 @@
 import { test, expect } from "@playwright/test";
 import { mockMe, mockConversations } from "./mocks.js";
 
-// The empty chat screen: the DeepSeek/no-proprietary-data warning, clickable
-// example prompts that fill the composer, and the keyboard-resizable sidebar.
+// The empty chat screen: the (generic, non-Franklin-specific) third-party-LLM
+// privacy warning, clickable example prompts that fill the composer, and the
+// keyboard-resizable sidebar.
 test("empty chat: privacy warning, example chips fill the composer, sidebar resizes", async ({ page }) => {
   await mockMe(page, { email: "user@franklin.edu", is_admin: false });
   await mockConversations(page, []);
   await page.goto("/");
 
-  // The warning must call out proprietary Franklin data + DeepSeek training.
+  // The warning must call out proprietary/confidential info and the
+  // third-party AI service, without hardcoding "Franklin" or "DeepSeek" or
+  // any cost-savings framing.
   await expect(
-    page.getByText(/Do not enter proprietary or confidential Franklin/i),
+    page.getByText(/Do not enter proprietary or confidential information/i),
   ).toBeVisible();
   await expect(
-    page.getByText(/DeepSeek, which may train on the data you submit/i),
+    page.getByText(/third-party AI service that may use submitted data to improve its models/i),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/no student records, internal figures, or other non-public information/i),
   ).toBeVisible();
 
   // Clicking an example prompt drops it into the composer for review.

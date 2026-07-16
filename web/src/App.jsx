@@ -20,8 +20,22 @@ export default function App() {
 
   useEffect(() => {
     if (isVerifyRoute()) return; // the /verify page manages its own flow
-    api.me().then(setUser).catch(() => setUser(null));
+    api.me().then((u) => {
+      setUser(u);
+      // A fresh deploy with no dataset yet: route an admin straight to
+      // Admin -> Imports on load (once) rather than leaving them on an
+      // empty Chat with no obvious way to fix it. They can still navigate
+      // freely afterward.
+      if (u?.is_admin && !u.has_data) setView("admin");
+    }).catch(() => setUser(null));
   }, []);
+
+  // Re-fetch /me after a successful data-import swap so a fresh-deploy
+  // admin's has_data flips true without a full page reload. Deliberately NOT
+  // wired into a useEffect keyed on `user` -- the initial no-data->Admin
+  // routing above only runs once, on load, so this later refresh updates
+  // `user.has_data` without yanking the admin's current view/tab around.
+  const refreshMe = () => api.me().then(setUser).catch(() => {});
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
@@ -58,7 +72,10 @@ export default function App() {
           </button>
         </div>
       </header>
-      {view === "chat" ? <Chat /> : <Admin me={user} />}
+      {view === "chat"
+        ? <Chat me={user} />
+        : <Admin me={user} initialTab={user.is_admin && !user.has_data ? "imports" : "allowlist"}
+                 onDataChanged={refreshMe} />}
     </div>
   );
 }

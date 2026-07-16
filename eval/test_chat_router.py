@@ -1,7 +1,8 @@
 """Chat router contract (app/routers/chat.py): streaming turns, the semantic
 cache-hit shortcut, edit/rerun (replacing an old exchange in place),
-conversation list/get/delete, feedback (a thumbs-up promotes a skill), and the
-CSV export's error branches.
+conversation list/get/delete, feedback (a thumbs-up promotes a skill), the
+fresh-deploy no-data guard (admin/non-admin wording, no agent run, no
+conversation created), and the CSV export's error branches.
 
 No LLM/API key needed: guard.classify is patched to always allow, and
 chat_router.stream_agent is replaced per-test with a canned async generator
@@ -457,6 +458,79 @@ def test_download_csv_no_sql_log_400():
         assert csv_r.status_code == 400, csv_r.text
 
 
+# ---------------------------------------------------------------------------
+# no-data guard: a fresh deploy with no ipeds.db dataset gets a friendly
+# notice instead of a raw SQL error, creates NO conversation, and never runs
+# the agent. chat_router.ipeds_years is patched to [] the same way the rest of
+# this suite patches chat_router.stream_agent -- and BOTH are restored in a
+# finally so the rest of the suite (which relies on the real ipeds.db existing
+# in this test environment) is unaffected.
+# ---------------------------------------------------------------------------
+
+def _exploding_agent(question, *, history=None, skills_block=""):
+    raise AssertionError("stream_agent must not run when there is no ipeds.db dataset")
+    yield  # pragma: no cover - unreachable; keeps this an async generator
+
+
+def test_no_data_guard_admin_wording_and_skips_agent():
+    with TestClient(app) as c:
+        _login(c, "admin@franklin.edu")
+        orig_years = chat_router.ipeds_years
+        orig_agent = chat_router.stream_agent
+        chat_router.ipeds_years = lambda: []
+        chat_router.stream_agent = _exploding_agent
+        try:
+            before = c.get("/api/chat/conversations").json()
+            r = c.post("/api/chat/stream", json={"question": "how many CS bachelors last year"})
+            after = c.get("/api/chat/conversations").json()
+        finally:
+            chat_router.ipeds_years = orig_years
+            chat_router.stream_agent = orig_agent
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        answer = next(e for e in events if e["type"] == "answer")
+        assert "No IPEDS dataset is loaded yet" in answer["text"], answer
+        assert "Admin" in answer["text"] and "Imports" in answer["text"], \
+            f"admin wording must route to Admin -> Imports: {answer}"
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("no_data") is True, done
+        assert after == before, "a no-data reply must not create/alter a conversation"
+
+
+def test_no_data_guard_non_admin_wording_and_skips_agent():
+    with TestClient(app) as c:
+        _login(c, "admin@franklin.edu")
+        c.post("/api/admin/allowlist", json={"email": "nodata-user@franklin.edu"})
+        token = captured["approved_link"].split("token=")[1]
+        c2 = TestClient(app)
+        assert c2.post("/api/auth/verify", json={"token": token}).status_code == 200
+
+        orig_years = chat_router.ipeds_years
+        orig_agent = chat_router.stream_agent
+        chat_router.ipeds_years = lambda: []
+        chat_router.stream_agent = _exploding_agent
+        try:
+            before = c2.get("/api/chat/conversations").json()
+            r = c2.post("/api/chat/stream", json={"question": "how many CS bachelors last year"})
+            after = c2.get("/api/chat/conversations").json()
+        finally:
+            chat_router.ipeds_years = orig_years
+            chat_router.stream_agent = orig_agent
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        answer = next(e for e in events if e["type"] == "answer")
+        assert "No IPEDS dataset is loaded yet" in answer["text"], answer
+        assert "administrator" in answer["text"].lower(), \
+            f"non-admin wording must tell them to wait for an administrator: {answer}"
+        assert "Imports" not in answer["text"], \
+            f"non-admin wording must not route to the admin-only Imports UI: {answer}"
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("no_data") is True, done
+        assert after == before, "a no-data reply must not create/alter a conversation"
+
+
 def test_download_csv_rejected_sql_400():
     with TestClient(app) as c:
         _login(c)
@@ -492,6 +566,10 @@ def run():
     check("thumbs-down feedback does not promote a skill",
           test_feedback_thumbs_down_does_not_promote)
     check("feedback on an unknown message 404s", test_feedback_unknown_message_404)
+    check("no-data guard: admin sees Admin->Imports wording and stream_agent never runs",
+          test_no_data_guard_admin_wording_and_skips_agent)
+    check("no-data guard: non-admin sees wait-for-administrator wording, agent never runs",
+          test_no_data_guard_non_admin_wording_and_skips_agent)
     check("CSV download of an unknown message 404s",
           test_download_csv_unknown_message_404)
     check("CSV download with no associated query 400s",

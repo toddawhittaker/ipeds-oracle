@@ -190,6 +190,14 @@ Two rules that will bite you if ignored (both detailed in SCHEMA.md):
   `cipcode` exists at 2‑/4‑/6‑digit plus a `'99'` grand‑total row that each sum
   to the same total — match an exact 6‑digit code, or use `'99'` for totals.
 
+**A fresh deploy with no `ipeds.db` yet is a supported first-run state**, not an
+error: `app/tools/sql.py`'s `ipeds_years()`/`has_ipeds_data()` probe the file
+non-raisingly (missing/0-byte/garbage/no-`_years` all yield `[]`/`False`).
+`GET /api/auth/me` exposes `has_data`; the chat-stream no-data guard in
+`app/routers/chat.py` returns a friendly notice (admin-aware wording, no
+conversation created, no agent run) instead of a raw SQL error; and the SPA
+routes an admin with no data straight to Admin → Imports on load.
+
 ### Adding a new IPEDS year
 
 The easiest path: in the running app, go to **Admin → Imports** and pick the

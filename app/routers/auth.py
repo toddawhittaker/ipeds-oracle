@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr
 from app import auth
 from app.auth import current_user
 from app.ratelimit import client_ip, enforce_auth_rate_limit
+from app.tools.sql import has_ipeds_data
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -54,7 +55,8 @@ def verify_post(body: VerifyRequest, response: Response):
 
 @router.get("/me")
 def me(user: sqlite3.Row = Depends(current_user)):
-    return {"email": user["email"], "is_admin": bool(user["is_admin"])}
+    return {"email": user["email"], "is_admin": bool(user["is_admin"]),
+            "has_data": has_ipeds_data()}
 
 
 @router.post("/logout")

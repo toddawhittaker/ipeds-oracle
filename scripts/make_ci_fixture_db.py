@@ -59,6 +59,13 @@ def build(out_path: Path) -> None:
         " VALUES (?,?,?,?,?)", rows
     )
 
+    # --- _years: ending years present -- the fresh-deploy "no data" guard
+    # (app.tools.sql.ipeds_years / has_ipeds_data) checks this table exists
+    # and is non-empty, so the fixture must carry one matching c_a's years or
+    # every chat/guard suite would see this fixture as a data-less deploy.
+    cur.execute("CREATE TABLE _years (year INTEGER)")
+    cur.executemany("INSERT INTO _years(year) VALUES (?)", [(y,) for y in years])
+
     # --- hd: institution directory, used by the LIKE/REPLACE probes ---------
     cur.execute("CREATE TABLE hd (unitid INTEGER, instnm TEXT)")
     institutions = [
