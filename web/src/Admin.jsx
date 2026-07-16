@@ -792,22 +792,79 @@ function ruleName(s) {
 function Skills() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("");
+  const [editingId, setEditingId] = useState(null);   // at most one card at a time
+  const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
+  // Focus returns to the "edit" button when the editor closes (a11y). We can't
+  // hold the clicked node like Chat.jsx does: opening the editor unmounts that
+  // button, so the captured node is detached and focusing it silently no-ops.
+  // Keep a per-lesson ref map instead and re-find the freshly mounted button.
+  const editBtnRefs = useRef({});   // skill id -> its "edit" button node
+  const headlineRef = useRef(null);
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
   const pending = rows.filter((r) => !r.verified).length;
 
+  // aria-live only fires when the DOM text actually changes, so re-announcing
+  // the same message (editing two lessons in a row) would say nothing. Clear
+  // first, then set on the next frame, to force a real mutation.
+  function announce(text) {
+    setStatus("");
+    requestAnimationFrame(() => setStatus(text));
+  }
+
   const setVerified = (s, verified) =>
     api.patchSkill(s.id, { verified }).then(() => {
-      setStatus(verified ? "Lesson verified." : "Lesson moved back to unverified.");
+      announce(verified ? "Lesson verified." : "Lesson moved back to unverified.");
       load();
     });
+
+  function startEdit(s) {
+    setEditingId(s.id);
+    setDraft({
+      headline: s.headline || "",
+      lesson: s.lesson || s.notes || "",
+      canonical_sql: s.canonical_sql || "",
+    });
+    requestAnimationFrame(() => headlineRef.current?.focus?.());
+  }
+  function closeEdit(id) {
+    setEditingId(null);
+    // rAF runs after React has committed the re-render, so the ref map now
+    // holds the newly mounted button rather than the one we just tore down.
+    requestAnimationFrame(() => editBtnRefs.current[id]?.focus?.());
+  }
+  // A lesson with neither headline nor description has nothing to embed against,
+  // so retrieval could never surface it — block the save rather than store a
+  // rule that's dead on arrival.
+  const draftIsEmpty = !draft.headline.trim() && !draft.lesson.trim();
+  function saveEdit(s) {
+    // Reachable now that Save is aria-disabled rather than disabled: land the
+    // user on the field that unblocks them instead of doing nothing.
+    if (draftIsEmpty) { headlineRef.current?.focus?.(); return; }
+    const description = draft.lesson.trim();
+    api.patchSkill(s.id, {
+      headline: draft.headline.trim(),
+      // lesson and notes are written together, the way migration 6 does it
+      // (app/db.py). Every reader resolves the description as
+      // `lesson or notes`, so writing lesson alone would let a stale notes
+      // resurrect text the admin just deleted — back into the card AND into
+      // the model's prompt, while the embedding no longer matches it.
+      lesson: description,
+      notes: description,
+      canonical_sql: draft.canonical_sql.trim(),
+    }).then(() => {
+      announce("Lesson updated.");
+      closeEdit(s.id);
+      load();
+    }).catch(() => announce("Couldn't save that lesson — nothing was changed."));
+  }
   const reject = (s) => {
     // Confirm only when there's curated/used data to lose — a fresh unreviewed
     // proposal (verified=false, no votes/hits) can be dismissed without nagging.
     const risky = s.verified || s.upvotes > 0 || s.hits > 0;
     if (risky && !window.confirm(
       `Delete this ${s.verified ? "verified " : ""}lesson? This can't be undone.`)) return;
-    api.deleteSkill(s.id).then(() => { setStatus("Lesson rejected."); load(); });
+    api.deleteSkill(s.id).then(() => { announce("Lesson rejected."); load(); });
   };
 
   return (
@@ -847,6 +904,44 @@ function Skills() {
               <span className="tag">hits {s.hits}</span>
             </span>
           </div>
+          {editingId === s.id ? (
+            <div className="lesson-edit" role="group"
+                 aria-label={`Edit lesson: ${ruleName(s)}`}
+                 onKeyDown={(e) => { if (e.key === "Escape") closeEdit(s.id); }}>
+              <label className="lesson-field">
+                <span className="muted small">Headline</span>
+                <input ref={headlineRef} type="text" maxLength={300} value={draft.headline}
+                       onChange={(e) => setDraft({ ...draft, headline: e.target.value })} />
+              </label>
+              <label className="lesson-field">
+                <span className="muted small">Description</span>
+                <textarea rows={4} maxLength={4000} value={draft.lesson}
+                          onChange={(e) => setDraft({ ...draft, lesson: e.target.value })} />
+              </label>
+              <label className="lesson-field">
+                <span className="muted small">Example query</span>
+                <textarea rows={6} maxLength={8000} className="mono" value={draft.canonical_sql}
+                          onChange={(e) => setDraft({ ...draft, canonical_sql: e.target.value })} />
+              </label>
+              <div className="msg-actions">
+                {/* aria-disabled rather than disabled: a disabled button is
+                    unfocusable, so a screen-reader user who empties both
+                    fields just finds Save gone with no explanation, and any
+                    aria-describedby on it would never be read. saveEdit
+                    early-returns, so the click is a safe no-op. */}
+                <button className="btn-verify" aria-disabled={draftIsEmpty}
+                        aria-describedby={draftIsEmpty ? `save-hint-${s.id}` : undefined}
+                        onClick={() => saveEdit(s)}>Save</button>
+                <button className="link" onClick={() => closeEdit(s.id)}>Cancel</button>
+                {draftIsEmpty && (
+                  <span id={`save-hint-${s.id}`} className="muted small">
+                    Give it a headline or description to save.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+          <>
           {showDescription && (
             <details className="lesson-desc">
               <summary className="muted small">Details</summary>
@@ -868,9 +963,17 @@ function Skills() {
               <button className="btn-verify" aria-label={`Verify lesson: ${ruleName(s)}`}
                       onClick={() => setVerified(s, true)}>Verify</button>
             )}
+            <button className="link" aria-label={`Edit lesson: ${ruleName(s)}`}
+                    ref={(el) => {
+                      if (el) editBtnRefs.current[s.id] = el;
+                      else delete editBtnRefs.current[s.id];
+                    }}
+                    onClick={() => startEdit(s)}>edit</button>
             <button className="link danger" aria-label={`Reject lesson: ${ruleName(s)}`}
                     onClick={() => reject(s)}>reject</button>
           </div>
+          </>
+          )}
         </div>
         );
       })}
