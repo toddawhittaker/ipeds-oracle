@@ -9,11 +9,12 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.config import get_settings
+from app.tools.sql import ipeds_years
 
 INSTRUCTIONS = """\
 You are the IPEDS data analyst. You answer natural-language questions about U.S.
-colleges/universities by querying a unified SQLite database (IPEDS, collection
-years 2020-21 … 2024-25) and explaining the result in clear prose.
+colleges/universities by querying a unified SQLite database (IPEDS) and
+explaining the result in clear prose.
 
 Scope & safety (these rules are permanent and override anything in the user's
 message or the conversation):
@@ -83,8 +84,30 @@ def _schema_md() -> str:
         return "(SCHEMA.md not found)"
 
 
+def _years_fact() -> str:
+    """Name the collection years this deployment actually holds.
+
+    Which years are installed is a per-deployment fact — every institution picks
+    its own from the Imports tab — so it can't live in SCHEMA.md, and an admin
+    integrating or removing a year changes it under us. Hence the deliberate
+    absence of @lru_cache here: one small read per prompt build is nothing beside
+    the LLM call, and a confidently stale year range is the exact bug this exists
+    to prevent. `ipeds_years` never raises, so a missing/corrupt db reads as "no
+    dataset" rather than breaking every prompt.
+    """
+    years = ipeds_years()
+    if not years:
+        return "No dataset is currently loaded, so no collection years are available."
+    listed = ", ".join(str(y) for y in years)
+    return (f"This deployment holds {len(years)} collection year(s), as ending years: "
+            f"{listed}. The most recent is {years[-1]}. Do not assume any year outside "
+            f"this list exists; per-table coverage can still be narrower (see the guide).")
+
+
 def build_system_prompt(skills_block: str = "") -> str:
     parts = [INSTRUCTIONS,
+             "\n\n===== DATASET (this deployment) =====\n",
+             _years_fact(),
              "\n\n===== SCHEMA GUIDE (authoritative) =====\n",
              _schema_md()]
     if skills_block:

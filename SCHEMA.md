@@ -1,7 +1,10 @@
 # IPEDS unified database — schema & query guide
 
-`ipeds.db` (SQLite, ~1.9 GB) stacks **every IPEDS survey table across collection
-years 2020-21 … 2024-25** into one file. This document is the context needed to
+`ipeds.db` (SQLite) stacks **every IPEDS survey table across whichever collection
+years this deployment has loaded** into one file — each institution picks its own
+years via Admin → Imports, so this guide never names them. `_years` is the
+authoritative list (the system prompt states it, and `SELECT year FROM _years`
+confirms it). This document is the context needed to
 translate natural-language questions into correct SQL. The database is
 **self-describing** — the `tables`, `vartable`, and `valuesets` tables let you
 look up any table, variable, or code on demand (see *Discovery* below), so this
@@ -26,7 +29,9 @@ Every row carries three added columns:
 | `year`        | INTEGER | **ending year, e.g. `2025`** — use this for filtering/sorting/grouping |
 | `src_table`   | TEXT    | original Access table name (provenance)                           |
 
-- **`year` is the ending year of the collection**: 2020-21→2021 … 2024-25→2025.
+- **`year` is the ending year of the collection**: a `2024-25` collection is
+  `year=2025`. (A convention, not a claim about coverage — `_years` says which
+  years are actually loaded here.)
 - "Last N years" ⇒ `year > (SELECT MAX(year) - N FROM _years)`. **Always a
   constant bound, never a JOIN to a year list** (see Gotchas).
 - Finance (`f_*`) and Financial Aid (`sfa*`) data lag ~1 year; `year` still

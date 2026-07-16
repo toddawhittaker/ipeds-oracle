@@ -82,8 +82,8 @@ def send_access_approved(to: str, link: str) -> bool:
      color:#1a202c;line-height:1.5">
   <h2 style="margin:0 0 12px">Welcome to {PRODUCT_NAME} 🎓</h2>
   <p>Your access has been approved. {PRODUCT_NAME} lets you explore U.S. college and
-     university data (IPEDS, collection years 2020-21 through 2024-25) just by
-     asking questions in plain English — no SQL and no spreadsheets required.</p>
+     university data (IPEDS) just by asking questions in plain English — no SQL
+     and no spreadsheets required.</p>
   <p style="margin:22px 0">
     <a href="{link}" style="display:inline-block;padding:11px 20px;
        background:#2b6cb0;color:#fff;border-radius:6px;text-decoration:none;
@@ -112,9 +112,8 @@ def send_access_approved(to: str, link: str) -> bool:
 </div>"""
     text = (
         f"Welcome to {PRODUCT_NAME} — you're approved!\n\n"
-        f"{PRODUCT_NAME} lets you explore U.S. college and university data (IPEDS, "
-        "collection years 2020-21 through 2024-25) just by asking questions in "
-        "plain English.\n\n"
+        f"{PRODUCT_NAME} lets you explore U.S. college and university data (IPEDS) "
+        "just by asking questions in plain English.\n\n"
         f"Sign in (this link works once and expires in {ttl} min):\n{link}\n\n"
         "Try asking things like:\n"
         "  - Top 20 institutions awarding Associate's degrees in Registered "
