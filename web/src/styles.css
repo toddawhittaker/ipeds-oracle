@@ -183,7 +183,13 @@ input, textarea, button { font-family: inherit; }
 .vote { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; filter: grayscale(1); opacity: .6; }
 .vote.on { filter: none; opacity: 1; border-color: var(--line); }
 details.sql summary { cursor: pointer; color: var(--muted); }
-details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+details.sql pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+/* The import report + streamed log wrap instead of scrolling horizontally, so
+   they don't sprout their own inner scrollbars nested inside the page scroll.
+   The (potentially long) log is a single bounded vertical-scroll box; the short
+   report just wraps and grows with the page. */
+.report, .log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log { max-height: 40vh; overflow-y: auto; }
 
 /* thinking / spinner */
 .spinner {
