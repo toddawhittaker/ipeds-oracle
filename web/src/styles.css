@@ -7,6 +7,9 @@
   --user: #eef4fb; --danger: #c0392b; --ok: #157347; --warn: #946a00;
   --scroll-thumb: rgba(0, 0, 0, .18); --scroll-thumb-hover: rgba(0, 0, 0, .34);
   --on-fg: #ffffff; /* text/icon on an --accent fill (contrast-safe in light) */
+  /* Background tint for a selected .year-card — kept light enough that
+     --text (near-black in light mode) still reads at AA contrast over it. */
+  --selected-tint: #dbe9f7;
 }
 :root[data-theme="dark"] {
   --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
@@ -14,6 +17,9 @@
   --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
   --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
   --on-fg: #10151b; /* dark text on the lighter dark-theme --accent (contrast-safe) */
+  /* Dark-mode equivalent — dark enough that --text (near-white) still reads
+     at AA contrast over it. */
+  --selected-tint: #2a3a4d;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -22,6 +28,7 @@
     --user: #232c38; --danger: #e06a5c; --ok: #4cc38a; --warn: #e0a94a;
     --scroll-thumb: rgba(255, 255, 255, .16); --scroll-thumb-hover: rgba(255, 255, 255, .32);
     --on-fg: #10151b;
+    --selected-tint: #2a3a4d;
   }
 }
 
@@ -37,6 +44,12 @@
 .thin-scroll::-webkit-scrollbar-corner { background: transparent; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* The app shell (.app) is exactly viewport height and owns its own inner
+   scroll regions (.admin / .messages), so the document root itself must never
+   scroll. Clipping .app alone doesn't stop it — the viewport scrollport still
+   reserves room for a nested overflow:auto child's content in Chromium — so we
+   pin the root scroller here. */
+html, body { overflow: hidden; }
 body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   background: var(--bg); color: var(--text); font-size: 15px;
@@ -52,7 +65,12 @@ input, textarea, button { font-family: inherit; }
 }
 
 /* layout */
-.app { height: 100%; display: flex; flex-direction: column; }
+/* overflow:hidden pins the shell to the viewport so the PAGE never scrolls —
+   only inner regions (.admin / .messages) scroll. Without it, a nested
+   overflow:auto child's clipped content still inflates the root scrollHeight in
+   Chromium, giving a phantom whole-page scrollbar (topbar included) on top of
+   the inner one. */
+.app { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   display: flex; align-items: center; gap: 20px; padding: 10px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel);
@@ -176,7 +194,13 @@ input, textarea, button { font-family: inherit; }
 .vote { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; filter: grayscale(1); opacity: .6; }
 .vote.on { filter: none; opacity: 1; border-color: var(--line); }
 details.sql summary { cursor: pointer; color: var(--muted); }
-details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+details.sql pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+/* The import report + streamed log wrap instead of scrolling horizontally, so
+   they don't sprout their own inner scrollbars nested inside the page scroll.
+   The (potentially long) log is a single bounded vertical-scroll box; the short
+   report just wraps and grows with the page. */
+.report, .log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log { max-height: 40vh; overflow-y: auto; }
 
 /* thinking / spinner */
 .spinner {
@@ -273,7 +297,11 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .chart-export-src { position: absolute; left: -99999px; top: 0; width: 600px; height: 300px; opacity: 0; pointer-events: none; }
 
 /* admin */
-.admin { flex: 1; overflow: auto; padding: 20px; }
+/* min-height:0 is REQUIRED so this flex child can shrink below its content and
+   scroll internally (like .chat). Without it, tall admin content grows .app
+   past the viewport — the whole page (topbar included) scrolls AND .admin
+   scrolls (double scrollbars), with phantom blank space below the content. */
+.admin { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 .subtabs { display: flex; gap: 6px; margin-bottom: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; }
 .panel h3 { margin-top: 0; }
@@ -298,7 +326,11 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; min-width: 110px; }
 .stat .v { font-size: 24px; font-weight: 700; }
 .stat .l { color: var(--muted); font-size: 13px; }
-.badge { padding: 2px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); }
+/* An opaque background (not "transparent"/inherit) keeps badge text contrast
+   independent of whatever it's sitting on — e.g. a .year-card.selected's
+   --selected-tint background, against which the accent/warn badge text
+   otherwise falls below AA (see styles review M2). */
+.badge { padding: 2px 8px; border-radius: 20px; font-size: 12px; border: 1px solid var(--line); background: var(--panel); }
 .badge.swapped, .badge.passed { color: var(--ok); border-color: var(--ok); }
 .badge.failed { color: var(--danger); border-color: var(--danger); }
 .badge.running, .badge.checks, .badge.pending { color: var(--accent); border-color: var(--accent); }
@@ -324,17 +356,24 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .year-card {
   border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
   background: var(--panel); cursor: pointer; display: flex; flex-direction: column;
-  gap: 8px; transition: outline-color .1s;
+  gap: 8px; min-height: 74px; transition: outline-color .1s;
 }
+/* Top row: year label on the left, the selected ✓ pinned top-right. */
+.year-card__top { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+/* Status pill is always the last child and pinned to the bottom of the card,
+   so pills line up in a row regardless of card height. */
+.year-card > .badge { margin-top: auto; align-self: flex-start; }
 .year-card.integrated, .year-card.unknown { cursor: default; opacity: .8; }
-.year-card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Selection reads as a background tint, not an outline — the outline channel
+   is reserved for :focus-within alone (see below), so a keyboard user's
+   focus ring is never ambiguous with "selected". */
+.year-card.selected { background: var(--selected-tint); }
 .year-card.locked { opacity: .5; pointer-events: none; }
-/* Deliberately distinct from .selected's solid outline (dashed + larger
-   offset) so a focused-but-unselected card can't be misread as selected by a
-   keyboard user. Declared after .selected so a card that is both selected
-   and focused still shows the focus ring for the current interaction. */
-.year-card:focus-within { outline: 2px dashed var(--accent); outline-offset: 3px; }
-.year-card input[type="checkbox"] { align-self: flex-start; }
+/* The ONLY outline channel on a year-card — a focused (but not necessarily
+   selected) card always gets this ring, selected or not. */
+.year-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.year-card__check { color: var(--accent); font-weight: 700; font-size: 15px; line-height: 1; }
+.badge.update { color: var(--accent); border-color: var(--accent); border-style: solid; }
 .year-card.skeleton {
   min-height: 68px; cursor: default;
   background: linear-gradient(90deg, var(--bg) 25%, var(--line) 37%, var(--bg) 63%);
@@ -355,6 +394,41 @@ details.sql pre, .report, .log { background: var(--bg); border: 1px solid var(--
 .integrate-bar button:disabled { opacity: .5; cursor: not-allowed; }
 .manual-import { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
 .manual-import summary { cursor: pointer; color: var(--muted); }
+
+/* Disk-headroom meter (Imports -> selecting years to integrate). */
+.disk-estimate { margin: 4px 0 14px; }
+.disk-meter {
+  height: 10px; border-radius: 6px; background: var(--bg);
+  border: 1px solid var(--line); overflow: hidden;
+}
+.disk-meter-fill { height: 100%; background: var(--accent); transition: width .15s ease; }
+.disk-meter.over .disk-meter-fill { background: var(--danger); }
+.disk-meter.over ~ p { color: var(--danger); }
+
+/* Per-year import progress (Imports -> a running job's progress column). */
+.file-progress { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.file-progress-row {
+  display: flex; gap: 10px; align-items: center; font-size: 13px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  background: var(--bg);
+}
+.file-progress-year { font-weight: 600; flex: none; min-width: 70px; }
+.file-progress-step { color: var(--muted); flex: none; min-width: 84px; text-transform: capitalize; }
+.file-progress-bar {
+  flex: 1; height: 8px; min-width: 60px; border-radius: 999px;
+  background: var(--line); overflow: hidden;
+}
+.file-progress-fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: var(--accent); transition: width .3s ease;
+}
+.file-progress-fill[data-step="fetched"] { background: var(--ok); }
+.file-progress-fill[data-step="failed"] { background: var(--danger); }
+.file-progress-pct {
+  color: var(--muted); flex: none; min-width: 40px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) { .file-progress-fill { transition: none; } }
 .skill { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
 .skill-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .tags { display: flex; gap: 6px; }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sqlite3
 import threading
 import time
@@ -12,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel, EmailStr
 
 import app.nces as nces
-from app import importer
+from app import estimate, importer
 from app.auth import mint_login_link, require_admin
 from app.config import get_settings
 from app.db import connect
@@ -219,16 +220,59 @@ def _integrated_starts() -> set[int]:
     return {y - 1 for y in importer._years(s.ipeds_db_path)}
 
 
+def _year_provenance() -> dict[int, str | None]:
+    """start_year -> the release it was integrated as ('Final'/'Provisional'),
+    or None if unknown (no year_provenance row at all — e.g. integrated before
+    this feature existed — or a manual upload, which records release=NULL).
+    Both "no row" and "NULL release" collapse to the same None here, which is
+    exactly what _derive_status wants: neither is ever an "update"."""
+    con = connect()
+    try:
+        rows = con.execute("SELECT start_year, release FROM year_provenance").fetchall()
+        return {r["start_year"]: r["release"] for r in rows}
+    finally:
+        con.close()
+
+
+def _derive_status(integrated: bool, available: bool,
+                   release: str | None, provenance_release: str | None) -> tuple[str, bool]:
+    """The single source of truth for a year's catalog status+selectability,
+    shared by GET /import/catalog and POST /import/integrate's validation so
+    the two can never drift apart.
+
+    - integrated + provenance was Provisional + NCES now offers Final ->
+      "update" (selectable — re-integrating picks up the better release).
+    - integrated otherwise (Final-as-Final, or provenance unknown/NULL) ->
+      "integrated" (never selectable again).
+    - not integrated + available -> "final"/"provisional" (selectable).
+    - not integrated + not available -> "unknown" (not selectable)."""
+    if integrated:
+        if provenance_release == "Provisional" and available and release == "Final":
+            return "update", True
+        return "integrated", False
+    if available and release == "Final":
+        return "final", True
+    if available and release == "Provisional":
+        return "provisional", True
+    return "unknown", False
+
+
 @router.get("/import/catalog")
 def import_catalog(refresh: bool = False):
     """The NCES year catalog merged with which ending years are already
-    integrated into the live DB. `status` per year: 'integrated' (any
-    release, never selectable again), 'final'/'provisional' (not yet
+    integrated into the live DB. `status` per year: 'integrated' (never
+    selectable again, unless a Provisional integration now has a Final
+    release out — see 'update'), 'update' (integrated as Provisional, Final
+    is now available — selectable), 'final'/'provisional' (not yet
     integrated, available, selectable), or 'unknown' (NCES doesn't have it —
     not selectable). `partial=True` flags a degraded probe (some/all years
     could not be checked) so the UI can show a retry notice. `refresh=true`
-    bypasses probe_catalog's in-process TTL cache (the toolbar's "Refresh")."""
+    bypasses probe_catalog's in-process TTL cache (the toolbar's "Refresh").
+    Also carries `disk` (free/total/used bytes on the ipeds.db volume) and
+    `calibration` (the estimator's knobs + derived per-year-db-size) so the
+    Imports tab can render a live disk-headroom meter."""
     integrated_starts = _integrated_starts()
+    provenance = _year_provenance()
     partial = False
     try:
         catalog = nces.probe_catalog(refresh=refresh)
@@ -248,24 +292,25 @@ def import_catalog(refresh: bool = False):
             # cover it — still show it correctly, and flag the response.
             partial = True
             entry = {"year_label": f"{sy}-{str(sy + 1)[-2:]}", "year": sy + 1,
-                     "available": False, "release": None}
+                     "available": False, "release": None, "zip_bytes": None}
         integrated = sy in integrated_starts
         available = bool(entry["available"])
         release = entry["release"]
-        if integrated:
-            status, selectable = "integrated", False
-        elif available and release == "Final":
-            status, selectable = "final", True
-        elif available and release == "Provisional":
-            status, selectable = "provisional", True
-        else:
-            status, selectable = "unknown", False
+        status, selectable = _derive_status(
+            integrated, available, release, provenance.get(sy))
         years.append({
             "start_year": sy, "year": entry["year"], "year_label": entry["year_label"],
             "status": status, "integrated": integrated, "available": available,
             "release": release, "selectable": selectable,
+            "zip_bytes": entry.get("zip_bytes"),
         })
-    return {"probed_at": time.time(), "partial": partial, "years": years}
+
+    s = get_settings()
+    dc = estimate.disk_and_calibration(s, integrated_year_count=len(integrated_starts))
+    du = shutil.disk_usage(Path(s.ipeds_db_path).parent)
+    return {"probed_at": time.time(), "partial": partial, "years": years,
+           "disk": {"free_bytes": du.free, "total_bytes": du.total, "used_bytes": du.used},
+           "calibration": dc["calibration"]}
 
 
 class IntegrateRequest(BaseModel):
@@ -282,15 +327,21 @@ def integrate(body: IntegrateRequest, admin: sqlite3.Row = Depends(require_admin
 
         current_year = datetime.now().year
         integrated_starts = _integrated_starts()
+        provenance = _year_provenance()
         catalog_by_year = {e["start_year"]: e for e in nces.probe_catalog()}
 
         for y in body.years:
             if type(y) is not int or not (nces.EARLIEST_START_YEAR <= y <= current_year + 1):  # noqa: E721
                 raise HTTPException(400, f"{y} is not a valid NCES start year.")
-            if y in integrated_starts:
-                raise HTTPException(400, f"{y} is already integrated.")
             entry = catalog_by_year.get(y)
-            if entry is None or not entry.get("available"):
+            integrated = y in integrated_starts
+            available = bool(entry and entry.get("available"))
+            release = entry.get("release") if entry else None
+            _status, selectable = _derive_status(
+                integrated, available, release, provenance.get(y))
+            if not selectable:
+                if integrated:
+                    raise HTTPException(400, f"{y} is already integrated.")
                 raise HTTPException(400, f"{y} is not available from NCES yet.")
 
         label = "integrate:" + ",".join(str(y) for y in sorted(body.years))

@@ -92,6 +92,7 @@ BACKEND_SUITES=(
   test_guard.py
   test_critic.py
   test_skills.py
+  test_estimate.py
   test_importer.py
   test_nces.py
   test_schema_tool.py

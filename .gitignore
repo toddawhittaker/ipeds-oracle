@@ -14,6 +14,9 @@ app.db
 app.db-*
 ipeds_staging.db
 ipeds.db-*
+# Atomic-swap backup the importer leaves next to ipeds.db (repo root in local
+# dev). NOT caught by *.db — it ends in .prev. ~1.9 GB; must never be committed.
+*.db.prev
 data/uploads/
 
 # Generated query outputs

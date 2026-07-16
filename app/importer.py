@@ -7,21 +7,31 @@ The heavy lifting reuses scripts/build_ipeds_db.py unchanged (it already accepts
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import app.nces as nces
+from app import estimate
 from app.config import get_settings
 from app.db import connect, set_meta
 from app.skills import invalidate_cache
 from app.tools.sql import run_sql
 
+log = logging.getLogger("ipeds.importer")
+
 FILENAME_RE = re.compile(r"^IPEDS(\d{4})(\d{2})\.accdb$", re.IGNORECASE)
 REQUIRED_FAMILIES = ("c_a", "hd", "valuesets", "vartable", "_years")
+# The Imports tab polls every 2s (web/src/Admin.jsx) — persisting per-year
+# progress more often than that is pure overhead. See _ProgressWriter below.
+PROGRESS_MIN_INTERVAL_SECONDS = 1.5
 
 
 class NCESFetchError(RuntimeError):
@@ -40,6 +50,123 @@ def _log(job_id: int, line: str) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def _write_progress_json(job_id: int, payload: str) -> None:
+    """The raw DB write behind _set_progress — takes an already-serialized
+    JSON string so a caller can serialize under a lock and write outside it
+    (see _ProgressThrottle below)."""
+    con = connect()
+    try:
+        con.execute("UPDATE import_jobs SET progress=?, updated_at=? WHERE id=?",
+                    (payload, time.time(), job_id))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _set_progress(job_id: int, progress: dict) -> None:
+    """Persist the structured per-year JSON progress blob the Imports tab
+    polls (import_jobs.progress). Shape: {"overall": {"phase", "message"},
+    "years": {"<start_year>": {start_year, year_label, step,
+    downloaded_bytes, total_bytes, pct}}}."""
+    _write_progress_json(job_id, json.dumps(progress))
+
+
+class _ProgressThrottle:
+    """Coalesces run_integrate's per-chunk progress callback so it doesn't
+    serialize a full-DB-connection UPDATE+commit on every streamed chunk —
+    across nces_download_concurrency concurrent downloads that's tens of
+    thousands of commits, which collapses throughput and can raise `database
+    is locked` past app.db's busy_timeout (which would otherwise abort the
+    whole transfer/integrate for what's purely a progress-display concern).
+
+    persist() only actually writes when the integer pct for that year has
+    changed OR PROGRESS_MIN_INTERVAL_SECONDS has passed since its last
+    write (force=True bypasses both, for one-off step transitions like
+    "downloading"/"fetched"/"failed"). The shared `progress` dict is mutated
+    and serialized to a JSON string WHILE HOLDING `lock` (so concurrent
+    per-year threads can't tear a read of it), but the DB write itself always
+    happens AFTER releasing the lock — and a failure there is logged and
+    swallowed, never re-raised, so it can never abort the transfer/integrate
+    it's merely reporting on."""
+
+    def __init__(self, job_id: int, progress: dict):
+        self.job_id = job_id
+        self.progress = progress
+        self.lock = threading.Lock()
+        self._last: dict[int, tuple[int, float]] = {}
+
+    def persist(self, sy: int, *, force: bool = False) -> None:
+        now = time.time()
+        with self.lock:
+            entry = self.progress["years"][str(sy)]
+            last_pct, last_t = self._last.get(sy, (None, 0.0))
+            if not force and entry["pct"] == last_pct and \
+                    (now - last_t) < PROGRESS_MIN_INTERVAL_SECONDS:
+                return
+            self._last[sy] = (entry["pct"], now)
+            payload = json.dumps(self.progress)
+        try:
+            _write_progress_json(self.job_id, payload)
+        except Exception as e:  # noqa: BLE001 — progress display only, never fatal
+            log.warning("could not persist import progress for job %s: %s: %s",
+                       self.job_id, type(e).__name__, e)
+
+
+def _record_provenance(rows: list[tuple[int, int, str | None, str]]) -> None:
+    """Record (or update) each (start_year, end_year, release, source) row in
+    year_provenance. Called ONLY after a successful swap — run_import passes
+    a single ('manual', release=None) row; run_integrate passes one
+    ('nces', release=<actual release fetched>) row per union year."""
+    con = connect()
+    try:
+        now = time.time()
+        for start_year, end_year, release, source in rows:
+            con.execute(
+                "INSERT INTO year_provenance(start_year, end_year, release, source, updated_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(start_year) DO UPDATE SET "
+                "end_year=excluded.end_year, release=excluded.release, "
+                "source=excluded.source, updated_at=excluded.updated_at",
+                (start_year, end_year, release, source, now))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _update_overall_phase(job_id: int, phase: str, message: str) -> None:
+    """Update just the progress["overall"] phase/message, preserving whatever
+    per-year progress (if any) is already there. Used by build_check_swap so
+    it composes with run_integrate's per-year progress structure without
+    needing to know about it, and works fine standalone for run_import (which
+    never populates "years" at all)."""
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT progress FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+    finally:
+        con.close()
+    progress = None
+    if row and row["progress"]:
+        try:
+            progress = json.loads(row["progress"])
+        except ValueError:
+            progress = None
+    if not isinstance(progress, dict):
+        progress = {}
+    progress.setdefault("years", {})
+    progress["overall"] = {"phase": phase, "message": message}
+    _set_progress(job_id, progress)
+
+
+def _human_bytes(n: float) -> str:
+    """A short human-readable byte size for job-report messages (e.g. '6.4 GB')."""
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024.0:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n:.0f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} PB"
 
 
 def _set_status(job_id: int, status: str, report: str | None = None) -> None:
@@ -186,6 +313,7 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
     staging = s.ipeds_db_path.with_name("ipeds_staging.db")
 
     # Full rebuild into a staging DB (reuse the loader unchanged).
+    _update_overall_phase(job_id, "building", "Rebuilding the staging database…")
     _log(job_id, "Rebuilding staging database (this can take several minutes)…")
     build = Path(__file__).resolve().parents[1] / "scripts" / "build_ipeds_db.py"
     proc = subprocess.Popen(
@@ -197,10 +325,12 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
     proc.wait()
     if proc.returncode != 0:
         _set_status(job_id, "failed", f"Loader exited with code {proc.returncode}.")
+        _update_overall_phase(job_id, "failed", f"Loader exited with code {proc.returncode}.")
         return False
 
     # Integrity + magnitude checks.
     _set_status(job_id, "checks")
+    _update_overall_phase(job_id, "checking", "Running integrity + magnitude checks…")
     _log(job_id, "Running integrity checks…")
     passed, report = integrity_checks(
         staging, s.ipeds_db_path if s.ipeds_db_path.exists() else None)
@@ -209,10 +339,12 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
     if not passed:
         _set_status(job_id, "failed",
                     "Integrity checks FAILED — live DB untouched.\n\n" + report_text)
+        _update_overall_phase(job_id, "failed", "Integrity checks failed — live DB untouched.")
         staging.unlink(missing_ok=True)
         return False
 
     # Atomic swap: back up live, move staging into place.
+    _update_overall_phase(job_id, "swapping", "Swapping the staging database into place…")
     if s.ipeds_db_path.exists():
         shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
     shutil.move(str(staging), str(s.ipeds_db_path))
@@ -229,6 +361,7 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
         con.close()
     invalidate_cache()
     _log(job_id, "Bumped data_version and cleared semantic cache.")
+    _update_overall_phase(job_id, "done", "Import succeeded and is now live.")
     _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
     return True
 
@@ -259,7 +392,12 @@ def run_import(job_id: int, upload_path: Path) -> None:
             shutil.copy2(str(upload_path), str(data_target))
         _log(job_id, f"Staged source file at {data_target}")
 
-        if not build_check_swap(job_id, s.data_dir):
+        if build_check_swap(job_id, s.data_dir):
+            m = FILENAME_RE.match(upload_path.name)
+            if m:
+                start_year = int(m.group(1))
+                _record_provenance([(start_year, start_year + 1, None, "manual")])
+        else:
             _restore_data_dir(data_target, backup_accdb)
     except Exception as e:  # noqa: BLE001
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
@@ -273,9 +411,18 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
     build_check_swap — a full rebuild of that union, never an incremental
     merge. Intended to run in a background thread; never propagates (mirrors
     run_import's own catch-and-fail-the-job handling). The work dir is always
-    removed afterward, success or failure."""
+    removed afterward, success or failure.
+
+    Before fetching anything, refuses (fails the job, touches neither the
+    live db nor the network) if app.estimate says the union's estimated
+    download+extract+staging footprint (padded by nces_disk_safety_factor)
+    won't fit in the free space on the ipeds.db volume. Downloads then run
+    CONCURRENTLY (a thread pool, width nces_download_concurrency), with
+    structured per-year progress (import_jobs.progress) updated throughout.
+    """
     s = get_settings()
     work = Path(s.nces_work_dir) / f"integrate_{job_id}"
+    progress: dict | None = None
     try:
         _set_status(job_id, "running")
 
@@ -289,39 +436,160 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
                     f"(already integrated: {sorted(already_integrated_starts)}, "
                     f"newly selected: {sorted(newly_selected_starts)})")
 
+        # --- (a) disk-headroom preflight refusal, BEFORE any fetch ---------
+        try:
+            catalog_by_year = {e["start_year"]: e for e in nces.probe_catalog()}
+        except Exception as e:  # noqa: BLE001 — a probe failure must not block the estimate
+            _log(job_id, f"NCES probe_catalog failed while estimating disk needs "
+                        f"({type(e).__name__}: {e}) — estimating with unknown sizes.")
+            catalog_by_year = {}
+        # A year with an unknown zip size (probe failure above, or NCES
+        # simply didn't send Content-Length) must NOT be estimated at the
+        # small calibration default (nces_default_per_year_db_mb) — the
+        # ENFORCED per-year caps (nces_zip_max_mb compressed,
+        # nces_accdb_max_mb extracted) allow far more than that default, so a
+        # run could pass this refusal and still fill the disk. Substitute the
+        # enforced compressed-size cap for any unknown year instead, so the
+        # refusal is a real backstop. (estimate_integrate's own None handling
+        # — a default_per_year_db_mb slice — is left untouched; this
+        # substitution happens only here, at the caller, before the values
+        # ever reach the estimator. The post-download nces_total_max_mb
+        # total-cap check below is a separate, complementary detector, bounded
+        # by concurrency × max per-year size.)
+        unknown_year_cap_bytes = s.nces_zip_max_mb * estimate.MB
+        zip_bytes = []
+        for sy in union:
+            z = catalog_by_year.get(sy, {}).get("zip_bytes")
+            zip_bytes.append(z if z is not None else unknown_year_cap_bytes)
+
+        live_db_bytes = (Path(s.ipeds_db_path).stat().st_size
+                         if Path(s.ipeds_db_path).exists() else 0)
+        current_integrated_year_count = len(existing_end_years)
+        already_integrated_count = len(already_integrated_starts)
+        selected_count = len(union) - already_integrated_count
+
+        du = shutil.disk_usage(Path(s.ipeds_db_path).parent)
+        est = estimate.estimate_integrate(
+            zip_bytes=zip_bytes,
+            already_integrated_count=already_integrated_count,
+            selected_count=selected_count,
+            live_db_bytes=live_db_bytes,
+            current_integrated_year_count=current_integrated_year_count,
+            disk_free_bytes=du.free,
+            disk_total_bytes=du.total,
+            expand_factor=s.nces_accdb_expand_factor,
+            default_per_year_db_mb=s.nces_default_per_year_db_mb,
+            bandwidth_mbps=s.nces_est_bandwidth_mbps,
+            build_seconds_per_year=s.nces_est_build_seconds_per_year,
+            safety_factor=s.nces_disk_safety_factor,
+        )
+        if not est["sufficient"]:
+            msg = (f"Not enough disk: need ~{_human_bytes(est['needed_with_safety_bytes'])}, "
+                  f"have ~{_human_bytes(du.free)} free")
+            _log(job_id, f"ERROR: {msg}")
+            _set_status(job_id, "failed", msg)
+            return
+
+        # --- (b) init per-year progress -------------------------------------
+        progress = {
+            "overall": {"phase": "downloading",
+                       "message": f"Fetching {len(union)} year(s) from NCES…"},
+            "years": {
+                str(sy): {
+                    "start_year": sy,
+                    "year_label": f"{sy}-{str(sy + 1)[-2:]}",
+                    "step": "queued",
+                    "downloaded_bytes": 0,
+                    "total_bytes": None,
+                    "pct": 0,
+                }
+                for sy in union
+            },
+        }
+        _set_progress(job_id, progress)
+
         work.mkdir(parents=True, exist_ok=True)
         max_total_bytes = s.nces_total_max_mb * 1024 * 1024
-        total_bytes = 0
-        for start_year in union:
-            _log(job_id, f"Fetching NCES start year {start_year}…")
+        size_state = {"total": 0}
+        size_lock = threading.Lock()
+        prog = _ProgressThrottle(job_id, progress)
+        releases: dict[int, str] = {}
+
+        def _fetch_one(sy: int) -> tuple[int, str]:
+            with prog.lock:
+                progress["years"][str(sy)]["step"] = "downloading"
+            prog.persist(sy, force=True)
+
+            def on_progress(written, total):
+                with prog.lock:
+                    entry = progress["years"][str(sy)]
+                    entry["downloaded_bytes"] = written
+                    entry["total_bytes"] = total
+                    entry["pct"] = int(written * 100 / total) if total else 0
+                prog.persist(sy)  # throttled — see _ProgressThrottle
+
             try:
-                accdb_path = nces.fetch_year(start_year, work)
+                accdb_path, release = nces.fetch_year(sy, work, on_progress=on_progress)
             except Exception as e:
+                with prog.lock:
+                    progress["years"][str(sy)]["step"] = "failed"
+                prog.persist(sy, force=True)
                 # A full-union rebuild re-fetches EVERY already-integrated year,
                 # not just the newly-selected one(s) — if NCES has since removed
                 # or relocated an already-integrated year, say exactly which
                 # year and which kind it was, rather than a generic error that
                 # reads like the newly-selected year(s) are the problem.
-                which = ("an already-integrated" if start_year in already_integrated_starts
+                which = ("an already-integrated" if sy in already_integrated_starts
                         else "a newly-selected")
-                year_label = f"{start_year}-{str(start_year + 1)[-2:]}"
+                year_label = f"{sy}-{str(sy + 1)[-2:]}"
                 raise NCESFetchError(
                     f"Could not fetch {which} year {year_label} from NCES "
                     f"(it may have been moved or withdrawn). Live database "
                     f"unchanged. ({type(e).__name__}: {e})") from e
-            total_bytes += accdb_path.stat().st_size
-            if total_bytes > max_total_bytes:
-                raise ValueError(
-                    f"union download size exceeded the {s.nces_total_max_mb} MB cap")
-            _log(job_id, f"Fetched {accdb_path.name}")
 
-        build_check_swap(job_id, work)
+            with prog.lock:
+                progress["years"][str(sy)]["step"] = "fetched"
+            prog.persist(sy, force=True)
+
+            with size_lock:
+                size_state["total"] += accdb_path.stat().st_size
+                if size_state["total"] > max_total_bytes:
+                    raise ValueError(
+                        f"union download size exceeded the {s.nces_total_max_mb} MB cap")
+
+            return sy, release
+
+        # --- (c) concurrent downloads ----------------------------------------
+        with ThreadPoolExecutor(max_workers=s.nces_download_concurrency) as ex:
+            futures = {ex.submit(_fetch_one, sy): sy for sy in union}
+            try:
+                for fut in as_completed(futures):
+                    sy, release = fut.result()
+                    releases[sy] = release
+                    _log(job_id, f"Fetched start year {sy} ({release})")
+            except Exception:
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
+
+        # --- (d) build/check/swap + provenance --------------------------------
+        ok = build_check_swap(job_id, work)
+        if ok:
+            _record_provenance([(sy, sy + 1, releases.get(sy), "nces") for sy in union])
+            progress["overall"] = {"phase": "done",
+                                   "message": "Integration complete and now live."}
+            _set_progress(job_id, progress)
     except NCESFetchError as e:
         # Deliberately-worded failure — pass the message through as-is (no
         # "Unexpected error:" prefix; see NCESFetchError's docstring).
+        if progress is not None:
+            progress["overall"] = {"phase": "failed", "message": str(e)}
+            _set_progress(job_id, progress)
         _log(job_id, f"ERROR: {e}")
         _set_status(job_id, "failed", str(e))
     except Exception as e:  # noqa: BLE001 — mirror run_import: never propagate
+        if progress is not None:
+            progress["overall"] = {"phase": "failed", "message": f"Unexpected error: {e}"}
+            _set_progress(job_id, progress)
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
     finally:

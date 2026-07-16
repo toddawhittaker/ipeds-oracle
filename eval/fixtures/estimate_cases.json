@@ -1,0 +1,144 @@
+[
+  {
+    "name": "normal_multi_year_selection",
+    "input": {
+      "zip_bytes": [
+        500000000,
+        600000000
+      ],
+      "already_integrated_count": 3,
+      "selected_count": 2,
+      "live_db_bytes": 2000000000,
+      "current_integrated_year_count": 4,
+      "disk_free_bytes": 50000000000,
+      "disk_total_bytes": 100000000000,
+      "expand_factor": 3.0,
+      "default_per_year_db_mb": 380,
+      "bandwidth_mbps": 10.0,
+      "build_seconds_per_year": 60.0,
+      "safety_factor": 1.2
+    },
+    "expected": {
+      "total_download_bytes": 1100000000,
+      "extracted_bytes": 3300000000,
+      "staging_db_bytes": 2500000000,
+      "per_year_db_bytes": 500000000,
+      "additional_bytes_needed": 6900000000,
+      "used_now_bytes": 50000000000,
+      "peak_used_bytes": 56900000000,
+      "disk_free_bytes": 50000000000,
+      "disk_total_bytes": 100000000000,
+      "est_download_seconds": 880.0,
+      "est_build_seconds": 300.0,
+      "safety_factor": 1.2,
+      "needed_with_safety_bytes": 8280000000,
+      "sufficient": true
+    }
+  },
+  {
+    "name": "none_zip_uses_default_per_year_mb",
+    "input": {
+      "zip_bytes": [
+        300000000,
+        null
+      ],
+      "already_integrated_count": 1,
+      "selected_count": 1,
+      "live_db_bytes": 1000000000,
+      "current_integrated_year_count": 2,
+      "disk_free_bytes": 5000000000,
+      "disk_total_bytes": 20000000000,
+      "expand_factor": 3.0,
+      "default_per_year_db_mb": 380,
+      "bandwidth_mbps": 10.0,
+      "build_seconds_per_year": 60.0,
+      "safety_factor": 1.2
+    },
+    "expected": {
+      "total_download_bytes": 698458880,
+      "extracted_bytes": 2095376640,
+      "staging_db_bytes": 1000000000,
+      "per_year_db_bytes": 500000000,
+      "additional_bytes_needed": 3793835520,
+      "used_now_bytes": 15000000000,
+      "peak_used_bytes": 18793835520,
+      "disk_free_bytes": 5000000000,
+      "disk_total_bytes": 20000000000,
+      "est_download_seconds": 558.767104,
+      "est_build_seconds": 120.0,
+      "safety_factor": 1.2,
+      "needed_with_safety_bytes": 4552602624,
+      "sufficient": true
+    }
+  },
+  {
+    "name": "divide_by_zero_fallback_per_year_db_bytes",
+    "input": {
+      "zip_bytes": [
+        200000000
+      ],
+      "already_integrated_count": 0,
+      "selected_count": 1,
+      "live_db_bytes": 0,
+      "current_integrated_year_count": 0,
+      "disk_free_bytes": 10000000000,
+      "disk_total_bytes": 10000000000,
+      "expand_factor": 3.0,
+      "default_per_year_db_mb": 380,
+      "bandwidth_mbps": 10.0,
+      "build_seconds_per_year": 60.0,
+      "safety_factor": 1.2
+    },
+    "expected": {
+      "total_download_bytes": 200000000,
+      "extracted_bytes": 600000000,
+      "staging_db_bytes": 398458880,
+      "per_year_db_bytes": 398458880,
+      "additional_bytes_needed": 1198458880,
+      "used_now_bytes": 0,
+      "peak_used_bytes": 1198458880,
+      "disk_free_bytes": 10000000000,
+      "disk_total_bytes": 10000000000,
+      "est_download_seconds": 160.0,
+      "est_build_seconds": 60.0,
+      "safety_factor": 1.2,
+      "needed_with_safety_bytes": 1438150656,
+      "sufficient": true
+    }
+  },
+  {
+    "name": "sufficient_boundary_exact_equal_is_true",
+    "input": {
+      "zip_bytes": [
+        100000000
+      ],
+      "already_integrated_count": 0,
+      "selected_count": 1,
+      "live_db_bytes": 0,
+      "current_integrated_year_count": 0,
+      "disk_free_bytes": 607286400,
+      "disk_total_bytes": 1000000000,
+      "expand_factor": 2.0,
+      "default_per_year_db_mb": 100,
+      "bandwidth_mbps": 10.0,
+      "build_seconds_per_year": 30.0,
+      "safety_factor": 1.5
+    },
+    "expected": {
+      "total_download_bytes": 100000000,
+      "extracted_bytes": 200000000,
+      "staging_db_bytes": 104857600,
+      "per_year_db_bytes": 104857600,
+      "additional_bytes_needed": 404857600,
+      "used_now_bytes": 392713600,
+      "peak_used_bytes": 797571200,
+      "disk_free_bytes": 607286400,
+      "disk_total_bytes": 1000000000,
+      "est_download_seconds": 80.0,
+      "est_build_seconds": 30.0,
+      "safety_factor": 1.5,
+      "needed_with_safety_bytes": 607286400,
+      "sufficient": true
+    }
+  }
+]

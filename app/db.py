@@ -158,6 +158,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     (3, "ALTER TABLE skills ADD COLUMN lesson TEXT;\n"
         "UPDATE skills SET lesson=notes "
         "WHERE lesson IS NULL AND notes IS NOT NULL AND trim(notes) != '';"),
+    # Per-year provenance (which release was integrated, and how) — lets the
+    # Imports catalog offer a Provisional->Final "update" re-integration.
+    (4, "CREATE TABLE IF NOT EXISTS year_provenance("
+        "start_year INTEGER PRIMARY KEY, end_year INTEGER NOT NULL, "
+        "release TEXT, source TEXT, updated_at REAL NOT NULL);"),
+    # Structured per-year JSON progress for a running import job (polled by
+    # the Imports tab's per-file progress rows).
+    (5, "ALTER TABLE import_jobs ADD COLUMN progress TEXT;"),
 ]
 
 
