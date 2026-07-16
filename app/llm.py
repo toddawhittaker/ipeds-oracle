@@ -94,6 +94,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     model = s.model_default
     consecutive_fails = 0
     critiqued = False  # the post-answer critic runs at most once per turn
+    draft_answer = ""          # the clean pre-critique draft, re-emitted when the
+    sql_count_at_critique = 0  # revision round argues instead of re-querying
 
     async with httpx.AsyncClient() as client:
         for i in range(s.llm_max_tool_iters):
@@ -139,12 +141,39 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     res.completion_tokens += crit.completion_tokens
                     res.cost += crit.cost
                     if not crit.ok:
-                        res.critic_revised = True
+                        # Capture the clean draft + the SQL count NOW, before the
+                        # revision round, so we can tell a real correction (it runs
+                        # new SQL) from a rebuttal (it doesn't) once it returns.
                         res.critic_issue = crit.issue
+                        draft_answer = answer
+                        sql_count_at_critique = len(res.sql_log)
                         yield {"type": "status", "text": "Double-checking the result…"}
                         messages.append({"role": "user",
                                          "content": critic.revision_instruction(crit.issue)})
                         continue
+                # If a revision round ran (draft_answer is set), decide what to
+                # emit. A genuine correction both re-queries AND lands on a
+                # different answer; anything else is treated as no correction:
+                #  - re-queried AND the answer actually changed -> keep the new
+                #    answer and mark the turn revised (so chat.py records the
+                #    critic's finding as a lesson).
+                #  - otherwise -> re-emit the clean pre-critique draft and leave
+                #    critic_revised False. This covers a reviewer-directed rebuttal
+                #    (no new run_sql), a re-query that merely confirmed the same
+                #    number (a critic false alarm — no lesson should be stored),
+                #    and an empty revision. So no meta-commentary leaks to the user
+                #    and no spurious lesson is recorded. Trade-off: an interpretive
+                #    fix the model makes WITHOUT re-querying isn't distinguishable
+                #    from a rebuttal, so it falls back to the draft too; the
+                #    hardened revision_instruction steers real corrections to
+                #    re-run run_sql.
+                if draft_answer:
+                    requeried = len(res.sql_log) > sql_count_at_critique
+                    changed = bool(answer.strip()) and answer.strip() != draft_answer.strip()
+                    if requeried and changed:
+                        res.critic_revised = True
+                    else:
+                        answer = draft_answer
                 res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
