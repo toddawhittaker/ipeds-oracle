@@ -1,4 +1,4 @@
-"""Chat API: streaming NL→answer, conversation history, feedback, CSV export."""
+"""Chat API: streaming NL→answer, conversation history, CSV export."""
 from __future__ import annotations
 
 import csv
@@ -179,11 +179,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         # its finding as an unverified lesson (self-learning from actual errors).
         # First-turn only (like the cache above): a follow-up's bare question
         # ("and for Ohio?") is a context-less, useless retrieval key.
-        if (not history and result.critic_revised and result.critic_issue
+        if (not history and result.critic_revised
+                and (result.critic_headline or result.critic_description)
                 and result.error is None and result.sql_log):
             await run_in_threadpool(
                 skills.record_lesson_from_critic, question,
-                result.sql_log[-1], result.critic_issue)
+                result.sql_log[-1], result.critic_headline, result.critic_description)
 
         done = {"type": "done", "escalated": result.escalated,
                 "model": result.model_used, "tokens": result.total_tokens,
@@ -262,7 +263,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         if not owns:
             raise HTTPException(404, "Not found.")
         rows = con.execute(
-            "SELECT id, role, content, sql_log, model_used, feedback, created_at "
+            "SELECT id, role, content, sql_log, model_used, created_at "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -283,38 +284,6 @@ def delete_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user))
     finally:
         con.close()
     return {"ok": True}
-
-
-class Feedback(BaseModel):
-    value: int  # +1 or -1
-
-
-@router.post("/messages/{message_id}/feedback")
-def feedback(message_id: int, fb: Feedback, user: sqlite3.Row = Depends(current_user)):
-    value = 1 if fb.value >= 0 else -1
-    con = connect()
-    try:
-        row = con.execute(
-            "SELECT m.id, m.content, m.sql_log, m.conversation_id "
-            "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
-            "WHERE m.id=? AND c.user_id=? AND m.role='assistant'",
-            (message_id, user["id"])).fetchone()
-        if not row:
-            raise HTTPException(404, "Message not found.")
-        con.execute("UPDATE messages SET feedback=? WHERE id=?", (value, message_id))
-        # the user question that prompted this answer = previous user message
-        prev = con.execute(
-            "SELECT content FROM messages WHERE conversation_id=? AND id<? "
-            "AND role='user' ORDER BY id DESC LIMIT 1",
-            (row["conversation_id"], message_id)).fetchone()
-        con.commit()
-        question = prev["content"] if prev else None
-        sql_list = json.loads(row["sql_log"] or "[]")
-    finally:
-        con.close()
-    if value == 1 and question and sql_list:
-        skills.promote_from_message(question, sql_list[-1])
-    return {"ok": True, "feedback": value}
 
 
 @router.get("/messages/{message_id}/download.csv")

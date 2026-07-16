@@ -1,18 +1,19 @@
 """Self-learning: a library of LESSONS retrieved as guidance, plus a semantic
 answer cache.
 
-A "lesson" is a short human-readable RULE ("for a national degree total filter
-cipcode='99'; never sum across CIP codes — ~4x overcount") — the transferable
-knowledge — with the original question as the retrieval key and an OPTIONAL SQL
-worked example. Lessons come from three sources: `seed` (SCHEMA.md examples),
-`feedback` (a user 👍), and `critic` (the post-answer critic caught a real
-mistake and phrased the fix as a rule). Feedback/critic lessons start UNVERIFIED
-and must be approved in the admin UI before they are ever retrieved.
+A "lesson" is a short generalized HEADLINE (the rule title) + a longer
+generalized DESCRIPTION (the transferable technique, explained in plain prose)
++ an OPTIONAL commented SQL worked example. The post-answer critic is the SOLE
+lesson source (a 👍/👎 feedback path used to exist but was removed — a "like"
+is a weak signal, not a reusable rule): when it catches a real mistake, it
+phrases the fix as a headline + description, which is captured as an
+UNVERIFIED lesson pending admin approval before it is ever retrieved.
 
-Retrieval embeds the incoming question and returns the rules attached to the
-most similar past scenarios, deduped so near-identical lessons don't crowd the
-few-shot slots. Embeddings run locally via fastembed (CPU, no per-call cost); if
-fastembed isn't installed, retrieval/dedup degrade gracefully (no-op retrieval,
+Retrieval embeds the incoming question and returns the lessons attached to the
+most similar past scenarios (ranked against each lesson's headline+description
+vector), deduped so near-identical lessons don't crowd the few-shot slots.
+Embeddings run locally via fastembed (CPU, no per-call cost); if fastembed
+isn't installed, retrieval/dedup degrade gracefully (no-op retrieval,
 exact-match dedup) so the app still runs.
 """
 from __future__ import annotations
@@ -23,12 +24,17 @@ import time
 import numpy as np
 
 from app.config import get_settings
-from app.db import connect, data_version
-from app.seeds import SEED_EXAMPLES
+from app.db import connect, data_version, get_meta, set_meta
+from app.seeds import SEED_EXAMPLES, SEED_LESSON_UPGRADES
 
 log = logging.getLogger("ipeds.skills")
 _model = None
 _embed_ok = True
+
+# Bumped whenever the embedding SOURCE convention changes (e.g. question ->
+# headline+description), so `reembed_skills_if_needed` knows to recompute
+# every stored vector once, at startup.
+_EMBED_SOURCE_VERSION = "2"
 
 
 def _embedder():
@@ -67,18 +73,32 @@ def _cosine(q: np.ndarray, mat: np.ndarray) -> np.ndarray:
     return mat @ q
 
 
+def _embed_source(headline: str, description: str) -> str:
+    """The text actually embedded for a lesson: headline + description — NEVER
+    the question. Used on every write, dedup lookup, and re-embed pass, so
+    retrieval ranks on the RULE, not on how one past user happened to phrase
+    their question."""
+    return f"{headline or ''}\n{description or ''}".strip()
+
+
 # --- Skill retrieval (few-shot) ------------------------------------------------
 
 def _lesson_text(row) -> str:
-    """One retrieved lesson: lead with the RULE, then an optional worked example."""
-    lesson = (row["lesson"] or row["notes"] or "").strip()
+    """One retrieved lesson: HEADLINE, then the description (lesson/notes),
+    then an optional commented SQL worked example. Returns '' when everything
+    is empty."""
+    headline = (row["headline"] or "").strip()
+    description = (row["lesson"] or row["notes"] or "").strip()
     sql = (row["canonical_sql"] or "").strip()
     parts = []
-    if lesson:
-        parts.append(f"LESSON: {lesson}")
-    if row["question"] and sql:
-        prefix = "e.g. " if lesson else ""
-        parts.append(f"{prefix}Q: {row['question']}\nSQL:\n{sql}")
+    if headline:
+        parts.append(f"LESSON: {headline}")
+        if description:
+            parts.append(description)
+    elif description:
+        parts.append(f"LESSON: {description}")
+    if sql:
+        parts.append(f"SQL (inline comments explain each field):\n{sql}")
     return "\n".join(parts)
 
 
@@ -95,8 +115,8 @@ def retrieve_skills_block(question: str) -> tuple[str, list[int]]:
     con = connect()
     try:
         rows = con.execute(
-            "SELECT id, question, canonical_sql, notes, lesson, embedding FROM skills "
-            "WHERE verified=1 AND embedding IS NOT NULL").fetchall()
+            "SELECT id, question, canonical_sql, notes, lesson, headline, embedding "
+            "FROM skills WHERE verified=1 AND embedding IS NOT NULL").fetchall()
     finally:
         con.close()
     if not rows:
@@ -130,16 +150,18 @@ def bump_hits(skill_ids: list[int]) -> None:
 
 # --- Skill authoring -----------------------------------------------------------
 
-def save_skill(question: str, canonical_sql: str, *, notes: str = "",
-               lesson: str = "", created_by: str = "system", verified: bool = False,
-               tags: str = "") -> int:
-    v = embed(question)
+def save_skill(question: str, canonical_sql: str, *, headline: str = "",
+               notes: str = "", lesson: str = "", created_by: str = "system",
+               verified: bool = False, tags: str = "") -> int:
+    source = _embed_source(headline, lesson)
+    v = embed(source) if source else None
     con = connect()
     try:
         cur = con.execute(
-            "INSERT INTO skills(question, canonical_sql, notes, lesson, embedding, "
-            "tags, verified, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (question, canonical_sql, notes, lesson,
+            "INSERT INTO skills(question, canonical_sql, notes, lesson, headline, "
+            "embedding, tags, verified, created_by, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (question, canonical_sql, notes, lesson, headline or None,
              _to_blob(v) if v is not None else None,
              tags, int(verified), created_by, time.time()))
         con.commit()
@@ -159,9 +181,14 @@ def _find_duplicate(con, qvec: np.ndarray | None, question: str,
     critic-discovered rule (say, award-level mixing) whose *question* is similar
     to a verified seed (about CIP '99') would be silently discarded and the seed
     spuriously upvoted, corrupting the admin's ranking signal. Prefers embedding
-    cosine over the same scenario; falls back to an exact (question, SQL) match
-    when embeddings are unavailable. Blobs whose dimension doesn't match the
-    current embed model are skipped (robust to an embed_model change)."""
+    cosine over the same scenario (the headline+description vector); falls back
+    to an exact (question, SQL) match ONLY when embeddings are unavailable
+    system-wide (qvec is None) — a true repeat still dedups via cosine
+    (identical headline+description → similarity ~1.0), while two genuinely
+    distinct rules on the same (question, SQL) scenario survive as separate
+    pending rows instead of being over-collapsed into one. Blobs whose
+    dimension doesn't match the current embed model are skipped (robust to an
+    embed_model change)."""
     if qvec is not None:
         rows = con.execute(
             "SELECT id, embedding FROM skills "
@@ -178,6 +205,9 @@ def _find_duplicate(con, qvec: np.ndarray | None, question: str,
             if sim >= best_sim:
                 best_id, best_sim = r["id"], sim
         return best_id
+    # Exact-match fallback: embeddings are unavailable system-wide (fastembed
+    # not installed), so cosine matching isn't possible at all — fall back to a
+    # verbatim (question, SQL) match from the same source.
     row = con.execute(
         "SELECT id FROM skills WHERE verified=0 AND created_by=? "
         "AND question=? AND canonical_sql=?",
@@ -185,48 +215,49 @@ def _find_duplicate(con, qvec: np.ndarray | None, question: str,
     return row["id"] if row else None
 
 
-def _upvote_or_save(question: str, canonical_sql: str, *, lesson: str,
-                    source: str) -> None:
-    """Dedup gate shared by feedback + critic promotion: bump an existing
-    same-source unverified near-duplicate's upvotes (backfilling its rule if it
-    had none, so no lesson text is lost), else insert a new UNVERIFIED lesson
-    pending admin review (retrieve_skills_block only returns verified=1 rows)."""
-    v = embed(question)
+def _upvote_or_save(question: str, canonical_sql: str, *, headline: str = "",
+                    lesson: str, source: str) -> None:
+    """Dedup gate shared by every lesson-writing path: bump an existing
+    same-source unverified near-duplicate's upvotes (backfilling its headline
+    and rule if it had none, so no lesson text is lost), else insert a new
+    UNVERIFIED lesson pending admin review (retrieve_skills_block only returns
+    verified=1 rows). The embedding used for the dedup lookup is the
+    headline+description vector (the RULE, not the question)."""
+    embed_source = _embed_source(headline, lesson)
+    v = embed(embed_source) if embed_source else None
     con = connect()
     try:
         dup = _find_duplicate(con, v, question, canonical_sql, source)
         if dup is not None:
-            if lesson:  # preserve a rule: backfill onto a rule-less match
+            if headline or lesson:  # preserve a rule: backfill onto a rule-less match
                 con.execute(
-                    "UPDATE skills SET lesson=? WHERE id=? AND (lesson IS NULL OR lesson='')",
-                    (lesson, dup))
+                    "UPDATE skills SET headline=?, lesson=? WHERE id=? "
+                    "AND (headline IS NULL OR headline='') "
+                    "AND (lesson IS NULL OR lesson='')",
+                    (headline, lesson, dup))
             con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?", (dup,))
             con.commit()
             return
     finally:
         con.close()
-    save_skill(question, canonical_sql, lesson=lesson, created_by=source,
-               verified=False)
+    save_skill(question, canonical_sql, headline=headline, lesson=lesson,
+              created_by=source, verified=False)
 
 
-def promote_from_message(question: str, sql: str) -> None:
-    """A 👍 on an answer promotes its (question, last SQL) into an unverified
-    lesson, or upvotes a same-source near-duplicate."""
-    if not sql:
-        return
-    _upvote_or_save(question, sql, lesson="", source="feedback")
-
-
-def record_lesson_from_critic(question: str, canonical_sql: str, issue: str) -> None:
+def record_lesson_from_critic(question: str, canonical_sql: str, headline: str,
+                              description: str) -> None:
     """The post-answer critic caught a likely mistake and forced a revision; its
-    finding IS the rule that fixes it. Capture it as an UNVERIFIED lesson (deduped
-    only against other pending critic candidates) pending admin review — this is
-    the real self-learning signal, a mistake the model actually made rather than
-    an answer a user happened to like."""
-    issue = (issue or "").strip()
-    if not issue:
+    finding IS the rule that fixes it — a generalized headline + description.
+    Capture it as an UNVERIFIED lesson (deduped only against other pending
+    critic candidates) pending admin review — this is the real self-learning
+    signal, a mistake the model actually made rather than an answer a user
+    happened to like. No-op if both headline and description are blank."""
+    headline = (headline or "").strip()
+    description = (description or "").strip()
+    if not headline and not description:
         return
-    _upvote_or_save(question, canonical_sql or "", lesson=issue, source="critic")
+    _upvote_or_save(question, canonical_sql or "", headline=headline,
+                    lesson=description, source="critic")
 
 
 # --- Semantic answer cache -----------------------------------------------------
@@ -291,9 +322,9 @@ def invalidate_cache() -> None:
 def seed_from_schema_examples() -> int:
     """Seed the skill library with the SCHEMA.md §8 / README worked examples.
 
-    The seed data (question, SQL, human-readable lesson) lives in app.seeds, a
-    dependency-free leaf module shared with db migration 6 so a fresh install and
-    an upgraded one carry identical lesson text."""
+    The seed data (question, headline, description, commented SQL) lives in
+    app.seeds, a dependency-free leaf module shared with db migration 6 so a
+    fresh install and an upgraded one carry identical lesson text."""
     n = 0
     con = connect()
     try:
@@ -302,9 +333,69 @@ def seed_from_schema_examples() -> int:
         con.close()
     if have:
         return 0
-    for q, sql, lesson in SEED_EXAMPLES:
-        # The lesson is the rule (shown to admins + fed to the LLM); the SQL is
-        # the worked example. notes mirrors the lesson for back-compat.
-        save_skill(q, sql, notes=lesson, lesson=lesson, created_by="seed", verified=True)
+    for s in SEED_EXAMPLES:
+        save_skill(s.question, s.commented_sql, headline=s.headline,
+                  lesson=s.description, notes="", created_by="seed", verified=True)
         n += 1
     return n
+
+
+def upgrade_seed_lessons() -> int:
+    """Idempotent startup backfill: upgrade any 'seed' row still bearing a
+    frozen v1 description (the text migration 6 rewrote a terse original INTO,
+    on a database that predates this PR) to the new generalized headline +
+    description + commented SQL. Matches on created_by='seed' AND the exact
+    v1 lesson text, so an admin-edited seed row is left untouched — same
+    safety convention as migration 6. Returns the number of rows upgraded."""
+    n = 0
+    con = connect()
+    try:
+        for v1_description, v2 in SEED_LESSON_UPGRADES:
+            cur = con.execute(
+                "UPDATE skills SET headline=?, lesson=?, canonical_sql=? "
+                "WHERE created_by='seed' AND lesson=?",
+                (v2.headline, v2.description, v2.commented_sql, v1_description))
+            n += cur.rowcount
+        con.commit()
+    finally:
+        con.close()
+    return n
+
+
+def reembed_skills_if_needed() -> int:
+    """Idempotent startup backfill: recompute every skill's embedding from
+    _embed_source(headline, lesson-or-notes) if the stored embeddings still
+    derive from a stale source convention (tracked in `meta`
+    skills_embed_source_version). Gated on fastembed: if embed() is
+    unavailable, this is a no-op and the version marker is left UNSET so a
+    later startup (once fastembed is available) retries. A row with no rule
+    text at all (empty headline+lesson+notes) has nothing to embed against —
+    its existing embedding is left UNTOUCHED (not blanked to NULL), so a
+    pre-existing rule-less lesson doesn't silently drop out of retrieval.
+    Returns the number of rows actually re-embedded."""
+    con = connect()
+    try:
+        current = get_meta(con, "skills_embed_source_version")
+        if current == _EMBED_SOURCE_VERSION:
+            return 0
+        rows = con.execute("SELECT id, headline, lesson, notes FROM skills").fetchall()
+        n = 0
+        for r in rows:
+            description = r["lesson"] or r["notes"] or ""
+            source = _embed_source(r["headline"] or "", description)
+            if not source:
+                continue  # no rule text — leave its existing embedding as-is
+            v = embed(source)
+            if v is None:
+                # embed() is unavailable — bail without advancing the marker so
+                # a later startup (once fastembed loads) retries from scratch.
+                con.rollback()
+                return 0
+            con.execute("UPDATE skills SET embedding=? WHERE id=?",
+                       (_to_blob(v), r["id"]))
+            n += 1
+        set_meta(con, "skills_embed_source_version", _EMBED_SOURCE_VERSION)
+        con.commit()
+        return n
+    finally:
+        con.close()

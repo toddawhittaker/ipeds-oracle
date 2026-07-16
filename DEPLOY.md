@@ -21,9 +21,11 @@ Browser ─► Caddy (auto-HTTPS) ─► FastAPI (app/) ─► OpenRouter (DeepS
 - **Query safety** (`app/tools/sql.py`): every model query runs on a read-only,
   immutable connection, single-SELECT only, with a watchdog that interrupts any
   query exceeding `SQL_TIMEOUT_SECONDS`.
-- **Self-learning** (`app/skills.py`): validated NL→SQL exemplars are retrieved
-  as few-shot context; 👍 promotes new ones; a semantic cache reuses SQL for
-  near-identical repeat questions and is invalidated on each data import.
+- **Self-learning** (`app/skills.py`): validated lessons (a generalized
+  headline + description + commented SQL example) are retrieved as few-shot
+  context; the post-answer critic is the sole source of new (unverified) lessons;
+  a semantic cache reuses SQL for near-identical repeat questions and is
+  invalidated on each data import.
 - **Imports** (`app/importer.py`): reuses `scripts/build_ipeds_db.py` to rebuild
   into a **staging** DB, runs integrity + magnitude checks, then **atomically
   swaps** — the live DB is never written in place. The **Imports** tab's year

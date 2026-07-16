@@ -786,7 +786,7 @@ function Stat({ label, value }) {
 }
 
 function ruleName(s) {
-  return s.lesson || s.notes || s.question || "untitled lesson";
+  return s.headline || s.lesson || s.notes || s.question || "untitled lesson";
 }
 
 function Skills() {
@@ -815,21 +815,26 @@ function Skills() {
       <h2>Learned lessons ({rows.length})</h2>
       <p className="muted small">
         Rules the assistant applies as guidance. The post-answer critic proposes a
-        lesson when it catches a mistake, and a 👍 on an answer proposes one too —
-        both start <strong>unverified</strong> until you approve them here.
+        lesson when it catches a mistake — a short headline plus a longer
+        description — and it starts <strong>unverified</strong> until you approve
+        it here.
         {pending > 0 && ` ${pending} awaiting review.`}
       </p>
       <div className="sr-only" role="status" aria-live="polite">{status}</div>
       {rows.length === 0 && (
         <p className="muted small">
-          No lessons yet — they’ll appear here as the critic and 👍 feedback propose them.
+          No lessons yet — they’ll appear here as the critic proposes them.
         </p>
       )}
-      {rows.map((s) => (
+      {rows.map((s) => {
+        const description = s.lesson || s.notes || "";
+        const headline = s.headline || description;
+        const showDescription = description && description !== headline;
+        return (
         <div key={s.id} className="skill">
           <div className="skill-head">
             <span className="lesson-rule">
-              {s.lesson || s.notes || <em className="muted">(no rule text)</em>}
+              {headline || <em className="muted">(no rule text)</em>}
             </span>
             <span className="tags">
               {s.verified
@@ -842,6 +847,12 @@ function Skills() {
               <span className="tag">hits {s.hits}</span>
             </span>
           </div>
+          {showDescription && (
+            <details className="lesson-desc">
+              <summary className="muted small">Details</summary>
+              <p>{description}</p>
+            </details>
+          )}
           {s.canonical_sql && (
             <details className="lesson-example">
               <summary className="muted small">Example query</summary>
@@ -861,7 +872,8 @@ function Skills() {
                     onClick={() => reject(s)}>reject</button>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

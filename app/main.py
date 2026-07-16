@@ -38,6 +38,20 @@ async def lifespan(app: FastAPI):
             log.info("seeded %d skill exemplars", n)
     except Exception as e:  # noqa: BLE001
         log.warning("skill seeding skipped: %s", e)
+    try:
+        from app.skills import upgrade_seed_lessons
+        n = upgrade_seed_lessons()
+        if n:
+            log.info("upgraded %d seed lesson(s) to the generalized headline/description shape", n)
+    except Exception as e:  # noqa: BLE001
+        log.warning("seed lesson upgrade skipped: %s", e)
+    try:
+        from app.skills import reembed_skills_if_needed
+        n = reembed_skills_if_needed()
+        if n:
+            log.info("re-embedded %d skill(s) onto the headline+description embedding source", n)
+    except Exception as e:  # noqa: BLE001
+        log.warning("skill re-embed skipped: %s", e)
     log.info("IPEDS Query API ready (db=%s)", get_settings().ipeds_db_path)
     yield
 
@@ -57,11 +71,19 @@ def health():
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
+    # Registered BEFORE the GET-only SPA catch-all below, for every method:
+    # Starlette resolves a route by PATH first, so without a dedicated
+    # any-method route here, a POST/PUT/PATCH/DELETE to an unmatched (e.g.
+    # removed) /api/* endpoint would still match the GET-only catch-all's path
+    # pattern and get a misleading 405 Method Not Allowed instead of 404.
+    @app.api_route("/api/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    def api_404(full_path: str):
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        # API routes are handled above; everything else serves the SPA shell.
-        if full_path.startswith("api/"):
-            return JSONResponse({"detail": "Not found"}, status_code=404)
+        # Real API routes, and the api_404 catch-all above, are matched first;
+        # everything else serves the SPA shell.
         web_root = WEB_DIST.resolve()
         candidate = (WEB_DIST / full_path).resolve()
         if full_path and candidate.is_relative_to(web_root) and candidate.is_file():

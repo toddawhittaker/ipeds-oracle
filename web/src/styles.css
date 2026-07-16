@@ -196,8 +196,6 @@ input, textarea, button { font-family: inherit; }
 .msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
 .msg-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
-.vote { background: none; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; filter: grayscale(1); opacity: .6; }
-.vote.on { filter: none; opacity: 1; border-color: var(--line); }
 details.sql summary { cursor: pointer; color: var(--muted); }
 details.sql pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
 /* The import report + streamed log wrap instead of scrolling horizontally, so
@@ -471,6 +469,9 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 .tag.warn { color: var(--danger); border-color: var(--danger); }
 .lesson-rule { font-weight: 600; line-height: 1.4; }
+.lesson-desc { margin-top: 10px; }
+.lesson-desc summary { cursor: pointer; }
+.lesson-desc p { margin: 6px 0 0; }
 .lesson-example { margin-top: 10px; }
 .lesson-example summary { cursor: pointer; }
 .lesson-example .qtext { margin: 6px 0 4px; font-style: italic; }

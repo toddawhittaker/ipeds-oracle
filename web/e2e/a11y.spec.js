@@ -6,7 +6,6 @@ import {
   mockConversations,
   mockConversation,
   mockStreamChat,
-  mockFeedback,
   mockAllowlist,
   mockAccessRequests,
   mockImportJobs,
@@ -30,7 +29,6 @@ async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
   await mockMe(page, { email: "user@franklin.edu", is_admin: false });
   const convos = await mockConversations(page, []);
   await mockStreamChat(page, { conversationId: convId, sql: [SQL], answer: ANSWER_MD, messageId: msgId });
-  const feedback = await mockFeedback(page);
   await mockConversation(page, convId, [
     { role: "user", content: "Associate's degrees in Registered Nursing by state" },
     { role: "assistant", id: msgId, content: ANSWER_MD, sql_log: [SQL] },
@@ -43,8 +41,6 @@ async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
   convos.setList([{ id: convId, title: "Associate's degrees in Registered Nursing by state" }]);
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("table")).toBeVisible();
-
-  return { feedback };
 }
 
 test.describe("conversation list items", () => {
@@ -65,26 +61,6 @@ test.describe("conversation list items", () => {
 
     await convoBtn.click();
     await expect(convoBtn).toHaveAttribute("aria-current", "page");
-  });
-});
-
-test.describe("vote buttons", () => {
-  test("are reachable by accessible name and expose aria-pressed", async ({ page }) => {
-    await askAndUnlockAnswer(page);
-
-    // exact: true — "Helpful" is otherwise a substring match of "Not helpful".
-    const upvote = page.getByRole("button", { name: "Helpful", exact: true });
-    const downvote = page.getByRole("button", { name: "Not helpful" });
-
-    await expect(upvote).toBeVisible();
-    await expect(downvote).toBeVisible();
-    await expect(upvote).toHaveAttribute("aria-pressed", "false");
-    await expect(downvote).toHaveAttribute("aria-pressed", "false");
-
-    await upvote.click();
-
-    await expect(upvote).toHaveAttribute("aria-pressed", "true");
-    await expect(downvote).toHaveAttribute("aria-pressed", "false");
   });
 });
 

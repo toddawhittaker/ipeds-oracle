@@ -37,7 +37,7 @@ fulfilled by a mock before it leaves the page.
 - `chat-happy-path.spec.js` — ask a question, watch the SSE-streamed markdown
   answer (with a table) render, expand the SQL log, then confirm the
   follow-up conversation fetch attaches the message id that unlocks the
-  👍/👎 feedback buttons and the CSV download link.
+  CSV download link.
 - `admin-tabs.spec.js` — click through Allowlist / Imports / Usage / Skills
   and assert each panel's mocked content; submit the add-allowlist form and
   assert the POST body. Also carries the Skills-tab-unmount crash regression
@@ -53,8 +53,7 @@ fulfilled by a mock before it leaves the page.
   plus the rebuild progress bar (`[data-testid="rebuild-progress"]`) driven by
   a polled job's `progress.rebuild` JSON.
 - `a11y.spec.js` — coverage for the accessibility fixes: conversation list
-  items are real buttons (with `aria-current` on the active one), 👍/👎 vote
-  buttons are reachable by accessible name and expose `aria-pressed`, the
+  items are real buttons (with `aria-current` on the active one), the
   streamed assistant answer container has `aria-live`, the Login/Chat/Admin
   inputs are reachable via `getByLabel`/`getByRole`, primary-nav and Admin
   subtab active state uses `aria-current`, the markdown result-table wrapper
@@ -62,3 +61,7 @@ fulfilled by a mock before it leaves the page.
   notice becomes `role="alert"` after submission. Also runs a couple of
   `@axe-core/playwright` smoke scans (Login, Chat) asserting no *critical*
   violations.
+- `admin-lessons.spec.js` — the Learned-lessons admin view: the headline
+  leads, the longer description collapses behind its own "Details", the SQL
+  worked example stays collapsed under "Example query", and verify/reject
+  actions (incl. the destructive-delete confirm dialog).

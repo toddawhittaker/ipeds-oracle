@@ -184,6 +184,25 @@ def test_migration_6_is_idempotent_and_noop_on_fresh_db():
     assert v2 == v, f"expected version to stay {v}, got {v2}"
 
 
+def test_migration_7_adds_headline_column():
+    # Generalized structured lessons: skills gains a nullable `headline` column
+    # (short generalized rule title). Pure DDL, no backfill (the Python
+    # upgrade_seed_lessons()/reembed_skills_if_needed() backfills handle text +
+    # embeddings after migrations run, at app startup).
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 6])
+    assert "headline" not in _cols(con, "skills"), _cols(con, "skills")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert v == 7, f"expected migration 7 to be the current baseline, got {v}"
+    assert "headline" in _cols(con, "skills"), _cols(con, "skills")
+    # New column must be nullable (existing rows aren't backfilled by the DDL).
+    con.execute("INSERT INTO skills(question, canonical_sql, created_at) "
+               "VALUES ('q', 'SELECT 1', 0)")
+    row = con.execute("SELECT headline FROM skills WHERE question='q'").fetchone()
+    assert row[0] is None, row
+
+
 def test_real_init_db_sets_baseline_and_bootstraps():
     init_db()
     con = connect()
@@ -220,6 +239,8 @@ def run():
           test_migration_6_rewrites_terse_seed_lessons)
     check("migration 6 is idempotent and a no-op on a fresh (unseeded) db",
           test_migration_6_is_idempotent_and_noop_on_fresh_db)
+    check("migration 7 adds skills.headline (nullable)",
+          test_migration_7_adds_headline_column)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()
