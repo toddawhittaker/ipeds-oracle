@@ -298,7 +298,7 @@ def test_import_rejects_oversized_upload() -> None:
         oversized = b"\0" * (2 * 1024 * 1024)  # 2 MB > 1 MB cap
         r = c.post(
             "/api/admin/import",
-            files={"file": ("big.accdb", oversized, "application/octet-stream")},
+            files={"files": ("big.accdb", oversized, "application/octet-stream")},
         )
         assert 400 <= r.status_code < 500, (
             f"oversized upload must be rejected with a 4xx, got {r.status_code}: "
@@ -309,7 +309,7 @@ def test_import_rejects_oversized_upload() -> None:
         # (also-rejected) attempt should fail on size (413), not on lock (409).
         r2 = c.post(
             "/api/admin/import",
-            files={"file": ("big2.accdb", oversized, "application/octet-stream")},
+            files={"files": ("big2.accdb", oversized, "application/octet-stream")},
         )
         assert r2.status_code == 413, (
             f"import lock leaked after a rejected upload (got {r2.status_code}: "
