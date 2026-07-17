@@ -152,18 +152,33 @@ window, `top_users` names the user) — pinned by a sentinel test in
 
 ## How we work (operating rules — follow these)
 
-**Coding workflow — hybrid.** Route *substantial* features (multi-file, needs
-design + tests + review) through the `.claude/agents/` team: `project-manager`
-orchestrates `architect` → `test-engineer` (writes failing tests first) →
-`implementer` → `security`/`a11y`/`code` reviewers. Do *small, well-scoped*
-changes inline. **State which path you're taking.** The `test-engineer` is the
-**sole owner of test files**; the `implementer` must not edit tests.
+**Coding workflow — hybrid.** The routing test is **design uncertainty OR large
+blast radius**, *not* "touches multiple files." Route through the
+`.claude/agents/` team — `project-manager` orchestrates `architect` →
+`test-engineer` (writes failing tests first) → `implementer` →
+`security`/`a11y`/`code` reviewers — only when the design is genuinely
+contestable or the change reaches far. A well-specified, low-ambiguity change
+goes **inline with a review pass at the end**, even if it spans a few files;
+**follow-on fixes to a shipped feature default to inline.** The full chain earns
+its overhead (stalls, dropped inter-agent messages, ceremony over trivia) only
+when specialization actually buys something. **State which path you're taking.**
+The `test-engineer`-owns-tests / `implementer`-can't-touch-tests separation
+applies to the **team path only**; on inline work, whoever writes the code
+writes its tests.
 
-**Testing standard — non-negotiable.** Every behavior change ships with unit
-tests, and **every `app/` module stays ≥ 80%** line coverage (per-module, not just
-the total) — enforced by `scripts/coverage_check.sh` in CI and the pre-push gate.
-Tests are dependency-light scripts in `eval/` (`sys.exit(1)` on failure, no API
-key needed). New low-coverage code is not "done" until it's tested.
+**Testing standard — softened, not abandoned.** Keep test-first for behavior
+that could realistically regress — ownership/authz scoping, persistence
+invariants, security contracts (e.g. no-enumeration-oracle), aggregation
+correctness. **Fix presentation trivia directly** (strings, labels,
+singular/plural, cosmetic shape) — no red test, no cross-agent handoff. Every
+new test must **justify itself by naming the specific regression it catches**;
+one that only re-echoes a constant or a UI string a function away is noise and
+doesn't ship. **Every `app/` module stays ≥ 80%** line coverage (per-module, not
+just the total) — enforced by `scripts/coverage_check.sh` in CI and the pre-push
+gate — but that floor is met with tests that guard **real behavior**, never
+padded with assertions on constants. Tests are dependency-light scripts in
+`eval/` (`sys.exit(1)` on failure, no API key needed). New low-coverage code is
+not "done" until it's tested.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
 CI (ruff `app scripts eval` + ESLint; the `eval/` backend suites against a
