@@ -543,43 +543,109 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
     return True
 
 
-def run_import(job_id: int, upload_path: Path) -> None:
-    """Full pipeline for one uploaded .accdb. Intended to run in a background
-    thread. Preflights the file, stages it into DATA_DIR (backing up any
-    existing same-named file), then hands off to build_check_swap — restoring
-    the pre-import state of DATA_DIR if that fails."""
+def _year_label(ending_year: int) -> str:
+    """Ending year (2021) -> the collection label ("2020-21")."""
+    return f"{ending_year - 1}-{str(ending_year)[2:]}"
+
+
+def _data_dir_years(data_dir: Path) -> set[int]:
+    """The set of ENDING years encoded in the IPEDS{YYYY}{YY}.accdb filenames
+    sitting in data_dir (start year + 1, to match _years())."""
+    years: set[int] = set()
+    if data_dir.exists():
+        for p in data_dir.glob("*.accdb"):
+            m = FILENAME_RE.match(p.name)
+            if m:
+                years.add(int(m.group(1)) + 1)
+    return years
+
+
+def _guard_no_dropped_years(data_dir: Path, live_db: Path) -> tuple[bool, str]:
+    """A manual rebuild replaces the dataset with EXACTLY the .accdb now in
+    data_dir, so its year set must be a SUPERSET of the live years — otherwise
+    the swap would silently drop a year. Refuse (before the multi-minute
+    rebuild) if any live year is missing from the upload. No live DB yet = a
+    first build, allowed."""
+    if not live_db.exists():
+        return True, ""
+    try:
+        live_years = set(_years(live_db))
+    except Exception:  # noqa: BLE001 — an unreadable/corrupt live DB can't be guarded;
+        return True, ""  # fail open (integrity_checks' shrink rule is the backstop).
+    if not live_years:
+        return True, ""
+    dropped = sorted(live_years - _data_dir_years(data_dir))
+    if not dropped:
+        return True, ""
+    return False, (
+        "Upload refused — it would DROP year(s) currently in the database: "
+        f"{', '.join(_year_label(y) for y in dropped)}. A manual upload rebuilds "
+        "the database from exactly the files you provide, so include every year "
+        f"you want to keep ({', '.join(_year_label(y) for y in sorted(live_years))}) "
+        "plus any new ones — or use NCES Integrate to add a year online. Live "
+        "database unchanged.")
+
+
+def run_import(job_id: int, upload_paths: list[Path]) -> None:
+    """Full pipeline for one or more uploaded .accdb files. Intended to run in a
+    background thread. Preflights every file, stages them all into DATA_DIR
+    (backing up any existing same-named files), refuses the rebuild if it would
+    DROP a currently-live year (the superset guard), then hands off to
+    build_check_swap — restoring DATA_DIR to its pre-import state on any failure."""
     s = get_settings()
-    data_target = s.data_dir / upload_path.name
-    backup_accdb = None
+    staged: list[tuple[Path, Path | None]] = []  # (data_target, backup or None)
+
+    def _restore_all() -> None:
+        for target, backup in staged:
+            _restore_data_dir(target, backup)
+
     try:
         _set_status(job_id, "running")
-        _log(job_id, f"Preflight on {upload_path.name}…")
-        ok, msg = preflight(upload_path)
-        _log(job_id, msg)
+        # Preflight every file first — reject the whole batch if any is bad.
+        for up in upload_paths:
+            _log(job_id, f"Preflight on {up.name}…")
+            ok, msg = preflight(up)
+            _log(job_id, msg)
+            if not ok:
+                _set_status(job_id, "failed", msg)
+                return
+
+        # Stage all where the loader discovers them (back up any existing ones).
+        s.data_dir.mkdir(parents=True, exist_ok=True)
+        for up in upload_paths:
+            data_target = s.data_dir / up.name
+            backup = None
+            if data_target.exists() and data_target.resolve() != up.resolve():
+                backup = data_target.with_suffix(".accdb.bak")
+                shutil.move(str(data_target), str(backup))
+            if up.resolve() != data_target.resolve():
+                shutil.copy2(str(up), str(data_target))
+            staged.append((data_target, backup))
+        _log(job_id, f"Staged {len(upload_paths)} source file(s) into {s.data_dir}")
+
+        # Superset guard — refuse a rebuild that would drop a live year.
+        ok, msg = _guard_no_dropped_years(s.data_dir, s.ipeds_db_path)
         if not ok:
+            _log(job_id, msg)
             _set_status(job_id, "failed", msg)
+            _restore_all()
             return
 
-        # Place the file where the loader discovers it (back up any existing one).
-        s.data_dir.mkdir(parents=True, exist_ok=True)
-        if data_target.exists() and data_target.resolve() != upload_path.resolve():
-            backup_accdb = data_target.with_suffix(".accdb.bak")
-            shutil.move(str(data_target), str(backup_accdb))
-        if upload_path.resolve() != data_target.resolve():
-            shutil.copy2(str(upload_path), str(data_target))
-        _log(job_id, f"Staged source file at {data_target}")
-
         if build_check_swap(job_id, s.data_dir):
-            m = FILENAME_RE.match(upload_path.name)
-            if m:
-                start_year = int(m.group(1))
-                _record_provenance([(start_year, start_year + 1, None, "manual")])
+            prov = []
+            for target, _ in staged:
+                m = FILENAME_RE.match(target.name)
+                if m:
+                    start_year = int(m.group(1))
+                    prov.append((start_year, start_year + 1, None, "manual"))
+            if prov:
+                _record_provenance(prov)
         else:
-            _restore_data_dir(data_target, backup_accdb)
+            _restore_all()
     except Exception as e:  # noqa: BLE001
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
-        _restore_data_dir(data_target, backup_accdb)
+        _restore_all()
 
 
 def run_integrate(job_id: int, start_years: list[int]) -> None:

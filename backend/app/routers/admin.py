@@ -322,38 +322,49 @@ _import_lock = threading.Lock()
 
 
 @router.post("/import")
-async def start_import(background: BackgroundTasks, file: UploadFile = File(...),
+async def start_import(background: BackgroundTasks,
+                       files: list[UploadFile] = File(...),
                        admin: sqlite3.Row = Depends(require_admin)):
-    if not file.filename or not file.filename.lower().endswith(".accdb"):
-        raise HTTPException(400, "Please upload an IPEDS .accdb file.")
+    if not files:
+        raise HTTPException(400, "Please upload at least one IPEDS .accdb file.")
+    for uf in files:
+        if not uf.filename or not uf.filename.lower().endswith(".accdb"):
+            raise HTTPException(400, "Every uploaded file must be an IPEDS .accdb file.")
     if not _import_lock.acquire(blocking=False):
         raise HTTPException(409, "An import is already running. Wait for it to finish.")
 
     s = get_settings()
     s.upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = s.upload_dir / Path(file.filename).name
     max_bytes = s.max_upload_mb * 1024 * 1024
+    dests: list[Path] = []
     try:
+        # Stream each file to disk; the size cap is the TOTAL across the batch.
         written = 0
-        with dest.open("wb") as f:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    raise HTTPException(
-                        413, f"Upload exceeds the {s.max_upload_mb} MB limit.")
-                f.write(chunk)
-        job_id = importer.create_job(file.filename, admin["email"])
+        for uf in files:
+            dest = s.upload_dir / Path(uf.filename).name
+            dests.append(dest)
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await uf.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise HTTPException(
+                            413, f"Upload exceeds the {s.max_upload_mb} MB limit.")
+                    f.write(chunk)
+        names = ", ".join(p.name for p in dests)
+        label = names if len(dests) == 1 else f"{len(dests)} files: {names}"
+        job_id = importer.create_job(label, admin["email"])
     except Exception:
-        dest.unlink(missing_ok=True)
+        for d in dests:
+            d.unlink(missing_ok=True)
         _import_lock.release()
         raise
 
     def _run():
         try:
-            importer.run_import(job_id, dest)
+            importer.run_import(job_id, dests)
         finally:
             _import_lock.release()
 

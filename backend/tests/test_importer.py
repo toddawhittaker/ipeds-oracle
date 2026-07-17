@@ -480,7 +480,7 @@ def test_run_import_preflight_failure_no_swap():
     importer.preflight = lambda p: (False, "bad file, rejected")
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -506,7 +506,7 @@ def test_run_import_loader_failure_restores_data_dir():
     importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output line"])
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -543,7 +543,7 @@ def test_run_import_integrity_checks_failure_no_swap():
     importer.integrity_checks = lambda staging_, live_: (False, ["✗ bad magnitude"])
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -575,7 +575,7 @@ def test_run_import_unexpected_exception_is_caught():
     importer.subprocess.Popen = _boom
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -585,6 +585,82 @@ def test_run_import_unexpected_exception_is_caught():
     assert row["status"] == "failed", row
     assert "Unexpected error" in (row["report"] or "") and "disk exploded" in row["report"], row
     assert "ERROR: RuntimeError" in (row["log"] or ""), row
+
+
+def test_run_import_refuses_dropping_a_live_year():
+    # The superset guard: a manual rebuild uses EXACTLY the .accdb in data_dir,
+    # so it must not drop a year the live DB currently has. Regression for the
+    # post-online-only footgun (data/ is empty, a single-year upload would
+    # otherwise rebuild a 1-year DB). Must fail BEFORE the loader runs, leaving
+    # the live DB untouched.
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2021, 2022])  # ending years -> 2020-21 + 2021-22 live
+    upload = _new_upload(d, name="IPEDS202021.accdb")  # only 2020-21; drops 2021-22
+
+    called = {"popen": False}
+
+    def _spy_popen(*a, **k):
+        called["popen"] = True
+        return _FakeProc(0, [])
+
+    orig_settings, orig_preflight = importer.get_settings, importer.preflight
+    orig_popen = importer.subprocess.Popen
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _spy_popen
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert "would DROP" in (row["report"] or "") and "2021-22" in row["report"], row
+    assert not called["popen"], "the loader must never run once the guard refuses"
+    assert live.exists(), "live DB must be untouched when the guard refuses"
+    assert not (data_dir / upload.name).exists(), "the staged upload must be rolled back"
+
+
+def test_run_import_multi_file_success_records_all_provenance():
+    # Multiple .accdb dropped at once: all stage, the rebuild runs on the union,
+    # and provenance is recorded for EVERY uploaded year. No live DB = a first
+    # build, so the superset guard is a no-op.
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    staging = live.with_name("ipeds_staging.db")
+    up1 = _new_upload(d, name="IPEDS202021.accdb")  # start 2020
+    up2 = _new_upload(d, name="IPEDS202122.accdb")  # start 2021
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"built")
+        return _FakeProc(0, ["build ok"])
+
+    orig = (importer.get_settings, importer.preflight, importer.subprocess.Popen,
+            importer.integrity_checks, importer._activate_staging)
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda s_, l_: (True, ["✓ ok"])
+    importer._activate_staging = lambda job_id, st: st.unlink(missing_ok=True)
+    try:
+        jid = create_job("2 files", "admin@example.edu")
+        run_import(jid, [up1, up2])
+    finally:
+        (importer.get_settings, importer.preflight, importer.subprocess.Popen,
+         importer.integrity_checks, importer._activate_staging) = orig
+
+    row = _job_row(jid)
+    assert row["status"] == "swapped", row
+    start_years = {p["start_year"] for p in _provenance_rows()}
+    assert {2020, 2021} <= start_years, start_years
+    assert (data_dir / "IPEDS202021.accdb").exists() and (data_dir / "IPEDS202122.accdb").exists()
 
 
 def test_run_import_backs_up_existing_staged_accdb():
@@ -606,7 +682,7 @@ def test_run_import_backs_up_existing_staged_accdb():
     importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output"])
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -650,7 +726,7 @@ def test_run_import_success_swaps_and_bumps_data_version():
     importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -1174,7 +1250,7 @@ def test_run_import_records_manual_provenance_on_success():
     importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -1202,7 +1278,7 @@ def test_run_import_no_provenance_written_on_preflight_failure():
     importer.preflight = lambda p: (False, "bad file, rejected")
     try:
         jid = create_job(upload.name, "admin@example.edu")
-        run_import(jid, upload)
+        run_import(jid, [upload])
     finally:
         importer.get_settings = orig_settings
         importer.preflight = orig_preflight
@@ -1695,6 +1771,10 @@ def run():
           test_run_import_integrity_checks_failure_no_swap)
     check("run_import: unexpected exception is caught and reported",
           test_run_import_unexpected_exception_is_caught)
+    check("run_import: refuses a rebuild that would DROP a live year (superset guard)",
+          test_run_import_refuses_dropping_a_live_year)
+    check("run_import: multi-file success stages all + records provenance for each",
+          test_run_import_multi_file_success_records_all_provenance)
     check("run_import: backs up a pre-existing staged .accdb of the same name",
           test_run_import_backs_up_existing_staged_accdb)
     check("run_import: success swaps db, bumps data_version, clears cache",

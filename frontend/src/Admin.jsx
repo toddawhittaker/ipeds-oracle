@@ -514,6 +514,9 @@ function Imports({ onDataChanged }) {
   const [active, setActive] = useState(null);
   const [activeYears, setActiveYears] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [dropFiles, setDropFiles] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
   const [notice, setNotice] = useState("");
   const fileRef = useRef();
   const poll = useRef();
@@ -600,16 +603,37 @@ function Imports({ onDataChanged }) {
     poll.current = setInterval(tick, 2000);
   }
 
+  function addFiles(fileList) {
+    const accdb = Array.from(fileList || []).filter((f) =>
+      f.name.toLowerCase().endsWith(".accdb"));
+    setUploadMsg("");
+    if (accdb.length) setDropFiles(accdb);
+    else if (fileList && fileList.length) setUploadMsg("Only .accdb files are accepted.");
+  }
+  function onDragOver(e) { e.preventDefault(); if (!dragging) setDragging(true); }
+  function onDragLeave(e) { e.preventDefault(); setDragging(false); }
+  function onDrop(e) { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }
+
   async function upload(e) {
     e.preventDefault();
-    const f = fileRef.current.files[0];
-    if (!f) return;
+    if (!dropFiles.length) return;
     setUploading(true);
+    setUploadMsg("");
     const fd = new FormData();
-    fd.append("file", f);
-    const r = await fetch("/api/admin/import", { method: "POST", body: fd });
-    const data = await r.json();
-    setUploading(false);
+    for (const f of dropFiles) fd.append("files", f);
+    let data = {};
+    try {
+      const r = await fetch("/api/admin/import", { method: "POST", body: fd });
+      data = await r.json().catch(() => ({}));
+      if (!r.ok) { setUploadMsg(data.detail || `Upload failed (${r.status}).`); return; }
+    } catch {
+      setUploadMsg("Upload failed — could not reach the server.");
+      return;
+    } finally {
+      setUploading(false);
+    }
+    setDropFiles([]);
+    if (fileRef.current) fileRef.current.value = "";
     setActiveYears(null);
     if (data.job_id) watch(data.job_id);
     loadJobs();
@@ -848,15 +872,62 @@ function Imports({ onDataChanged }) {
       </div>
 
       <details className="manual-import">
-        <summary>Manual upload (.accdb fallback)</summary>
+        <summary>Manual upload (.accdb — offline / full rebuild)</summary>
         <p className="muted small">
-          Upload a year&apos;s <code>IPEDS{"{YYYY}{YY}"}.accdb</code> directly — the same
-          rebuild-and-check pipeline runs on just that file.
+          Drop the <strong>complete set</strong> of{" "}
+          <code>IPEDS{"{YYYY}{YY}"}.accdb</code> files the database should contain — the
+          rebuild replaces the dataset with exactly these, so include every year
+          currently loaded plus any new ones (a build that would drop a live year is
+          refused). To add a single year online, use <strong>NCES Integrate</strong> above.
         </p>
-        <form className="row" onSubmit={upload}>
-          <label htmlFor="import-file" className="sr-only">IPEDS Access database file</label>
-          <input id="import-file" ref={fileRef} type="file" accept=".accdb" required disabled={locked} />
-          <button type="submit" disabled={uploading || locked}>{uploading ? "Uploading…" : "Import"}</button>
+        <form onSubmit={upload}>
+          <div
+            className={"dropzone" + (dragging ? " dragging" : "")}
+            onDragEnter={onDragOver}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
+            <span className="dropzone-hint" aria-hidden="true">
+              {dragging ? "Drop the .accdb files" : "Drag .accdb files here, or"}
+            </span>
+            <label htmlFor="import-file" className="link">Choose files</label>
+            <input
+              id="import-file"
+              ref={fileRef}
+              type="file"
+              accept=".accdb"
+              multiple
+              className="sr-only"
+              disabled={locked}
+              onChange={(e) => addFiles(e.target.files)}
+            />
+          </div>
+          {/* Screen-reader announcement for the (visual-only) drag + selection state. */}
+          <div className="sr-only" role="status" aria-live="polite">
+            {dragging
+              ? "Release to drop the files"
+              : dropFiles.length
+                ? `${dropFiles.length} file${dropFiles.length > 1 ? "s" : ""} selected`
+                : ""}
+          </div>
+          {dropFiles.length > 0 && (
+            <ul className="dropfile-list small">
+              {dropFiles.map((f) => (
+                <li key={f.name}>
+                  {f.name} <span className="muted">({humanBytes(f.size)})</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {uploadMsg && <p className="notice error small" role="alert">{uploadMsg}</p>}
+          <button type="submit" disabled={uploading || locked || !dropFiles.length}>
+            {uploading
+              ? "Uploading…"
+              : dropFiles.length
+                ? `Rebuild from ${dropFiles.length} file${dropFiles.length > 1 ? "s" : ""}`
+                : "Rebuild"}
+          </button>
         </form>
       </details>
 

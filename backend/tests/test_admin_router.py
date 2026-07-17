@@ -174,7 +174,7 @@ class _SyncThread:
         self._target()
 
 
-def _run_import_success(job_id, upload_path):
+def _run_import_success(job_id, upload_paths):
     con = connect()
     try:
         con.execute("UPDATE import_jobs SET status='swapped', report=? WHERE id=?",
@@ -188,7 +188,7 @@ def test_import_rejects_non_accdb_extension():
     with TestClient(app) as c:
         _login(c)
         r = c.post("/api/admin/import",
-                   files={"file": ("notes.txt", b"hello", "text/plain")})
+                   files={"files": ("notes.txt", b"hello", "text/plain")})
         assert r.status_code == 400, r.text
 
 
@@ -198,8 +198,8 @@ def test_import_conflicts_while_one_already_running():
         assert admin_router._import_lock.acquire(blocking=False)
         try:
             r = c.post("/api/admin/import",
-                       files={"file": ("IPEDS202526.accdb", b"data",
-                                       "application/octet-stream")})
+                       files={"files": ("IPEDS202526.accdb", b"data",
+                                        "application/octet-stream")})
             assert r.status_code == 409, r.text
         finally:
             admin_router._import_lock.release()
@@ -213,9 +213,10 @@ def test_import_success_creates_and_completes_a_job():
         admin_router.threading.Thread = _SyncThread
         admin_router.importer.run_import = _run_import_success
         try:
+            # A multi-file batch (the drag-drop shape) — every part is named "files".
             r = c.post("/api/admin/import",
-                       files={"file": ("IPEDS202526.accdb", b"fake accdb bytes",
-                                       "application/octet-stream")})
+                       files=[("files", ("IPEDS202425.accdb", b"a", "application/octet-stream")),
+                              ("files", ("IPEDS202526.accdb", b"b", "application/octet-stream"))])
         finally:
             admin_router.threading.Thread = orig_thread
             admin_router.importer.run_import = orig_run_import
