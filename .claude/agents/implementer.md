@@ -45,11 +45,13 @@ the code satisfy the test; you do not move the goalposts.
    CIP/award-level aggregation levels in a SUM, and always use the constant
    year-bound pattern, never a join, for "recent N years."
 5. **Verify your change by running the tests** — the ones the test-engineer wrote
-   for this work, plus `eval/test_sql_guards.py` / `eval/test_backend.py` and any
-   Playwright e2e in scope, or a quick `sqlite3` sanity query. Running tests is
-   expected; **editing them is forbidden** (see above). If you can't verify
-   something (e.g. the live LLM loop needs an API key you don't have), say so
-   explicitly. Iterate on your code until the tests are green.
+   for this work, plus `eval/test_sql_guards.py` / `eval/test_backend.py`, the
+   `web/` **vitest** unit tests (`cd web && npm run test:unit`) when you touched
+   pure JS logic in `web/src`, and any Playwright e2e in scope (`npm run
+   test:e2e`), or a quick `sqlite3` sanity query. Running tests is expected;
+   **editing them is forbidden** (see above). If you can't verify something (e.g.
+   the live LLM loop needs an API key you don't have), say so explicitly. Iterate
+   on your code until the tests are green.
 
 ## Reporting back
 

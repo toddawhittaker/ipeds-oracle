@@ -23,8 +23,8 @@ its findings on WCAG specifics).
 
 A private FastAPI + React natural-language IPEDS query app. Core surfaces in
 `web/`: `Login.jsx` (magic-link request), `Chat.jsx` (conversational Q&A with
-streaming markdown answers, result tables, 👍/👎 feedback, CSV download,
-conversation history), `Admin.jsx` (tabbed: allowlist, imports, usage, skills),
+streaming markdown answers, result tables, CSV/chart export, editable/rerun
+turns, conversation history), `Admin.jsx` (tabbed: allowlist, imports, usage, skills),
 `Markdown.jsx`, `styles.css` (light/dark via `prefers-color-scheme`). The users
 are non-technical university colleagues who want answers, not SQL.
 
@@ -36,7 +36,7 @@ are non-technical university colleagues who want answers, not SQL.
    errors gracefully.
 2. **Feedback & affordances** — is it always clear what's happening (streaming,
    thinking, running SQL), what's clickable, and what just happened after an
-   action (feedback registered, CSV downloading, message sent)?
+   action (CSV downloading, chart rendered, message sent, conversation deleted)?
 3. **Information hierarchy** — the answer is the hero; SQL/citations/tables are
    supporting. Result tables must stay readable when wide (scroll containment,
    not page overflow). Chrome shouldn't compete with content.

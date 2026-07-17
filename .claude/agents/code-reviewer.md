@@ -32,6 +32,10 @@ you find — that goes back to the implementer.
    - The `ipeds.db` connection must stay read-only/immutable; the SQL validator
      and watchdog must not be weakened.
    - `year` is the ending year of the collection.
+   - **Tests in the diff:** flag ones that guard nothing — a bare constant/removed-
+     field/UI-string echo, or pure logic pinned through a slow Playwright spec that
+     a vitest unit test should own (browser truth — routing/focus/aria-live/SSE-DOM
+     — correctly stays in Playwright). Report it; the test-engineer changes tests.
 4. **Verify, don't just pattern-match.** For each candidate finding, construct the
    concrete failure scenario (inputs → wrong output). Drop anything you can't
    substantiate. Rank surviving findings most-severe first.
