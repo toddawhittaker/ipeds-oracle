@@ -613,14 +613,15 @@ def usage(since: float | None = None, until: float | None = None):
             "COALESCE(SUM(l.cost),0.0) AS spend FROM usage_log l "
             "JOIN users u ON u.id=l.user_id WHERE l.created_at BETWEEN ? AND ? "
             "GROUP BY u.email ORDER BY queries DESC LIMIT 10", args).fetchall()
-        recent = con.execute(
-            "SELECT question, model_used, ok, cached, cost, created_at "
-            f"FROM usage_log {win} ORDER BY id DESC LIMIT 20", args).fetchall()
+        # No "recent" (verbatim question text) here, deliberately: this endpoint's
+        # caller-controlled since/until plus top_users' per-user naming would make
+        # a raw recent-questions feed an attributable privacy leak across all
+        # users, not just an aggregate view. eval/test_admin_router.py pins this
+        # absence as a contract — do not restore it.
         return {"since": since, "until": until, "bucket": "hour" if hourly else "day",
                 "totals": dict(totals),
                 "series": [dict(r) for r in series],
-                "top_users": [dict(r) for r in top_users],
-                "recent": [dict(r) for r in recent]}
+                "top_users": [dict(r) for r in top_users]}
     finally:
         con.close()
 

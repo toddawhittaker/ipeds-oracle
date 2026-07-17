@@ -142,7 +142,12 @@ as a headline+description in one call, reused as both the revision feedback and
 the stored lesson) when it catches a mistake (lessons start unverified → admin
 approves; deduped on save; embedding key = headline+description, never the
 question; `SKILLS_ENABLED=0/1` gates the on/off eval A/B) + semantic answer
-cache.
+cache. Admin → Usage's `GET /api/admin/usage` returns only aggregates
+(totals/series/top_users) and deliberately never verbatim question text —
+`usage_log.question` is still written, but echoing it back would be an
+attributable privacy leak (caller-controlled `since`/`until` narrows the
+window, `top_users` names the user) — pinned by a sentinel test in
+`eval/test_admin_router.py`.
 **Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
 
 ## How we work (operating rules — follow these)
