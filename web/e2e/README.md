@@ -65,3 +65,14 @@ fulfilled by a mock before it leaves the page.
   leads, the longer description collapses behind its own "Details", the SQL
   worked example stays collapsed under "Example query", and verify/reject
   actions (incl. the destructive-delete confirm dialog).
+- `delete-focus.spec.js` — focus management after deleting a conversation:
+  deleting the open chat navigates to `/` and focuses the composer; deleting a
+  different chat focuses whatever now occupies the deleted row's index (next
+  sibling, else previous, else "+ New chat", never `<body>`); a dedicated
+  bare-`aria-live` "delete-announcer" region reports what happened (with a
+  remaining-chat count so two same-titled deletes in a row still produce
+  distinct announcements); dismissing the confirm or a failed DELETE leave
+  focus sane and never falsely announce "Deleted"; an unrelated later
+  `refreshConvos()` must not steal focus back into the sidebar; and the
+  pre-existing unscoped `[role="status"].sr-only` locator must keep resolving
+  to exactly one node.
