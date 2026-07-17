@@ -100,8 +100,7 @@ def send_access_approved(to: str, link: str) -> bool:
     <li>Which states awarded the most Master's degrees in Education?</li>
   </ul>
   <p style="font-size:14px">Every answer comes with the data behind it — sortable
-     tables, inline charts, and one-click CSV export. A 👍 or 👎 on any answer
-     helps the assistant get better over time.</p>
+     tables, inline charts, and one-click CSV export.</p>
 
   <p style="color:#666;font-size:13px;border-top:1px solid #e2e8f0;
      padding-top:12px;margin-top:22px">The link above expires in {ttl} minutes,

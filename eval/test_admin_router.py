@@ -600,7 +600,81 @@ def test_allowlist_add_approval_email_failure_is_logged_not_raised():
         finally:
             admin_router.send_access_approved = orig_send
         assert r.status_code == 200, r.text
-        assert r.json()["invited"] is False, r.text
+        body = r.json()
+        assert body["invited"] is False, r.text
+        # No RESEND_API_KEY is set in this suite's env (the dev/no-key world):
+        # the mailer would have logged the whole email -- link included -- to
+        # the console, so mail_configured must be False here, distinguishing
+        # this "recoverable" failure from the key-configured one below.
+        assert body["mail_configured"] is False, body
+
+
+def _patch_resend_key(key):
+    """Monkeypatch admin_router.get_settings (imported as a bare name via
+    `from app.config import get_settings`, same convention as
+    admin_router.send_access_approved above) to return a copy of the real,
+    cached Settings with only resend_api_key overridden -- so every other
+    field (app_public_url, etc.) that add_allowlist/mint_login_link also
+    reads stays real and valid."""
+    orig_get_settings = admin_router.get_settings
+    real = orig_get_settings()
+    fake = real.model_copy(update={"resend_api_key": key})
+    admin_router.get_settings = lambda: fake
+
+    def _restore():
+        admin_router.get_settings = orig_get_settings
+    return _restore
+
+
+def test_allowlist_add_mail_configured_false_when_no_key():
+    # This suite's env has RESEND_API_KEY="" -- the baseline "no key" case.
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/allowlist", json={"email": "nokey@example.edu"})
+        assert r.status_code == 200, r.text
+        assert r.json()["mail_configured"] is False, r.text
+
+
+def test_allowlist_add_mail_configured_true_when_key_set():
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_resend_key("re_test_key_1234")
+        orig_send = admin_router.send_access_approved
+        admin_router.send_access_approved = lambda email, link: True
+        try:
+            r = c.post("/api/admin/allowlist", json={"email": "haskey@example.edu"})
+        finally:
+            admin_router.send_access_approved = orig_send
+            restore()
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mail_configured"] is True, body
+        assert body["invited"] is True, body
+
+
+def test_allowlist_add_invited_false_mail_configured_true_is_reachable():
+    """The whole reason mail_configured exists: with a key CONFIGURED, a send
+    failure (invited=False) means the link was minted but never printed
+    anywhere -- unlike the no-key dev case, where the console has it. Assert
+    this exact (invited=False, mail_configured=True) combination is reachable,
+    since that's the case the admin UI must react to differently."""
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_resend_key("re_test_key_5678")
+        orig_send = admin_router.send_access_approved
+
+        def _boom(email, link):
+            raise RuntimeError("smtp is down")
+        admin_router.send_access_approved = _boom
+        try:
+            r = c.post("/api/admin/allowlist", json={"email": "keyfails@example.edu"})
+        finally:
+            admin_router.send_access_approved = orig_send
+            restore()
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["invited"] is False, body
+        assert body["mail_configured"] is True, body
 
 
 def _is_admin(c, email):
@@ -886,6 +960,13 @@ def run():
     check("deintegrate success creates a job", test_deintegrate_success_creates_a_job)
     check("allowlist add logs (not raises) an approval-email failure",
           test_allowlist_add_approval_email_failure_is_logged_not_raised)
+    check("allowlist add: mail_configured is False when no resend key is set",
+          test_allowlist_add_mail_configured_false_when_no_key)
+    check("allowlist add: mail_configured is True when a resend key is set",
+          test_allowlist_add_mail_configured_true_when_key_set)
+    check("allowlist add: invited=False + mail_configured=True is reachable "
+          "(send failed WITH a key configured)",
+          test_allowlist_add_invited_false_mail_configured_true_is_reachable)
     check("promote makes a user admin immediately on their live session",
           test_promote_makes_user_admin_immediately_on_live_session)
     check("demote an admin when another admin exists",
