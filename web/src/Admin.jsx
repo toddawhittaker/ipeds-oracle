@@ -47,10 +47,29 @@ export default function Admin({ me, initialTab, onDataChanged }) {
   );
 }
 
+// Mirrors app.auth.canon_email exactly (lowercase + strip a `+tag`
+// local-part suffix, dots left alone) -- used ONLY to name the address that
+// will ACTUALLY be blocked in the Reject confirm dialog (SEC #2, round-4
+// security review). Canonicalization propagates the block TOWARD the base
+// address, so a confirm that just echoes the literal typed-in string gets
+// the direction backwards for a +tag input -- rejecting
+// "victim+newsletter@example.edu" blocks "victim@example.edu", which is not
+// itself "a +tag variant of" the address shown. Duplicated here (not
+// imported) because this is a pure display concern with no reason to add a
+// server round-trip just to phrase a confirm dialog -- keep it textually in
+// sync with app.auth.canon_email if that ever changes.
+function canonEmailForDisplay(email) {
+  const trimmed = email.trim().toLowerCase();
+  const at = trimmed.indexOf("@");
+  if (at === -1) return trimmed;
+  return trimmed.slice(0, at).split("+")[0] + trimmed.slice(at);
+}
+
 function Allowlist({ me }) {
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
   const [denied, setDenied] = useState([]);
+  const [deniedError, setDeniedError] = useState("");
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -77,11 +96,24 @@ function Allowlist({ me }) {
   const load = () => {
     api.allowlist().then(setRows);
     api.accessRequests().then(setReqs);
-    // .catch keeps this optional: several existing e2e specs mock
-    // allowlist/access-requests but predate this endpoint and don't mock it,
-    // and an unhandled rejection there would surface as a page error (see
-    // admin-tabs.spec.js's Skills-unmount regression test).
-    api.deniedRequests().then(setDenied).catch(() => {});
+    // Unlike the two loaders above -- where an empty rendered result on
+    // failure is indistinguishable from "genuinely nothing yet", which is
+    // fine -- a silently-swallowed failure HERE (SEC #3, round-4 security
+    // review) would be byte-identical to "nobody is blocked", the one
+    // thing this section's entire job is to be able to say with
+    // confidence. Render a real error state instead (see the JSX below).
+    // Report only what the response actually says (a `detail` field, when
+    // the server sent one) rather than inferring a cause -- same principle,
+    // and the same JSON.parse(err.message).detail pattern, as
+    // toggleAdmin's catch further down: guessing at a cause from a proxy
+    // value instead of asking the server directly is exactly the class of
+    // bug PR #57/#60 fixed for the invite-email flash.
+    api.deniedRequests().then((d) => { setDenied(d); setDeniedError(""); })
+      .catch((err) => {
+        let detail = "";
+        try { detail = JSON.parse(err.message).detail || ""; } catch { /* no JSON body to read */ }
+        setDeniedError(detail || "Couldn't load blocked addresses.");
+      });
   };
   useEffect(load, []);
 
@@ -137,11 +169,17 @@ function Allowlist({ me }) {
   }
 
   async function reject(addr) {
+    // Name the address that will ACTUALLY be blocked (SEC #2) -- canon_email
+    // propagates the block toward the BASE address, so for a +tag input like
+    // "victim+newsletter@example.edu" the address actually blocked is
+    // "victim@example.edu", which the old copy's "+tag variants of THIS
+    // address" phrasing had backwards.
+    const target = canonEmailForDisplay(addr);
     if (!window.confirm(
-      `Reject the access request from ${addr}? That blocks this address ` +
-      `(and any +tag variants of it) from requesting access again. You can ` +
-      `undo the block from the "Blocked from requesting access" list at ` +
-      `the bottom of this tab.`)) return;
+      `Reject the access request from ${addr}? That blocks ${target} ` +
+      `(and every +tag/case variant of it) from requesting access again. ` +
+      `You can undo the block from the "Blocked from requesting access" ` +
+      `list at the bottom of this tab.`)) return;
     try {
       await api.denyAccessRequest(addr);
       // Set BEFORE load() below removes addr's .req row from the DOM, so
@@ -268,35 +306,96 @@ function Allowlist({ me }) {
       {/* Plain subdued section, not the --user tint used above for "needs
           your action" — a block is the opposite: something already handled
           that's merely visible/auditable here. Hidden entirely when there's
-          nothing denied, same as the pending-requests block above. */}
-      {denied.length > 0 && (
+          nothing denied AND nothing failed to load — same as the
+          pending-requests block above, except a load failure (SEC #3) must
+          still show something rather than looking identical to "empty". */}
+      {(denied.length > 0 || deniedError) && (
         <section className="denied">
           <h2>Blocked from requesting access</h2>
-          <p className="denied-help">
-            Rejecting a request blocks that address from asking again. Undoing
-            a block only lets the address request access again — it grants no
-            access and sends no email.
-          </p>
-          {denied.map((r) => (
-            <div key={r.id} className="denied-row">
-              <span className="denied-who">
-                {r.emails.join(", ")}
-                {r.emails.length > 1 && (
-                  <span className="denied-note">
-                    {" "}— all the same mailbox; undoing clears them together
-                  </span>
-                )}
-              </span>
-              <span className="denied-when">
-                {r.created_at ? new Date(r.created_at * 1000).toLocaleDateString() : "—"}
-              </span>
-              <button className="link"
-                      aria-label={`Allow ${r.emails.join(", ")} to request access again`}
-                      onClick={() => undo(r)}>
-                Allow to request again
-              </button>
-            </div>
-          ))}
+          {deniedError ? (
+            // A DIFFERENT class from the flash `.notice` above (not reused)
+            // deliberately -- several existing e2e specs open this tab
+            // without mocking GET .../denied at all (it predates this
+            // endpoint) and assert on an unscoped `.notice` locator for
+            // something else entirely (e.g. deny-access-request.spec.js's
+            // failed-Reject test); sharing the class would make that
+            // locator resolve to two elements and fail on a strict-mode
+            // violation that has nothing to do with what that test covers.
+            <p className="denied-error" role="alert">{deniedError}</p>
+          ) : (
+            <>
+              <p className="denied-help">
+                Rejecting a request blocks that address from asking again. Undoing
+                a block only lets the address request access again — it grants no
+                access and sends no email.
+              </p>
+              {denied.map((r) => {
+                // DELIBERATELY the opposite display rule from the pending
+                // list above (which renders the raw typed address, never
+                // canon_email): Approve is EXACT-match, so up there the raw
+                // string IS the resource. Here canon_email IS the resource —
+                // it's what is_denied() actually matches and what Undo's
+                // DELETE keys on — so it has to be the PRIMARY label, not
+                // hidden. Round-3 hid it always; a security review (SEC #1)
+                // found that lets an attacker file ONLY a +tag variant, get
+                // the admin to Reject it, and block the real victim's base
+                // address without that address ever appearing anywhere in
+                // this UI. Do NOT "make the two lists consistent" — that
+                // symmetry is the bug.
+                // Everything ELSE the group was requested as, besides the
+                // canonical address itself -- kept out of the "requested as"
+                // note so the base address's text isn't rendered a second
+                // time on the page (an unscoped getByText(canon_email) has
+                // to resolve to exactly one element; see undo-denial.spec.js).
+                const others = r.emails.filter((e) => e !== r.canon_email);
+                const differs = others.length > 0;
+                const whoId = `denied-who-${r.id}`;
+                return (
+                  <div key={r.id} className="denied-row">
+                    <span className="denied-who" id={whoId}>
+                      <span className="denied-primary">{r.canon_email}</span>
+                      {differs && (
+                        <span className="denied-note">
+                          {" "}— requested as {others.join(", ")}; the block covers
+                          this whole mailbox
+                        </span>
+                      )}
+                    </span>
+                    {/* SEC #4: this is MAX(created_at) from access_requests
+                        -- when the request was FILED, not a denial
+                        timestamp (there is no decided_at column). Rendered
+                        as a bare date it read as "blocked on", overstating
+                        what the app actually knows -- label it honestly. */}
+                    <span className="denied-when">
+                      requested {r.created_at ? new Date(r.created_at * 1000).toLocaleDateString() : "—"}
+                    </span>
+                    {/* A11Y #1 (WCAG 2.5.3 Label in Name): no aria-label —
+                        the old one interpolated the address into the MIDDLE
+                        of the phrase ("Allow {emails} to request access
+                        again"), so the visible label was never a prefix of
+                        the accessible name and the button was unreachable by
+                        speech input ("click Allow to request again"). Visible
+                        text stays verbatim and IS the whole accessible name;
+                        the disambiguating address context (needed when a
+                        screen-reader user browses several identically-worded
+                        "Allow to request again" buttons by role) is wired via
+                        aria-describedby at .denied-who instead of appended
+                        into the name itself -- appending it there (as this
+                        repo's own review comment on this row suggested)
+                        would re-render the address as a SECOND text node on
+                        the page, breaking every unscoped getByText(address)
+                        assertion right above this. describedby reuses the
+                        already-rendered node rather than duplicating it, and
+                        still reads out via the accessible DESCRIPTION on
+                        focus in every screen reader that supports it. */}
+                    <button className="link" aria-describedby={whoId} onClick={() => undo(r)}>
+                      Allow to request again
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </section>
       )}
     </div>

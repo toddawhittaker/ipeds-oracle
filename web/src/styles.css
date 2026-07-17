@@ -326,11 +326,36 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .denied { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
 .denied h2 { font-size: 15px; margin: 0 0 4px; }
 .denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
+/* SEC #3: the "Blocked from requesting access" section's own error state —
+   a distinct class from the flash `.notice` above (see Admin.jsx's comment
+   at this element's render site for why the two must not share one). Same
+   visual language (border/radius/padding) as `.notice` with a danger-toned
+   border so it reads as a failure, not an ordinary status message. */
+.denied-error { background: var(--user); border: 1px solid var(--danger); border-radius: 8px; padding: 14px; }
 .denied-row { display: flex; align-items: baseline; gap: 12px; padding: 5px 0; font-size: 14px; }
 .denied-who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* canon_email is the primary label (the address actually blocked — see
+   Admin.jsx's comment at this row's render site); weight it so it reads as
+   the headline, with the original(s) in .denied-note as subdued context. */
+.denied-primary { font-weight: 600; }
 .denied-when, .denied-row button { flex: none; }
 .denied-when { font-size: 13px; }
-.denied-note { font-size: 13px; }
+.denied-note { font-size: 13px; color: var(--muted); }
+/* A11Y #2: at a 320px viewport, two flex:none siblings (date, button) claimed
+   ~208px of a ~238px row, leaving the address column ~5px wide and the row
+   ~1500px tall (overflow-wrap:anywhere breaking it one character per line).
+   flex-wrap is the WRONG tool here — flexbox wraps on BASE size, so a long
+   text sibling just drops the whole flex group to its own line rather than
+   freeing up room (min-width:0 above is what handles the normal-width case).
+   Below the app's one existing breakpoint (@media (max-width: 559.98px),
+   styles.css:507's .skill-head — reused rather than inventing a new one),
+   stop being a single row at all and stack top-to-bottom instead. MUST sit
+   BELOW the .denied-row rule above: a media query adds no specificity, so it
+   only wins by coming later in the stylesheet (same principle as
+   .skill-head's override further down). */
+@media (max-width: 559.98px) {
+  .denied-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+}
 .usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
 .usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }

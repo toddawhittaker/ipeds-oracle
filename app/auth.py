@@ -58,7 +58,21 @@ def is_denied(con: sqlite3.Connection, email: str) -> bool:
     (migration 9), so it is effectively never NULL in production — the
     fallback to a plain lowercase match only covers a row that somehow reached
     this table without going through either path, and keeps that case
-    conservative (exact-match) rather than silently matching nothing."""
+    conservative (exact-match) rather than silently matching nothing.
+
+    One more subtlety in that fallback, deliberately left alone: SQLite's
+    built-in LOWER() only folds ASCII A-Z (it has no Unicode casefolding
+    table), while Python's str.lower() — used by canon_email() above, and by
+    whatever wrote the row's canon_email in the first place — folds full
+    Unicode. So for a row with a non-ASCII uppercase local part, the
+    COALESCE fallback's LOWER(email) and this function's canon_email(email)
+    CAN disagree. That's fail-closed, not a live bug: it can only make a row
+    LESS matchable (nothing gets denied that shouldn't be, nothing un-blocks
+    that shouldn't), and it's unreachable in production because canon_email
+    is populated at write time by this same Python function for every row
+    the app itself ever inserts — the NULL-triggered fallback only exists
+    for a row that predates that. Do not "fix" this by teaching SQLite a
+    Unicode-aware LOWER() or similar; there is nothing here that needs it."""
     return con.execute(
         "SELECT 1 FROM access_requests "
         "WHERE status='denied' AND COALESCE(canon_email, LOWER(email))=? LIMIT 1",
