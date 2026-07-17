@@ -633,6 +633,145 @@ def test_is_allowlisted_stays_exact_no_plus_tag_bypass():
         f"exactly like any other new address, got {request_spy.calls}")
 
 
+# ---------------------------------------------------------------------------
+# ROUND 3 (.plan-undeny.md) -- undo a denial (return an address to "never
+# requested"). app.auth has no un-deny helper; the real HTTP endpoint (DELETE
+# /api/admin/access-requests/{email}/denial) lives in app/routers/admin.py and
+# has its own dedicated suite in eval/test_admin_router.py. This suite's job
+# is is_denied()/request_login()'s behavior AFTER an undo -- i.e. proving the
+# post-undo state is genuinely "never requested" from the gate's point of
+# view -- so _undeny below bypasses admin auth/the HTTP layer with direct SQL
+# that matches the endpoint's exact contract, mirroring the same convention
+# already used by _deny/_deny_all_pending above (this suite has no admin
+# login flow to drive the real endpoint through).
+# ---------------------------------------------------------------------------
+
+def _undeny(email):
+    """Direct-SQL equivalent of DELETE /api/admin/access-requests/{email}/denial:
+    delete every 'denied' row sharing `email`'s CANONICAL address. See the
+    section comment above for why this bypasses the HTTP endpoint."""
+    con = connect()
+    target = auth_mod.canon_email(email)
+    con.execute(
+        "DELETE FROM access_requests WHERE status='denied' "
+        "AND COALESCE(canon_email, LOWER(email))=?", (target,))
+    con.commit()
+    con.close()
+
+
+def test_undenied_address_requests_exactly_like_a_first_timer():
+    """THE stated round-3 requirement, as an EQUIVALENCE test rather than a
+    spot-check: a deny->undo->re-request address is compared to a CONTROL
+    address that never requested at all, and the two must be identical in
+    shape (row count, status, response body, admin-notification count).
+    Comparing to the control -- never to hardcoded expectations -- is what
+    actually proves "indistinguishable from a first-timer" rather than
+    "does something plausible"; same reasoning as
+    test_response_message_identical_regardless_of_domain_match above.
+
+    _set_domain("") is the DEFAULT config (EMAIL_DOMAIN unset) -- stated
+    explicitly per .plan-undeny.md section 4, whose timing analysis is
+    scoped to exactly this default (may_request_access is True for
+    everyone, so there is no out-of-domain bucket to complicate the
+    comparison).
+
+    NOT COVERED HERE: timing. This test only pins ROW/RESPONSE shape, never
+    elapsed time -- see test_denied_response_is_byte_identical_to_pending_
+    and_out_of_domain above for why a wall-clock assertion doesn't belong in
+    this suite, and .plan-undeny.md section 4 for the timing analysis this
+    test deliberately does not attempt to strengthen."""
+    _set_domain("")
+    _clear_requests()
+    control_addr = "control-firsttimer@example.edu"
+    undone_addr = "undone-firsttimer@example.edu"
+    _deny(undone_addr)
+    _undeny(undone_addr)
+
+    with _MailSpy("send_access_request") as control_spy:
+        with TestClient(app) as c:
+            control_resp = c.post("/api/auth/request", json={"email": control_addr})
+    control_rows = _requests_for(control_addr)
+
+    with _MailSpy("send_access_request") as undone_spy:
+        with TestClient(app) as c:
+            undone_resp = c.post("/api/auth/request", json={"email": undone_addr})
+    undone_rows = _requests_for(undone_addr)
+
+    assert control_resp.status_code == 200, control_resp.text
+    assert undone_resp.status_code == 200, undone_resp.text
+    assert control_resp.json() == undone_resp.json(), (
+        f"response bodies must be byte-identical: control={control_resp.json()!r} "
+        f"undone={undone_resp.json()!r}")
+    assert len(control_rows) == 1 and len(undone_rows) == 1, (
+        f"both must file exactly ONE row, got control={control_rows!r} "
+        f"undone={undone_rows!r}")
+    assert control_rows[0]["status"] == "pending", control_rows[0]
+    assert undone_rows[0]["status"] == "pending", undone_rows[0]
+    assert control_rows[0]["status"] == undone_rows[0]["status"], \
+        (control_rows[0]["status"], undone_rows[0]["status"])
+    assert len(control_spy.calls) == 1, control_spy.calls
+    assert len(undone_spy.calls) == 1, undone_spy.calls
+
+
+def test_undo_leaves_no_trace_rows():
+    """The literal "never requested" state, checked BEFORE the re-request."""
+    _set_domain("")
+    _clear_requests()
+    email = "notrace@example.edu"
+    _deny(email)
+    assert _requests_for(email) != [], "sanity: the deny must have written a row"
+    _undeny(email)
+    rows = _requests_for(email)
+    assert rows == [], \
+        f"expected ZERO rows after undo (the never-requested state), got {rows}"
+
+
+def test_undone_denial_no_longer_blocks_any_variant():
+    """Mirror of eval/test_admin_router.py's canonical-group undo test, at
+    the gate rather than the router: deny the bare address, undo it, then a
+    +tag VARIANT that was never itself denied must file cleanly."""
+    _set_domain("")
+    _clear_requests()
+    bare = "gatevariant@example.edu"
+    variant = "gatevariant+2@example.edu"
+    _deny(bare)
+    _undeny(bare)
+
+    with _MailSpy("send_access_request") as spy:
+        with TestClient(app) as c:
+            r = c.post("/api/auth/request", json={"email": variant})
+            assert r.status_code == 200, r.text
+    rows = _requests_for(variant)
+    assert len(rows) == 1 and rows[0]["status"] == "pending", rows
+    assert len(spy.calls) == 1, spy.calls
+
+
+def test_undo_does_not_reset_the_rate_limit_window():
+    """Undo is not a quota grant: the un-denied address must still be
+    throttled by auth_request_attempts exactly like anyone else -- pins that
+    undo leaves the rate-limit ledger untouched."""
+    _set_domain("")
+    _clear_requests()
+    email = "ratelimited-undo@example.edu"
+    con = connect()
+    con.execute("DELETE FROM auth_request_attempts WHERE email=?", (email,))
+    con.execute(
+        "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
+        (email, "127.0.0.1", time.time()))
+    con.commit()
+    con.close()
+    _deny(email)
+
+    _undeny(email)
+
+    con = connect()
+    n = con.execute(
+        "SELECT COUNT(*) FROM auth_request_attempts WHERE email=?", (email,)).fetchone()[0]
+    con.close()
+    assert n == 1, \
+        f"undo must not touch the rate-limit ledger, expected 1 row, got {n}"
+
+
 def run():
     print("EMAIL_DOMAIN access-request gate + GET /api/auth/config:")
     check("in-domain non-allowlisted request -> row + admin notification",
@@ -670,6 +809,14 @@ def run():
           test_denied_and_out_of_domain_schedule_no_background_task)
     check("is_allowlisted stays exact-match -- no +tag bypass (defect 2, opposite polarity)",
           test_is_allowlisted_stays_exact_no_plus_tag_bypass)
+    check("an undenied address requests exactly like a first-timer (round 3, equivalence)",
+          test_undenied_address_requests_exactly_like_a_first_timer)
+    check("undo leaves no trace rows (never-requested state)",
+          test_undo_leaves_no_trace_rows)
+    check("an undone denial no longer blocks any variant",
+          test_undone_denial_no_longer_blocks_any_variant)
+    check("undo does not reset the rate-limit window",
+          test_undo_does_not_reset_the_rate_limit_window)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

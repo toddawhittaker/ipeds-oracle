@@ -60,13 +60,24 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
         if body.is_admin:
             con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
                         "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
-        # Widened to include 'denied': allowlisting is an explicit override, so
-        # convert any prior denial to 'approved' too (not just a stale pending
-        # row) — see the deny endpoint's docstring below for why leaving a
-        # denied row un-converted would let routine allowlist offboarding
-        # silently re-block someone no admin meant to re-deny.
+        # CANONICAL match (round 3 fold-in fix 1), not exact: a denial spans
+        # every +tag/case variant of `email` (see app.auth.canon_email /
+        # is_denied), so clearing it with an EXACT 'WHERE email=?' converted
+        # only the literal address typed in and left a variant's denied row
+        # behind. Months later, offboarding (DELETE /allowlist/{email}) would
+        # find that surviving row and is_denied() would resurrect the block
+        # — the exact scenario this widened-to-'denied' UPDATE was written to
+        # prevent, reintroduced through the variant it forgot. Textually
+        # identical predicate to app.auth.is_denied's — keep it that way, or
+        # the two drift and a block clears for one variant but not another.
+        # This does NOT canonicalize the allowlist itself (the INSERT above
+        # stays EXACT) — only the denial-clearing side, which is safe because
+        # an admin explicitly approving one member of a mailbox group is
+        # unambiguous intent to clear the whole group's block.
         con.execute("UPDATE access_requests SET status='approved' "
-                    "WHERE email=? AND status IN ('pending','denied')", (email,))
+                    "WHERE status IN ('pending','denied') "
+                    "AND COALESCE(canon_email, LOWER(email))=?",
+                    (canon_email(email),))
         # Newly approved/added people get a ready-to-use sign-in link so they can
         # get in without having to know to request one again.
         if newly_added:
@@ -155,6 +166,42 @@ def access_requests():
         con.close()
 
 
+@router.get("/access-requests/denied")
+def access_requests_denied():
+    """Every address an admin has denied, collapsed one row per CANONICAL
+    group — deliberately a DIFFERENT grouping from access_requests() above.
+    Approve is EXACT (add_allowlist inserts the literal address), so the
+    pending list groups by the raw `email`; deny/undo are CANONICAL (a block
+    spans +tag/case variants — see app.auth.canon_email/is_denied), so this
+    list groups by COALESCE(canon_email, LOWER(email)) instead. One Undo
+    control per group clears every variant in it — see clear_access_denial.
+
+    `emails` carries every distinct ORIGINAL address in the group, sorted —
+    the UI renders these, never `canon_email` itself, which exists only as
+    the argument to DELETE .../denial. Post-processed in Python rather than
+    with SQL's json_group_array so this stays a plain array; safe to split
+    on a comma because addresses reach this table only through
+    LoginRequest.email (EmailStr), which cannot contain one."""
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT MIN(id) AS id, "
+            "COALESCE(canon_email, LOWER(email)) AS canon_email, "
+            "GROUP_CONCAT(DISTINCT email) AS emails, "
+            "MAX(created_at) AS created_at "
+            "FROM access_requests WHERE status='denied' "
+            "GROUP BY COALESCE(canon_email, LOWER(email)) "
+            "ORDER BY created_at DESC").fetchall()
+        return [
+            {"id": r["id"], "canon_email": r["canon_email"],
+             "emails": sorted(set(r["emails"].split(","))),
+             "created_at": r["created_at"]}
+            for r in rows
+        ]
+    finally:
+        con.close()
+
+
 @router.post("/access-requests/{email}/deny")
 def deny_access_request(email: str):
     """Deny every pending request sharing `email`'s CANONICAL address (see
@@ -166,8 +213,12 @@ def deny_access_request(email: str):
     variants — and hence the underlying mailbox — un-denied and bypassable.
 
     The row is UPDATEd, never deleted — its persistence IS the block.
-    Reversible by adding the (raw) address to the allowlist, which converts
-    the denied rows back to 'approved' (see add_allowlist)."""
+    Reversible WITHOUT granting access via
+    DELETE /access-requests/{email}/denial (see clear_access_denial below),
+    which un-blocks the whole canonical group and sends no email. Allowlisting
+    the address also clears the block (see add_allowlist) but is a stronger
+    action — it grants full access AND emails a welcome link, which is not
+    always what an admin undoing a mistaken denial wants."""
     email = email.strip().lower()
     target = canon_email(email)
     con = connect()
@@ -185,6 +236,47 @@ def deny_access_request(email: str):
     finally:
         con.close()
     return {"ok": True, "email": email}
+
+
+@router.delete("/access-requests/{email}/denial")
+def clear_access_denial(email: str):
+    """Undo a denial: return `email`'s canonical group to "never requested"
+    by DELETING its denied rows outright, never re-statusing them. An admin
+    calling this is declaring the underlying request fictitious, and "never
+    requested" is the intended terminal state (see .plan-undeny.md). The verb
+    matches the handler exactly: unlike /deny (which must UPDATE, never
+    DELETE — see that endpoint's docstring), this genuinely IS a DELETE FROM,
+    on a different resource (the denial, not the request itself).
+
+    Grants NO access and sends NO email — that absence is the whole
+    requirement. The only prior way to un-block a denied address was
+    allowlisting it, which grants full access AND emails a welcome link;
+    reproducing that here would be the exact bug this endpoint exists to fix.
+
+    `status='denied'` is a guard, never widen it — it protects the group's
+    inert 'approved'/'pending' history from being swept up too.
+
+    Canonical, and the predicate is textually identical to
+    app.auth.is_denied's on purpose — keep it that way, or a block clears for
+    one variant of a mailbox but leaves another still blocked.
+
+    Always 200, never 404 — deliberately unlike /deny's 404-on-nothing-to-do:
+    DELETE is idempotent by contract, so clearing an already-cleared denial
+    is a success by definition, same as the neighbouring
+    DELETE /allowlist/{email}. `cleared` lets a caller distinguish if it
+    cares; the UI reloads the list either way, so a double-click
+    self-corrects visually instead of flashing a spurious error."""
+    email = email.strip().lower()
+    target = canon_email(email)
+    con = connect()
+    try:
+        cur = con.execute(
+            "DELETE FROM access_requests WHERE status='denied' "
+            "AND COALESCE(canon_email, LOWER(email))=?", (target,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "email": email, "cleared": cur.rowcount}
 
 
 # --- Data import --------------------------------------------------------------

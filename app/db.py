@@ -225,6 +225,21 @@ MIGRATIONS: list[tuple[int, str]] = [
         ") WHERE canon_email IS NULL;\n"
         "CREATE INDEX IF NOT EXISTS idx_access_requests_canon_email "
         "ON access_requests(canon_email);"),
+    # Round 3 (.plan-undeny.md, fold-in fix 2): is_denied() (app/auth.py)
+    # wraps the column in COALESCE(canon_email, LOWER(email)), and migration
+    # 9's idx_access_requests_canon_email is a PLAIN column index -- SQLite
+    # cannot match a plain index to an expression, so the lookup that
+    # migration 9 was written to protect still full-table-SCANs on every
+    # unauthenticated POST /api/auth/request (verified with EXPLAIN QUERY
+    # PLAN). An index on the EXPRESSION is what that predicate can actually
+    # use; COALESCE and LOWER are deterministic, so it's a legal index
+    # expression. Keep this expression textually identical to
+    # app.auth.is_denied's / admin.py's deny/undo/add_allowlist predicates,
+    # or the planner silently falls back to a scan again. Do NOT drop or
+    # renumber migrations 8 or 9 -- never edit a shipped migration; 9's plain
+    # index still serves nothing harmful, and removing it is a separate call.
+    (10, "CREATE INDEX IF NOT EXISTS idx_access_requests_canon_expr "
+         "ON access_requests(COALESCE(canon_email, LOWER(email)));"),
 ]
 
 

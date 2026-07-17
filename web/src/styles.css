@@ -323,6 +323,14 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .requests { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
 .req { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .req button { margin-left: auto; }
+.denied { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
+.denied h2 { font-size: 15px; margin: 0 0 4px; }
+.denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
+.denied-row { display: flex; align-items: baseline; gap: 12px; padding: 5px 0; font-size: 14px; }
+.denied-who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.denied-when, .denied-row button { flex: none; }
+.denied-when { font-size: 13px; }
+.denied-note { font-size: 13px; }
 .usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
 .usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }

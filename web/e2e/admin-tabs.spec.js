@@ -4,6 +4,7 @@ import {
   mockConversations,
   mockAllowlist,
   mockAccessRequests,
+  mockDeniedRequests,
   mockUsage,
   mockSkills,
   mockImportJobs,
@@ -20,6 +21,14 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
     { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
   await mockAccessRequests(page, [{ id: 1, email: "newperson@example.edu" }]);
+  // SEC #3 (round-3 security review): Admin.jsx's load() swallows a failed
+  // GET .../denied with a bare .catch(() => {}) -- added, per the
+  // implementer, because THIS spec didn't mock the endpoint and an
+  // unhandled rejection surfaced as a page error. Mocking it here removes
+  // that test-convenience justification for the swallow; see
+  // undo-denial.spec.js's SEC #3 test for the actual failure-state
+  // regression test that now covers the endpoint's own error path.
+  await mockDeniedRequests(page, []);
   await mockUsage(page, {
     since: 0, until: 1, bucket: "day",
     totals: { queries: 123, tokens: 45678, spend: 0.42, cache_hits: 12, escalations: 3, failures: 1 },
@@ -106,6 +115,8 @@ test("regression: navigating away from the Skills tab and back does not crash th
   await mockConversations(page, []);
   await mockAllowlist(page, []);
   await mockAccessRequests(page, []);
+  // See the SEC #3 comment on the mockDeniedRequests call above.
+  await mockDeniedRequests(page, []);
   await mockSkills(page, [
     { id: 1, question: "q", lesson: "example rule", canonical_sql: "SELECT 1", notes: "",
       verified: true, created_by: "seed", upvotes: 0, downvotes: 0, hits: 0 },

@@ -111,17 +111,26 @@ force one revision round). Auth = passwordless **magic link**, manual allowlist,
 email via **Resend**; the allowlist is the sole authority on sign-in, while
 optional `EMAIL_DOMAIN` keeps *access requests* to the institution's own domain
 (and feeds the login form's hint via unauthenticated `GET /api/auth/config`). An
-admin can **deny** an access request, which permanently blocks that address —
-and every `+tag`/case variant of it, matched on a canonical form stored in
+admin can **deny** an access request, which blocks that address — and every
+`+tag`/case variant of it, matched on a canonical form stored in
 `access_requests.canon_email` (lowercased, `+tag` stripped, dots left alone
 since they can be a different real person) — from filing new ones (no row, no
 admin email), while returning the exact same neutral response as every other
 path; every branch's outbound send is scheduled via `BackgroundTasks` rather
 than sent inline, so denial is never an enumeration oracle by response body
 **or** by wall-clock (a synchronous Resend call on only some branches was a
-measured 400x+ timing oracle). Allowlisting a denied address always un-blocks
-it (converts its `denied` row to `approved`, so removing it from the allowlist
-later can't resurrect the block).
+measured 400x+ timing oracle). A denial is **not permanent**: the admin
+console's Allowlist tab lists every active block ("Blocked from requesting
+access", grouped **canonically** since the block spans `+tag` variants —
+deliberately unlike the pending list above it, grouped by the **raw**
+address since Approve is exact) with an undo control
+(`DELETE /api/admin/access-requests/{email}/denial`) that DELETEs the denied
+rows outright — returning the address to a genuine *never requested* state —
+**grants no access and sends no email**. Allowlisting a denied address also
+clears the block (its `denied` rows convert to `approved`, canonically, so
+offboarding a variant later can't resurrect it) but is the stronger action:
+it grants full access **and** emails a welcome link, which isn't always what
+undoing a mistaken denial calls for.
 Self-learning = a library of **lessons** — each a short
 generalized **headline** + a longer generalized **description** (collapsible in
 the admin UI) + a commented SQL worked example — retrieved as guidance and

@@ -50,6 +50,7 @@ export default function Admin({ me, initialTab, onDataChanged }) {
 function Allowlist({ me }) {
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
+  const [denied, setDenied] = useState([]);
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -76,6 +77,11 @@ function Allowlist({ me }) {
   const load = () => {
     api.allowlist().then(setRows);
     api.accessRequests().then(setReqs);
+    // .catch keeps this optional: several existing e2e specs mock
+    // allowlist/access-requests but predate this endpoint and don't mock it,
+    // and an unhandled rejection there would surface as a page error (see
+    // admin-tabs.spec.js's Skills-unmount regression test).
+    api.deniedRequests().then(setDenied).catch(() => {});
   };
   useEffect(load, []);
 
@@ -95,8 +101,10 @@ function Allowlist({ me }) {
 
   async function reject(addr) {
     if (!window.confirm(
-      `Reject the access request from ${addr}? They won't be able to request ` +
-      `access again unless you add them to the allowlist.`)) return;
+      `Reject the access request from ${addr}? That blocks this address ` +
+      `(and any +tag variants of it) from requesting access again. You can ` +
+      `undo the block from the "Blocked from requesting access" list at ` +
+      `the bottom of this tab.`)) return;
     try {
       await api.denyAccessRequest(addr);
       // Set BEFORE load() below removes addr's .req row from the DOM, so
@@ -107,6 +115,25 @@ function Allowlist({ me }) {
       announce(`Rejected the access request from ${addr}.`);
     } catch {
       announce(`Could not reject ${addr}.`);
+    }
+    load();
+  }
+
+  // Reversible, non-destructive: worst case of a misclick is the address
+  // filing a request again (lands in the pending queue, emails admins —
+  // exactly as it would anyway). No window.confirm, deliberately unlike
+  // reject() above — see .plan-undeny.md's ui-ux spec for the reasoning.
+  // `r.canon_email` is what the DELETE call keys on; `r.emails` (the
+  // ORIGINAL addresses) is all that's ever shown to the admin.
+  async function undo(r) {
+    const shown = r.emails.join(", ");
+    try {
+      await api.clearDenial(r.canon_email); // match on canonical, display the original
+      announce(`Unblocked ${shown}. They can request access again — they were not ` +
+               `given access, and no email was sent.`);
+    } catch {
+      announce(`Could not undo the block on ${shown}. They are still blocked from ` +
+               `requesting access.`);
     }
     load();
   }
@@ -200,6 +227,41 @@ function Allowlist({ me }) {
           ))}
         </tbody>
       </table>
+
+      {/* Plain subdued section, not the --user tint used above for "needs
+          your action" — a block is the opposite: something already handled
+          that's merely visible/auditable here. Hidden entirely when there's
+          nothing denied, same as the pending-requests block above. */}
+      {denied.length > 0 && (
+        <section className="denied">
+          <h2>Blocked from requesting access</h2>
+          <p className="denied-help">
+            Rejecting a request blocks that address from asking again. Undoing
+            a block only lets the address request access again — it grants no
+            access and sends no email.
+          </p>
+          {denied.map((r) => (
+            <div key={r.id} className="denied-row">
+              <span className="denied-who">
+                {r.emails.join(", ")}
+                {r.emails.length > 1 && (
+                  <span className="denied-note">
+                    {" "}— all the same mailbox; undoing clears them together
+                  </span>
+                )}
+              </span>
+              <span className="denied-when">
+                {r.created_at ? new Date(r.created_at * 1000).toLocaleDateString() : "—"}
+              </span>
+              <button className="link"
+                      aria-label={`Allow ${r.emails.join(", ")} to request access again`}
+                      onClick={() => undo(r)}>
+                Allow to request again
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

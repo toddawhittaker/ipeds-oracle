@@ -126,7 +126,11 @@ def request_login(email: str, base_url: str, tasks: BackgroundTasks) -> dict:
     - allowlisted must be checked FIRST, so allowlisting a previously-denied
       address un-blocks it for free (see app.routers.admin.add_allowlist,
       which also converts the denied row to 'approved' so the block can't
-      resurrect if the address is later removed from the allowlist).
+      resurrect if the address is later removed from the allowlist). An admin
+      can also clear a denial WITHOUT allowlisting — see
+      app.routers.admin.clear_access_denial (DELETE
+      /access-requests/{email}/denial) — which un-blocks the address but
+      grants no access and sends no email, unlike allowlisting.
     - denied must be checked SECOND, before may_request_access — otherwise a
       denied in-domain address would keep inserting rows and emailing admins
       on every retry, i.e. the deny feature would do nothing.

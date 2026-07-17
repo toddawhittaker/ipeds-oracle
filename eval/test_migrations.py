@@ -194,7 +194,10 @@ def test_migration_7_adds_headline_column():
     assert "headline" not in _cols(con, "skills"), _cols(con, "skills")
     v = _apply_migrations(con, MIGRATIONS)
     assert v == max(m[0] for m in MIGRATIONS), v
-    assert v == 9, f"expected migration 9 to be the current baseline, got {v}"
+    # Baseline bumped 9 -> 10 by round 3 (migration 10: an expression index
+    # for is_denied's COALESCE predicate -- see
+    # test_migration_10_adds_expression_index_used_by_is_denied below).
+    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
     assert "headline" in _cols(con, "skills"), _cols(con, "skills")
     # New column must be nullable (existing rows aren't backfilled by the DDL).
     con.execute("INSERT INTO skills(question, canonical_sql, created_at) "
@@ -250,7 +253,10 @@ def test_migration_9_adds_canon_email_column_index_and_backfills():
 
     v = _apply_migrations(con, MIGRATIONS)
     assert v == max(m[0] for m in MIGRATIONS), v
-    assert v == 9, f"expected migration 9 to be the current baseline, got {v}"
+    # Baseline bumped 9 -> 10 by round 3 (migration 10: an expression index
+    # for is_denied's COALESCE predicate -- see
+    # test_migration_10_adds_expression_index_used_by_is_denied below).
+    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
     assert "canon_email" in _cols(con, "access_requests"), _cols(con, "access_requests")
 
     idx_names = {r[0] for r in con.execute(
@@ -272,6 +278,73 @@ def test_migration_9_adds_canon_email_column_index_and_backfills():
         "SELECT canon_email FROM access_requests WHERE email='mallory+old@example.edu'"
     ).fetchone()
     assert row_after[0] == "mallory@example.edu", row_after
+
+
+# ---------------------------------------------------------------------------
+# Round 3 (.plan-undeny.md) -- FOLDED-IN FIX 2: migration 9's
+# idx_access_requests_canon_email is a PLAIN column index, but is_denied()'s
+# predicate wraps the column in COALESCE(canon_email, LOWER(email)) -- SQLite
+# cannot match a plain index to an expression, so the lookup that migration 9
+# was written to protect (an unauthenticated, attacker-growable hot path)
+# still full-table-SCANs. Measured directly (see the test below): migration 9
+# alone -> SCAN; add an index on the EXPRESSION -> SEARCH. Migration 10 adds
+# that expression index. RED today (migration 10 doesn't exist yet).
+# ---------------------------------------------------------------------------
+
+def test_migration_10_adds_expression_index_used_by_is_denied():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 9])
+    idx_before = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_access_requests_canon_expr" not in idx_before, idx_before
+
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
+    idx_after = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_access_requests_canon_expr" in idx_after, (
+        f"expected a NEW expression index idx_access_requests_canon_expr "
+        f"among {idx_after}")
+    # Migration 9's plain-column index must NOT be dropped/renamed -- never
+    # edit a shipped migration (CLAUDE.md / MIGRATIONS' own header comment).
+    assert "idx_access_requests_canon_email" in idx_after, idx_after
+
+    # Re-applying against an already-migrated db must be a safe no-op.
+    v2 = _apply_migrations(con, MIGRATIONS)
+    assert v2 == v, f"expected version to stay {v}, got {v2}"
+    idx_after2 = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert idx_after2 == idx_after, idx_after2
+
+
+def test_is_denied_lookup_uses_an_index_not_a_scan():
+    """The ONLY test in this suite that can catch the real regression this
+    feature is fragile to: the predicate here and migration 10's index
+    EXPRESSION drifting apart. That drift fails SILENTLY -- correct query
+    results either way -- so nothing about correctness would ever flag it;
+    only an EXPLAIN QUERY PLAN check on the exact predicate does. The SQL
+    below is copy-pasted character-for-character from app.auth.is_denied's
+    query (see app/auth.py) -- if a future edit changes one and not the
+    other, THIS test goes red, not is_denied's own behavioral suite (which
+    only checks results, and would stay green through a full-scan
+    regression).
+
+    RED today: migration 10 (the expression index) doesn't exist yet, so
+    this plans as a SCAN. Verified independently with sqlite3 CLI against
+    the shipped migration 9 schema before writing this test."""
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, MIGRATIONS)
+    plan = con.execute(
+        "EXPLAIN QUERY PLAN SELECT 1 FROM access_requests "
+        "WHERE status='denied' AND COALESCE(canon_email, LOWER(email))=? LIMIT 1",
+        ("someone@example.edu",)).fetchall()
+    plan_text = " ".join(str(row[-1]) for row in plan)
+    assert "SCAN" not in plan_text, (
+        f"is_denied's unauthenticated hot-path predicate must not full-scan "
+        f"access_requests -- got plan: {plan_text!r}")
+    assert "SEARCH" in plan_text, (
+        f"expected an index SEARCH in the query plan, got: {plan_text!r}")
 
 
 def test_real_init_db_sets_baseline_and_bootstraps():
@@ -316,6 +389,10 @@ def run():
           test_access_requests_email_index_exists)
     check("migration 9 adds access_requests.canon_email + index, backfills existing rows",
           test_migration_9_adds_canon_email_column_index_and_backfills)
+    check("migration 10 adds an expression index for is_denied's COALESCE predicate "
+          "(fold-in fix 2)", test_migration_10_adds_expression_index_used_by_is_denied)
+    check("is_denied's exact predicate plans as a SEARCH, not a SCAN (fold-in fix 2)",
+          test_is_denied_lookup_uses_an_index_not_a_scan)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
     print()
