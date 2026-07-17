@@ -22,7 +22,7 @@ its findings on WCAG specifics).
 ## The product
 
 A private FastAPI + React natural-language IPEDS query app. Core surfaces in
-`web/`: `Login.jsx` (magic-link request), `Chat.jsx` (conversational Q&A with
+`frontend/`: `Login.jsx` (magic-link request), `Chat.jsx` (conversational Q&A with
 streaming markdown answers, result tables, CSV/chart export, editable/rerun
 turns, conversation history), `Admin.jsx` (tabbed: allowlist, imports, usage, skills),
 `Markdown.jsx`, `styles.css` (light/dark via `prefers-color-scheme`). The users

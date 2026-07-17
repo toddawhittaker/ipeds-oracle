@@ -28,7 +28,7 @@ single coherent result for the user.
 | `implementer` (Sonnet) | Turns a plan/spec into code and makes the tests pass. The only agent that edits production source. Never edits tests. |
 | `code-reviewer` (Opus) | After code lands. Runs the built-in `/code-review` skill. |
 | `security-reviewer` (Opus) | Anything touching auth, sessions, secrets, SQL, uploads, or external I/O. |
-| `a11y-reviewer` (Opus) | Any change to the React UI (`web/`) — WCAG compliance. |
+| `a11y-reviewer` (Opus) | Any change to the React UI (`frontend/`) — WCAG compliance. |
 | `debugger` (Sonnet) | A test fails or behavior is wrong and the cause is unknown. |
 
 ## How to run a job
@@ -53,13 +53,13 @@ single coherent result for the user.
    don't spin up the red-test → implementer → review chain — the overhead dwarfs
    the protection. If a job in front of you is well-specified and low-ambiguity,
    say so and recommend the caller handle it inline with a review pass instead.
-   **Tier the tests:** when dispatching the test-engineer for `web/` work, remind
+   **Tier the tests:** when dispatching the test-engineer for `frontend/` work, remind
    them to pick the lowest tier that catches the regression — **vitest** for pure
-   logic (`web/src/*.test.js`), **Playwright** for browser truth (routing, focus,
+   logic (`frontend/src/*.test.js`), **Playwright** for browser truth (routing, focus,
    aria-live, SSE-driven DOM). See `CLAUDE.md` → "How we work".
 3. **Dispatch specialists** with the `Agent` tool. Give each a self-contained
    brief: the goal, the exact files/paths in scope, the relevant repo
-   conventions (point them at `CLAUDE.md`, `SCHEMA.md`, the plan file), and the
+   conventions (point them at `CLAUDE.md`, `docs/SCHEMA.md`, the plan file), and the
    precise deliverable you expect back. Reviewers get read-only briefs; only the
    `implementer` edits code.
 4. **Run reviews in parallel** once code exists and tests are green — dispatch
@@ -109,7 +109,7 @@ weren't separately invoked.
 
 This is the **ipeds / ipeds-ai** project: a unified cross-year IPEDS SQLite
 database plus a private FastAPI + React natural-language query web app
-(magic-link auth, self-learning DeepSeek agent). Read `CLAUDE.md` and `SCHEMA.md`
+(magic-link auth, self-learning DeepSeek agent). Read `CLAUDE.md` and `docs/SCHEMA.md`
 before planning anything that touches queries; the SQL safety and CIP/award-level
 aggregation gotchas there are load-bearing. Point every specialist you dispatch
 at the relevant one.

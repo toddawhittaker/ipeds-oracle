@@ -1,8 +1,8 @@
 # Contributing
 
 Developer guide for the IPEDS Query app. For the user-facing overview see
-[README.md](README.md); for production deployment see [DEPLOY.md](DEPLOY.md); for
-the data model and query conventions see [SCHEMA.md](SCHEMA.md).
+[README.md](README.md); for production deployment see [DEPLOY.md](docs/DEPLOY.md); for
+the data model and query conventions see [SCHEMA.md](docs/SCHEMA.md).
 
 ## Stack
 
@@ -16,37 +16,39 @@ the data model and query conventions see [SCHEMA.md](SCHEMA.md).
   skills, usage — the only thing that's written to).
 - **Frontend** — React 18 + [Vite](https://vitejs.dev/), Recharts for charts,
   react‑markdown for answers.
-- **Tests** — plain‑script backend suites in `eval/`, [vitest](https://vitest.dev/)
-  unit tests for pure JS logic in `web/src/*.test.js`, and
-  [Playwright](https://playwright.dev/) end‑to‑end specs in `web/e2e/`.
+- **Tests** — plain‑script backend suites in `backend/tests/`, [vitest](https://vitest.dev/)
+  unit tests for pure JS logic in `frontend/src/*.test.js`, and
+  [Playwright](https://playwright.dev/) end‑to‑end specs in `frontend/e2e/`.
 
 ## Repo layout
 
 ```
-app/                FastAPI backend
-  main.py             app + static serving + startup
-  config.py           pydantic-settings (env-driven config)
-  llm.py              the tool-calling agent loop
-  llmhttp.py          shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
-  prompt.py           system prompt (distilled from SCHEMA.md)
-  tools/              run_sql (sandboxed), schema/discovery, skills
-  routers/            auth, chat (stream/history/CSV), admin
-  auth.py, security.py, mailer.py, ratelimit.py
-  skills.py           skill library + semantic cache (fastembed)
-  importer.py         background "load a new year" job (upload + NCES integrate)
-  nces.py             fetch IPEDS .accdb releases from nces.ed.gov (SSRF-hardened)
-  db.py               schema + PRAGMA user_version migrations
-  logbuffer.py        in-memory log ring buffer (admin Logs view)
-web/                React + Vite front end
+backend/              the Python side (all Python tooling runs from here)
+  app/                FastAPI backend
+    main.py           app + static serving + startup
+    config.py         pydantic-settings (env-driven config)
+    llm.py            the tool-calling agent loop
+    llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
+    prompt.py         system prompt (distilled from docs/SCHEMA.md)
+    tools/            run_sql (sandboxed), schema/discovery, skills
+    routers/          auth, chat (stream/history/CSV), admin
+    auth.py, security.py, mailer.py, ratelimit.py
+    skills.py         skill library + semantic cache (fastembed)
+    importer.py       background "load a new year" job (upload + NCES integrate)
+    nces.py           fetch IPEDS .accdb releases from nces.ed.gov (SSRF-hardened)
+    db.py             schema + PRAGMA user_version migrations
+    logbuffer.py      in-memory log ring buffer (admin Logs view)
+  tests/              backend test suites + the NL→SQL accuracy harness
+  pyproject.toml      ruff config; requirements.txt / -dev.txt / .lock
+frontend/             React + Vite front end
   src/                Chat, Admin, Chart, Markdown, Login, … — client-side
-                      routed (react-router-dom); the route table lives in
-                      App.jsx ("/", "/chat/:id", "/admin", "/admin/:tab",
-                      "/verify", catch-all -> "/")
+                      routed (react-router-dom); route table in App.jsx
+                      ("/", "/chat/:id", "/admin", "/admin/:tab", "/verify",
+                      catch-all -> "/"); co-located *.test.js are vitest units
   e2e/                Playwright specs (network-mocked)
-eval/                backend test suites + the NL→SQL accuracy harness
-scripts/            build_ipeds_db.py, backups, CI fixture builder
-data/               source IPEDS{YYYY}{YY}.accdb files (gitignored, large)
-docs/               official IPEDS Excel table documentation
+docs/               SCHEMA.md (data model + query guide), DEPLOY.md
+scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
+data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
 .github/workflows/  CI (lint · unit · backend · e2e · image) + manual NL→SQL eval
 .claude/agents/     the specialist agent team (see below)
 ```
@@ -63,7 +65,7 @@ cp .env.example .env && $EDITOR .env      # at minimum LLM_API_KEY, ADMIN_EMAILS
 .venv/bin/uvicorn app.main:app --reload   # API on http://localhost:8000
 
 # Frontend (separate terminal)
-cd web && npm install
+cd frontend && npm install
 npm run dev                               # UI on http://localhost:5173 (proxies /api → :8000)
 ```
 
@@ -89,7 +91,7 @@ dev servers collide on port 8000. Give each session its own **git worktree**
 scripts/worktree-add.sh feat/my-branch      # ../ipeds-my-branch, port hint 8100
 ```
 
-The script symlinks the big shared artifacts (`.venv`, `web/node_modules`,
+The script symlinks the big shared artifacts (`.venv`, `frontend/node_modules`,
 `.env`, the 2 GB read‑only `ipeds.db`) and **copies** the small stateful DBs
 (`app.db`, `logs.db`) so each session's writes stay isolated. It refuses to leave
 any symlink that isn't gitignored — **PR #48 clobbered `main` by committing a
@@ -106,37 +108,37 @@ fixture `ipeds.db`.
 
 ```bash
 # Backend suites (any/all)
-.venv/bin/python eval/test_sql_guards.py          # SQL sandbox + timeout watchdog
-.venv/bin/python eval/test_backend.py             # auth, admin, skills, cache, CSV
-.venv/bin/python eval/test_security.py            # path traversal, de-auth, IDOR, …
-.venv/bin/python eval/test_agent_loop.py          # tool-loop synthesis fallback
+.venv/bin/python backend/tests/test_sql_guards.py          # SQL sandbox + timeout watchdog
+.venv/bin/python backend/tests/test_backend.py             # auth, admin, skills, cache, CSV
+.venv/bin/python backend/tests/test_security.py            # path traversal, de-auth, IDOR, …
+.venv/bin/python backend/tests/test_agent_loop.py          # tool-loop synthesis fallback
 # also: test_sql_guards_hardening, test_rate_limit, test_migrations,
 #       test_result_isolation, test_backup, test_logbuffer, test_mailer, test_guard,
-#       test_estimate (disk/time estimator contract, shared with web/src/estimate.js)
+#       test_estimate (disk/time estimator contract, shared with frontend/src/estimate.js)
 
 # Web unit tests — the FAST pure-logic tier (vitest + jsdom, no browser)
-cd web && npm run test:unit          # runs with the JS coverage floor
-cd web && npm run test:unit:watch    # watch mode for iterating
+cd frontend && npm run test:unit          # runs with the JS coverage floor
+cd frontend && npm run test:unit:watch    # watch mode for iterating
 
 # End-to-end UI (network-mocked; no key, no ipeds.db needed)
-cd web && npm run test:e2e
+cd frontend && npm run test:e2e
 
 # Full NL→SQL accuracy (needs LLM_API_KEY + a real ipeds.db)
-.venv/bin/python eval/eval_nl2sql.py
+.venv/bin/python backend/tests/eval_nl2sql.py
 ```
 
-**Test pyramid.** Pure input→output logic goes in **vitest** (`web/src/*.test.js`,
+**Test pyramid.** Pure input→output logic goes in **vitest** (`frontend/src/*.test.js`,
 table-driven, no browser). Genuine browser truth — routing, focus, aria-live/AT,
-back/forward, SSE-driven DOM — stays in **Playwright** (`web/e2e/`); jsdom's focus
+back/forward, SSE-driven DOM — stays in **Playwright** (`frontend/e2e/`); jsdom's focus
 and history models aren't the browser's. Pick the lowest tier that can actually
 catch the regression.
 
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
 
-**Coverage standard: every `app/` module stays ≥ 80%** (per-module, not just the
+**Coverage standard: every `backend/app/` module stays ≥ 80%** (per-module, not just the
 total) — enforced in CI (and the pre-push gate) by `scripts/coverage_check.sh`,
-which runs every `eval/test_*.py` under coverage.py and fails if any module drops
+which runs every `backend/tests/test_*.py` under coverage.py and fails if any module drops
 below the floor. Every behavior change ships with unit tests. Measure locally:
 
 ```bash
@@ -144,7 +146,7 @@ scripts/coverage_check.sh                                           # the gate (
 .venv/bin/coverage report --sort=cover                              # per-module breakdown
 ```
 
-The **JS side** has its own floor: `web/vitest.config.js` gates a per-file ≥ 80%
+The **JS side** has its own floor: `frontend/vitest.config.js` gates a per-file ≥ 80%
 line coverage over an explicit allowlist of the pure-logic modules under test
 (`announce.js`, `estimate.js`, `mdnorm.js`, `tabledata.js`) — `npm run test:unit`
 fails if one dips. Add a module to that list when it gets real unit tests.
@@ -162,7 +164,7 @@ land on `main`.
 > over http; with a real `EMAIL_DOMAIN`, `test_backend.py`'s out‑of‑domain
 > `stranger@x.com` is refused an access request and the suite fails. Run them
 > with both neutralized:
-> `COOKIE_SECURE=false EMAIL_DOMAIN= .venv/bin/python eval/test_backend.py`.
+> `COOKIE_SECURE=false EMAIL_DOMAIN= .venv/bin/python backend/tests/test_backend.py`.
 > CI has no `.env`, so it just works there — which is exactly why a bleed like
 > this only ever breaks the local gate. `scripts/ci_env.sh` blanks these for you
 > and is sourced by both `scripts/run_ci_local.sh` and `scripts/coverage_check.sh`
@@ -176,15 +178,15 @@ land on `main`.
 
 ```bash
 .venv/bin/ruff check app scripts eval   # backend lint + import order (matches CI scope; config in pyproject.toml)
-cd web && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
-cd web && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
+cd frontend && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
+cd frontend && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
 ```
 
 ## CI & the contribution workflow
 
 `.github/workflows/ci.yml` runs on every PR and push to `main`, with five jobs:
 **lint** (ruff + ESLint), **unit** (vitest — the fast pure-logic tier, with the
-JS coverage floor), **backend** (all the `eval/test_*` suites against a fixture
+JS coverage floor), **backend** (all the `backend/tests/test_*` suites against a fixture
 DB), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
 image, boots it, and curls `/api/health` as a smoke test). A separate
 `nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an API key + the real DB).
@@ -224,7 +226,7 @@ reference the tiers, features, and rules and go stale silently otherwise.
 
 `ipeds.db` is built from the Access files in `data/` and is **rebuildable** (so
 it's gitignored). `app.db` holds the irreplaceable state and is backed up
-separately (see [DEPLOY.md](DEPLOY.md)).
+separately (see [DEPLOY.md](docs/DEPLOY.md)).
 
 ```bash
 python3 scripts/build_ipeds_db.py             # build ipeds.db from data/*.accdb
@@ -236,7 +238,7 @@ Each physical Access table (e.g. `C2024_A`, `HD2024`) is grouped into a
 `survey_year`, `year` (ending year — use for sorting/filtering), and `src_table`
 provenance columns. Metadata lives alongside the data: `valuesets` (code →
 label), `vartable` (data dictionary), `tables` (catalog), plus convenience views
-like `institutions_current` and `_years`. **[SCHEMA.md](SCHEMA.md) is the full
+like `institutions_current` and `_years`. **[SCHEMA.md](docs/SCHEMA.md) is the full
 reference** — read it before writing queries or touching the loader.
 
 Two rules that will bite you if ignored (both detailed in SCHEMA.md):
@@ -249,10 +251,10 @@ Two rules that will bite you if ignored (both detailed in SCHEMA.md):
   to the same total — match an exact 6‑digit code, or use `'99'` for totals.
 
 **A fresh deploy with no `ipeds.db` yet is a supported first-run state**, not an
-error: `app/tools/sql.py`'s `ipeds_years()`/`has_ipeds_data()` probe the file
+error: `backend/app/tools/sql.py`'s `ipeds_years()`/`has_ipeds_data()` probe the file
 non-raisingly (missing/0-byte/garbage/no-`_years` all yield `[]`/`False`).
 `GET /api/auth/me` exposes `has_data`; the chat-stream no-data guard in
-`app/routers/chat.py` returns a friendly notice (admin-aware wording, no
+`backend/app/routers/chat.py` returns a friendly notice (admin-aware wording, no
 conversation created, no agent run) instead of a raw SQL error; and the SPA
 routes an admin with no data straight to Admin → Imports on load — a one-shot
 `navigate("/admin/imports", { replace: true })` that fires only when the admin
@@ -279,7 +281,7 @@ use the manual upload fallback (a collapsed `<details>` under the year catalog
 in the same Imports tab) — same staging-DB + integrity-checks + atomic-swap
 pipeline, just for one file instead of a union.
 
-**`app/nces.py`** is the fetch layer: every URL it requests is built ONLY from
+**`backend/app/nces.py`** is the fetch layer: every URL it requests is built ONLY from
 a fixed host (`nces.ed.gov`) + a fixed template + a validated integer year (the
 SSRF choke point) — never from caller-supplied strings — and a redirect that
 resolves off that host is rejected. `GET /api/admin/import/catalog` merges
@@ -300,9 +302,9 @@ available, not a plain already-integrated year — an "update" year IS
 accepted), takes the same single-flight import lock as manual upload, and
 runs `importer.run_integrate()` in a background thread. Both endpoints derive
 status/selectability through the same `_derive_status()` helper in
-`app/routers/admin.py` so they can't drift apart.
+`backend/app/routers/admin.py` so they can't drift apart.
 
-**Disk-headroom preflight (`app/estimate.py`).** Before `run_integrate` fetches
+**Disk-headroom preflight (`backend/app/estimate.py`).** Before `run_integrate` fetches
 anything, it estimates the run's peak disk footprint (download + extracted
 `.accdb` + rebuilt staging DB, for the **whole union** being rebuilt — not just
 the newly-picked years) via the pure `estimate.estimate_integrate()` function,
@@ -310,9 +312,9 @@ pads it by `NCES_DISK_SAFETY_FACTOR`, and refuses the job (failing it with a
 `"Not enough disk: need ~X, have ~Y free"` message, before touching the
 network or the live db) if `shutil.disk_usage` on the `ipeds.db` volume can't
 cover it. The same estimator (mirrored, key-for-key in camelCase, by
-`web/src/estimate.js` — cross-language agreement is asserted by the vitest unit
-test `web/src/estimate.test.js` against the shared fixture
-`eval/fixtures/estimate_cases.json`) drives a live **disk meter** on the
+`frontend/src/estimate.js` — cross-language agreement is asserted by the vitest unit
+test `frontend/src/estimate.test.js` against the shared fixture
+`backend/tests/fixtures/estimate_cases.json`) drives a live **disk meter** on the
 Imports tab: as an admin checks years, the client re-estimates against just
 the checked years' `zip_bytes` (a UX preview, not the server's authoritative
 check) and disables "Integrate selected" once the estimate exceeds
@@ -345,9 +347,9 @@ whole union), and the 8 disk/time estimator knobs: `NCES_ACCDB_EXPAND_FACTOR`,
 `NCES_EST_BANDWIDTH_MBPS`, `NCES_EST_BUILD_SECONDS_PER_YEAR`,
 `NCES_DEFAULT_PER_YEAR_DB_MB`, `NCES_DOWNLOAD_DEADLINE_SECONDS`,
 `NCES_DISK_SAFETY_FACTOR`, `NCES_PROBE_CONCURRENCY`,
-`NCES_DOWNLOAD_CONCURRENCY`. `eval/test_nces.py` exercises the fetch layer
+`NCES_DOWNLOAD_CONCURRENCY`. `backend/tests/test_nces.py` exercises the fetch layer
 entirely against `httpx.MockTransport` (no socket, no real NCES);
-`eval/test_importer.py` and `eval/test_admin_router.py` monkeypatch
+`backend/tests/test_importer.py` and `backend/tests/test_admin_router.py` monkeypatch
 `nces.fetch_year` / `nces.probe_catalog` / `importer._years` /
 `importer.shutil.disk_usage` / `admin.shutil.disk_usage` as bare module
 attributes (never `from ... import`) so tests can substitute fakes without

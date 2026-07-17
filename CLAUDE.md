@@ -5,31 +5,31 @@ about U.S. colleges/universities (IPEDS = the U.S. Dept. of Education's census o
 postsecondary institutions) for an institution's approved colleagues. A
 DeepSeek-backed agent turns each question into SQL against the read-only IPEDS
 dataset (`ipeds.db`) and streams back an answer. The app is the work;
-`CONTRIBUTING.md` (dev handbook) and `DEPLOY.md` (deploy) are the deeper guides.
+`CONTRIBUTING.md` (dev handbook) and `docs/DEPLOY.md` (deploy) are the deeper guides.
 
 ## Layout
 - `ipeds.db` — **the** dataset: SQLite, every IPEDS survey table stacked across
   **whichever collection years the deployment loaded** (each institution picks its
   own via Admin → Imports; `SELECT year FROM _years` is the authoritative list —
   never assume a range). Opened **read-only** by the app.
-- `SCHEMA.md` — **read before writing any query.** Data model, conventions,
+- `docs/SCHEMA.md` — **read before writing any query.** Data model, conventions,
   family catalog, code references, query patterns, worked NL→SQL examples.
-- `app/` — FastAPI backend. `web/` — Vite/React SPA. `eval/` — test suites.
+- `backend/app/` — FastAPI backend. `frontend/` — Vite/React SPA. `backend/tests/` — test suites.
 - `app.db` — app state (users, sessions, conversations, usage). `logs.db` —
   persistent server logs. Both separate from the read-only `ipeds.db`.
 - `scripts/build_ipeds_db.py` — repeatable loader that builds `ipeds.db` from the
   `data/*.accdb` files (`--dry-run` prints the table→family mapping).
 - `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
-  team). `DEPLOY.md` — VPS/Docker deploy. `docs/` — official IPEDS Excel docs.
+  team). `docs/` — `SCHEMA.md` (data model + query guide) and `DEPLOY.md` (VPS/Docker deploy).
 - `brand/` — logo source masters (icon + wordmark) and the ImageMagick commands
-  that regenerate the web favicons + `web/src/assets/wordmark*.png` from them.
+  that regenerate the web favicons + `frontend/src/assets/wordmark*.png` from them.
 
 ## The dataset (`ipeds.db`)
 
 The app's agent queries `ipeds.db`; you'll also query it directly — to verify an
 aggregation, derive an eval's expected answer, or debug the agent's SQL.
 
-- **`SCHEMA.md` is authoritative — read it before writing or verifying any query.**
+- **`docs/SCHEMA.md` is authoritative — read it before writing or verifying any query.**
   It's injected into every agent prompt. The DB is self-describing: use its
   *Discovery* queries (§3: `tables`, `vartable`, `valuesets`) to look up any
   table/variable/code rather than guessing.
@@ -37,7 +37,7 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   magnitudes** against reality (~1M associate's/yr nationally) — a number 2–4× off
   usually means an aggregation-level mistake.
 
-### Critical query gotchas (details in `SCHEMA.md`)
+### Critical query gotchas (details in `docs/SCHEMA.md`)
 - **"Recent N years" = a constant bound**, never a join:
   `WHERE year > (SELECT MAX(year)-3 FROM _years)`. A `JOIN (SELECT DISTINCT
   year …)` makes SQLite full-scan the 8M-row `c_a` and effectively hang.
@@ -66,10 +66,10 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
 ## Architecture
 
 ### Stack & data stores
-- **Backend** — FastAPI (`app/`: `config`, `db`, `auth`, `security`, `mailer`,
+- **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `security`, `mailer`,
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
   `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
-- **Frontend** — a Vite/React SPA (`web/`) with SSE-streamed chat, **client-side
+- **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
   routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users`,
   `/admin/:tab`, `/verify`, catch-all → `/`. FastAPI's SPA catch-all serves
   `index.html` for all of them, so a hard refresh / deep link never 404s.
@@ -79,10 +79,10 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
 
 ### The agent loop
 LLM = **DeepSeek** via any OpenAI-compatible provider (`LLM_BASE_URL`, **OpenRouter**
-by default, through the shared `app/llmhttp.py` transport; `v4-flash` default →
+by default, through the shared `backend/app/llmhttp.py` transport; `v4-flash` default →
 escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 - a topical **guardrail** in front (off-topic questions never reach the DB);
-- a deterministic SQL **linter** (`app/tools/sqllint.py`) — a pre-flight check that
+- a deterministic SQL **linter** (`backend/app/tools/sqllint.py`) — a pre-flight check that
   flags IPEDS aggregation foot-guns (CIP-rollup / second-major double counts,
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
   agent self-corrects;
@@ -127,7 +127,7 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   calls for.
 
 ### Admin → Imports (dataset management)
-- A live **NCES year catalog**: `app/nces.py` probes `nces.ed.gov` (**SSRF-hardened**
+- A live **NCES year catalog**: `backend/app/nces.py` probes `nces.ed.gov` (**SSRF-hardened**
   — URLs are built only from a fixed host + template + a validated year) for which
   start years have a Final/Provisional release; an admin multi-selects years to
   fetch + integrate.
@@ -150,9 +150,9 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 and **deliberately never verbatim question text**. `usage_log.question` is still
 written, but echoing it back would be an attributable privacy leak (the
 caller-controlled `since`/`until` narrows the window; `top_users` names the user).
-A sentinel test in `eval/test_admin_router.py` pins this.
+A sentinel test in `backend/tests/test_admin_router.py` pins this.
 
-**Full details live in `CONTRIBUTING.md` and `DEPLOY.md` — read them, don't guess.**
+**Full details live in `CONTRIBUTING.md` and `docs/DEPLOY.md` — read them, don't guess.**
 
 ## How we work (operating rules — follow these)
 
@@ -176,35 +176,35 @@ persistence invariants, security contracts, aggregation correctness); fix
 presentation trivia (strings, labels, singular/plural, cosmetic shape) directly.
 Every new test must **name the specific regression it catches** — one that only
 re-echoes a constant or a UI string a function away is noise and doesn't ship.
-**Every `app/` module stays ≥ 80%** line coverage (per-module, not just the
+**Every `backend/app/` module stays ≥ 80%** line coverage (per-module, not just the
 total) — enforced by `scripts/coverage_check.sh` in CI and the pre-push gate —
 but that floor is met with tests that **guard real behavior**, never padded with
-assertions on constants. Tests are dependency-light scripts in `eval/`
+assertions on constants. Tests are dependency-light scripts in `backend/tests/`
 (`sys.exit(1)` on failure, no API key needed). New low-coverage code is not
 "done" until it's tested.
 
 **Test pyramid — pick the lowest tier that actually catches the regression.**
 *Pure logic* — functions and leaf modules with real input→output behavior — is
-unit-tested with **vitest** (`web/`, jsdom, no browser; co-located
-`web/src/*.test.js`, table-driven). *Genuine browser truth* —
+unit-tested with **vitest** (`frontend/`, jsdom, no browser; co-located
+`frontend/src/*.test.js`, table-driven). *Genuine browser truth* —
 routing/navigation, focus management, aria-live/AT announcements, back/forward,
-SSE-driven DOM — stays in **Playwright** (`web/e2e/`). jsdom's focus and history
+SSE-driven DOM — stays in **Playwright** (`frontend/e2e/`). jsdom's focus and history
 models are **not** the browser's, so component tests that lean on routing,
 portals, or focus belong in Playwright, not vitest. Don't boot a browser to
 check a pure function; don't unit-test a navigation truth jsdom will fake and
 get wrong. When a pure function is currently pinned through an e2e assertion,
 **move it down** to vitest and thin the now-redundant e2e logic check — keep the
 browser *flow* (focus, the aria-live announcement firing) around it. **JS
-coverage is gated:** `web/vitest.config.js` enforces a per-file ≥80% line floor
+coverage is gated:** `frontend/vitest.config.js` enforces a per-file ≥80% line floor
 over an explicit **allowlist** of the pure-logic modules under test — the JS
-analogue of `coverage_check.sh`'s per-`app/`-module rule. Add a module to that
+analogue of `coverage_check.sh`'s per-`backend/app/`-module rule. Add a module to that
 list when (and only when) it gets real unit tests, so JS logic never silently
 escapes a gate. Browser-tested components (`Chat.jsx`, `Admin.jsx`, …) are
 deliberately not in the floor — Playwright covers them.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (ruff `app scripts eval` + ESLint; the `web/` **vitest** unit tests; the
-`eval/` backend suites against a fixture DB; Playwright e2e). A
+CI (ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/` **vitest** unit tests; the
+`backend/tests/` backend suites against a fixture DB; Playwright e2e). A
 `.githooks/pre-push` hook runs it automatically (bypass: `git push --no-verify`;
 skip e2e: `SKIP_E2E=1`). This is the *only* merge gate — GitHub branch protection
 isn't available on this repo's plan, so a red CI check can otherwise land on
@@ -232,7 +232,7 @@ sessions at once*.
 **Release/deploy (CI/CD).** CI's **image** job builds + smoke-tests the Docker
 image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*`
 git tag** publishes `:vX.Y.Z` + `:latest`. Production is **pull-on-the-box** —
-the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `DEPLOY.md`.
+the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `docs/DEPLOY.md`.
 
 **Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys,
 `EMAIL_DOMAIN=…`) bleeds into tests — run auth suites with `COOKIE_SECURE=false`,
@@ -247,7 +247,7 @@ catch, since `run_ci_local.sh` exported it before calling that script.)
 
 **Keep the docs — and the agent team — synced.** When a change alters
 architecture, workflow, config, or commands, update `CLAUDE.md` (and
-`CONTRIBUTING.md`/`DEPLOY.md`) in the *same* PR. **A major architecture or
+`CONTRIBUTING.md`/`docs/DEPLOY.md`) in the *same* PR. **A major architecture or
 infrastructure change — a new test tier, a new gate, a removed/renamed feature, a
 changed workflow rule — must also trigger a sweep of `.claude/agents/`.** The
 specialist definitions reference the tiers, features, and rules and go stale

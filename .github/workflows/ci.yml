@@ -6,11 +6,11 @@ name: CI
 #   * backend job  — builds a tiny fixture ipeds.db (scripts/make_ci_fixture_db.py)
 #                    and runs the SQL-guard, hardening, backend and security suites.
 #   * e2e job      — Playwright specs that mock every /api/** call at the network
-#                    layer (web/e2e/mocks.js); no backend process is started.
+#                    layer (frontend/e2e/mocks.js); no backend process is started.
 #
-# NOT run here: eval/eval_nl2sql.py asserts known-good national totals against the
-# real database and needs LLM_API_KEY. Run it locally against the real
-# ipeds.db when swapping models — see eval/ and SCHEMA.md.
+# NOT run here: backend/tests/eval_nl2sql.py asserts known-good national totals
+# against the real database and needs LLM_API_KEY. Run it locally against the
+# real ipeds.db when swapping models — see backend/tests/ and docs/SCHEMA.md.
 
 on:
   push:
@@ -44,25 +44,25 @@ jobs:
       - name: Install ruff
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r backend/requirements-dev.txt
 
       - name: Ruff (lint + import order)
-        run: ruff check app scripts eval
+        run: ruff check --config backend/pyproject.toml backend/app backend/tests scripts
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Install web deps
+      - name: Install frontend deps
         run: npm ci
-        working-directory: web
+        working-directory: frontend
 
       - name: ESLint
         run: npm run lint
-        working-directory: web
+        working-directory: frontend
 
   backend:
     name: Backend suites (guards · hardening · backend · security)
@@ -88,84 +88,84 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.lock
+          pip install -r backend/requirements.lock
 
       - name: Build CI fixture database
         run: python scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH"
 
-      - name: Stub web/dist (activates app/main.py SPA-serving + its traversal guard)
+      - name: Stub frontend/dist (activates backend/app/main.py SPA-serving + its traversal guard)
         run: python scripts/make_web_dist_stub.py
 
       - name: SQL guard tests
-        run: python eval/test_sql_guards.py
+        run: python backend/tests/test_sql_guards.py
 
       - name: SQL guard hardening tests
-        run: python eval/test_sql_guards_hardening.py
+        run: python backend/tests/test_sql_guards_hardening.py
 
       - name: SQL aggregation lint tests (rollup/hang foot-gun checks)
-        run: python eval/test_sqllint.py
+        run: python backend/tests/test_sqllint.py
 
       - name: Backend tests (auth · admin · skills · cache · CSV)
-        run: python eval/test_backend.py
+        run: python backend/tests/test_backend.py
 
       - name: Security regression tests
-        run: python eval/test_security.py
+        run: python backend/tests/test_security.py
 
       - name: Auth rate-limit tests
-        run: python eval/test_rate_limit.py
+        run: python backend/tests/test_rate_limit.py
 
       - name: EMAIL_DOMAIN access-request gate tests
-        run: python eval/test_access_gate.py
+        run: python backend/tests/test_access_gate.py
 
       - name: app.db migration tests
-        run: python eval/test_migrations.py
+        run: python backend/tests/test_migrations.py
 
       - name: run_sql result isolation tests
-        run: python eval/test_result_isolation.py
+        run: python backend/tests/test_result_isolation.py
 
       - name: app.db backup/restore tests
-        run: python eval/test_backup.py
+        run: python backend/tests/test_backup.py
 
       - name: agent tool-loop tests
-        run: python eval/test_agent_loop.py
+        run: python backend/tests/test_agent_loop.py
 
       - name: shared LLM transport tests (provider-neutral chat_completion)
-        run: python eval/test_llmhttp.py
+        run: python backend/tests/test_llmhttp.py
 
       - name: log-buffer secret-scrubbing tests
-        run: python eval/test_logbuffer.py
+        run: python backend/tests/test_logbuffer.py
 
       - name: mailer tests (failure handling · admin fan-out)
-        run: python eval/test_mailer.py
+        run: python backend/tests/test_mailer.py
 
       - name: guardrail tests (topical gate · injection refusal)
-        run: python eval/test_guard.py
+        run: python backend/tests/test_guard.py
 
       - name: critic tests (post-answer review · one-shot revision)
-        run: python eval/test_critic.py
+        run: python backend/tests/test_critic.py
 
       - name: self-learning lesson tests (store · dedup · critic emission)
-        run: python eval/test_skills.py
+        run: python backend/tests/test_skills.py
 
       - name: importer tests (preflight · integrity checks · run_import pipeline)
-        run: python eval/test_importer.py
+        run: python backend/tests/test_importer.py
 
       - name: NCES fetch tests (host-pin · zip-slip/zip-bomb guards · catalog)
-        run: python eval/test_nces.py
+        run: python backend/tests/test_nces.py
 
       - name: schema discovery-tool tests
-        run: python eval/test_schema_tool.py
+        run: python backend/tests/test_schema_tool.py
 
       - name: tool-registry tests (tool_specs · dispatch error handling)
-        run: python eval/test_registry.py
+        run: python backend/tests/test_registry.py
 
       - name: chat router tests (cache hit · edit/rerun · feedback · CSV errors)
-        run: python eval/test_chat_router.py
+        run: python backend/tests/test_chat_router.py
 
       - name: admin router tests (import HTTP surface · usage · skills · logs)
-        run: python eval/test_admin_router.py
+        run: python backend/tests/test_admin_router.py
 
-      - name: Coverage gate (app/ >= 80%)
+      - name: Coverage gate (backend/app/ >= 80%)
         run: |
           pip install coverage==7.15.1
           scripts/coverage_check.sh
@@ -175,7 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
@@ -184,7 +184,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
@@ -209,7 +209,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -225,7 +225,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: web/playwright-report/
+          path: frontend/playwright-report/
           retention-days: 7
 
   image:

@@ -8,9 +8,11 @@ app.db
 app.db-*
 data/
 output/
-web/node_modules
-web/dist
-docs/
+frontend/node_modules
+frontend/dist
+# docs/ is excluded EXCEPT SCHEMA.md, which the image needs (system prompt).
+docs/*
+!docs/SCHEMA.md
 __pycache__/
 *.pyc
 .env

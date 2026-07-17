@@ -11,7 +11,7 @@ they only need the tables and columns they query to *exist and execute*:
   * `hd(unitid, instnm)` — the validator false-positive probes run `LIKE`/
     `REPLACE` queries against institution names.
 
-This is NOT a substitute for the real data. `eval/eval_nl2sql.py` asserts
+This is NOT a substitute for the real data. `backend/tests/eval_nl2sql.py` asserts
 known-good national totals (CA public CS bachelor's = 7,679, …) and must be run
 locally/against the real `ipeds.db`; it is intentionally not part of hosted CI.
 

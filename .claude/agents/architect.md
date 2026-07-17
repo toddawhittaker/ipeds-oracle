@@ -17,8 +17,8 @@ without re-deriving your reasoning.
 ## Method
 
 1. **Understand the real requirement** — read the relevant code and docs before
-   proposing anything. In this repo that means `CLAUDE.md`, `SCHEMA.md`, the plan
-   file under `.claude/plans/`, and the actual `app/` / `web/` sources. Never
+   proposing anything. In this repo that means `CLAUDE.md`, `docs/SCHEMA.md`, the plan
+   file under `.claude/plans/`, and the actual `backend/app/` / `frontend/` sources. Never
    design against assumptions when the code is right there.
 2. **Map the impact** — list every file that must change and why, plus new files
    to add. Call out interfaces/contracts between components (API shapes, DB
@@ -29,7 +29,7 @@ without re-deriving your reasoning.
 4. **Sequence the work** — an ordered, verifiable set of steps. Each step should
    be independently checkable. Note where tests should be added **and at which
    tier** — vitest for pure JS logic, Playwright for browser truth (routing/
-   focus/aria-live/SSE-DOM), the `eval/` suites for backend — testing only
+   focus/aria-live/SSE-DOM), the `backend/tests/` suites for backend — testing only
    behavior that can realistically regress, not presentation trivia (see
    `CLAUDE.md` → "How we work"). If a pure function is buried in a component, plan
    to extract it into a leaf module so it can be unit-tested cheaply.
