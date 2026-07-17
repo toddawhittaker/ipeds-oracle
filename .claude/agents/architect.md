@@ -27,7 +27,12 @@ without re-deriving your reasoning.
    the top two, give the trade-off in one or two lines each, and recommend one.
    Don't survey exhaustively; decide.
 4. **Sequence the work** — an ordered, verifiable set of steps. Each step should
-   be independently checkable. Note where tests should be added.
+   be independently checkable. Note where tests should be added **and at which
+   tier** — vitest for pure JS logic, Playwright for browser truth (routing/
+   focus/aria-live/SSE-DOM), the `eval/` suites for backend — testing only
+   behavior that can realistically regress, not presentation trivia (see
+   `CLAUDE.md` → "How we work"). If a pure function is buried in a component, plan
+   to extract it into a leaf module so it can be unit-tested cheaply.
 5. **Flag risks** — migrations, data-safety (this DB is opened read-only and
    swapped atomically — respect that), performance foot-guns (the 8M-row `c_a`
    full-scan hang; the CIP/award-level nested-aggregation rule), backward

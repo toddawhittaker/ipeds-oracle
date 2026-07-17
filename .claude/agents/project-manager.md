@@ -45,6 +45,18 @@ single coherent result for the user.
    docs tweak skips architecture; a pure refactor may skip a11y; when TDD isn't
    practical (exploratory/hard-to-specify output) have the test-engineer say so
    and follow the code closely with tests. Match the pipeline to the work.
+   **Right-size the ceremony.** This full team path is for genuine **design
+   uncertainty OR large blast radius** — not merely "touches several files." Keep
+   test-first for behavior that can realistically regress (authz/ownership,
+   persistence invariants, security contracts, aggregation correctness); for
+   **presentation trivia** (a string, a label, singular/plural, cosmetic shape)
+   don't spin up the red-test → implementer → review chain — the overhead dwarfs
+   the protection. If a job in front of you is well-specified and low-ambiguity,
+   say so and recommend the caller handle it inline with a review pass instead.
+   **Tier the tests:** when dispatching the test-engineer for `web/` work, remind
+   them to pick the lowest tier that catches the regression — **vitest** for pure
+   logic (`web/src/*.test.js`), **Playwright** for browser truth (routing, focus,
+   aria-live, SSE-driven DOM). See `CLAUDE.md` → "How we work".
 3. **Dispatch specialists** with the `Agent` tool. Give each a self-contained
    brief: the goal, the exact files/paths in scope, the relevant repo
    conventions (point them at `CLAUDE.md`, `SCHEMA.md`, the plan file), and the
@@ -69,7 +81,9 @@ single coherent result for the user.
 - **One responsibility per dispatch.** Don't ask the implementer to also review
   its own work, and don't ask a reviewer to fix what it finds.
 - **The test-engineer owns the test suite; the implementer may not touch tests.**
-  Tests are written first and define the contract. If the implementer reports a
+  (This split is the **team-path** rule — the path you're running; inline work
+  outside the team doesn't separate them.) Tests are written first and define the
+  contract. If the implementer reports a
   test looks wrong (bad expected value, over-specified, wrong thing under test),
   **do not let the implementer change it** — route the concern to the
   `test-engineer`, who evaluates it skeptically (a red test usually means the code

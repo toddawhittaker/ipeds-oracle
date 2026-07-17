@@ -16,9 +16,10 @@ to the implementer.
 ## Scope
 
 The frontend lives in `web/` (Vite + React): `Chat.jsx` (SSE streaming answers,
-feedback thumbs, CSV download), `Login.jsx`, `Admin.jsx` (tabbed:
-allowlist/imports/usage/skills), `Markdown.jsx` (react-markdown + gfm, scrollable
-result tables), `styles.css` (light/dark via `prefers-color-scheme`).
+CSV/chart export, conversation sidebar with delete + focus/aria-live management),
+`Login.jsx`, `Admin.jsx` (tabbed: allowlist/imports/usage/skills), `Markdown.jsx`
+(react-markdown + gfm, scrollable result tables), `styles.css` (light/dark via
+`prefers-color-scheme`).
 
 ## What to check (WCAG 2.2 AA)
 
@@ -27,14 +28,14 @@ result tables), `styles.css` (light/dark via `prefers-color-scheme`).
    (`Admin.jsx`) follow the tab/tabpanel keyboard pattern.
 2. **Screen readers / semantics** — real semantic elements or correct ARIA
    roles/names; buttons are `<button>`, not clickable `<div>`s; form inputs have
-   associated `<label>`s; the thumbs feedback controls have accessible names;
-   icon-only buttons have text alternatives.
+   associated `<label>`s; icon-only buttons (send, edit, rerun, delete) have text
+   alternatives.
 3. **Live regions** — streaming chat answers and status updates announce
    appropriately (`aria-live`) without spamming; loading/error states are
    perceivable non-visually.
 4. **Color & contrast** — text and UI contrast meets AA in BOTH light and dark
-   themes; information never conveyed by color alone (e.g. 👍/👎 state, error
-   highlighting).
+   themes; information never conveyed by color alone (e.g. the amber "unverified"
+   lesson pill, the disk-headroom over-capacity state, error highlighting).
 5. **Structure** — heading hierarchy, landmarks (`main`, `nav`), page `lang`,
    descriptive link/button text.
 6. **Data tables** — the markdown result tables have proper `<th>`/scope; the
