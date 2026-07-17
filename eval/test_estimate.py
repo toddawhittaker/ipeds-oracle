@@ -1,6 +1,6 @@
 """Disk/time estimator contract (app/estimate.py) — the single source of truth
 for the NCES "integrate" preflight math, shared (in spirit) with its JS mirror
-web/src/estimate.js (see web/e2e/estimate.spec.js for the cross-language
+web/src/estimate.js (see web/src/estimate.test.js for the cross-language
 agreement test against the SAME fixture: eval/fixtures/estimate_cases.json).
 
 estimate_integrate is a PURE function: no I/O, no settings lookups — every

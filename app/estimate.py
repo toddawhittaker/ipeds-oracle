@@ -3,7 +3,7 @@
 `estimate_integrate` is a PURE function — no I/O, no settings lookups, every
 input passed explicitly by the caller — so it's testable byte-for-byte
 against the shared fixture `eval/fixtures/estimate_cases.json` (also mirrored,
-key-for-key in camelCase, by web/src/estimate.js — see web/e2e/estimate.spec.js
+key-for-key in camelCase, by web/src/estimate.js — see web/src/estimate.test.js
 for the cross-language agreement test). See eval/test_estimate.py for the full
 pinned contract; the arithmetic below must not drift from it.
 
