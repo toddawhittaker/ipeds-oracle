@@ -82,6 +82,18 @@ test("search filters live, shows the miss message, and clears", async ({ page })
   await expect(search).toBeFocused();
 });
 
+test("a non-admin's Admin cell is blank — never a literal 0", async ({ page }) => {
+  // Regression: is_admin is a NUMBER, so `{r.is_admin && ...}` rendered a stray
+  // "0" in every non-admin's Admin cell.
+  await openUsers(page, [
+    { email: "plain@example.edu", note: "staff", is_admin: 0, last_login: null },
+  ]);
+  const adminCell = page.getByRole("row", { name: /plain@example\.edu/ }).getByRole("cell").nth(2);
+  await expect(adminCell).toHaveText("");
+  // The Actions column carries a visible header, not just an sr-only label.
+  await expect(page.getByRole("columnheader", { name: "Actions" })).toBeVisible();
+});
+
 test("clicking a header sorts and toggles direction with aria-sort", async ({ page }) => {
   await openUsers(page, [
     { email: "carol@example.edu", note: "c", is_admin: false, last_login: 1700000000 },

@@ -112,6 +112,9 @@ function Allowlist({ me }) {
   // read-out on every keystroke (WCAG 4.1.3).
   const [liveLabel, setLiveLabel] = useState("");
   const [flash, setFlash] = useState("");
+  const [flashLeaving, setFlashLeaving] = useState(false); // fade-out state
+  const flashTimers = useRef([]);
+  useEffect(() => () => flashTimers.current.forEach(clearTimeout), []);
   // Focus target for the visible flash box (a11y): moved here whenever a
   // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
   // — without it, an action that unmounts the row the user just activated
@@ -135,9 +138,20 @@ function Allowlist({ me }) {
   // on the next frame, to force a real mutation every time. Same pattern as
   // Skills' announce() below (Admin.jsx), reused here rather than invented
   // fresh.
+  // Show the flash as a toast: it overlays (fixed-positioned, so it never shifts
+  // the page under the cursor), then auto-fades after a few seconds instead of
+  // lingering until navigation. The clear-then-set-next-frame dance still forces
+  // a real DOM mutation so the paired aria-live region re-announces identical text.
   function announce(text) {
+    flashTimers.current.forEach(clearTimeout);
+    flashTimers.current = [];
+    setFlashLeaving(false);
     setFlash("");
     requestAnimationFrame(() => setFlash(text));
+    flashTimers.current = [
+      setTimeout(() => setFlashLeaving(true), 4000),
+      setTimeout(() => { setFlash(""); setFlashLeaving(false); }, 4400),
+    ];
   }
 
   const load = () => {
@@ -356,7 +370,12 @@ function Allowlist({ me }) {
           status region further down) — role="status" lives there only, so
           sighted and screen-reader users each get exactly one announcement
           instead of two. */}
-      {flash && <div ref={flashRef} tabIndex={-1} className="notice">{flash}</div>}
+      {flash && (
+        <div ref={flashRef} tabIndex={-1}
+             className={"notice flash-toast" + (flashLeaving ? " leaving" : "")}>
+          {flash}
+        </div>
+      )}
       <div className="sr-only" role="status" aria-live="polite">{flash}</div>
       {reqs.length > 0 && (
         <div className="requests">
@@ -429,7 +448,7 @@ function Allowlist({ me }) {
                   </th>
                 );
               })}
-            <th scope="col"><span className="sr-only">Actions</span></th>
+            <th scope="col" className="actions-head">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -447,11 +466,13 @@ function Allowlist({ me }) {
                 <td>{r.email}</td>
                 <td>{r.note}</td>
                 <td>
-                  {r.is_admin && (
+                  {/* Ternary, not `&&`: is_admin is a NUMBER (0/1), and
+                      `0 && ...` renders a literal "0" in a non-admin's cell. */}
+                  {r.is_admin ? (
                     <span className="admintoggle on">
                       {isSelf ? "✓ Admin (you)" : "✓ Admin"}
                     </span>
-                  )}
+                  ) : null}
                 </td>
                 <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
                 <td className="actions">
