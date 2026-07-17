@@ -99,6 +99,8 @@ test("clicking a header sorts and toggles direction with aria-sort", async ({ pa
   await page.getByRole("button", { name: /^Email/ }).click();
   await expect(emailHeader).toHaveAttribute("aria-sort", "descending");
   await expect(firstCell()).toHaveText("carol@example.edu");
+  // The sort change is announced (aria-sort alone is silent on activation).
+  await expect(page.locator(".pager [aria-live]")).toHaveText(/Sorted by email, descending/);
 });
 
 test("pagination pages through and disables Prev/Next at the ends", async ({ page }) => {
@@ -139,6 +141,28 @@ test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) 
   // The action moved to Remove admin now that they're an admin.
   await expect(page.getByRole("button", { name: "Remove admin" })).toBeVisible();
   expect(api.patches).toEqual([{ email: "colleague@example.edu", is_admin: true }]);
+});
+
+test("promoting returns focus to the row's action button, not the top notice", async ({ page }) => {
+  // Guards the focus-restore-vs-reload race: the row persists (shield swaps
+  // Make->Remove admin) and focus must land back on that button after the
+  // reload — not on <body> (briefly-disabled button) or the top flash notice.
+  await openUsers(page, [
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+  ]);
+  await page.getByRole("button", { name: "Make admin" }).click();
+  const removeAdmin = page.getByRole("button", { name: "Remove admin" });
+  await expect(removeAdmin).toBeVisible();
+  await expect(removeAdmin).toBeFocused();
+});
+
+test("paging to the last page moves focus off the now-disabled Next", async ({ page }) => {
+  await openUsers(page, bulkRows(30)); // 2 pages at 25/page
+  await page.getByRole("button", { name: "Next page" }).click();
+  const next = page.getByRole("button", { name: "Next page" });
+  await expect(next).toBeDisabled();
+  // Focus handed to the still-enabled sibling rather than dropped to <body>.
+  await expect(page.getByRole("button", { name: "Previous page" })).toBeFocused();
 });
 
 test("Remove user confirms by email, then deletes the row", async ({ page }) => {

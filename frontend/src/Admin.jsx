@@ -100,13 +100,33 @@ function Allowlist({ me }) {
   const [page, setPage] = useState(1);
   const [busyEmail, setBusyEmail] = useState(""); // row action in flight
   const searchRef = useRef(null);
+  // Focus targets so a control that self-disables (Prev/Next at an end) or a row
+  // action (promote) can hand focus somewhere sensible instead of dropping it to
+  // <body> — see the a11y fixes in sortBy/toggleAdmin/goPage below.
+  const actionBtnRefs = useRef({});
+  const prevRef = useRef(null);
+  const nextRef = useRef(null);
+  // A polite live region for the TABLE's own status (result range + sort), kept
+  // separate from the action-outcome flash below (which is role="status" and a
+  // focus target). Debounced so typing in the search box doesn't enqueue a range
+  // read-out on every keystroke (WCAG 4.1.3).
+  const [liveLabel, setLiveLabel] = useState("");
   const [flash, setFlash] = useState("");
   // Focus target for the visible flash box (a11y): moved here whenever a
   // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
   // — without it, an action that unmounts the row the user just activated
   // (e.g. Reject removing its own .req row on reload) drops focus to <body>.
   const flashRef = useRef(null);
-  useEffect(() => { if (flash) flashRef.current?.focus(); }, [flash]);
+  // Actions that UNMOUNT the row they were triggered from (reject/remove) need
+  // focus to land on this notice, or it drops to <body>. Actions whose row
+  // PERSISTS (promote/demote) restore focus to the row's own button instead, and
+  // set this flag so the flash doesn't yank focus up to the notice first.
+  const skipFlashFocus = useRef(false);
+  useEffect(() => {
+    if (!flash) return;
+    if (skipFlashFocus.current) { skipFlashFocus.current = false; return; }
+    flashRef.current?.focus();
+  }, [flash]);
 
   // aria-live only fires reliably on a genuine DOM mutation, and React bails
   // out of a re-render entirely when setState is called with the SAME value
@@ -121,7 +141,10 @@ function Allowlist({ me }) {
   }
 
   const load = () => {
-    api.allowlist().then(setRows);
+    // Return the allowlist fetch so a caller can sequence focus AFTER the table
+    // reload commits (the focus-restore-vs-reload race: restoring focus while a
+    // reload re-renders the row drops focus to <body>).
+    const loaded = api.allowlist().then(setRows);
     api.accessRequests().then(setReqs);
     // Unlike the two loaders above -- where an empty rendered result on
     // failure is indistinguishable from "genuinely nothing yet", which is
@@ -141,8 +164,9 @@ function Allowlist({ me }) {
         try { detail = JSON.parse(err.message).detail || ""; } catch { /* no JSON body to read */ }
         setDeniedError(detail || "Couldn't load blocked addresses.");
       });
+    return loaded;
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   // One message per outcome, keyed off the backend's `delivery` value. "No email
   // was sent" has THREE distinct causes needing different reactions, so never
@@ -242,6 +266,9 @@ function Allowlist({ me }) {
 
   async function toggleAdmin(r) {
     setBusyEmail(r.email);
+    // The row survives this action, so keep the flash from stealing focus to the
+    // top notice; focus is returned to the row's button after the reload below.
+    skipFlashFocus.current = true;
     try {
       await api.setAdmin(r.email, !r.is_admin);
       announce(r.is_admin
@@ -254,7 +281,13 @@ function Allowlist({ me }) {
     } finally {
       setBusyEmail("");
     }
-    load();
+    // The row PERSISTS (only its shield swaps Make<->Remove admin), so return
+    // focus to that same row's action button AFTER the reload commits — instead
+    // of stranding the keyboard user on the top notice announce() focused, or on
+    // <body> where the briefly-disabled button dropped it. Sequenced after
+    // load() per the focus-restore-vs-reload race rule.
+    await load();
+    requestAnimationFrame(() => actionBtnRefs.current[r.email]?.focus?.());
   }
 
   // Destructive: confirm (naming the email), then announce the outcome — closing
@@ -282,13 +315,36 @@ function Allowlist({ me }) {
 
   // Clicking a header toggles asc/desc on the active column, else switches to it
   // ascending. Any sort change returns to page 1 (preserving search + page size).
+  // Activating a sort gives no visual feedback a screen reader can catch (aria-
+  // sort on a <th> only surfaces on re-navigation), so announce the new order.
+  const SORT_LABELS = { email: "email", note: "note", admin: "admin status", last_login: "last login" };
   function sortBy(key) {
-    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
+    const dir = key === sortKey ? (sortDir === "asc" ? "desc" : "asc") : "asc";
+    setSortKey(key);
+    setSortDir(dir);
     setPage(1);
+    setLiveLabel(`Sorted by ${SORT_LABELS[key]}, ${dir === "asc" ? "ascending" : "descending"}.`);
+  }
+
+  // Page moves that land on an end DISABLE the button under focus (Prev on page
+  // 1, Next on the last page), dropping focus to <body>; hand it to the sibling.
+  function goPage(next) {
+    setPage(next);
+    if (next <= 1) requestAnimationFrame(() => nextRef.current?.focus());
+    else if (next >= view.totalPages) requestAnimationFrame(() => prevRef.current?.focus());
   }
 
   const view = viewUsers(rows, { query: q, sortKey, sortDir, page, perPage });
+
+  // Debounce the range read-out: coalesce rapid changes (typing, quick paging)
+  // into a single announcement once the view settles. Skip the initial mount so
+  // opening the tab doesn't announce the count unprompted.
+  const didAnnounce = useRef(false);
+  useEffect(() => {
+    if (!didAnnounce.current) { didAnnounce.current = true; return; }
+    const id = setTimeout(() => setLiveLabel(view.label), 450);
+    return () => clearTimeout(id);
+  }, [view.label]);
 
   return (
     <div className="panel">
@@ -403,19 +459,21 @@ function Allowlist({ me }) {
                     <>
                       {r.is_admin ? (
                         <button type="button" className="icon-btn tip" data-tip="Remove admin"
-                                aria-label="Remove admin" disabled={busy} aria-busy={busy}
+                                aria-label="Remove admin" disabled={busy}
+                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
                                 onClick={() => toggleAdmin(r)}>
                           <IconShieldMinus />
                         </button>
                       ) : (
                         <button type="button" className="icon-btn tip" data-tip="Make admin"
-                                aria-label="Make admin" disabled={busy} aria-busy={busy}
+                                aria-label="Make admin" disabled={busy}
+                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
                                 onClick={() => toggleAdmin(r)}>
                           <IconShieldPlus />
                         </button>
                       )}
                       <button type="button" className="icon-btn danger tip" data-tip="Remove user"
-                              aria-label="Remove user" disabled={busy} aria-busy={busy}
+                              aria-label="Remove user" disabled={busy}
                               onClick={() => removeUser(r)}>
                         <IconTrash />
                       </button>
@@ -430,10 +488,11 @@ function Allowlist({ me }) {
 
       <div className="pager">
         <span className="pager-range">{view.label}</span>
-        {/* Announce the count/range politely to screen readers. A bare
-            aria-live div (NOT role="status") so it stays distinct from the
-            single action-outcome status region up top. */}
-        <div className="sr-only" aria-live="polite">{view.label}</div>
+        {/* Table status (range + sort) announced politely. A bare aria-live div
+            (NOT role="status") so it stays distinct from the single action-
+            outcome status region up top; fed the DEBOUNCED liveLabel, never the
+            per-keystroke view.label, so search-as-you-type doesn't spam it. */}
+        <div className="sr-only" aria-live="polite">{liveLabel}</div>
         <label className="pager-size">
           <span className="sr-only">Users per page</span>
           <select value={perPage}
@@ -442,13 +501,13 @@ function Allowlist({ me }) {
           </select>
         </label>
         <div className="pager-nav">
-          <button type="button" className="pgbtn" aria-label="Previous page"
-                  disabled={view.page <= 1} onClick={() => setPage(view.page - 1)}>
+          <button type="button" className="pgbtn" aria-label="Previous page" ref={prevRef}
+                  disabled={view.page <= 1} onClick={() => goPage(view.page - 1)}>
             ‹ Prev
           </button>
           <span className="pager-page">Page {view.page} of {view.totalPages}</span>
-          <button type="button" className="pgbtn" aria-label="Next page"
-                  disabled={view.page >= view.totalPages} onClick={() => setPage(view.page + 1)}>
+          <button type="button" className="pgbtn" aria-label="Next page" ref={nextRef}
+                  disabled={view.page >= view.totalPages} onClick={() => goPage(view.page + 1)}>
             Next ›
           </button>
         </div>

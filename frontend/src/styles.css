@@ -609,16 +609,18 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .searchwrap { position: relative; flex: 1 1 260px; max-width: 360px; }
 .searchwrap .logsearch { width: 100%; min-width: 0; padding-right: 30px; }
 .search-clear {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
   background: none; border: none; color: var(--muted); cursor: pointer;
-  display: grid; place-items: center; padding: 4px; border-radius: 4px;
+  display: grid; place-items: center; min-width: 24px; min-height: 24px;
+  border-radius: 4px;
 }
 .search-clear:hover { color: var(--text); }
 
-/* Click-to-sort column headers (keyboard-operable buttons inheriting the th). */
+/* Click-to-sort column headers (keyboard-operable buttons inheriting the th).
+   Vertical padding brings the target box to >=24px tall (WCAG 2.5.8). */
 .sortbtn {
   background: none; border: none; color: inherit; font: inherit; font-weight: 600;
-  cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;
+  cursor: pointer; padding: 5px 2px; display: inline-flex; align-items: center; gap: 4px;
 }
 .sortbtn:hover, .sortbtn.active { color: var(--accent); }
 .caret { font-size: 10px; width: 10px; display: inline-block; }
