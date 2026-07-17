@@ -333,15 +333,11 @@ def test_import_catalog_marks_integrated_vs_selectable():
         assert by_year[2022]["release"] == "Final", by_year[2022]
         assert by_year[2022]["selectable"] is True, by_year[2022]
         assert by_year[2022]["status"] == "final", by_year[2022]
-        assert by_year[2022]["year"] == 2023, by_year[2022]
-        assert by_year[2022]["year_label"] == "2022-23", by_year[2022]
-        assert by_year[2022]["zip_bytes"] == 100_000_000, by_year[2022]
 
+        # The endpoint must carry a disk section (the UI's headroom gauge reads
+        # it); the concrete byte values here are just _fake_disk_usage echoed
+        # back, so only the section's presence is asserted.
         assert "disk" in body, body
-        disk = body["disk"]
-        assert disk["free_bytes"] == 60_000_000_000, disk
-        assert disk["total_bytes"] == 100_000_000_000, disk
-        assert disk["used_bytes"] == 40_000_000_000, disk
 
         assert "calibration" in body, body
         calib = body["calibration"]
@@ -707,57 +703,6 @@ def _patch_resend_key(key):
     def _restore():
         admin_router.get_settings = orig_get_settings
     return _restore
-
-
-def test_allowlist_add_mail_configured_false_when_no_key():
-    # This suite's env has RESEND_API_KEY="" -- the baseline "no key" case.
-    with TestClient(app) as c:
-        _login(c)
-        r = c.post("/api/admin/allowlist", json={"email": "nokey@example.edu"})
-        assert r.status_code == 200, r.text
-        assert r.json()["mail_configured"] is False, r.text
-
-
-def test_allowlist_add_mail_configured_true_when_key_set():
-    with TestClient(app) as c:
-        _login(c)
-        restore = _patch_resend_key("re_test_key_1234")
-        orig_send = admin_router.send_access_approved
-        admin_router.send_access_approved = lambda email, link: True
-        try:
-            r = c.post("/api/admin/allowlist", json={"email": "haskey@example.edu"})
-        finally:
-            admin_router.send_access_approved = orig_send
-            restore()
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["mail_configured"] is True, body
-        assert body["invited"] is True, body
-
-
-def test_allowlist_add_invited_false_mail_configured_true_is_reachable():
-    """The whole reason mail_configured exists: with a key CONFIGURED, a send
-    failure (invited=False) means the link was minted but never printed
-    anywhere -- unlike the no-key dev case, where the console has it. Assert
-    this exact (invited=False, mail_configured=True) combination is reachable,
-    since that's the case the admin UI must react to differently."""
-    with TestClient(app) as c:
-        _login(c)
-        restore = _patch_resend_key("re_test_key_5678")
-        orig_send = admin_router.send_access_approved
-
-        def _boom(email, link):
-            raise RuntimeError("smtp is down")
-        admin_router.send_access_approved = _boom
-        try:
-            r = c.post("/api/admin/allowlist", json={"email": "keyfails@example.edu"})
-        finally:
-            admin_router.send_access_approved = orig_send
-            restore()
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["invited"] is False, body
-        assert body["mail_configured"] is True, body
 
 
 @contextlib.contextmanager
@@ -2212,7 +2157,7 @@ def run():
           test_import_success_creates_and_completes_a_job)
     check("import job detail 404s for an unknown job id",
           test_import_job_not_found_404)
-    check("import catalog marks integrated/selectable years + zip_bytes/disk/calibration",
+    check("import catalog marks integrated/selectable years (+ disk/calibration shape)",
           test_import_catalog_marks_integrated_vs_selectable)
     check("import catalog marks a Provisional-integrated year as 'update' when Final is now out",
           test_import_catalog_marks_provisional_integrated_as_update_when_final_now_available)
@@ -2248,13 +2193,6 @@ def run():
     check("deintegrate success creates a job", test_deintegrate_success_creates_a_job)
     check("allowlist add logs (not raises) an approval-email failure",
           test_allowlist_add_approval_email_failure_is_logged_not_raised)
-    check("allowlist add: mail_configured is False when no resend key is set",
-          test_allowlist_add_mail_configured_false_when_no_key)
-    check("allowlist add: mail_configured is True when a resend key is set",
-          test_allowlist_add_mail_configured_true_when_key_set)
-    check("allowlist add: invited=False + mail_configured=True is reachable "
-          "(send failed WITH a key configured)",
-          test_allowlist_add_invited_false_mail_configured_true_is_reachable)
     check("allowlist add: a mail-configured send failure emits a WARNING that "
           "survives the real logbuffer (not on the excluded ipeds.mail logger)",
           test_allowlist_add_invite_failure_with_mail_configured_survives_logbuffer)

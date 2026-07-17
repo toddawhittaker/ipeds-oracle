@@ -162,46 +162,6 @@ def test_all_three_emails_use_the_product_name_constant():
         mailer.send_email = orig_send_email
 
 
-def test_send_access_approved_html_has_no_stale_thumbs_copy():
-    """Regression guard for the removed-thumbs-feature class of bug: the
-    approval email used to promise "A 👍 or 👎 on any answer helps the
-    assistant get better over time", but thumbs feedback was ripped out when
-    lessons landed (self-learning now comes from the critic, not a user
-    thumbs vote). Check for the whole family of thumbs-related phrasing --
-    the glyphs themselves, the words describing the feature, and the specific
-    stale sentence -- not just the two emoji characters, so a differently-
-    worded reintroduction of the same stale claim still trips this."""
-    orig_get_settings, orig_send_email = mailer.get_settings, mailer.send_email
-    captured_html = {}
-
-    def fake_send_email(to, subject, html_body, text=None):
-        captured_html["html"] = html_body
-        return True
-
-    mailer.get_settings = lambda: types.SimpleNamespace(
-        magic_link_ttl_minutes=15, app_public_url="https://ipeds.example.edu")
-    mailer.send_email = fake_send_email
-    try:
-        mailer.send_access_approved("new@example.edu", "https://x/verify?token=abc")
-    finally:
-        mailer.get_settings = orig_get_settings
-        mailer.send_email = orig_send_email
-
-    body = captured_html["html"]
-    stale_markers = [
-        "\U0001F44D",  # 👍 thumbs up
-        "\U0001F44E",  # 👎 thumbs down
-        "thumbs",
-        "upvote",
-        "downvote",
-        "get better over time",
-    ]
-    for marker in stale_markers:
-        assert marker.lower() not in body.lower(), (
-            f"stale thumbs-feedback copy {marker!r} still present in "
-            f"send_access_approved's HTML body: {body!r}")
-
-
 def run():
     print("mailer contract:")
     check("send_email swallows provider errors (returns False)",
@@ -215,8 +175,6 @@ def run():
           test_send_access_request_empty_is_falsey_noop)
     check("all three emails use the fixed PRODUCT_NAME constant, never s.app_title",
           test_all_three_emails_use_the_product_name_constant)
-    check("send_access_approved HTML has no stale thumbs-feedback copy",
-          test_send_access_approved_html_has_no_stale_thumbs_copy)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

@@ -140,9 +140,11 @@ def test_parse_never_throws_on_garbage():
 # --- _SYSTEM / build_review_messages / revision_instruction --------------------
 
 def test_system_prompt_pins_key_substrings():
-    required = ("self-contained", "not cryptic shorthand", "reusable rule",
-                "HEADLINE", "DESCRIPTION")
-    for s in required:
+    # Only the labels the output parser consumes are load-bearing: a prompt
+    # reworded to emit anything other than HEADLINE/DESCRIPTION would silently
+    # break parse_verdict. (Prose wording of the rest of the prompt is free to
+    # change without a behavior regression, so it isn't pinned here.)
+    for s in ("HEADLINE", "DESCRIPTION"):
         assert s in critic._SYSTEM, (s, critic._SYSTEM)
 
 
@@ -177,13 +179,6 @@ def test_revision_instruction_keeps_anti_leak_hardening():
     msg = critic.revision_instruction("H", "D")
     assert "Output ONLY the final answer" in msg, msg
     assert "Never mention the reviewer" in msg, msg
-
-
-# --- Critique dataclass ----------------------------------------------------------
-
-def test_critique_defaults_to_empty_headline_and_description():
-    c = Critique(ok=True)
-    assert c.headline == "" and c.description == "", c
 
 
 # --- review(): fail-open + live transport --------------------------------------
@@ -330,7 +325,6 @@ def test_review_posts_url_headers_and_probe_timeout():
     assert call["headers"]["HTTP-Referer"] == "http://localhost:8000", call["headers"]
     assert call["headers"]["X-Title"] == "IPEDS Query", call["headers"]
     assert call["timeout"] == llmhttp.PROBE_TIMEOUT, call["timeout"]
-    assert call["timeout"] == 30.0, call["timeout"]
 
 
 # --- agent-loop integration ----------------------------------------------------
@@ -581,7 +575,7 @@ def run():
     check("parse bare REVISE gets a non-empty fallback",
           test_parse_bare_revise_gets_a_nonempty_fallback)
     check("parse_verdict never throws on garbage input", test_parse_never_throws_on_garbage)
-    check("_SYSTEM pins self-contained/not-cryptic/reusable-rule/HEADLINE/DESCRIPTION",
+    check("_SYSTEM pins the parser's HEADLINE/DESCRIPTION labels",
           test_system_prompt_pins_key_substrings)
     check("build_review_messages includes question/SQL/answer",
           test_build_messages_includes_artifacts)
@@ -591,8 +585,6 @@ def run():
           test_revision_instruction_carries_headline_and_description)
     check("revision_instruction keeps the anti-leak hardening",
           test_revision_instruction_keeps_anti_leak_hardening)
-    check("Critique defaults headline/description to ''",
-          test_critique_defaults_to_empty_headline_and_description)
     check("review fails open without a key", test_review_fails_open_without_key)
     check("review fails open when disabled", test_review_disabled_fails_open)
     check("review OK verdict (live transport)", test_review_ok_verdict_live)

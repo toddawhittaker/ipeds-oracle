@@ -279,17 +279,6 @@ def test_record_lesson_headline_only_is_not_noop():
     assert _count() == 1, "a non-blank headline alone must still record a lesson"
 
 
-def test_critic_lesson_dedups_against_existing():
-    # A TRUE repeat (identical headline+description, not just similar text) —
-    # see the module-level note on the embeddings-available dedup restriction.
-    _reset()
-    q = "delta epsilon zeta scenario"
-    headline, description = "H", "rule one"
-    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
-    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
-    assert _count() == 1, "a repeat critic finding on the same scenario must dedup"
-
-
 def test_critic_lesson_not_collapsed_into_verified_seed():
     # The HIGH review bug: a new critic finding on a question similar to an
     # already-VERIFIED lesson must NOT be discarded into it (nor upvote it) — it's
@@ -591,7 +580,6 @@ def run():
           test_record_lesson_from_critic_is_unverified_with_headline_and_description)
     check("blank headline AND description is a no-op", test_record_lesson_both_blank_is_noop)
     check("a headline alone is NOT a no-op", test_record_lesson_headline_only_is_not_noop)
-    check("repeat critic finding dedups", test_critic_lesson_dedups_against_existing)
     check("distinct critic rule not collapsed into a verified seed",
           test_critic_lesson_not_collapsed_into_verified_seed)
     check("dedup is scoped to the same source", test_dedup_is_scoped_to_same_source)

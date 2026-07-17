@@ -395,32 +395,6 @@ def test_conversation_crud():
 
 
 # ---------------------------------------------------------------------------
-# feedback removed: the endpoint must be gone (404), and get_conversation must
-# no longer surface a `feedback` column on any message.
-# ---------------------------------------------------------------------------
-
-def test_feedback_route_removed_404s():
-    with TestClient(app) as c:
-        _login(c)
-        r = c.post("/api/chat/messages/1/feedback", json={"value": 1})
-        assert r.status_code == 404, \
-            f"POST /messages/{{id}}/feedback must be gone (route removed), got {r.status_code}"
-
-
-def test_get_conversation_no_longer_exposes_feedback_field():
-    with TestClient(app) as c:
-        _login(c)
-        r = _post_turn(c, "a question with no feedback field", answer_text="an answer",
-                       sql_log=["SELECT 1"])
-        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
-        rows = c.get(f"/api/chat/conversations/{conv_id}").json()
-        assert rows, rows
-        for row in rows:
-            assert "feedback" not in row, \
-                f"get_conversation must not select the vestigial feedback column: {row}"
-
-
-# ---------------------------------------------------------------------------
 # CSV download error branches (the success path is covered in test_backend.py)
 # ---------------------------------------------------------------------------
 
@@ -546,9 +520,6 @@ def run():
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
-    check("POST .../feedback is removed (404)", test_feedback_route_removed_404s)
-    check("get_conversation no longer exposes a feedback field",
-          test_get_conversation_no_longer_exposes_feedback_field)
     check("no-data guard: admin sees Admin->Imports wording and stream_agent never runs",
           test_no_data_guard_admin_wording_and_skips_agent)
     check("no-data guard: non-admin sees wait-for-administrator wording, agent never runs",

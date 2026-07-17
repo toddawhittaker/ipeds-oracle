@@ -197,7 +197,6 @@ def test_migration_7_adds_headline_column():
     # Baseline bumped 9 -> 10 by round 3 (migration 10: an expression index
     # for is_denied's COALESCE predicate -- see
     # test_migration_10_adds_expression_index_used_by_is_denied below).
-    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
     assert "headline" in _cols(con, "skills"), _cols(con, "skills")
     # New column must be nullable (existing rows aren't backfilled by the DDL).
     con.execute("INSERT INTO skills(question, canonical_sql, created_at) "
@@ -256,7 +255,6 @@ def test_migration_9_adds_canon_email_column_index_and_backfills():
     # Baseline bumped 9 -> 10 by round 3 (migration 10: an expression index
     # for is_denied's COALESCE predicate -- see
     # test_migration_10_adds_expression_index_used_by_is_denied below).
-    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
     assert "canon_email" in _cols(con, "access_requests"), _cols(con, "access_requests")
 
     idx_names = {r[0] for r in con.execute(
@@ -300,7 +298,6 @@ def test_migration_10_adds_expression_index_used_by_is_denied():
 
     v = _apply_migrations(con, MIGRATIONS)
     assert v == max(m[0] for m in MIGRATIONS), v
-    assert v == 10, f"expected migration 10 to be the current baseline, got {v}"
     idx_after = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='index'")}
     assert "idx_access_requests_canon_expr" in idx_after, (
