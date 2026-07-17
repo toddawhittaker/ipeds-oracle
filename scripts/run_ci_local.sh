@@ -40,20 +40,20 @@ fail() { printf '%s\n' "${BOLD}${RED}CI FAILED: $*${RST}" >&2; exit 1; }
 # =========================================================================
 # Job 1 — lint (ruff · eslint)
 # =========================================================================
-step "Lint: ruff check app scripts eval"
-"$RUFF" check app scripts eval || fail "ruff"
+step "Lint: ruff check backend/app backend/tests scripts"
+"$RUFF" check --config backend/pyproject.toml backend/app backend/tests scripts || fail "ruff"
 
-step "Lint: eslint (web)"
-( cd web && npm run --silent lint ) || fail "eslint"
+step "Lint: eslint (frontend)"
+( cd frontend && npm run --silent lint ) || fail "eslint"
 
 # =========================================================================
 # Job 1b — web unit tests (vitest: the fast pure-logic tier + JS coverage floor)
 # =========================================================================
 # vitest.config.js gates a per-file >=80% line floor over the pure-logic modules
-# under test (the JS analogue of coverage_check.sh's per-module app/ rule), so a
+# under test (the JS analogue of coverage_check.sh's per-module backend/app/ rule), so a
 # failing unit test OR a coverage dip on those modules blocks the push.
-step "Unit: vitest (web)"
-( cd web && npm run --silent test:unit ) || fail "vitest unit tests"
+step "Unit: vitest (frontend)"
+( cd frontend && npm run --silent test:unit ) || fail "vitest unit tests"
 
 # =========================================================================
 # Job 2 — backend suites (against a throwaway fixture DB, like CI)
@@ -72,8 +72,8 @@ rm -f "$APP_DB_PATH"
 step "Backend: build CI fixture database"
 "$PY" scripts/make_ci_fixture_db.py "$IPEDS_DB_PATH" || fail "fixture db build"
 
-# Ensure app/main.py's SPA-serving block is active for the test run (no-op if a
-# real web/dist build already exists).
+# Ensure backend/app/main.py's SPA-serving block is active for the test run
+# (no-op if a real frontend/dist build already exists).
 "$PY" scripts/make_web_dist_stub.py
 
 BACKEND_SUITES=(
@@ -104,12 +104,12 @@ BACKEND_SUITES=(
   test_admin_router.py
 )
 for suite in "${BACKEND_SUITES[@]}"; do
-  step "Backend: eval/$suite"
-  "$PY" "eval/$suite" || fail "eval/$suite"
+  step "Backend: backend/tests/$suite"
+  "$PY" "backend/tests/$suite" || fail "backend/tests/$suite"
 done
 
-# Coverage gate — app/ must stay >= 80% (re-runs suites under coverage.py).
-step "Backend: coverage gate (app/ >= 80%)"
+# Coverage gate — backend/app/ must stay >= 80% (re-runs suites under coverage.py).
+step "Backend: coverage gate (backend/app/ >= 80%)"
 "$REPO_ROOT/scripts/coverage_check.sh" || fail "coverage < 80%"
 
 # =========================================================================
@@ -118,8 +118,8 @@ step "Backend: coverage gate (app/ >= 80%)"
 if [ "${SKIP_E2E:-0}" = "1" ]; then
   printf '%s\n' "${YEL}Skipping e2e (SKIP_E2E=1).${RST}"
 else
-  step "e2e: playwright (web)"
-  ( cd web && npm run --silent test:e2e ) || fail "playwright e2e"
+  step "e2e: playwright (frontend)"
+  ( cd frontend && npm run --silent test:e2e ) || fail "playwright e2e"
 fi
 
 printf '%s\n' "${BOLD}${GRN}All CI checks passed.${RST}"

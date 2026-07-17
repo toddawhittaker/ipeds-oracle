@@ -1,9 +1,9 @@
 # --- Stage 1: build the React frontend -------------------------------------
-FROM node:22-slim AS web
-WORKDIR /web
-COPY web/package.json web/package-lock.json* ./
+FROM node:22-slim AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
-COPY web/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: runtime ------------------------------------------------------
@@ -14,18 +14,21 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+# PYTHONPATH puts backend/ on sys.path so `uvicorn app.main:app` resolves; and
+# config.py (at /srv/backend/app/) anchors ROOT = parents[2] = /srv, so
+# ROOT/docs/SCHEMA.md, ROOT/frontend/dist and ROOT/scripts all line up below.
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/srv/backend
 
 # Install from the pinned + hashed lockfile for reproducible builds.
-COPY requirements.lock ./
+COPY backend/requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
 # App code + the loader + the schema guide (used as the system prompt).
-COPY app/ ./app/
+COPY backend/app ./backend/app
 COPY scripts/ ./scripts/
-COPY SCHEMA.md ./SCHEMA.md
+COPY docs/SCHEMA.md ./docs/SCHEMA.md
 # Built SPA from stage 1.
-COPY --from=web /web/dist ./web/dist
+COPY --from=frontend /frontend/dist ./frontend/dist
 
 # Data (ipeds.db, app.db, uploads) lives on a mounted volume; see compose.yaml.
 # Warm the embedding model at build time so first request is fast (optional).

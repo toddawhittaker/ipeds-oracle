@@ -4,7 +4,7 @@
 #
 #   source "$(dirname "${BASH_SOURCE[0]}")/ci_env.sh"
 #
-# CI runs with NO .env; a local prod .env (loaded by app/config.py via an
+# CI runs with NO .env; a local prod .env (loaded by backend/app/config.py via an
 # absolute path, so CWD tricks don't help) bleeds real settings into the tests.
 # OS env vars take precedence over the .env file in pydantic-settings, so we
 # blank the ones that change behavior to reproduce CI's environment.

@@ -42,7 +42,7 @@ else
 fi
 
 # Symlink the big, shared, read-only-safe artifacts.
-for link in .venv web/node_modules .env ipeds.db; do
+for link in .venv frontend/node_modules .env ipeds.db; do
   src="$MAIN/$link"
   [ -e "$src" ] || { echo "skip  $link (not in primary checkout)"; continue; }
   mkdir -p "$DIR/$(dirname "$link")"
@@ -71,7 +71,7 @@ Worktree ready.
   branch: $BRANCH
 
 Run its dev server on a DISTINCT port so it never fights another session:
-  cd "$DIR" && COOKIE_SECURE=false .venv/bin/uvicorn --app-dir "$DIR" \\
+  cd "$DIR" && COOKIE_SECURE=false .venv/bin/uvicorn --app-dir "$DIR/backend" \\
       app.main:app --host 0.0.0.0 --port $PORT
 
 Full CI gate (uses the symlinked .venv / node_modules):

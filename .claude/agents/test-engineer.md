@@ -69,23 +69,23 @@ with them.
 
 The test pyramid (see `CLAUDE.md` → "How we work"):
 
-- **Pure logic → vitest** (`web/src/*.test.js`, jsdom, no browser). Fast,
+- **Pure logic → vitest** (`frontend/src/*.test.js`, jsdom, no browser). Fast,
   table-driven input→output — functions and leaf modules with real behavior
   (e.g. `estimate.js`, `mdnorm.js`, `tabledata.js`, `announce.js`). Run with
-  `npm run test:unit`; `web/vitest.config.js` enforces a per-file ≥80% line floor
+  `npm run test:unit`; `frontend/vitest.config.js` enforces a per-file ≥80% line floor
   over an **allowlist** of pure-logic modules — add a module to that list when
   (and only when) it gets real unit tests.
-- **Genuine browser truth → Playwright** (`web/e2e/*.spec.js`, `npm run test:e2e`).
+- **Genuine browser truth → Playwright** (`frontend/e2e/*.spec.js`, `npm run test:e2e`).
   Routing/navigation, focus management, aria-live/AT announcements, back/forward,
   SSE-driven DOM. jsdom's focus and history models are **not** the browser's, so
   anything leaning on them belongs here, not vitest. Prefer stable role/label
   selectors (`getByRole`, `getByLabel`) over brittle CSS. Every `/api/**` call is
-  mocked (`web/e2e/mocks.js`) so specs run key-free and DB-free.
-- **Backend → plain-script suites in `eval/`** (`sys.exit(1)` on failure, no API
+  mocked (`frontend/e2e/mocks.js`) so specs run key-free and DB-free.
+- **Backend → plain-script suites in `backend/tests/`** (`sys.exit(1)` on failure, no API
   key; a throwaway fixture `app.db`/`ipeds.db`): `test_sql_guards.py` (SQL safety
   + watchdog), `test_backend.py` (auth/admin/skills/cache/CSV), and the many
   others. Per-module ≥80% line coverage enforced by `scripts/coverage_check.sh`.
-- **NL→SQL accuracy → `eval/eval_nl2sql.py`** (needs `LLM_API_KEY` + the real
+- **NL→SQL accuracy → `backend/tests/eval_nl2sql.py`** (needs `LLM_API_KEY` + the real
   `ipeds.db`; the model-swap regression gate — CA public CS bachelor's = 7,679).
 
 **Don't boot a browser to check a pure function; don't unit-test a navigation
@@ -107,11 +107,11 @@ green.
 ## Constraints
 
 - Touch test files and test config/deps only — never edit production code in
-  `app/` or `web/` source to make a test pass. If production must change, report
+  `backend/app/` or `frontend/` source to make a test pass. If production must change, report
   it up to the project-manager; don't do it here. (Extracting a pure function into
   its own leaf module so it can be unit-tested IS a production change — request
   it, don't do it here.)
-- New low-coverage code isn't "done" until tested: `app/` stays ≥80% per module
+- New low-coverage code isn't "done" until tested: `backend/app/` stays ≥80% per module
   (`coverage_check.sh`) and any JS module in `vitest.config.js`'s coverage
   allowlist stays ≥80% too. **Meet the floor with tests that guard real behavior,
   never padded with assertions on constants.**

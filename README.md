@@ -9,7 +9,7 @@ Department of Education's annual census of colleges) across collection years
 aid, graduation and outcome rates, admissions, and institutional details.
 
 > **Just want to use it?** Read the rest of this page.
-> **Running or deploying it?** See [DEPLOY.md](DEPLOY.md).
+> **Running or deploying it?** See [DEPLOY.md](docs/DEPLOY.md).
 > **Working on the code?** See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
@@ -97,5 +97,5 @@ A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
 SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
 charts. It's designed to be cheap to run and safe by construction — the model
 can only issue read‑only queries, guarded by a timeout. Details in
-[CONTRIBUTING.md](CONTRIBUTING.md) and [DEPLOY.md](DEPLOY.md); the data model and
-query conventions are documented in [SCHEMA.md](SCHEMA.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) and [DEPLOY.md](docs/DEPLOY.md); the data model and
+query conventions are documented in [SCHEMA.md](docs/SCHEMA.md).

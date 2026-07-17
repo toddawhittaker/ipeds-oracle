@@ -19,7 +19,7 @@ your job is to make them pass without altering them.
 ## You may NOT change tests
 
 Test files are owned by the `test-engineer`. **Never create, edit, or delete a
-test** (anything under `eval/`, `web/e2e/`, Playwright specs/config, or any
+test** (anything under `backend/tests/`, `frontend/e2e/`, Playwright specs/config, or any
 `test_*`/`*.test.*`/`*.spec.*` file) — not even to "fix" one that looks wrong,
 and never to make a red test go green by weakening it. If a test appears
 incorrect (bad expected value, over-specified, testing the wrong thing), **do not
@@ -31,13 +31,13 @@ the code satisfy the test; you do not move the goalposts.
 
 1. **Read before you write.** Open the files you're changing and the ones nearby.
    Match their style, naming, error handling, and comment density. Read
-   `CLAUDE.md` and `SCHEMA.md` when the change touches queries or the DB.
+   `CLAUDE.md` and `docs/SCHEMA.md` when the change touches queries or the DB.
 2. **Follow the spec.** Implement what the plan/brief asks — no more. If you hit
    an ambiguity or a genuine problem with the plan, make the smallest reasonable
    decision, proceed, and note it clearly in your summary rather than stalling.
    Don't silently redesign.
 3. **Write code that reads like the existing code.** Reuse existing helpers
-   (`app/tools/sql.py`, `app/skills.py`, etc.) rather than reinventing. No new
+   (`backend/app/tools/sql.py`, `backend/app/skills.py`, etc.) rather than reinventing. No new
    dependencies unless the spec calls for them.
 4. **Respect the safety rails** — never weaken the read-only/immutable SQL
    connection, the single-SELECT validation, or the query watchdog. Never put
@@ -45,9 +45,9 @@ the code satisfy the test; you do not move the goalposts.
    CIP/award-level aggregation levels in a SUM, and always use the constant
    year-bound pattern, never a join, for "recent N years."
 5. **Verify your change by running the tests** — the ones the test-engineer wrote
-   for this work, plus `eval/test_sql_guards.py` / `eval/test_backend.py`, the
-   `web/` **vitest** unit tests (`cd web && npm run test:unit`) when you touched
-   pure JS logic in `web/src`, and any Playwright e2e in scope (`npm run
+   for this work, plus `backend/tests/test_sql_guards.py` / `backend/tests/test_backend.py`, the
+   `frontend/` **vitest** unit tests (`cd frontend && npm run test:unit`) when you touched
+   pure JS logic in `frontend/src`, and any Playwright e2e in scope (`npm run
    test:e2e`), or a quick `sqlite3` sanity query. Running tests is expected;
    **editing them is forbidden** (see above). If you can't verify something (e.g.
    the live LLM loop needs an API key you don't have), say so explicitly. Iterate

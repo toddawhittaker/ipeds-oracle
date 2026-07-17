@@ -21,19 +21,19 @@ passwordless magic-link auth, a manual allowlist, an LLM tool-calling loop that
 executes model-generated SQL, and an admin import that swaps the database.
 Prioritize:
 
-1. **SQL execution sandbox** (`app/tools/sql.py`) — the model generates SQL that
+1. **SQL execution sandbox** (`backend/app/tools/sql.py`) — the model generates SQL that
    you run. Confirm: read-only + immutable connection, single-SELECT/WITH only,
    multi-statement (`;`) and DDL/DML/`PRAGMA`/`ATTACH` rejected, watchdog
    interrupt on timeout, row caps. Probe for validator bypasses (comments,
    nested statements, CTE tricks, `ATTACH`-via-string).
-2. **Auth & sessions** (`app/auth.py`, `app/security.py`) — tokens single-use,
+2. **Auth & sessions** (`backend/app/auth.py`, `backend/app/security.py`) — tokens single-use,
    hashed at rest (never stored raw), short TTL, constant-time compare where it
    matters; session cookie httponly + secure + signed; no user enumeration
    (request-login must be neutral whether or not the email is allowlisted);
    rate-limiting on link requests.
 3. **Authorization** — admin routes actually gated (`require_admin` on the
    router), no IDOR on conversations/imports, allowlist enforced everywhere.
-4. **File upload / import** (`app/importer.py`) — filename validation, path
+4. **File upload / import** (`backend/app/importer.py`) — filename validation, path
    traversal, resource exhaustion, and that a failed/hostile import cannot
    corrupt or replace the live DB except via the vetted atomic swap.
 5. **Secrets** — nothing hardcoded; all via `pydantic-settings`/`.env`; `.env`

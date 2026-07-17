@@ -1,0 +1,28 @@
+# Tooling config for the IPEDS web app (no build system — this project is run,
+# not packaged). Ruff is the linter/import-sorter; see .github/workflows/ci.yml.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Nothing under the lint targets (backend/app, backend/tests, scripts) needs
+# excluding; .venv is the only stray Python tree to skip.
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# A pragmatic set: pycodestyle (E/W), pyflakes (F), isort (I), pyupgrade (UP),
+# flake8-bugbear (B). Two rules are silenced because they fight patterns that
+# are correct here, not accidents:
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "B008",  # function call in default arg — this IS the FastAPI Depends()/Query() idiom
+    "E702",  # multiple statements on one line — the codebase's deliberate `a(); b()` style
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The tests/* scripts intentionally set sys.path / os.environ before importing
+# `app`, so their module-level imports can't all sit at the top of the file.
+# `**/tests/*.py` matches whether ruff is invoked from repo root (paths like
+# backend/tests/x.py, via --config) or from within backend/.
+"**/tests/*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

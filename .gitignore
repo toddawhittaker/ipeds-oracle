@@ -31,12 +31,12 @@ output/
 # No trailing slash: that form matches only directories, so a *symlink* named
 # node_modules slips past it and gets committed.
 node_modules
-web/dist/
+frontend/dist/
 *.tsbuildinfo
 
 # --- Playwright e2e output ---
-web/test-results/
-web/playwright-report/
+frontend/test-results/
+frontend/playwright-report/
 
 # --- Claude Code local settings (agent definitions in .claude/agents/ ARE tracked) ---
 .claude/settings.local.json

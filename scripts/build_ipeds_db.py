@@ -186,7 +186,7 @@ def main():
     if args.dry_run:
         return
 
-    # Machine-readable progress markers for app/importer.py's build_check_swap
+    # Machine-readable progress markers for backend/app/importer.py's build_check_swap
     # (drives the Imports tab's determinate rebuild progress bar) — additive,
     # alongside all the human-readable prints above/below, never replacing them.
     tables_total = sum(len(fam_srcs[f]) for f in fam_cols)
