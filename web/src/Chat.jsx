@@ -134,6 +134,7 @@ export default function Chat({ me }) {
   const navigate = useNavigate();
   const [openId, setOpenId] = useState(routeId);
   const [notice, setNotice] = useState("");
+  const [deleteAnnounce, setDeleteAnnounce] = useState("");
   const loadedFor = useRef(null); // routeId this conversation's messages were last fetched for
   const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, status?}
   const [input, setInput] = useState("");
@@ -153,6 +154,11 @@ export default function Chat({ me }) {
   const chatRef = useRef(null);
   const editTrigger = useRef(null); // Edit button that opened the inline editor
   const mdRefs = useRef({}); // message index -> rendered markdown DOM node
+  // Set by deleteConvo() for the "deleted a DIFFERENT conv" case only --
+  // {id} (focus that row) or {newchat:true} (focus "+ New chat", no rows
+  // left). Consumed by the [convos] effect below, which is the only place
+  // that actually moves focus for that case (see its comment for why).
+  const focusAfterDelete = useRef(null);
   // Bumped by newChat() and by any real route change (effect below) to mark
   // whichever stream is currently in flight as abandoned. submit() captures
   // the value at call time; the `conversation` SSE handler compares against
@@ -189,6 +195,23 @@ export default function Chat({ me }) {
   // NOT role="status" anymore -- exactly one announcement, not two.
   const refreshConvos = () => api.conversations().then(setConvos).catch(() => {});
   useEffect(() => { refreshConvos(); }, []);
+  // Moves focus after deleting a DIFFERENT conversation (case 2 -- deleting
+  // the OPEN one is handled directly in deleteConvo() via navigate() + rAF,
+  // matching fillExample/saveEdit's precedent, and never touches this ref).
+  // `convos` changes for lots of reasons that have nothing to do with a
+  // delete -- this mount effect, every submit()'s refreshConvos(), the
+  // optimistic title patch -- so the ref is a ONE-SHOT: it's cleared the
+  // instant this effect runs, regardless of whether `want` was set, so an
+  // unrelated later `convos` update never re-fires the focus move.
+  useEffect(() => {
+    const want = focusAfterDelete.current;
+    if (!want) return;
+    focusAfterDelete.current = null;
+    const el = (!want.newchat && document.getElementById(`convo-${want.id}`))
+      || document.querySelector(".sidebar .newchat, .sidebar .newchat-collapsed")
+      || taRef.current;
+    el?.focus();
+  }, [convos]);
   useEffect(() => {
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
@@ -336,9 +359,42 @@ export default function Chat({ me }) {
 
   async function deleteConvo(e, id) {
     e.stopPropagation();
-    if (!window.confirm("Delete this chat? This can't be undone.")) return;
-    await api.deleteConversation(id).catch(() => {});
-    if (id === convId) navigate("/");
+    // Snapshot everything the post-delete UI needs from THIS render's convos
+    // BEFORE the await -- refreshConvos() resolves when setConvos is called,
+    // not after commit (React 18 batches), so `convos` read after the await
+    // could already be stale/wrong. idx/next/remaining below are all derived
+    // from this pre-delete snapshot.
+    const idx = convos.findIndex((c) => c.id === id);
+    const title = (idx >= 0 ? convos[idx].title : "") || "Untitled";
+    if (!window.confirm(`Delete "${title}"? This can't be undone.`)) return;
+    const isOpen = id === convId;
+    const next = convos[idx + 1] || convos[idx - 1] || null;
+    const remaining = Math.max(convos.length - 1, 0);
+    const ok = await api.deleteConversation(id).then(() => true).catch(() => false);
+    if (!ok) { setDeleteAnnounce("Couldn't delete that chat."); return; }
+    if (isOpen) {
+      // Case 1: deleting the OPEN conversation. Focus goes to the composer,
+      // via the same navigate()+rAF precedent as fillExample/saveEdit --
+      // deliberately NOT through focusAfterDelete/the [convos] effect below,
+      // which targets a sidebar row on a different clock (refreshConvos()
+      // landing later would otherwise steal focus back out of the composer).
+      setDeleteAnnounce(`Deleted "${title}". Started a new chat.`);
+      navigate("/");
+      requestAnimationFrame(() => taRef.current?.focus());
+    } else {
+      // Case 2: deleting a DIFFERENT conversation. Focus whatever now
+      // occupies the deleted row's index once refreshConvos() actually
+      // commits -- see the [convos] effect above.
+      focusAfterDelete.current = next ? { id: next.id } : { newchat: true };
+      // The remaining-count is LOAD-BEARING, not chatty: a live region only
+      // announces on a text MUTATION, and two chats both titled "Untitled"
+      // (the render fallback below) would otherwise produce an IDENTICAL
+      // announcement -- the second delete would be silently swallowed. The
+      // count strictly decreases, so consecutive announcements always differ.
+      setDeleteAnnounce(remaining === 0
+        ? `Deleted "${title}". No chats remaining.`
+        : `Deleted "${title}". ${remaining} ${remaining === 1 ? "chat" : "chats"} remaining.`);
+    }
     refreshConvos();
   }
 
@@ -455,7 +511,7 @@ export default function Chat({ me }) {
           <div className="convo-list thin-scroll">
             {convos.map((c) => (
               <div key={c.id} className={"convo-row" + (c.id === convId ? " on" : "")}>
-                <button type="button"
+                <button type="button" id={`convo-${c.id}`}
                         className={"convo" + (c.id === convId ? " on" : "")}
                         aria-current={c.id === convId ? "page" : undefined}
                         onClick={() => navigate(`/chat/${c.id}`)}>
@@ -463,11 +519,25 @@ export default function Chat({ me }) {
                 </button>
                 <button type="button" className="convo-del"
                         onClick={(e) => deleteConvo(e, c.id)}
-                        title="Delete chat" aria-label="Delete chat"><IconTrash /></button>
+                        title="Delete chat"
+                        aria-label={`Delete chat: ${c.title || "Untitled"}`}><IconTrash /></button>
               </div>
             ))}
           </div>
         )}
+        {/* Always mounted (outside the collapsed ternary above) so a delete
+            while the sidebar is collapsed still announces. Deliberately a
+            BARE aria-live, never role="status" -- Chat's bad-conversation
+            notice below is already a role="status" node, and several e2e
+            specs assert an UNSCOPED page.getByRole("status") resolves to
+            exactly one match (same reasoning as App.jsx's route-announcer).
+            A separate `deleteAnnounce` state, not `notice` -- the render-time
+            reset above (openId !== routeId) does setNotice("") on every route
+            change, which would wipe this out from under case 1 (delete the
+            open chat navigates to "/") before it could be heard. */}
+        <div className="sr-only" aria-live="polite" data-testid="delete-announcer">
+          {deleteAnnounce}
+        </div>
       </aside>
 
       {!collapsed && (

@@ -44,7 +44,11 @@ test.describe("chat routing", () => {
     ]);
 
     await page.goto("/");
-    const row = page.getByRole("button", { name: "CA nursing associate's degrees" });
+    // exact:true -- getByRole name-matching is substring by default, and the
+    // row's own trash-button aria-label ("Delete chat: <title>") now CONTAINS
+    // the bare title, so an unscoped substring match hits both buttons
+    // (strict-mode violation) -- see web/e2e/delete-focus.spec.js.
+    const row = page.getByRole("button", { name: "CA nursing associate's degrees", exact: true });
     await row.click();
 
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/3");
@@ -66,8 +70,10 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
 
     await expect(page.getByText("Here you go.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "CA nursing associate's degrees" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Other chat" })).toBeVisible();
+    // exact:true on both -- each row's own trash-button aria-label now
+    // contains the bare title as a substring (see note above).
+    await expect(page.getByRole("button", { name: "CA nursing associate's degrees", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Other chat", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "+ New chat" })).toBeVisible();
   });
 
@@ -198,7 +204,9 @@ test.describe("chat routing", () => {
     await expect(page.getByText("Here you go.")).toBeVisible();
 
     page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat" }).click();
+    // Per-row accessible name (WCAG 4.1.2, see web/e2e/delete-focus.spec.js):
+    // every trash button used to be identically named "Delete chat".
+    await page.getByRole("button", { name: "Delete chat: CA nursing associate's degrees" }).click();
 
     await expect.poll(() => del.calls).toEqual(["3"]);
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
@@ -222,7 +230,7 @@ test.describe("chat routing", () => {
 
     const otherRow = page.locator(".convo-row", { has: page.getByRole("button", { name: "Other chat" }) });
     page.once("dialog", (d) => d.accept());
-    await otherRow.getByRole("button", { name: "Delete chat" }).click();
+    await otherRow.getByRole("button", { name: "Delete chat: Other chat" }).click();
 
     await expect.poll(() => del.calls).toEqual(["5"]);
     expect(new URL(page.url()).pathname).toBe("/chat/3");
@@ -243,7 +251,8 @@ test.describe("chat routing", () => {
     await expect(page.locator(".notice")).toHaveText("That conversation isn't available.");
     await expect(page.getByText("conversation 999 not found for user 1")).toHaveCount(0);
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Some other chat" })).toBeVisible();
+    // exact:true -- see note above.
+    await expect(page.getByRole("button", { name: "Some other chat", exact: true })).toBeVisible();
     // The bad-id URL itself isn't wiped out from under the user.
     expect(new URL(page.url()).pathname).toBe("/chat/999");
   });
