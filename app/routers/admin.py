@@ -69,37 +69,49 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
         con.commit()
     finally:
         con.close()
+    # `delivery` is what actually became of the invite, as ONE value. There are
+    # FOUR outcomes, not two, and each asks the admin to do something different.
+    # Deriving that from a pair of booleans is what let "was already on the
+    # allowlist" masquerade as "the email failed to send" — no link is minted
+    # for an existing member (see newly_added), so `invited` is False there too,
+    # for a reason that has nothing to do with mail.
     invited = False
     mail_configured = bool(get_settings().resend_api_key)
-    if invite_link:
+    if not invite_link:
+        # Already on the allowlist. Nothing was sent because nothing needed to
+        # be; re-adding only updates the note. They can sign in any time.
+        delivery = "already_allowlisted"
+    else:
         try:
             invited = send_access_approved(email, invite_link)
         except Exception as e:  # noqa: BLE001 — approval must not fail if email does
             log.warning("approval email to %s failed: %s", email, e)
-        if not invited and mail_configured:
-            # Re-report the failure from a logger the admin can actually READ.
-            # send_email() swallows provider errors and returns False, so the
-            # except above never fires; its own log line lives on the `ipeds.mail`
-            # logger, which logbuffer.py drops WHOLESALE (dev mode logs the magic
-            # link there, and the Logs view is readable by any admin). Net effect
-            # without this line: a failed invite leaves NOTHING in the Logs tab
-            # while the UI tells the admin to go look there — the same lie this
-            # endpoint's message was just fixed to stop telling.
-            # Safe to store: names the address and the outcome, never the link.
+        if invited:
+            delivery = "emailed"
+        elif mail_configured:
+            # A configured provider rejected or errored. The link was minted but
+            # printed NOWHERE — mailer.py only logs the body when there's no key
+            # — so the only way in is for them to request their own.
+            delivery = "failed"
+            # Re-report from a logger the admin can actually READ. send_email()
+            # swallows provider errors and returns False, so the except above
+            # never fires, and send_email's own log line is on the `ipeds.mail`
+            # logger that logbuffer.py drops WHOLESALE (dev mode logs the magic
+            # link there, and any admin can read the Logs view). Without this,
+            # a failed invite leaves NOTHING in the Logs tab while the UI tells
+            # the admin to go look there. Names the address, never the link.
             log.warning(
                 "invite email to %s was NOT delivered — mail is configured, so the "
                 "provider rejected or errored (see the server console for the "
                 "provider's own error). Their sign-in link was minted but not "
                 "stored anywhere; they must request one from the sign-in page.",
                 email)
-    # A failed send means two very different things and the admin has to act
-    # differently in each: with no key configured (dev) the mailer logged the
-    # whole email — link included — to the CONSOLE, so it's recoverable; with a
-    # key configured, the send genuinely failed and the link was never printed
-    # anywhere, so the only way in is for them to request one themselves. Tell
-    # the UI which world it's in rather than making it guess.
+        else:
+            # No key: the mailer logged the whole email, link included, to the
+            # CONSOLE. Recoverable — and pointedly NOT in the Logs tab.
+            delivery = "logged_to_console"
     return {"ok": True, "email": email, "invited": invited,
-            "mail_configured": mail_configured}
+            "mail_configured": mail_configured, "delivery": delivery}
 
 
 class AllowlistAdminPatch(BaseModel):
