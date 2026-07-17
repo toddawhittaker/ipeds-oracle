@@ -92,6 +92,11 @@ class Settings(BaseSettings):
 
     # --- Server logs -------------------------------------------------------
     log_retention_days: int = Field(default=30)  # older log rows are pruned
+    # A hard ceiling on rows, independent of age: retention alone is unbounded
+    # WITHIN its window, so a log storm (a retry loop, a chatty dependency) can
+    # run the file away in a day and the 30-day sweep won't touch it. Whichever
+    # limit bites first wins. 0 disables the cap and leaves age-only pruning.
+    log_max_rows: int = Field(default=50_000)
 
     # --- Auth / sessions ---------------------------------------------------
     session_ttl_days: int = Field(default=30)
