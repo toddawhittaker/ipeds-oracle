@@ -122,4 +122,78 @@ test.describe("reject an access request", () => {
 
     await expect(pendingRow).toHaveCount(0);
   });
+
+  // Regression: `.req` used to right-align Approve with a bare
+  // `margin-left: auto` on `.req button`. That worked while `.req` held
+  // exactly one button, but flexbox splits free space EQUALLY between
+  // multiple auto margins -- once Reject joined Approve beside it, each row
+  // divided its OWN slack between the two buttons, and since each row's
+  // slack depends on its email's rendered width, Approve landed at a
+  // different x in every row. The fix moves the auto margin onto the email
+  // span instead (`.req > span { margin-right: auto }`), so the button PAIR
+  // stays glued together and right-aligned regardless of address length.
+  //
+  // The rows below use WILDLY different email lengths on purpose: the old
+  // bug only manifests when rows have different slack. Same-length emails
+  // would pass on the broken CSS too (vacuous test) -- see PR #55's pill-wrap
+  // regression for the same trap with white-space wrapping.
+  test("Approve and Reject line up at the same x across rows of very different email length", async ({ page }) => {
+    const rows = [
+      { id: 1, email: "a@b.edu", reason: null, status: "pending", created_at: 1_700_000_000 },
+      {
+        id: 2,
+        email: "a-very-long-departmental-mailbox-address@subdomain.example.edu",
+        reason: null,
+        status: "pending",
+        created_at: 1_700_000_100,
+      },
+      { id: 3, email: "mid.length@example.edu", reason: null, status: "pending", created_at: 1_700_000_200 },
+    ];
+    await openAllowlistTab(page, { reqs: rows });
+
+    const approveBoxes = [];
+    const rejectBoxes = [];
+    for (const r of rows) {
+      const approveBox = await page
+        .getByRole("button", { name: `Approve the access request from ${r.email}` })
+        .boundingBox();
+      const rejectBox = await page
+        .getByRole("button", { name: `Reject the access request from ${r.email}` })
+        .boundingBox();
+      expect(approveBox).not.toBeNull();
+      expect(rejectBox).not.toBeNull();
+      approveBoxes.push(approveBox);
+      rejectBoxes.push(rejectBox);
+    }
+
+    // The assertion that actually catches the bug class: every row's Approve
+    // sits at the same x as every other row's Approve, and likewise for
+    // Reject -- NOT a hardcoded pixel value (that would break on any
+    // unrelated layout change), just the cross-row invariant.
+    const approveXs = approveBoxes.map((b) => b.x);
+    const rejectXs = rejectBoxes.map((b) => b.x);
+    for (const x of approveXs) expect(x).toBeCloseTo(approveXs[0], 0);
+    for (const x of rejectXs) expect(x).toBeCloseTo(rejectXs[0], 0);
+
+    // And Reject must sit to the right of Approve in every row (the pair
+    // stayed together, not just each button independently aligned).
+    for (let i = 0; i < rows.length; i += 1) {
+      expect(rejectBoxes[i].x).toBeGreaterThan(approveBoxes[i].x);
+    }
+  });
+
+  // Companion regression: Approve used to be a bare, unstyled `<button>` --
+  // raw browser chrome (Chromium's UA default is a flat grey, `rgb(239, 239,
+  // 239)`, with no border-radius). Deliberately NOT asserting the exact
+  // accent color (a brittle literal that would break on any theme/palette
+  // change) -- just that it's neither the browser default background nor
+  // square-cornered, which is what "unstyled" actually looks like.
+  test("Approve is a styled pill, not a bare unstyled <button>", async ({ page }) => {
+    await openAllowlistTab(page, { reqs: TWO_PENDING });
+
+    const approve = page.getByRole("button", { name: "Approve the access request from one@example.edu" });
+    await expect(approve).not.toHaveCSS("background-color", "rgb(239, 239, 239)");
+    await expect(approve).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(approve).not.toHaveCSS("border-radius", "0px");
+  });
 });

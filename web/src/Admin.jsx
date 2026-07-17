@@ -245,7 +245,8 @@ function Allowlist({ me }) {
           {reqs.map((r) => (
             <div key={r.id} className="req">
               <span>{r.email}</span>
-              <button aria-label={`Approve the access request from ${r.email}`}
+              <button className="btn-approve"
+                      aria-label={`Approve the access request from ${r.email}`}
                       onClick={() => invite(r.email, "approved request", false)}>
                 Approve
               </button>

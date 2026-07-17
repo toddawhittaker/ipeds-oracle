@@ -104,10 +104,11 @@ input, textarea, button { font-family: inherit; }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-/* Primary action in the lessons approval queue — approving should read louder
-   than the destructive "reject" link. */
-.btn-verify { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; }
-.btn-verify:hover { background: var(--accent-d); }
+/* Primary action in an approval queue — approving should read louder than the
+   destructive "reject" link beside it. Shared by the lessons queue and the
+   access-request queue: same affordance, same pairing, so same treatment. */
+.btn-verify, .btn-approve { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; }
+.btn-verify:hover, .btn-approve:hover { background: var(--accent-d); }
 .ico { display: inline-flex; align-items: center; gap: 5px; }
 .ico svg { flex: none; }
 .link.danger { color: var(--danger); }
@@ -322,7 +323,17 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .grid th, .grid td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; font-size: 14px; }
 .requests { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
 .req { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
-.req button { margin-left: auto; }
+/* The EMAIL absorbs the free space, not the buttons. `margin-left:auto` on
+   `.req button` worked while there was exactly one button, but flexbox splits
+   free space EQUALLY between multiple auto margins — so once Reject joined
+   Approve, each row divided its slack between them and Approve landed at a
+   different x in every row (measured: both buttons ml=227.578px, Approve at
+   x=489 with a 227px gap before Reject). Pushing from the email instead keeps
+   the pair together and right-aligned, so they line up across rows whatever
+   the address length. min-width:0 lets a long address wrap rather than shove
+   the buttons out of the row (see .lesson-rule — same trap, PR #55). */
+.req > span { margin-right: auto; min-width: 0; overflow-wrap: break-word; }
+.req button { flex: none; }
 .denied { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
 .denied h2 { font-size: 15px; margin: 0 0 4px; }
 .denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
