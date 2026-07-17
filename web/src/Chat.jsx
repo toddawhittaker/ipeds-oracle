@@ -165,6 +165,11 @@ export default function Chat({ me }) {
   // it before yanking the viewer to the new /chat/:id -- see the "'+ New
   // chat' mid-stream" fix in submit() below.
   const turnToken = useRef(0);
+  // Marks the CURRENT turn's own self-navigation (the "conversation" SSE
+  // handler's / -> /chat/:id URL flip for a brand-new conversation) so the
+  // [routeId] turnToken effect below doesn't mistake it for the user
+  // navigating away and abandon the very turn that's still rendering.
+  const selfNavId = useRef(null);
 
   // The URL changed out from under us -- sidebar click, "+ New chat",
   // delete-the-open-chat, or browser Back/Forward -- so reset local thread
@@ -173,7 +178,14 @@ export default function Chat({ me }) {
   // and an effect here would also mean an extra render with stale messages
   // visible before the reset lands.
   if (openId !== routeId) {
+    // Also free the composer in the view navigated TO -- `busy`/`status` are
+    // single shared state, not per-turn, so leaving them set would strand
+    // the user here until the abandoned turn's stream resolves elsewhere.
+    // This deliberately does NOT fire on the happy-path self-nav (the
+    // `conversation` handler pre-syncs setOpenId so openId === routeId by
+    // the time this render runs).
     setOpenId(routeId); setMessages([]); setNotice(""); setEditingIdx(null);
+    setBusy(false); setStatus("");
   }
   const badFormat = routeId !== null && !NUMERIC_ID.test(routeId);
   const showNotice = notice || (badFormat ? NOT_AVAILABLE : "");
@@ -254,7 +266,19 @@ export default function Chat({ me }) {
   // back. (newChat() bumps it directly too, since starting a fresh "/"
   // thread from an already-"/" URL never changes routeId, so this effect
   // alone wouldn't catch that case -- see newChat() below.)
-  useEffect(() => { turnToken.current++; }, [routeId]);
+  useEffect(() => {
+    // If this route change is the current turn's own self-nav (the
+    // `conversation` handler's / -> /chat/:id flip for a brand-new
+    // conversation), consume the marker and don't abandon it -- this relies
+    // on navigate() being a synchronous (non-transition) history update,
+    // same load-bearing precondition as the main.jsx v7_startTransition
+    // warning referenced in submit() below.
+    if (selfNavId.current !== null && String(routeId) === selfNavId.current) {
+      selfNavId.current = null;
+      return;
+    }
+    turnToken.current++;
+  }, [routeId]);
 
   async function doCopy(i, kind, markdown) {
     const text = stripChartBlocks(markdown);
@@ -278,7 +302,12 @@ export default function Chat({ me }) {
     // the `conversation` SSE handler in submit() below. The user is entitled
     // to walk away from a stream; it just must not yank them back afterward.
     turnToken.current++;
-    if (routeId === null) { setMessages([]); setNotice(""); setEditingIdx(null); }
+    if (routeId === null) {
+      // Already at "/" -- the [routeId] effect above won't fire (routeId
+      // doesn't change), so free the composer directly here too.
+      setMessages([]); setNotice(""); setEditingIdx(null);
+      setBusy(false); setStatus("");
+    }
     else navigate("/");
   }
 
@@ -402,6 +431,12 @@ export default function Chat({ me }) {
     q = (q || "").trim();
     if (!q || busy) return;
     const myTurn = turnToken.current; // see the `conversation` SSE handler below
+    // True only while this is still the turn the user is looking at. Stale
+    // (abandoned) turns must keep draining the stream to completion -- see
+    // the note atop submit() -- but their VIEW writes must stop the instant
+    // the user has moved on, so they don't bleed into whatever conversation
+    // is now on screen.
+    const isMine = () => turnToken.current === myTurn;
     setBusy(true); setStatus("Thinking…");
     setMessages((m) => [...m, { role: "user", content: q },
                               { role: "assistant", content: "", sql_log: [], thinking: [], pending: true }]);
@@ -459,12 +494,24 @@ export default function Chat({ me }) {
           // the matching warning at main.jsx.
           loadedFor.current = String(ev.id);
           setOpenId(String(ev.id));
+          // Only a brand-new conversation (convId === null) actually flips
+          // routeId here -- an existing-conversation turn's routeId is
+          // already correct, so marking self-nav for it would linger
+          // unconsumed and mask a LATER genuine navigation-away.
+          if (convId === null) selfNavId.current = String(ev.id);
           navigate(`/chat/${ev.id}`, { replace: true });
         }
-        else if (ev.type === "status") { setStatus(ev.text); addThought({ kind: "status", text: ev.text }); }
-        else if (ev.type === "sql") { sqlLog = [...sqlLog, ev.sql]; setStatus("Running query…"); addThought({ kind: "sql", text: ev.sql }); }
-        else if (ev.type === "thinking") addThought({ kind: "reason", text: ev.text });
-        else if (ev.type === "tool") addThought({ kind: "tool", text: `${ev.name}${ev.ok ? " ✓" : " ✗"}` });
+        else if (ev.type === "status") {
+          // Gated: a stale turn's status text must not overwrite whatever
+          // the now-viewed conversation is showing (or isn't).
+          if (isMine()) { setStatus(ev.text); addThought({ kind: "status", text: ev.text }); }
+        }
+        else if (ev.type === "sql") {
+          sqlLog = [...sqlLog, ev.sql]; // local accumulation stays ungated -- needed for the finalization write below
+          if (isMine()) { setStatus("Running query…"); addThought({ kind: "sql", text: ev.sql }); }
+        }
+        else if (ev.type === "thinking") { if (isMine()) addThought({ kind: "reason", text: ev.text }); }
+        else if (ev.type === "tool") { if (isMine()) addThought({ kind: "tool", text: `${ev.name}${ev.ok ? " ✓" : " ✗"}` }); }
         else if (ev.type === "answer") answer = ev.text;
         else if (ev.type === "error") answer = "⚠️ " + ev.text;
         else if (ev.type === "done") {
@@ -476,14 +523,24 @@ export default function Chat({ me }) {
     } catch (err) {
       answer = "⚠️ " + err.message;
     }
-    setMessages((m) => {
-      const c = [...m];
-      const ai = c.length - 1, ui = c.length - 2;
-      if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, id: msgId ?? c[ai].id, pending: false };
-      if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
-      return c;
-    });
-    setBusy(false); setStatus("");
+    // VIEW writes -- gated: a stale (abandoned) turn's final answer must not
+    // land in whatever conversation is now on screen, and must not leave
+    // that conversation's composer stuck disabled. The stream still drained
+    // to completion above, so the answer IS persisted server-side; reopening
+    // that conversation will show it.
+    if (isMine()) {
+      setMessages((m) => {
+        const c = [...m];
+        const ai = c.length - 1, ui = c.length - 2;
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, id: msgId ?? c[ai].id, pending: false };
+        if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
+        return c;
+      });
+      setBusy(false); setStatus("");
+    }
+    // Ungated -- these touch only the sidebar list/titles, never the viewed
+    // thread, and stay useful even for an abandoned-but-persisted turn (its
+    // new conversation should still show up in the sidebar).
     refreshConvos();
     // Optimistically show the model-generated conversation title right away.
     if (newTitle && newConvId) {
