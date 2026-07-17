@@ -61,25 +61,38 @@ function Allowlist({ me }) {
   };
   useEffect(load, []);
 
-  // "Not emailed" has two causes that need opposite reactions from the admin,
-  // so never collapse them into one message. Note that NEITHER link ever lands
-  // in the admin Logs page: logbuffer.py drops the ipeds.mail logger outright
-  // and redacts `token=` everywhere else, deliberately, so an admin browsing
-  // logs can't harvest a live sign-in link. Pointing there would be a wild
-  // goose chase — the dev link is on the server's stdout/stderr only.
+  // One message per outcome, keyed off the backend's `delivery` value. "No email
+  // was sent" has THREE distinct causes needing different reactions, so never
+  // collapse them: an earlier version inferred the cause from booleans and told
+  // the admin an invite had FAILED when the person was simply already on the
+  // allowlist and no mail was ever attempted.
+  //
+  // Note the dev link never lands in the admin Logs page either: logbuffer.py
+  // drops the ipeds.mail logger outright and redacts `token=` everywhere else,
+  // deliberately, so an admin browsing logs can't harvest a live sign-in link.
+  // It's on the server's stdout/stderr only.
+  const INVITE_FLASH = {
+    emailed: (a) => `Approved — a sign-in link was emailed to ${a}.`,
+    already_allowlisted: (a) =>
+      `${a} was already on the allowlist, so no new invite was sent. They can ` +
+      `sign in from the sign-in page whenever they like.`,
+    failed: (a) =>
+      `${a} added, but the invite email FAILED to send — check the Logs tab ` +
+      `for the error. Their sign-in link wasn't saved anywhere, so ask them to ` +
+      `request one from the sign-in page.`,
+    logged_to_console: (a) =>
+      `${a} added. No email was sent (no mail key configured) — the sign-in ` +
+      `link is in the server console, not the Logs tab.`,
+  };
+
   function inviteFlash(addr, res) {
     // The request itself failed — nothing was added. Saying "added" here (as
     // this did before) sends the admin off to chase a missing email for an
     // account that was never created.
     if (!res?.ok) return `Couldn't add ${addr} — the request failed. Try again.`;
-    if (res.invited) return `Approved — a sign-in link was emailed to ${addr}.`;
-    if (res.mail_configured) {
-      return `${addr} added, but the invite email FAILED to send — check the ` +
-        `Logs tab for the error. The sign-in link was not saved anywhere, so ` +
-        `ask them to request one from the sign-in page.`;
-    }
-    return `${addr} added. No email was sent (no mail key configured) — the ` +
-      `sign-in link is in the server console, not the Logs tab.`;
+    // Unknown/absent delivery: state only what we know rather than guessing a
+    // cause. Silence beats a confident wrong answer here.
+    return (INVITE_FLASH[res.delivery] ?? ((a) => `${a} added.`))(addr);
   }
 
   async function invite(addr, noteText, admin = false) {
