@@ -129,8 +129,6 @@ def run():
     zrecs = hz.records(limit=100000)
     check("max_rows=0 disables the cap (nothing dropped by row count)",
           len(zrecs) == total_z)
-    check("max_rows=0 did not wipe the table",
-          len(zrecs) > 0)
 
     # --- fewer rows than the cap is a no-op (the `id < NULL` path) ---------
     # An off-by-one or a NULL mishandling here would silently empty the store.

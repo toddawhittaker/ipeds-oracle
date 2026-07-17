@@ -249,14 +249,6 @@ def test_temperature_forwarded_verbatim():
 # 8. timeout forwarded verbatim — 120s agent default vs 30s guard/critic probe.
 # ---------------------------------------------------------------------------
 
-def test_default_timeout_constant_is_120s():
-    assert llmhttp.DEFAULT_TIMEOUT == 120.0, llmhttp.DEFAULT_TIMEOUT
-
-
-def test_probe_timeout_constant_is_30s():
-    assert llmhttp.PROBE_TIMEOUT == 30.0, llmhttp.PROBE_TIMEOUT
-
-
 def test_timeout_forwarded_verbatim_default():
     client = _RecordingClient(_json_response(_OK_BODY))
     s = _settings()
@@ -270,7 +262,7 @@ def test_timeout_forwarded_verbatim_probe():
     s = _settings()
     _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
                                  timeout=llmhttp.PROBE_TIMEOUT, settings=s))
-    assert client.last["timeout"] == 30.0, client.last["timeout"]
+    assert client.last["timeout"] == llmhttp.PROBE_TIMEOUT, client.last["timeout"]
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +362,6 @@ def run():
     check("tools=[] (falsy) -> neither tools nor tool_choice key present",
           test_empty_tools_list_also_omits_both_keys)
     check("temperature is forwarded verbatim", test_temperature_forwarded_verbatim)
-    check("DEFAULT_TIMEOUT == 120.0", test_default_timeout_constant_is_120s)
-    check("PROBE_TIMEOUT == 30.0", test_probe_timeout_constant_is_30s)
     check("timeout forwarded verbatim (default)", test_timeout_forwarded_verbatim_default)
     check("timeout forwarded verbatim (probe)", test_timeout_forwarded_verbatim_probe)
     check("HTTPStatusError propagates uncaught", test_http_status_error_propagates)

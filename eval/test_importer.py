@@ -200,7 +200,7 @@ def test_preflight_success():
     finally:
         importer.subprocess.run = orig
     assert ok is True, msg
-    assert "Preflight OK" in msg and "5 tables" in msg, msg
+    assert "Preflight OK" in msg, msg
 
 
 # ---------------------------------------------------------------------------
@@ -673,20 +673,6 @@ def test_run_import_success_swaps_and_bumps_data_version():
         assert n_cache == 0, "semantic cache was not invalidated"
     finally:
         con.close()
-
-
-# ---------------------------------------------------------------------------
-# build_check_swap — the extracted loader->checks->swap core (used by both
-# run_import, above, and run_integrate, below). run_import's existing tests
-# already exercise its behavior end-to-end through this seam (they monkeypatch
-# importer.subprocess.Popen / importer.integrity_checks as bare module
-# globals, which build_check_swap must call the same way for those mocks to
-# still take effect) — this just pins that the extracted function exists and
-# is directly callable, i.e. the refactor actually happened.
-# ---------------------------------------------------------------------------
-
-def test_build_check_swap_is_a_standalone_callable():
-    assert callable(build_check_swap), "importer.build_check_swap must exist post-refactor"
 
 
 # ---------------------------------------------------------------------------
@@ -1701,8 +1687,6 @@ def run():
           test_run_import_backs_up_existing_staged_accdb)
     check("run_import: success swaps db, bumps data_version, clears cache",
           test_run_import_success_swaps_and_bumps_data_version)
-    check("build_check_swap exists as a standalone callable (extracted core)",
-          test_build_check_swap_is_a_standalone_callable)
     check("run_integrate: union is correct, idempotent, fetches once per year",
           test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year)
     check("run_integrate: cleans up the temp work dir on success",

@@ -164,6 +164,17 @@ def run():
                     f"{deep_link} did not serve the built SPA index.html shell verbatim"
             print("  ✓ GET /chat/1 and GET /admin/users serve the SPA index.html "
                   "shell (deep-link contract)")
+            # A non-GET method to an UNMATCHED /api/* path must 404, not the
+            # misleading 405 the GET-only SPA catch-all would otherwise give:
+            # main.py registers a dedicated any-method /api/{path} 404 route
+            # ahead of spa() precisely so a removed endpoint reads as "not
+            # found", not "method not allowed" (Starlette resolves by path
+            # first, so the GET-only catch-all's pattern would match a POST).
+            gone = c.post("/api/chat/messages/1/does-not-exist", json={})
+            assert gone.status_code == 404, \
+                f"unmatched /api/* POST must 404, got {gone.status_code} " \
+                "(405 means the any-method api_404 route was lost)"
+            print("  ✓ POST to an unmatched /api/* path returns 404, not 405")
         else:
             print("  ⚠ web/dist not built — skipping SPA deep-link server contract check")
 

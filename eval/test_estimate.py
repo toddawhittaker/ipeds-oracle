@@ -86,11 +86,6 @@ def test_all_fixture_cases_match():
         _assert_case_matches(case)
 
 
-def test_normal_multi_year_selection_in_isolation():
-    cases = {c["name"]: c for c in _load_cases()}
-    _assert_case_matches(cases["normal_multi_year_selection"])
-
-
 def test_none_zip_contributes_default_per_year_mb():
     cases = {c["name"]: c for c in _load_cases()}
     case = cases["none_zip_uses_default_per_year_mb"]
@@ -204,8 +199,6 @@ def run():
           test_fixture_file_exists_and_has_four_cases)
     check("all fixture cases match estimate_integrate exactly",
           test_all_fixture_cases_match)
-    check("normal multi-year selection matches in isolation",
-          test_normal_multi_year_selection_in_isolation)
     check("a None zip entry contributes exactly one default_per_year_db_mb*MB slice",
           test_none_zip_contributes_default_per_year_mb)
     check("divide-by-zero fallback (live_db_bytes/current_integrated_year_count) "

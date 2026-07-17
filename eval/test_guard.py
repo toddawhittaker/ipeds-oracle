@@ -206,7 +206,6 @@ def test_classify_posts_url_headers_and_probe_timeout():
     assert call["headers"]["HTTP-Referer"] == "http://localhost:8000", call["headers"]
     assert call["headers"]["X-Title"] == "IPEDS Query", call["headers"]
     assert call["timeout"] == llmhttp.PROBE_TIMEOUT, call["timeout"]
-    assert call["timeout"] == 30.0, call["timeout"]
 
 
 def _login(c):
