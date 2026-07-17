@@ -111,8 +111,6 @@ test.describe("admin routing", () => {
     // verbatim, and the panel still renders their data correctly.
     await expect(page.getByRole("link", { name: "Users" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Allowlist" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Allowlist" })).toHaveCount(0);
     await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
   });
 });

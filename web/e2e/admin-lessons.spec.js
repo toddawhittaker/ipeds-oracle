@@ -505,13 +505,12 @@ test("clearing the Description clears notes too — a stale notes fallback canno
   expect(patchBody.notes).not.toBe(STALE_NOTES_LESSON.notes);
 });
 
-// Also being changed in this PR: the "unverified" pill (.tag.warn) moves off
-// --danger (red, implies something's broken) onto --warn (amber, "needs
-// review") — the token already exists in all three palettes and its AA
-// contrast was verified separately. Pinned here as an exact computed-color
-// check (light theme, Playwright's default color-scheme) rather than
-// re-deriving contrast math.
-test("unverified pill renders the --warn amber token, not --danger red", async ({ page }) => {
+// The "unverified" pill uses .tag.warn (amber, "needs review"), NOT .tag.danger
+// (red, implies something's broken). Asserting the class the pill carries pins
+// that behavioral distinction palette-independently; the exact --warn RGB and
+// its AA contrast are verified separately, not re-pinned here (they'd only churn
+// on a palette retune).
+test("unverified pill renders as the warn pill, not the danger pill", async ({ page }) => {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockSkills(page, [EDITABLE_LESSON]);
@@ -522,10 +521,8 @@ test("unverified pill renders the --warn amber token, not --danger red", async (
   await page.getByRole("link", { name: "Admin" }).click();
   await page.getByRole("link", { name: "Skills" }).click();
 
-  const pill = page.locator("span.tag.warn");
-  await expect(pill).toHaveText("unverified");
-  // Light-theme --warn: #946a00 -> rgb(148, 106, 0). Light-theme --danger:
-  // #c0392b -> rgb(192, 57, 43) (see web/src/styles.css :root[data-theme="light"]).
-  await expect(pill).toHaveCSS("color", "rgb(148, 106, 0)");
-  await expect(pill).toHaveCSS("border-color", "rgb(148, 106, 0)");
+  // span.tag.warn resolving to the "unverified" pill IS the assertion: had it
+  // regressed onto .tag.danger, this locator would find no such text.
+  await expect(page.locator("span.tag.warn")).toHaveText("unverified");
+  await expect(page.locator("span.tag.danger")).toHaveCount(0);
 });
