@@ -21,11 +21,11 @@ async function openManualUpload(page) {
   await page.getByText("Manual upload", { exact: false }).click(); // expand the <details>
 }
 
-test("drop zone shows a visual dragging state on dragover and clears on dragleave", async ({ page }) => {
+test("drop zone shows a visual dragging state on dragenter and clears on dragleave", async ({ page }) => {
   await openManualUpload(page);
   const zone = page.locator(".dropzone");
   await expect(zone).not.toHaveClass(/dragging/);
-  await zone.dispatchEvent("dragover");
+  await zone.dispatchEvent("dragenter");
   await expect(zone).toHaveClass(/dragging/);
   await zone.dispatchEvent("dragleave");
   await expect(zone).not.toHaveClass(/dragging/);
