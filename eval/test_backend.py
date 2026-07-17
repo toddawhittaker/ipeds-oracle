@@ -143,6 +143,30 @@ def run():
         rows = csv_resp.text.strip().splitlines()
         print(f"  ✓ CSV export ({len(rows)-1} data rows)")
 
+        # --- SPA deep-link contract (server-side) ---------------------------
+        # The client-side router (react-router-dom) owns /chat/:id and
+        # /admin/:tab; the server's only job is to serve the SAME index.html
+        # shell for those paths as it does for "/", so a hard refresh/direct
+        # link doesn't 404. app/main.py's catch-all `spa()` route (and the
+        # `WEB_DIST` it serves from) is only registered when web/dist has been
+        # built (`npm run build`), so skip cleanly rather than failing in a
+        # checkout that hasn't built the frontend — same convention as this
+        # suite's fastembed-not-installed skips above.
+        from app.main import WEB_DIST
+        index_html = WEB_DIST / "index.html"
+        if index_html.exists():
+            shell = index_html.read_text()
+            for deep_link in ("/chat/1", "/admin/users"):
+                dr = c.get(deep_link, follow_redirects=False)
+                assert dr.status_code == 200, \
+                    f"{deep_link}: {dr.status_code} {dr.text[:200]!r}"
+                assert dr.text == shell, \
+                    f"{deep_link} did not serve the built SPA index.html shell verbatim"
+            print("  ✓ GET /chat/1 and GET /admin/users serve the SPA index.html "
+                  "shell (deep-link contract)")
+        else:
+            print("  ⚠ web/dist not built — skipping SPA deep-link server contract check")
+
     print("\nALL BACKEND TESTS PASSED")
 
 

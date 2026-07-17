@@ -128,14 +128,14 @@ test.describe("tabs selected state", () => {
     await expect(adminTab).toHaveAttribute("aria-current", "page");
     await expect(chatTab).not.toHaveAttribute("aria-current", "page");
 
-    const allowlistSub = page.getByRole("button", { name: "Allowlist" });
+    const usersSub = page.getByRole("button", { name: "Users" });
     const importsSub = page.getByRole("button", { name: "Imports" });
-    await expect(allowlistSub).toHaveAttribute("aria-current", "page");
+    await expect(usersSub).toHaveAttribute("aria-current", "page");
     await expect(importsSub).not.toHaveAttribute("aria-current", "page");
 
     await importsSub.click();
     await expect(importsSub).toHaveAttribute("aria-current", "page");
-    await expect(allowlistSub).not.toHaveAttribute("aria-current", "page");
+    await expect(usersSub).not.toHaveAttribute("aria-current", "page");
   });
 });
 

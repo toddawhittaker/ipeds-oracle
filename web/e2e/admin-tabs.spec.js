@@ -128,9 +128,14 @@ test("regression: navigating away from the Skills tab and back does not crash th
   await expect(page.getByText("example rule")).toBeVisible();
 
   // Unmount Skills by navigating to another subtab — this used to crash the
-  // whole app (root element went blank).
-  await page.getByRole("button", { name: "Allowlist" }).click();
-  await expect(page.getByRole("heading", { name: "Allowlist" })).toBeVisible();
+  // whole app (root element went blank). Assert visibility first (fails fast
+  // at expect's 5s default) rather than a raw .click(), which would otherwise
+  // block for the full test timeout while the "Allowlist" -> "Users" rename
+  // is still unimplemented.
+  const usersSub = page.getByRole("button", { name: "Users" });
+  await expect(usersSub).toBeVisible();
+  await usersSub.click();
+  await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   // The rest of the shell must still be intact too, not just the Admin panel.
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
 

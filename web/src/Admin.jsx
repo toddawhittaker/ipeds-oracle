@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
@@ -24,21 +25,37 @@ function humanSeconds(s) {
 // swapped/failed — "passed" is not a real job status.
 const TERMINAL_JOB_STATUSES = ["failed", "swapped"];
 
-export default function Admin({ me, initialTab, onDataChanged }) {
-  const [tab, setTab] = useState(initialTab || "allowlist");
+// One source of truth for both the subtab nav and the /admin/:tab route
+// validator below -- "users" is the route/label; the underlying component
+// stays named Allowlist (it mirrors the /api/admin/allowlist endpoints it
+// drives, which are unchanged by this rename).
+export const ADMIN_TABS = ["users", "imports", "usage", "skills", "logs"];
+
+// Reads the :tab route param and either renders Admin with it or bounces an
+// unknown tab back to /admin/users. Kept separate from Admin itself so Admin
+// stays a plain {tab} prop component, easy to reason about without also
+// threading route matching through it.
+export function AdminRoute({ me, onDataChanged }) {
+  const { tab } = useParams();
+  if (!ADMIN_TABS.includes(tab)) return <Navigate to="/admin/users" replace />;
+  return <Admin me={me} tab={tab} onDataChanged={onDataChanged} />;
+}
+
+export default function Admin({ me, tab, onDataChanged }) {
+  const navigate = useNavigate();
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
-        {["allowlist", "imports", "usage", "skills", "logs"].map((t) => (
+        {ADMIN_TABS.map((t) => (
           <button key={t} className={tab === t ? "on" : ""}
                   aria-current={tab === t ? "page" : undefined}
-                  onClick={() => setTab(t)}>
+                  onClick={() => navigate(`/admin/${t}`)}>
             {t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
       </nav>
-      {tab === "allowlist" && <Allowlist me={me} />}
+      {tab === "users" && <Allowlist me={me} />}
       {tab === "imports" && <Imports onDataChanged={onDataChanged} />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
@@ -260,7 +277,7 @@ function Allowlist({ me }) {
         </div>
       )}
 
-      <h2>Allowlist</h2>
+      <h2>Users</h2>
       <form className="row" onSubmit={add}>
         <label htmlFor="allow-email" className="sr-only">Email</label>
         <input id="allow-email" type="email" placeholder="email" required value={email}

@@ -37,7 +37,10 @@ app/                FastAPI backend
   db.py               schema + PRAGMA user_version migrations
   logbuffer.py        in-memory log ring buffer (admin Logs view)
 web/                React + Vite front end
-  src/                Chat, Admin, Chart, Markdown, Login, …
+  src/                Chat, Admin, Chart, Markdown, Login, … — client-side
+                      routed (react-router-dom); the route table lives in
+                      App.jsx ("/", "/chat/:id", "/admin", "/admin/:tab",
+                      "/verify", catch-all -> "/")
   e2e/                Playwright specs (network-mocked)
 eval/                backend test suites + the NL→SQL accuracy harness
 scripts/            build_ipeds_db.py, backups, CI fixture builder
@@ -227,7 +230,11 @@ non-raisingly (missing/0-byte/garbage/no-`_years` all yield `[]`/`False`).
 `GET /api/auth/me` exposes `has_data`; the chat-stream no-data guard in
 `app/routers/chat.py` returns a friendly notice (admin-aware wording, no
 conversation created, no agent run) instead of a raw SQL error; and the SPA
-routes an admin with no data straight to Admin → Imports on load.
+routes an admin with no data straight to Admin → Imports on load — a one-shot
+`navigate("/admin/imports", { replace: true })` that fires only when the admin
+LANDED on bare `/` (a deep link to `/chat/:id` or another `/admin/:tab` is
+never yanked), and never re-fires on a later `refreshMe()` once the import
+completes.
 
 ### Adding a new IPEDS year
 

@@ -19,7 +19,11 @@ export default function Verify() {
   );
 
   useEffect(() => {
-    // Drop the token from the address bar / history right away.
+    // Drop the token from the address bar / history right away. Raw
+    // window.history.replaceState, deliberately bypassing react-router's
+    // history object -- harmless today since nothing here reads
+    // useLocation().search, but a future addition that does would see a
+    // stale search string until the next real navigation.
     window.history.replaceState({}, "", "/verify");
     if (!token) return;
     api

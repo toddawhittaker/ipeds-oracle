@@ -83,7 +83,10 @@ incl. `tools/sqllint.py`, a deterministic pre-flight check that flags IPEDS
 aggregation foot-guns (CIP rollup/second-major double counts, DISTINCT-year
 full-scan) in model SQL and feeds the warning back so the agent self-corrects —
 routers/*) +
-React SPA (`web/`, SSE-streamed chat). SQLite everywhere: `ipeds.db` (read-only
+React SPA (`web/`, SSE-streamed chat, client-side **routed** via
+react-router-dom — `/`, `/chat/:id`, `/admin` → `/admin/users`, `/admin/:tab`,
+`/verify`, catch-all → `/`; the FastAPI SPA catch-all serves `index.html` for
+all of them so a hard refresh/deep link never 404s). SQLite everywhere: `ipeds.db` (read-only
 query target), `app.db` (state, with a `PRAGMA user_version` migration runner),
 `logs.db` (persistent admin logs). Admin → Imports is a live **NCES year
 catalog**: `app/nces.py` probes `nces.ed.gov` (SSRF-hardened — URLs are built
