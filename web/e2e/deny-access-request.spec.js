@@ -25,7 +25,7 @@ async function openAllowlistTab(page, { allowlist = [], reqs = [] } = {}) {
   await mockAllowlist(page, allowlist);
   await mockAccessRequests(page, reqs);
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
 }
 
 const TWO_PENDING = [
@@ -107,7 +107,7 @@ test.describe("reject an access request", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Admin" }).click();
+    await page.getByRole("link", { name: "Admin" }).click();
     // Scope to the pending-request ROW (`.req`, per Admin.jsx), not the whole
     // page: a page-wide getByText would also match anything else on the page
     // that happens to contain this address (e.g. a flash message naming who

@@ -46,9 +46,11 @@ test.describe("chat routing", () => {
     await page.goto("/");
     // exact:true -- getByRole name-matching is substring by default, and the
     // row's own trash-button aria-label ("Delete chat: <title>") now CONTAINS
-    // the bare title, so an unscoped substring match hits both buttons
-    // (strict-mode violation) -- see web/e2e/delete-focus.spec.js.
-    const row = page.getByRole("button", { name: "CA nursing associate's degrees", exact: true });
+    // the bare title, so an unscoped substring match hits both the row link
+    // and the trash button (strict-mode violation) -- see
+    // web/e2e/delete-focus.spec.js. The row itself is a real react-router
+    // <a> link (see web/e2e/nav-links.spec.js).
+    const row = page.getByRole("link", { name: "CA nursing associate's degrees", exact: true });
     await row.click();
 
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/3");
@@ -72,9 +74,9 @@ test.describe("chat routing", () => {
     await expect(page.getByText("Here you go.")).toBeVisible();
     // exact:true on both -- each row's own trash-button aria-label now
     // contains the bare title as a substring (see note above).
-    await expect(page.getByRole("button", { name: "CA nursing associate's degrees", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Other chat", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "+ New chat" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "CA nursing associate's degrees", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Other chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
   });
 
   // Regression guard: a naive "fetch the conversation whenever :id changes"
@@ -128,7 +130,7 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
     await expect(page.getByText("Here you go.")).toBeVisible();
 
-    await page.getByRole("button", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "+ New chat" }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     await expect(page.getByText("Here you go.")).toHaveCount(0);
@@ -159,7 +161,7 @@ test.describe("chat routing", () => {
     expect(new URL(page.url()).pathname).toBe("/");
 
     const historyLenBefore = await page.evaluate(() => globalThis.history.length);
-    await page.getByRole("button", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "+ New chat" }).click();
 
     await expect(page.getByText("Here's what I can tell you without data.")).toHaveCount(0);
     expect(new URL(page.url()).pathname).toBe("/");
@@ -185,7 +187,7 @@ test.describe("chat routing", () => {
     await expect(page.getByText(/boom/)).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");
 
-    await page.getByRole("button", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "+ New chat" }).click();
 
     await expect(page.getByText(/boom/)).toHaveCount(0);
     expect(new URL(page.url()).pathname).toBe("/");
@@ -228,7 +230,7 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
     await expect(page.getByText("Here you go.")).toBeVisible();
 
-    const otherRow = page.locator(".convo-row", { has: page.getByRole("button", { name: "Other chat" }) });
+    const otherRow = page.locator(".convo-row", { has: page.getByRole("link", { name: "Other chat" }) });
     page.once("dialog", (d) => d.accept());
     await otherRow.getByRole("button", { name: "Delete chat: Other chat" }).click();
 
@@ -252,7 +254,7 @@ test.describe("chat routing", () => {
     await expect(page.getByText("conversation 999 not found for user 1")).toHaveCount(0);
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     // exact:true -- see note above.
-    await expect(page.getByRole("button", { name: "Some other chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Some other chat", exact: true })).toBeVisible();
     // The bad-id URL itself isn't wiped out from under the user.
     expect(new URL(page.url()).pathname).toBe("/chat/999");
   });
@@ -402,7 +404,7 @@ test.describe("chat routing", () => {
     expect(new URL(page.url()).pathname).toBe("/chat/42");
 
     // Sidebar highlight (c.id === convId) must recognize the open conversation.
-    await expect(page.getByRole("button", { name: "How many?", exact: true }))
+    await expect(page.getByRole("link", { name: "How many?", exact: true }))
       .toHaveAttribute("aria-current", "page");
   });
 
@@ -436,7 +438,7 @@ test.describe("chat routing", () => {
     // away before it resolves, same as a user who changes their mind.
     await page.waitForTimeout(150);
     expect(new URL(page.url()).pathname).toBe("/");
-    await page.getByRole("button", { name: "+ New chat" }).click({ force: true });
+    await page.getByRole("link", { name: "+ New chat" }).click({ force: true });
 
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");

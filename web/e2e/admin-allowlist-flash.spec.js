@@ -17,7 +17,7 @@ import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./
 
 async function openAllowlistAndSubmit(page, email = "newperson@example.edu") {
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
   await page.getByPlaceholder("email").fill(email);
   await page.getByRole("button", { name: "Add" }).click();
 }

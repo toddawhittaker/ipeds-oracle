@@ -37,7 +37,7 @@ test.describe("auth / verify (magic-link confirm)", () => {
     expect(verify.calls[0]).toEqual({ token: "tok-abc-123" });
 
     // …and we land in the signed-in app shell.
-    await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
     await expect(page.getByText("prof@example.edu")).toBeVisible();
   });
 

@@ -31,8 +31,8 @@ async function openImportsTab(page) {
   await mockConversations(page, []);
   await mockImportJobs(page, []);
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
-  await page.getByRole("button", { name: "Imports" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Imports" }).click();
 }
 
 const CATALOG = {

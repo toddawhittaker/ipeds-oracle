@@ -96,11 +96,11 @@ input, textarea, button { font-family: inherit; }
 }
 .brand .wordmark { height: 26px; }
 .tabs { display: flex; gap: 6px; }
-.tabs button, .subtabs button {
+.tabs a, .subtabs a {
   background: transparent; border: 1px solid transparent; color: var(--muted);
-  padding: 6px 12px; border-radius: 8px;
+  padding: 6px 12px; border-radius: 8px; text-decoration: none;
 }
-.tabs button.on, .subtabs button.on { color: var(--text); background: var(--bg); border-color: var(--line); }
+.tabs a.on, .subtabs a.on { color: var(--text); background: var(--bg); border-color: var(--line); }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
@@ -151,8 +151,8 @@ input, textarea, button { font-family: inherit; }
   display: grid; place-items: center; font-size: 16px; line-height: 1;
 }
 .icon-btn:hover { color: var(--text); }
-.newchat-collapsed { font-size: 20px; }
-.newchat { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; }
+.newchat-collapsed { font-size: 20px; text-decoration: none; }
+.newchat { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; text-align: center; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .convo-row { display: flex; align-items: center; border-radius: 8px; }
 .convo-row:hover { background: var(--bg); }
@@ -161,6 +161,7 @@ input, textarea, button { font-family: inherit; }
   flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; color: var(--muted);
   text-align: left; background: none; border: none; border-radius: 8px;
+  text-decoration: none;
 }
 /* Inset (negative) offset -- .convo-list is overflow:auto, and a positive
    offset on this full-width child gets clipped by the scroll container. */

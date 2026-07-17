@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api.js";
 import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
@@ -128,11 +128,9 @@ function Shell() {
       <header className="topbar">
         <div className="brand"><span className="wordmark" role="img" aria-label="IPEDS Query" /></div>
         <nav className="tabs" aria-label="Primary">
-          <button className={onAdmin ? "" : "on"} aria-current={onAdmin ? undefined : "page"}
-                  onClick={() => navigate("/")}>Chat</button>
+          <Link to="/" className={onAdmin ? "" : "on"} aria-current={onAdmin ? undefined : "page"}>Chat</Link>
           {user.is_admin && (
-            <button className={onAdmin ? "on" : ""} aria-current={onAdmin ? "page" : undefined}
-                    onClick={() => navigate("/admin")}>Admin</button>
+            <Link to="/admin" className={onAdmin ? "on" : ""} aria-current={onAdmin ? "page" : undefined}>Admin</Link>
           )}
         </nav>
         <div className="userbox">

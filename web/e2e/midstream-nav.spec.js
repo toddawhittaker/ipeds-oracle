@@ -60,7 +60,7 @@ test.describe("mid-stream navigation", () => {
     // Still streaming (mocked with a 600ms delay) -- navigate away, same as a
     // user who changes their mind mid-answer.
     await page.waitForTimeout(150);
-    await page.getByRole("button", { name: "B", exact: true }).click();
+    await page.getByRole("link", { name: "B", exact: true }).click();
 
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/5");
     await expect(page.getByText("old B answer")).toBeVisible();
@@ -85,7 +85,7 @@ test.describe("mid-stream navigation", () => {
       { role: "user", content: "Q-A" },
       { role: "assistant", content: "ANSWER-A" },
     ]);
-    await page.getByRole("button", { name: "A", exact: true }).click();
+    await page.getByRole("link", { name: "A", exact: true }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/3");
     await expect(page.getByText("ANSWER-A")).toBeVisible();
   });
@@ -127,7 +127,7 @@ test.describe("mid-stream navigation", () => {
     await page.getByRole("button", { name: "Send" }).click();
 
     await page.waitForTimeout(150); // A is still in flight (800ms delay)
-    await page.getByRole("button", { name: "B", exact: true }).click();
+    await page.getByRole("link", { name: "B", exact: true }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/5");
 
     await page.getByPlaceholder("Ask about IPEDS data…").fill("Q-B");
@@ -169,7 +169,7 @@ test.describe("mid-stream navigation", () => {
     // in-flight stream (per the design) must keep draining in the
     // background rather than being aborted.
     await page.waitForTimeout(150);
-    await page.getByRole("button", { name: "Admin", exact: true }).click();
+    await page.getByRole("link", { name: "Admin", exact: true }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
 
     // Let the abandoned stream finish landing while Chat is unmounted.
@@ -277,7 +277,7 @@ test.describe("mid-stream navigation", () => {
     await page.getByRole("button", { name: "Send" }).click();
 
     await page.waitForTimeout(150);
-    await page.getByRole("button", { name: "B", exact: true }).click();
+    await page.getByRole("link", { name: "B", exact: true }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/5");
 
     await page.getByPlaceholder("Ask about IPEDS data…").fill("Q-B");

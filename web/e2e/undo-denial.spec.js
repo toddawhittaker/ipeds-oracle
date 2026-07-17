@@ -63,7 +63,7 @@ async function openAllowlistTab(
   await mockAccessRequests(page, reqs);
   await mockDeniedRequests(page, denied, { httpStatus: deniedHttpStatus });
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
 }
 
 const ONE_DENIED_GROUP = [

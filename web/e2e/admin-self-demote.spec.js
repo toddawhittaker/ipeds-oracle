@@ -13,7 +13,7 @@ test("admin cannot demote themselves from the allowlist UI", async ({ page }) =>
   await mockAccessRequests(page, []);
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
 
   // Own row: a plain "(you)" label, NOT a toggle button.
   await expect(page.getByText("✓ admin (you)")).toBeVisible();

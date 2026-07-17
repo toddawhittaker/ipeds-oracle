@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
@@ -159,7 +159,7 @@ export default function Chat({ me }) {
   // left). Consumed by the [convos] effect below, which is the only place
   // that actually moves focus for that case (see its comment for why).
   const focusAfterDelete = useRef(null);
-  // Bumped by newChat() and by any real route change (effect below) to mark
+  // Bumped by handleNewChat() and by any real route change (effect below) to mark
   // whichever stream is currently in flight as abandoned. submit() captures
   // the value at call time; the `conversation` SSE handler compares against
   // it before yanking the viewer to the new /chat/:id -- see the "'+ New
@@ -263,9 +263,9 @@ export default function Chat({ me }) {
   // Forward, delete-the-open-chat -- means the viewer has moved on from
   // whichever turn was in flight when it happened. Bump the token so that
   // turn's `conversation` SSE handler (if it lands later) won't yank them
-  // back. (newChat() bumps it directly too, since starting a fresh "/"
+  // back. (handleNewChat() bumps it directly too, since starting a fresh "/"
   // thread from an already-"/" URL never changes routeId, so this effect
-  // alone wouldn't catch that case -- see newChat() below.)
+  // alone wouldn't catch that case -- see handleNewChat() below.)
   useEffect(() => {
     // If this route change is the current turn's own self-nav (the
     // `conversation` handler's / -> /chat/:id flip for a brand-new
@@ -297,18 +297,23 @@ export default function Chat({ me }) {
   // openId===routeId never flips, and that render-time reset never fires --
   // so navigate("/") alone would be a silent no-op AND would push a
   // duplicate "/" history entry. Reset state directly in that case instead.
-  function newChat() {
-    // Abandon whichever turn is in flight -- see turnToken's declaration and
-    // the `conversation` SSE handler in submit() below. The user is entitled
-    // to walk away from a stream; it just must not yank them back afterward.
+  function handleNewChat(e) {
+    // Modified / middle / right clicks: let the browser open "/" in a NEW tab
+    // WITHOUT running this tab's SPA-only side effects.
+    if (e.defaultPrevented) return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // Plain left click (the one react-router turns into an in-tab nav to "/").
+    // Abandon whichever turn is in flight (see turnToken).
     turnToken.current++;
     if (routeId === null) {
-      // Already at "/" -- the [routeId] effect above won't fire (routeId
-      // doesn't change), so free the composer directly here too.
+      // Already at "/" -- a Link nav to "/" would push a DUPLICATE history entry
+      // and the render-time reset (openId !== routeId) never fires. Suppress the
+      // Link's nav and reset thread state directly, as the old newChat() did.
+      e.preventDefault();
       setMessages([]); setNotice(""); setEditingIdx(null);
       setBusy(false); setStatus("");
     }
-    else navigate("/");
+    // else: let the Link push "/"; routeId flips, the render-time reset fires.
   }
 
   function toggleSidebar() {
@@ -458,7 +463,7 @@ export default function Chat({ me }) {
           // The viewer may have already abandoned this turn -- "+ New chat"
           // mid-stream, a sidebar click to a different chat, browser Back/
           // Forward, or deleting the open chat -- before this event landed.
-          // turnToken is bumped by newChat() and by any real route change
+          // turnToken is bumped by handleNewChat() and by any real route change
           // (effect above); if it no longer matches what this turn captured
           // at the top of submit(), silently drop the "open/navigate to it"
           // side effects below. The turn still finishes normally in the
@@ -559,21 +564,20 @@ export default function Chat({ me }) {
                   aria-expanded={!collapsed}>
             {collapsed ? "»" : "«"}
           </button>
-          {!collapsed && <button className="newchat" onClick={newChat}>+ New chat</button>}
+          {!collapsed && <Link to="/" className="newchat" onClick={handleNewChat}>+ New chat</Link>}
         </div>
         {collapsed ? (
-          <button className="icon-btn newchat-collapsed" onClick={newChat}
-                  title="New chat" aria-label="New chat">+</button>
+          <Link to="/" className="icon-btn newchat-collapsed" onClick={handleNewChat}
+                title="New chat" aria-label="New chat">+</Link>
         ) : (
           <div className="convo-list thin-scroll">
             {convos.map((c) => (
               <div key={c.id} className={"convo-row" + (c.id === convId ? " on" : "")}>
-                <button type="button" id={`convo-${c.id}`}
-                        className={"convo" + (c.id === convId ? " on" : "")}
-                        aria-current={c.id === convId ? "page" : undefined}
-                        onClick={() => navigate(`/chat/${c.id}`)}>
+                <Link to={`/chat/${c.id}`} id={`convo-${c.id}`}
+                      className={"convo" + (c.id === convId ? " on" : "")}
+                      aria-current={c.id === convId ? "page" : undefined}>
                   {c.title || "Untitled"}
-                </button>
+                </Link>
                 <button type="button" className="convo-del"
                         onClick={(e) => deleteConvo(e, c.id)}
                         title="Delete chat"
