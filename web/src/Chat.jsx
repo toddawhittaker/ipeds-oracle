@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
@@ -121,9 +122,19 @@ function ThinkingTrace({ items }) {
   );
 }
 
+// A route :id is only ever a plain conversation id (see api.js); anything
+// else (e.g. "abc") is a malformed URL, not a real conversation, and must
+// never reach the network -- same notice, zero fetch.
+const NUMERIC_ID = /^\d+$/;
+const NOT_AVAILABLE = "That conversation isn't available.";
+
 export default function Chat({ me }) {
   const [convos, setConvos] = useState([]);
-  const [convId, setConvId] = useState(null);
+  const { id: routeId = null } = useParams();
+  const navigate = useNavigate();
+  const [openId, setOpenId] = useState(routeId);
+  const [notice, setNotice] = useState("");
+  const loadedFor = useRef(null); // routeId this conversation's messages were last fetched for
   const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, status?}
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,7 +153,40 @@ export default function Chat({ me }) {
   const chatRef = useRef(null);
   const editTrigger = useRef(null); // Edit button that opened the inline editor
   const mdRefs = useRef({}); // message index -> rendered markdown DOM node
+  // Bumped by newChat() and by any real route change (effect below) to mark
+  // whichever stream is currently in flight as abandoned. submit() captures
+  // the value at call time; the `conversation` SSE handler compares against
+  // it before yanking the viewer to the new /chat/:id -- see the "'+ New
+  // chat' mid-stream" fix in submit() below.
+  const turnToken = useRef(0);
 
+  // The URL changed out from under us -- sidebar click, "+ New chat",
+  // delete-the-open-chat, or browser Back/Forward -- so reset local thread
+  // state to match. This has to happen DURING RENDER, not in an effect:
+  // react-hooks/set-state-in-effect is an ERROR in this repo's eslint config,
+  // and an effect here would also mean an extra render with stale messages
+  // visible before the reset lands.
+  if (openId !== routeId) {
+    setOpenId(routeId); setMessages([]); setNotice(""); setEditingIdx(null);
+  }
+  const badFormat = routeId !== null && !NUMERIC_ID.test(routeId);
+  const showNotice = notice || (badFormat ? NOT_AVAILABLE : "");
+  const convId = routeId !== null && !badFormat && !notice ? Number(routeId) : null;
+
+  // A11y (WCAG 4.1.3): the always-mounted live region that actually announces
+  // showNotice. A role="status" node that's already populated at first paint
+  // (the sync /chat/abc path) or that mounts brand-new inside an async
+  // .catch (the /chat/999 path) is never reliably announced -- same class of
+  // bug already fixed for Admin.jsx's flash box (Admin.jsx:249-258). Chat is
+  // already mounted across every client-side nav (App.jsx keeps it alive
+  // between "/" <-> "/chat/:id"), so this node is already committed/painted
+  // BEFORE showNotice changes on any of those navigations -- a plain render
+  // mutates the same already-mounted node, which is exactly what a screen
+  // reader needs to announce it. (A setTimeout(0) deferral doesn't help the
+  // one path that isn't already mounted -- a direct page load of /chat/abc --
+  // since the mutation still lands inside the initial-load window screen
+  // readers swallow either way.) The visible `.notice` below is deliberately
+  // NOT role="status" anymore -- exactly one announcement, not two.
   const refreshConvos = () => api.conversations().then(setConvos).catch(() => {});
   useEffect(() => { refreshConvos(); }, []);
   useEffect(() => {
@@ -157,6 +201,38 @@ export default function Chat({ me }) {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }, [input]);
 
+  // Fetch a deep-linked/sidebar-selected conversation's messages. Every
+  // setState here happens inside the async .then/.catch callback, never sync
+  // in the effect body, so this can't collide with the render-time reset
+  // above. Skipped entirely (no fetch) for a non-numeric :id -- see
+  // NUMERIC_ID/badFormat above -- and for the id the live SSE stream just
+  // assigned (loadedFor is set to it directly in the `conversation` event
+  // handler below, before the URL flip, precisely so this effect no-ops for
+  // an id it already has fully in memory).
+  useEffect(() => {
+    if (routeId === null) { loadedFor.current = null; return; }
+    if (loadedFor.current === routeId) return;
+    loadedFor.current = routeId;
+    if (!NUMERIC_ID.test(routeId)) return;
+    let cancelled = false;
+    api.conversation(routeId)
+      .then((msgs) => {
+        if (cancelled) return;
+        setMessages(msgs.map((m) => ({ ...m, sql_log: m.sql_log ? JSON.parse(m.sql_log) : [] })));
+      })
+      .catch(() => { if (!cancelled) setNotice(NOT_AVAILABLE); });
+    return () => { cancelled = true; };
+  }, [routeId]);
+
+  // A real route change -- sidebar click to a different chat, browser Back/
+  // Forward, delete-the-open-chat -- means the viewer has moved on from
+  // whichever turn was in flight when it happened. Bump the token so that
+  // turn's `conversation` SSE handler (if it lands later) won't yank them
+  // back. (newChat() bumps it directly too, since starting a fresh "/"
+  // thread from an already-"/" URL never changes routeId, so this effect
+  // alone wouldn't catch that case -- see newChat() below.)
+  useEffect(() => { turnToken.current++; }, [routeId]);
+
   async function doCopy(i, kind, markdown) {
     const text = stripChartBlocks(markdown);
     const ok = kind === "html"
@@ -165,15 +241,23 @@ export default function Chat({ me }) {
     if (ok) { setCopied(`${i}:${kind}`); setTimeout(() => setCopied(null), 1400); }
   }
 
-  async function openConvo(id) {
-    setConvId(id);
-    const msgs = await api.conversation(id);
-    setMessages(msgs.map((m) => ({
-      ...m, sql_log: m.sql_log ? JSON.parse(m.sql_log) : [],
-    })));
+  // Pushes a new history entry -- Back from a freshly-opened chat should
+  // return to whatever the sidebar/URL showed before, not vanish. The
+  // render-time reset above (openId !== routeId) picks up the resulting
+  // messages/notice reset once the route param changes. But when the URL is
+  // ALREADY "/" (e.g. the has_data:false no-conversation-event guard, or a
+  // streamChat() throw before any SSE event lands), routeId stays null,
+  // openId===routeId never flips, and that render-time reset never fires --
+  // so navigate("/") alone would be a silent no-op AND would push a
+  // duplicate "/" history entry. Reset state directly in that case instead.
+  function newChat() {
+    // Abandon whichever turn is in flight -- see turnToken's declaration and
+    // the `conversation` SSE handler in submit() below. The user is entitled
+    // to walk away from a stream; it just must not yank them back afterward.
+    turnToken.current++;
+    if (routeId === null) { setMessages([]); setNotice(""); setEditingIdx(null); }
+    else navigate("/");
   }
-
-  function newChat() { setConvId(null); setMessages([]); }
 
   function toggleSidebar() {
     setCollapsed((v) => { const n = !v; localStorage.setItem("sidebarCollapsed", n ? "1" : "0"); return n; });
@@ -254,13 +338,14 @@ export default function Chat({ me }) {
     e.stopPropagation();
     if (!window.confirm("Delete this chat? This can't be undone.")) return;
     await api.deleteConversation(id).catch(() => {});
-    if (id === convId) newChat();
+    if (id === convId) navigate("/");
     refreshConvos();
   }
 
   async function submit(q, { editMessageId = null } = {}) {
     q = (q || "").trim();
     if (!q || busy) return;
+    const myTurn = turnToken.current; // see the `conversation` SSE handler below
     setBusy(true); setStatus("Thinking…");
     setMessages((m) => [...m, { role: "user", content: q },
                               { role: "assistant", content: "", sql_log: [], thinking: [], pending: true }]);
@@ -277,7 +362,49 @@ export default function Chat({ me }) {
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
     try {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
-        if (ev.type === "conversation") { newConvId = ev.id; setConvId(ev.id); }
+        if (ev.type === "conversation") {
+          newConvId = ev.id;
+          // The viewer may have already abandoned this turn -- "+ New chat"
+          // mid-stream, a sidebar click to a different chat, browser Back/
+          // Forward, or deleting the open chat -- before this event landed.
+          // turnToken is bumped by newChat() and by any real route change
+          // (effect above); if it no longer matches what this turn captured
+          // at the top of submit(), silently drop the "open/navigate to it"
+          // side effects below. The turn still finishes normally in the
+          // background -- refreshConvos() after the stream still lists the
+          // new conversation in the sidebar -- only the yank-the-viewer-back
+          // behavior is suppressed.
+          if (turnToken.current !== myTurn) return;
+          // setNotice, loadedFor, and setOpenId below are ALL load-bearing,
+          // and all three must run before navigate(): React 18's createRoot
+          // auto-batches every state update from this one event-handler tick
+          // into a SINGLE render, in which openId === routeId already (the
+          // :id param and openId flip to the same new value together) -- so
+          // the render-time reset above never fires and the just-streamed
+          // answer stays on screen. setNotice clears a stale notice left
+          // over from a bad deep link (e.g. /chat/999 -> 404) -- otherwise it
+          // would float above the thread forever, since the render-time
+          // reset that normally clears it never fires here, for the same
+          // reason. loadedFor stops the loader effect from refetching a
+          // conversation the client already has fully in memory; setOpenId
+          // stops the render-time reset from wiping it.
+          setNotice("");
+          // LOAD-BEARING PRECONDITION, WARNING FOR FUTURE MAINTAINERS: this
+          // batching guarantee holds only because navigate() here is a plain
+          // synchronous history update, NOT a React transition. If
+          // <BrowserRouter future={{ v7_startTransition: true }}> is ever
+          // added (main.jsx) -- the documented v6->v7 migration step, and
+          // the v7 DEFAULT -- navigate() below starts deferring its location
+          // update as a transition: React would commit openId/routeId
+          // BEFORE the transition resolves, the render-time reset above
+          // would wipe the just-streamed answer, and loadedFor.current
+          // already being set to this id would stop the loader effect from
+          // ever refetching it -- the answer would be gone permanently. See
+          // the matching warning at main.jsx.
+          loadedFor.current = String(ev.id);
+          setOpenId(String(ev.id));
+          navigate(`/chat/${ev.id}`, { replace: true });
+        }
         else if (ev.type === "status") { setStatus(ev.text); addThought({ kind: "status", text: ev.text }); }
         else if (ev.type === "sql") { sqlLog = [...sqlLog, ev.sql]; setStatus("Running query…"); addThought({ kind: "sql", text: ev.sql }); }
         else if (ev.type === "thinking") addThought({ kind: "reason", text: ev.text });
@@ -331,7 +458,7 @@ export default function Chat({ me }) {
                 <button type="button"
                         className={"convo" + (c.id === convId ? " on" : "")}
                         aria-current={c.id === convId ? "page" : undefined}
-                        onClick={() => openConvo(c.id)}>
+                        onClick={() => navigate(`/chat/${c.id}`)}>
                   {c.title || "Untitled"}
                 </button>
                 <button type="button" className="convo-del"
@@ -355,6 +482,14 @@ export default function Chat({ me }) {
         <h1 className="sr-only">Chat</h1>
         <div className="messages thin-scroll">
           <div className="messages-inner">
+          {/* Rendered ABOVE the empty state, URL left as-is -- navigating away
+              would re-run the render-time reset above and wipe the notice
+              right when the user needs to see it. Never renders the server's
+              `detail` (see NOT_AVAILABLE): a 404 (doesn't exist) and a 403
+              (not yours) must read identically so this can't be used to
+              enumerate other users' conversation ids. */}
+          {showNotice && <div className="notice">{showNotice}</div>}
+          <div className="sr-only" role="status" aria-live="polite">{showNotice}</div>
           {messages.length === 0 && !me?.has_data && (
             <div className="empty">
               <h2>No IPEDS data loaded yet</h2>

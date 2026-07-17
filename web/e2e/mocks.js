@@ -123,19 +123,36 @@ export async function mockConversations(page, initial = []) {
 }
 
 /**
- * GET /api/chat/conversations/:id -> array of {role, content, id?, sql_log?}.
- * `sql_log` must be passed as a JSON STRING per the real API contract (Chat.jsx
- * does JSON.parse on it) — pass an array of SQL strings and this helper
- * stringifies it for you.
+ * GET /api/chat/conversations/:id -> array of {role, content, id?, sql_log?}
+ * (or a non-200 `httpStatus`, e.g. 404 for "doesn't exist" / 403 for "not
+ * yours" -- see web/e2e/routing-chat.spec.js's bad-:id notice tests, which
+ * assert the SAME rendered text for both so the UI isn't an enumeration
+ * oracle). `sql_log` must be passed as a JSON STRING per the real API
+ * contract (Chat.jsx does JSON.parse on it) — pass an array of SQL strings
+ * and this helper stringifies it for you.
+ *
+ * Returns a handle whose live `.calls` getter counts GET requests actually
+ * received, so a spec can assert a fetch for this id never fired at all (e.g.
+ * a route param that must never reach the network, or a live SSE stream that
+ * must not trigger a redundant reload right after the URL flips to it).
  */
-export async function mockConversation(page, id, messages) {
-  const body = messages.map((m) => ({
+export async function mockConversation(page, id, messages, { httpStatus = 200, detail } = {}) {
+  let calls = 0;
+  const body = (messages || []).map((m) => ({
     ...m,
     sql_log: m.sql_log !== undefined ? JSON.stringify(m.sql_log) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    if (route.request().method() !== "GET") return route.continue();
+    calls += 1;
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "Not found." }) });
+    }
   });
+  return { get calls() { return calls; } };
 }
 
 /**
@@ -145,6 +162,20 @@ export async function mockConversation(page, id, messages) {
  * to attach ids that unlock CSV/copy — see Chat.jsx submit()).
  * `answer` should be markdown containing a GFM table so specs can assert the
  * rendered <table>.
+ *
+ * Returns `{ calls }`: the parsed POST body (`{question, conversation_id,
+ * edit_message_id}`, per web/src/api.js streamChat()) for every request this
+ * route has fulfilled, in order — so a spec can assert exactly which
+ * `conversation_id` a given turn sent (e.g. a follow-up turn must carry the
+ * conversation id the FIRST turn was assigned, not null — see
+ * web/e2e/routing-chat.spec.js's orphaned-conversation regression).
+ *
+ * `delayMs` (default 0) delays fulfilling the response by that many ms —
+ * i.e. simulates network/model latency so the request is genuinely
+ * "in-flight" (busy===true) for a spec to act during, e.g. clicking
+ * "+ New chat" mid-stream. The whole response (SSE body) still lands as one
+ * chunk once the delay elapses; this only defers *when* it lands, since
+ * route.fulfill can't drip a body incrementally.
  */
 export async function mockStreamChat(page, {
   conversationId,
@@ -154,8 +185,12 @@ export async function mockStreamChat(page, {
   messageId = null,
   userMessageId = null,
   title = null,
+  delayMs = 0,
 } = {}) {
+  const calls = [];
   await page.route("**/api/chat/stream", async (route) => {
+    calls.push(route.request().postDataJSON());
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     const events = [
       { type: "conversation", id: conversationId },
       { type: "status", text: statusText },
@@ -167,6 +202,70 @@ export async function mockStreamChat(page, {
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });
   });
+  return { calls };
+}
+
+/**
+ * POST /api/chat/stream -> SSE stream WITHOUT a `conversation` event -- mirrors
+ * app/routers/chat.py's has_data:false guard, which streams only
+ * status/answer/done and deliberately never assigns/returns a conversation id
+ * (there's nothing to save yet). Used to exercise the "URL never leaves /"
+ * path -- see web/e2e/routing-chat.spec.js's "+ New chat" no-op regression.
+ */
+export async function mockStreamChatNoConversation(page, {
+  statusText = "Thinking…",
+  answer = "Answer.",
+  messageId = null,
+} = {}) {
+  await page.route("**/api/chat/stream", async (route) => {
+    const events = [
+      { type: "status", text: statusText },
+      { type: "answer", text: answer },
+      { type: "done", message_id: messageId, user_message_id: null, model: "test", tokens: 0 },
+    ];
+    const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+  });
+}
+
+/**
+ * POST /api/chat/stream -> a non-200 response, fulfilled BEFORE any SSE event
+ * is ever written (mirrors a network drop / 500 that fails before the
+ * `conversation` event). web/src/api.js's streamChat() throws
+ * `new Error(await r.text())` as soon as `!r.ok`, which Chat.jsx's submit()
+ * catches and renders as "⚠️ " + message -- so the URL never leaves / either.
+ */
+export async function mockStreamChatError(page, { httpStatus = 500, detail = "Internal error" } = {}) {
+  await page.route("**/api/chat/stream", async (route) => {
+    await route.fulfill({ status: httpStatus, contentType: "text/plain", body: detail });
+  });
+}
+
+/**
+ * DELETE /api/chat/conversations/:id -> {ok:true} (or a non-200 httpStatus).
+ * Captures every deleted id (parsed out of the URL), mirroring
+ * mockDeintegrate/mockClearDenial's shape (web/src/api.js: deleteConversation(id)
+ * -> DELETE /api/chat/conversations/${id}).
+ *
+ * REST reuses the exact same path GET /api/chat/conversations/:id uses
+ * (mockConversation), so this is registered on the same glob. A non-DELETE
+ * request calls `route.fallback()` (never `route.continue()`, which would
+ * escape straight to the real network and 404/hang in a mocked-only test env)
+ * so it defers to an earlier-registered mockConversation(...) handler for
+ * that id. Playwright runs the NEWEST-registered matching handler first, so
+ * call mockDeleteConversation(...) AFTER any per-id mockConversation(...)
+ * calls in a spec — that ordering is what lets fallback() actually reach them.
+ */
+export async function mockDeleteConversation(page, { httpStatus = 200 } = {}) {
+  const calls = [];
+  await page.route("**/api/chat/conversations/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    const url = new URL(route.request().url());
+    calls.push(url.pathname.split("/").pop());
+    await route.fulfill({ status: httpStatus, contentType: "application/json",
+      body: JSON.stringify({ ok: httpStatus === 200 }) });
+  });
+  return { calls };
 }
 
 /**
@@ -328,6 +427,17 @@ export async function mockClearDenial(page, { httpStatus = 200, cleared = 1, det
     }
   });
   return { calls };
+}
+
+/**
+ * GET /api/admin/logs?... -> {records:[{ts,level,name,msg}]}. Drives the
+ * Admin -> Logs subtab (web/src/api.js: logs(...) -> GET /api/admin/logs?...;
+ * Admin.jsx's Logs() reads `d.records`).
+ */
+export async function mockLogs(page, records) {
+  await page.route("**/api/admin/logs*", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records }) });
+  });
 }
 
 /**
