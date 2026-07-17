@@ -179,17 +179,38 @@ assertions on constants. Tests are dependency-light scripts in `eval/`
 (`sys.exit(1)` on failure, no API key needed). New low-coverage code is not
 "done" until it's tested.
 
+**Test pyramid — pick the lowest tier that actually catches the regression.**
+*Pure logic* — functions and leaf modules with real input→output behavior — is
+unit-tested with **vitest** (`web/`, jsdom, no browser; co-located
+`web/src/*.test.js`, table-driven). *Genuine browser truth* —
+routing/navigation, focus management, aria-live/AT announcements, back/forward,
+SSE-driven DOM — stays in **Playwright** (`web/e2e/`). jsdom's focus and history
+models are **not** the browser's, so component tests that lean on routing,
+portals, or focus belong in Playwright, not vitest. Don't boot a browser to
+check a pure function; don't unit-test a navigation truth jsdom will fake and
+get wrong. When a pure function is currently pinned through an e2e assertion,
+**move it down** to vitest and thin the now-redundant e2e logic check — keep the
+browser *flow* (focus, the aria-live announcement firing) around it. **JS
+coverage is gated:** `web/vitest.config.js` enforces a per-file ≥80% line floor
+over an explicit **allowlist** of the pure-logic modules under test — the JS
+analogue of `coverage_check.sh`'s per-`app/`-module rule. Add a module to that
+list when (and only when) it gets real unit tests, so JS logic never silently
+escapes a gate. Browser-tested components (`Chat.jsx`, `Admin.jsx`, …) are
+deliberately not in the floor — Playwright covers them.
+
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (ruff `app scripts eval` + ESLint; the `eval/` backend suites against a
-fixture DB; Playwright e2e). A `.githooks/pre-push` hook runs it automatically
-(bypass: `git push --no-verify`; skip e2e: `SKIP_E2E=1`). This is the *only*
-merge gate — GitHub branch protection isn't available on this repo's plan, so a
-red CI check can otherwise land on `main`.
+CI (ruff `app scripts eval` + ESLint; the `web/` **vitest** unit tests; the
+`eval/` backend suites against a fixture DB; Playwright e2e). A
+`.githooks/pre-push` hook runs it automatically (bypass: `git push --no-verify`;
+skip e2e: `SKIP_E2E=1`). This is the *only* merge gate — GitHub branch protection
+isn't available on this repo's plan, so a red CI check can otherwise land on
+`main`.
 
 **Ship via branch → PR → merge on green.** Never commit straight to `main`.
 Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), keep PRs focused (one item),
-open a PR, watch `gh pr checks <n> --watch`, merge only when lint · backend · e2e
-· image are all green. End commit messages with the `Co-Authored-By:` trailer.
+open a PR, watch `gh pr checks <n> --watch`, merge only when lint · unit ·
+backend · e2e · image are all green. End commit messages with the
+`Co-Authored-By:` trailer.
 
 **Two sessions → use a worktree.** If a second dev/agent session runs in this
 repo, they share one working tree — a `git checkout` in one moves the other's

@@ -170,6 +170,31 @@ jobs:
           pip install coverage==7.15.1
           scripts/coverage_check.sh
 
+  unit:
+    name: Web unit tests (vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs vitest with coverage; vitest.config.js enforces a per-file >=80%
+      # line floor over the pure-logic modules under test (the JS analogue of
+      # coverage_check.sh). No browser — jsdom only.
+      - name: Run unit tests (with coverage floor)
+        run: npm run test:unit
+
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest

@@ -16,8 +16,9 @@ the data model and query conventions see [SCHEMA.md](SCHEMA.md).
   skills, usage — the only thing that's written to).
 - **Frontend** — React 18 + [Vite](https://vitejs.dev/), Recharts for charts,
   react‑markdown for answers.
-- **Tests** — plain‑script backend suites in `eval/` + [Playwright](https://playwright.dev/)
-  end‑to‑end specs in `web/e2e/`.
+- **Tests** — plain‑script backend suites in `eval/`, [vitest](https://vitest.dev/)
+  unit tests for pure JS logic in `web/src/*.test.js`, and
+  [Playwright](https://playwright.dev/) end‑to‑end specs in `web/e2e/`.
 
 ## Repo layout
 
@@ -46,7 +47,7 @@ eval/                backend test suites + the NL→SQL accuracy harness
 scripts/            build_ipeds_db.py, backups, CI fixture builder
 data/               source IPEDS{YYYY}{YY}.accdb files (gitignored, large)
 docs/               official IPEDS Excel table documentation
-.github/workflows/  CI (lint · backend · e2e · image) + manual NL→SQL eval
+.github/workflows/  CI (lint · unit · backend · e2e · image) + manual NL→SQL eval
 .claude/agents/     the specialist agent team (see below)
 ```
 
@@ -113,12 +114,22 @@ fixture `ipeds.db`.
 #       test_result_isolation, test_backup, test_logbuffer, test_mailer, test_guard,
 #       test_estimate (disk/time estimator contract, shared with web/src/estimate.js)
 
+# Web unit tests — the FAST pure-logic tier (vitest + jsdom, no browser)
+cd web && npm run test:unit          # runs with the JS coverage floor
+cd web && npm run test:unit:watch    # watch mode for iterating
+
 # End-to-end UI (network-mocked; no key, no ipeds.db needed)
 cd web && npm run test:e2e
 
 # Full NL→SQL accuracy (needs LLM_API_KEY + a real ipeds.db)
 .venv/bin/python eval/eval_nl2sql.py
 ```
+
+**Test pyramid.** Pure input→output logic goes in **vitest** (`web/src/*.test.js`,
+table-driven, no browser). Genuine browser truth — routing, focus, aria-live/AT,
+back/forward, SSE-driven DOM — stays in **Playwright** (`web/e2e/`); jsdom's focus
+and history models aren't the browser's. Pick the lowest tier that can actually
+catch the regression.
 
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
@@ -132,6 +143,12 @@ below the floor. Every behavior change ships with unit tests. Measure locally:
 scripts/coverage_check.sh                                           # the gate (>=80% or fail)
 .venv/bin/coverage report --sort=cover                              # per-module breakdown
 ```
+
+The **JS side** has its own floor: `web/vitest.config.js` gates a per-file ≥ 80%
+line coverage over an explicit allowlist of the pure-logic modules under test
+(`announce.js`, `estimate.js`, `mdnorm.js`, `tabledata.js`) — `npm run test:unit`
+fails if one dips. Add a module to that list when it gets real unit tests.
+Browser-tested components stay out of the floor (Playwright covers them).
 
 **Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
 three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
@@ -165,13 +182,14 @@ cd web && npm run format           # Prettier (write) — optional; existing fil
 
 ## CI & the contribution workflow
 
-`.github/workflows/ci.yml` runs on every PR and push to `main`, with four jobs:
-**lint** (ruff + ESLint), **backend** (all the `eval/test_*` suites against a
-fixture DB), **e2e** (Playwright, network‑mocked), and **image** (builds the
-Docker image, boots it, and curls `/api/health` as a smoke test). A separate
+`.github/workflows/ci.yml` runs on every PR and push to `main`, with five jobs:
+**lint** (ruff + ESLint), **unit** (vitest — the fast pure-logic tier, with the
+JS coverage floor), **backend** (all the `eval/test_*` suites against a fixture
+DB), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
+image, boots it, and curls `/api/health` as a smoke test). A separate
 `nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an API key + the real DB).
 
-The **image** job gates on the three test jobs, so a broken build or a boot
+The **image** job gates on the test jobs, so a broken build or a boot
 failure never reaches the registry. It publishes to GHCR only on pushes, not on
 PRs: a push to `main` moves `:edge` + `:sha-<short>`, and a `v*` release tag
 publishes `:vX.Y.Z` + `:latest`. The VPS pulls those — see DEPLOY.md. (The four
@@ -184,7 +202,7 @@ Workflow:
 2. Keep PRs focused; don't split a single file across PRs.
 3. Add or update tests for behavior changes — the **test‑engineer** agent owns
    test files (see below); new behavior is written test‑first where practical.
-4. Open a PR; it merges only when lint · backend · e2e · image are green.
+4. Open a PR; it merges only when lint · unit · backend · e2e · image are green.
 5. End commit messages with the `Co-Authored-By:` trailer.
 
 ## The agent team
@@ -286,8 +304,8 @@ pads it by `NCES_DISK_SAFETY_FACTOR`, and refuses the job (failing it with a
 `"Not enough disk: need ~X, have ~Y free"` message, before touching the
 network or the live db) if `shutil.disk_usage` on the `ipeds.db` volume can't
 cover it. The same estimator (mirrored, key-for-key in camelCase, by
-`web/src/estimate.js` — cross-language agreement is asserted by
-`web/e2e/estimate.spec.js` against the shared fixture
+`web/src/estimate.js` — cross-language agreement is asserted by the vitest unit
+test `web/src/estimate.test.js` against the shared fixture
 `eval/fixtures/estimate_cases.json`) drives a live **disk meter** on the
 Imports tab: as an admin checks years, the client re-estimates against just
 the checked years' `zip_bytes` (a UX preview, not the server's authoritative

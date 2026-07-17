@@ -4,24 +4,19 @@
 // eval/fixtures/estimate_cases.json (also asserted from the Python side by
 // eval/test_estimate.py). See that fixture's cases for the derivation.
 //
-// The fixture stores snake_case keys (the Python function's kwarg names).
-// DECISION (documented here since the architect's contract left the exact
-// JS calling convention open): estimateIntegrate takes a SINGLE options
-// object with camelCase keys mirroring the Python kwargs 1:1 (zipBytes,
-// alreadyIntegratedCount, selectedCount, liveDbBytes, currentIntegratedYearCount,
-// diskFreeBytes, diskTotalBytes, expandFactor, defaultPerYearDbMb,
-// bandwidthMbps, buildSecondsPerYear, safetyFactor) and returns a plain object
-// with camelCase output keys (totalDownloadBytes, extractedBytes,
-// stagingDbBytes, perYearDbBytes, additionalBytesNeeded, usedNowBytes,
-// peakUsedBytes, diskFreeBytes, diskTotalBytes, estDownloadSeconds,
-// estBuildSeconds, safetyFactor, neededWithSafetyBytes, sufficient) — this
-// test converts the fixture's snake_case keys to camelCase rather than the
-// fixture storing both shapes, so there is exactly one ground truth file.
-import { test, expect } from "@playwright/test";
+// Moved here from web/e2e/estimate.spec.js: this is pure input->output logic
+// that never referenced `page`, so it belongs in the fast unit tier, not a
+// browser. (The disk-headroom METER that renders this result -- .over class,
+// submit-disable -- IS browser truth and stays in web/e2e/nces-catalog.spec.js.)
+//
+// The fixture stores snake_case keys (the Python kwarg names); estimateIntegrate
+// takes a single options object with camelCase keys mirroring them 1:1, so this
+// test converts snake_case -> camelCase rather than the fixture carrying both.
+import { describe, test, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { estimateIntegrate } from "../src/estimate.js";
+import { estimateIntegrate } from "./estimate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../eval/fixtures/estimate_cases.json");
@@ -40,8 +35,8 @@ function camelizeKeys(obj) {
 
 const cases = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf-8"));
 
-test.describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrate (Python)", () => {
-  test(`fixture has all 4 required cases`, () => {
+describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrate (Python)", () => {
+  test("fixture has all 4 required cases", () => {
     expect(cases.length).toBe(4);
     const names = new Set(cases.map((c) => c.name));
     expect(names).toEqual(new Set([
@@ -75,7 +70,7 @@ test.describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrat
     });
   }
 
-  test("sufficient boundary case: free bytes exactly equal to needed -> true", () => {
+  test("sufficient boundary: free bytes exactly equal to needed -> true (a >=)", () => {
     const boundary = cases.find((c) => c.name === "sufficient_boundary_exact_equal_is_true");
     const result = estimateIntegrate(camelizeKeys(boundary.input));
     expect(result.diskFreeBytes).toBe(result.neededWithSafetyBytes);
@@ -91,9 +86,9 @@ test.describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrat
   });
 
   test("bandwidth uses decimal Mbps/8, not the 1024*1024 storage MB constant", () => {
-    // 10 Mbps == 1,250,000 bytes/sec (decimal). A 1,250,000-byte download
-    // must take exactly 1.0 second — pins that the JS mirror doesn't reuse
-    // the 1024*1024 byte-storage constant for the bandwidth conversion too.
+    // 10 Mbps == 1,250,000 bytes/sec (decimal). A 1,250,000-byte download must
+    // take exactly 1.0 second — pins that the JS mirror doesn't reuse the
+    // 1024*1024 byte-storage constant for the bandwidth conversion too.
     const result = estimateIntegrate({
       zipBytes: [1_250_000], alreadyIntegratedCount: 0, selectedCount: 1,
       liveDbBytes: 0, currentIntegratedYearCount: 0,
@@ -102,6 +97,18 @@ test.describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrat
       buildSecondsPerYear: 0.0, safetyFactor: 1.0,
     });
     expect(result.estDownloadSeconds).toBeCloseTo(1.0, 9);
+  });
+
+  test("zero bandwidth yields a 0-second download estimate, never a divide-by-zero", () => {
+    // Covers the `bandwidthBytesPerSec ? ... : 0.0` guard branch.
+    const result = estimateIntegrate({
+      zipBytes: [1_000_000], alreadyIntegratedCount: 0, selectedCount: 1,
+      liveDbBytes: 0, currentIntegratedYearCount: 0,
+      diskFreeBytes: 10_000_000_000, diskTotalBytes: 10_000_000_000,
+      expandFactor: 1.0, defaultPerYearDbMb: 0, bandwidthMbps: 0,
+      buildSecondsPerYear: 0.0, safetyFactor: 1.0,
+    });
+    expect(result.estDownloadSeconds).toBe(0.0);
   });
 
   test("a null zip entry contributes exactly one defaultPerYearDbMb*MB slice", () => {
@@ -114,5 +121,18 @@ test.describe("estimateIntegrate (JS) agrees with app.estimate.estimate_integrat
       buildSecondsPerYear: 60.0, safetyFactor: 1.2,
     });
     expect(result.totalDownloadBytes).toBe(300_000_000 + 380 * MB);
+  });
+
+  test("perYearDbBytes divides live/count when both are present (no fallback)", () => {
+    // Covers the non-fallback arm of perYearDbBytes: liveDbBytes and
+    // currentIntegratedYearCount both truthy -> floor(live/count).
+    const result = estimateIntegrate({
+      zipBytes: [0], alreadyIntegratedCount: 1, selectedCount: 0,
+      liveDbBytes: 900, currentIntegratedYearCount: 4,
+      diskFreeBytes: 10_000, diskTotalBytes: 10_000,
+      expandFactor: 1.0, defaultPerYearDbMb: 999, bandwidthMbps: 10.0,
+      buildSecondsPerYear: 0.0, safetyFactor: 1.0,
+    });
+    expect(result.perYearDbBytes).toBe(225); // floor(900/4), NOT 999*MB
   });
 });

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
+import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 
 // Clickable starter prompts shown on the empty chat screen.
 const EXAMPLES = [
@@ -405,29 +406,23 @@ export default function Chat({ me }) {
     const next = convos[idx + 1] || convos[idx - 1] || null;
     const remaining = Math.max(convos.length - 1, 0);
     const ok = await api.deleteConversation(id).then(() => true).catch(() => false);
-    if (!ok) { setDeleteAnnounce("Couldn't delete that chat."); return; }
+    if (!ok) { setDeleteAnnounce(DELETE_FAILED); return; }
     if (isOpen) {
       // Case 1: deleting the OPEN conversation. Focus goes to the composer,
       // via the same navigate()+rAF precedent as fillExample/saveEdit --
       // deliberately NOT through focusAfterDelete/the [convos] effect below,
       // which targets a sidebar row on a different clock (refreshConvos()
       // landing later would otherwise steal focus back out of the composer).
-      setDeleteAnnounce(`Deleted "${title}". Started a new chat.`);
+      setDeleteAnnounce(deleteAnnouncement({ title, open: true, remaining }));
       navigate("/");
       requestAnimationFrame(() => taRef.current?.focus());
     } else {
       // Case 2: deleting a DIFFERENT conversation. Focus whatever now
       // occupies the deleted row's index once refreshConvos() actually
-      // commits -- see the [convos] effect above.
+      // commits -- see the [convos] effect above. The announcement's
+      // remaining-count is load-bearing for re-announcement -- see announce.js.
       focusAfterDelete.current = next ? { id: next.id } : { newchat: true };
-      // The remaining-count is LOAD-BEARING, not chatty: a live region only
-      // announces on a text MUTATION, and two chats both titled "Untitled"
-      // (the render fallback below) would otherwise produce an IDENTICAL
-      // announcement -- the second delete would be silently swallowed. The
-      // count strictly decreases, so consecutive announcements always differ.
-      setDeleteAnnounce(remaining === 0
-        ? `Deleted "${title}". No chats remaining.`
-        : `Deleted "${title}". ${remaining} ${remaining === 1 ? "chat" : "chats"} remaining.`);
+      setDeleteAnnounce(deleteAnnouncement({ title, open: false, remaining }));
     }
     refreshConvos();
   }

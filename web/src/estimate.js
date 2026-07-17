@@ -1,7 +1,8 @@
 // Disk/time estimator — JS mirror of app/estimate.py's estimate_integrate.
 // Cross-language agreement is asserted against the SAME fixture
-// (eval/fixtures/estimate_cases.json) by web/e2e/estimate.spec.js; keep this
-// in lockstep with the Python original if either changes.
+// (eval/fixtures/estimate_cases.json) by the vitest unit test
+// web/src/estimate.test.js; keep this in lockstep with the Python original if
+// either changes.
 //
 // estimateIntegrate takes a SINGLE options object with camelCase keys
 // mirroring the Python kwargs 1:1: zipBytes, alreadyIntegratedCount,

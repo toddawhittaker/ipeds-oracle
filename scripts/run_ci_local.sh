@@ -2,8 +2,8 @@
 #
 # run_ci_local.sh — run the full GitHub CI scope on this machine.
 #
-# This mirrors .github/workflows/ci.yml (the lint · backend · e2e jobs) so a red
-# check can be caught BEFORE it reaches GitHub. It exists because branch
+# This mirrors .github/workflows/ci.yml (the lint · unit · backend · e2e jobs)
+# so a red check can be caught BEFORE it reaches GitHub. It exists because branch
 # protection / required status checks are not available on this private repo's
 # plan, so CI is not a server-side merge gate — this is the client-side gate
 # (wired up as a pre-push hook via .githooks/pre-push).
@@ -45,6 +45,15 @@ step "Lint: ruff check app scripts eval"
 
 step "Lint: eslint (web)"
 ( cd web && npm run --silent lint ) || fail "eslint"
+
+# =========================================================================
+# Job 1b — web unit tests (vitest: the fast pure-logic tier + JS coverage floor)
+# =========================================================================
+# vitest.config.js gates a per-file >=80% line floor over the pure-logic modules
+# under test (the JS analogue of coverage_check.sh's per-module app/ rule), so a
+# failing unit test OR a coverage dip on those modules blocks the push.
+step "Unit: vitest (web)"
+( cd web && npm run --silent test:unit ) || fail "vitest unit tests"
 
 # =========================================================================
 # Job 2 — backend suites (against a throwaway fixture DB, like CI)
