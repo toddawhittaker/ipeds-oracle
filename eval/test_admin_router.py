@@ -113,6 +113,55 @@ def _seed_access_request(email, status="pending", created_at=None):
     return row_id
 
 
+# Unmistakable sentinel for the usage-dashboard privacy contract tests below
+# (see test_usage_dashboard_never_leaks_question_text). Distinctive enough
+# that it could never appear in any real column value by accident.
+USAGE_SENTINEL = "SENTINEL_SECRET_QUESTION_TEXT_DO_NOT_LEAK"
+
+
+def _get_or_create_user(email):
+    """Look up (or create) a users row for email, returning its id. Usage_log
+    rows FK-reference users(id) only loosely (no FK declared on user_id, but
+    the /usage endpoint's top_users JOIN requires a matching users row to
+    show up), so seeding a real user keeps this realistic."""
+    con = connect()
+    try:
+        row = con.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        if row:
+            return row["id"]
+        cur = con.execute(
+            "INSERT INTO users(email, is_admin, created_at) VALUES (?,0,?)",
+            (email, time.time()))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-flash",
+                     ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
+                     escalated=0):
+    """Insert one usage_log row directly (mirroring the exact column set
+    app/routers/chat.py:_persist's own INSERT uses), bypassing the full
+    chat-turn/streaming path -- the same direct-seed convention this file
+    already uses for access_requests (_seed_access_request above). Returns
+    the seeded user's id."""
+    user_id = _get_or_create_user(email)
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO usage_log(user_id, question, model_used, escalated, "
+            "prompt_tokens, completion_tokens, ok, cached, cost, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (user_id, question, model_used, escalated, prompt_tokens,
+             completion_tokens, ok, cached, cost,
+             created_at if created_at is not None else time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return user_id
+
+
 class _SyncThread:
     """Runs the target immediately (synchronously) instead of on a real
     background thread, so a mocked run_import completes before .start()
@@ -1093,6 +1142,143 @@ def test_usage_since_after_until_is_swapped():
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["since"] <= body["until"], body
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/usage -- privacy contract.
+#
+# usage_log.question KEEPS being written (Todd's explicit decision, no schema
+# change) -- the fix is narrower: the admin-facing dashboard must stop
+# echoing verbatim question text back out. The old "recent" key returned the
+# last 20 raw question strings across ALL users, unfiltered by the request's
+# own since/until window's narrowness -- and since since/until are
+# caller-controlled and top_users names the active users in that window, an
+# admin could trivially narrow the window to a single user's session and read
+# their literal questions. That's a real content leak, not a cosmetic one.
+#
+# These tests are the actual regression gate: they don't just check that the
+# key "recent" is gone (a rename would slip past a narrower test) -- they
+# seed a distinctive sentinel as the question text and assert it never
+# appears ANYWHERE in the serialized response body, under any key, in any
+# nesting. Do NOT "fix" a failure here by re-adding question text to the
+# response in any form; that is precisely the leak this PR removes.
+# ---------------------------------------------------------------------------
+
+def test_usage_response_has_no_recent_key():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.get("/api/admin/usage")
+        assert r.status_code == 200, r.text
+        assert "recent" not in r.json(), \
+            "the usage dashboard must not return a 'recent' key of verbatim " \
+            "question text (privacy leak; deliberately removed -- see CLAUDE.md)"
+
+
+def test_usage_dashboard_never_leaks_question_text():
+    """The core privacy-contract test. Seed usage_log rows whose `question`
+    is an unmistakable sentinel, hit the real endpoint, and grep the ENTIRE
+    raw response body (not a parsed/re-serialized dict -- the actual bytes
+    the client would receive) for the sentinel. This survives a future
+    "recent" being renamed to something else, or a question smuggled into
+    top_users/series/totals, since it doesn't care what key it might hide
+    under."""
+    with TestClient(app) as c:
+        _login(c)
+        now = time.time()
+        _seed_usage_log("leaker1@example.edu", USAGE_SENTINEL, created_at=now)
+        _seed_usage_log("leaker2@example.edu", USAGE_SENTINEL + "_TWO", created_at=now)
+
+        r = c.get("/api/admin/usage", params={"since": now - 60, "until": now + 60})
+        assert r.status_code == 200, r.text
+        raw = r.text  # exact wire body
+        assert USAGE_SENTINEL not in raw, \
+            f"question text leaked into the usage dashboard response: {raw}"
+        assert (USAGE_SENTINEL + "_TWO") not in raw, \
+            f"question text leaked into the usage dashboard response: {raw}"
+
+
+def test_usage_dashboard_narrow_window_plus_top_users_still_no_question_text():
+    """Covers the attributability angle specifically: narrowing since/until
+    to exactly one user's activity window, combined with top_users naming
+    that user, used to be exactly how an admin could de-anonymize the old
+    'recent' list down to a single person's literal question. Confirm that
+    narrowing the window to name a user via top_users still yields zero
+    question text -- not just that the 'recent' key is absent."""
+    with TestClient(app) as c:
+        _login(c)
+        t = time.time()
+        email = "narrowuser@example.edu"
+        _seed_usage_log(email, USAGE_SENTINEL, created_at=t)
+
+        r = c.get("/api/admin/usage", params={"since": t - 1, "until": t + 1})
+        assert r.status_code == 200, r.text
+        body = r.json()
+
+        # top_users legitimately still names the user in this narrow window --
+        # that's unchanged and correct. The point is that naming them buys
+        # an admin no question text whatsoever.
+        assert any(u["email"] == email for u in body["top_users"]), body["top_users"]
+
+        raw = r.text
+        assert USAGE_SENTINEL not in raw, \
+            f"narrow since/until + top_users must not expose question text: {raw}"
+
+
+def test_usage_totals_series_top_users_unaffected_by_recent_removal():
+    """MUST-STILL-WORK pin: totals/series/top_users are untouched by removing
+    'recent' -- assert their presence and correctness against known seeded
+    rows, so a future edit can't quietly break them while trimming the
+    response dict."""
+    with TestClient(app) as c:
+        _login(c)
+        # A fixed, arbitrary past timestamp -- NOT time.time() -- so this
+        # test's tight since/until window can't accidentally sweep in rows
+        # seeded (at real "now") by the sentinel/leak tests above, which
+        # would inflate `queries`/`spend` and make this test flaky depending
+        # on run timing/order.
+        t = 1_700_000_000.0
+        email = "counts@example.edu"
+        _seed_usage_log(email, "q1 (not a sentinel, just filler text)",
+                        created_at=t, cost=0.10)
+        _seed_usage_log(email, "q2 (not a sentinel, just filler text)",
+                        created_at=t, cost=0.20)
+
+        r = c.get("/api/admin/usage", params={"since": t - 5, "until": t + 5})
+        assert r.status_code == 200, r.text
+        body = r.json()
+
+        assert "totals" in body, body
+        assert "series" in body, body
+        assert "top_users" in body, body
+
+        assert body["totals"]["queries"] == 2, body["totals"]
+        assert abs(body["totals"]["spend"] - 0.30) < 1e-9, body["totals"]
+
+        top = next((u for u in body["top_users"] if u["email"] == email), None)
+        assert top is not None, body["top_users"]
+        assert top["queries"] == 2, top
+
+
+def test_usage_log_question_column_still_written():
+    """Deliberate, and the flip side of the privacy fix: usage_log.question
+    KEEPS being written to the database -- only the admin-facing /usage
+    endpoint stops exposing it. This pins the write path (a direct seed+read
+    against the same column set app/routers/chat.py:_persist's INSERT uses --
+    see _seed_usage_log's docstring) so nobody "helpfully" also drops the
+    column or stops writing to it while fixing the leak."""
+    email = "stillwritten@example.edu"
+    question = "does usage_log.question still get written after the fix?"
+    _seed_usage_log(email, question, created_at=time.time())
+
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT question FROM usage_log WHERE question=?", (question,)).fetchone()
+    finally:
+        con.close()
+    assert row is not None and row["question"] == question, \
+        "usage_log.question must still be written/readable -- this is deliberate, " \
+        "not something to remove alongside the /usage endpoint fix"
 
 
 def test_skills_get_includes_headline_field():
@@ -2105,6 +2291,16 @@ def run():
           test_cannot_demote_self)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
+    check("usage dashboard response has no 'recent' key",
+          test_usage_response_has_no_recent_key)
+    check("usage dashboard PRIVACY CONTRACT: never leaks question text (sentinel)",
+          test_usage_dashboard_never_leaks_question_text)
+    check("usage dashboard: narrow since/until + top_users still leaks no question text",
+          test_usage_dashboard_narrow_window_plus_top_users_still_no_question_text)
+    check("usage dashboard: totals/series/top_users unaffected by 'recent' removal",
+          test_usage_totals_series_top_users_unaffected_by_recent_removal)
+    check("usage_log.question is still written to the DB (deliberate, not dropped)",
+          test_usage_log_question_column_still_written)
     check("skills GET includes the headline field", test_skills_get_includes_headline_field)
     check("skills PATCH headline/lesson re-embeds", test_skills_patch_headline_or_lesson_reembeds)
     check("skills PATCH preserves an existing embedding when embed() fails (returns None)",
