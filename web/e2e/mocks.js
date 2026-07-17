@@ -169,8 +169,16 @@ export async function mockStreamChat(page, {
   });
 }
 
-/** GET/POST /api/admin/allowlist. Returns captured POST bodies. */
-export async function mockAllowlist(page, rows) {
+/**
+ * GET/POST /api/admin/allowlist. Returns captured POST bodies.
+ *
+ * `postStatus`/`postBody` let a spec control exactly what POST returns, so
+ * the four `inviteFlash()` branches in web/src/Admin.jsx (added/failed-to-add,
+ * invited, mail_configured true/false) can each be driven deterministically —
+ * see web/e2e/admin-allowlist-flash.spec.js. Defaults (200, {ok:true}) match
+ * every pre-existing caller of this helper, which only cares about the GET.
+ */
+export async function mockAllowlist(page, rows, { postStatus = 200, postBody = { ok: true } } = {}) {
   const posts = [];
   await page.route("**/api/admin/allowlist", async (route) => {
     const req = route.request();
@@ -178,7 +186,7 @@ export async function mockAllowlist(page, rows) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     } else if (req.method() === "POST") {
       posts.push(req.postDataJSON());
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+      await route.fulfill({ status: postStatus, contentType: "application/json", body: JSON.stringify(postBody) });
     } else {
       await route.continue();
     }

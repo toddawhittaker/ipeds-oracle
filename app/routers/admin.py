@@ -85,13 +85,49 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
         con.commit()
     finally:
         con.close()
+    # `delivery` is what actually became of the invite, as ONE value. There are
+    # FOUR outcomes, not two, and each asks the admin to do something different.
+    # Deriving that from a pair of booleans is what let "was already on the
+    # allowlist" masquerade as "the email failed to send" — no link is minted
+    # for an existing member (see newly_added), so `invited` is False there too,
+    # for a reason that has nothing to do with mail.
     invited = False
-    if invite_link:
+    mail_configured = bool(get_settings().resend_api_key)
+    if not invite_link:
+        # Already on the allowlist. Nothing was sent because nothing needed to
+        # be; re-adding only updates the note. They can sign in any time.
+        delivery = "already_allowlisted"
+    else:
         try:
             invited = send_access_approved(email, invite_link)
         except Exception as e:  # noqa: BLE001 — approval must not fail if email does
             log.warning("approval email to %s failed: %s", email, e)
-    return {"ok": True, "email": email, "invited": invited}
+        if invited:
+            delivery = "emailed"
+        elif mail_configured:
+            # A configured provider rejected or errored. The link was minted but
+            # printed NOWHERE — mailer.py only logs the body when there's no key
+            # — so the only way in is for them to request their own.
+            delivery = "failed"
+            # Re-report from a logger the admin can actually READ. send_email()
+            # swallows provider errors and returns False, so the except above
+            # never fires, and send_email's own log line is on the `ipeds.mail`
+            # logger that logbuffer.py drops WHOLESALE (dev mode logs the magic
+            # link there, and any admin can read the Logs view). Without this,
+            # a failed invite leaves NOTHING in the Logs tab while the UI tells
+            # the admin to go look there. Names the address, never the link.
+            log.warning(
+                "invite email to %s was NOT delivered — mail is configured, so the "
+                "provider rejected or errored (see the server console for the "
+                "provider's own error). Their sign-in link was minted but not "
+                "stored anywhere; they must request one from the sign-in page.",
+                email)
+        else:
+            # No key: the mailer logged the whole email, link included, to the
+            # CONSOLE. Recoverable — and pointedly NOT in the Logs tab.
+            delivery = "logged_to_console"
+    return {"ok": True, "email": email, "invited": invited,
+            "mail_configured": mail_configured, "delivery": delivery}
 
 
 class AllowlistAdminPatch(BaseModel):
