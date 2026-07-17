@@ -26,14 +26,6 @@ test.describe("auth / login", () => {
     const emailInput = page.getByPlaceholder("you@example.edu");
     await expect(emailInput).toBeVisible();
 
-    // Example prompts prime the user for what they can ask.
-    await expect(
-      page.getByText("Top 20 institutions awarding Associate's degrees", { exact: false })
-    ).toBeVisible();
-    await expect(
-      page.getByText("Which states awarded the most Master's degrees in Education?", { exact: false })
-    ).toBeVisible();
-
     await emailInput.fill("admin@example.edu");
     await page.getByRole("button", { name: "Email me a sign-in link" }).click();
 

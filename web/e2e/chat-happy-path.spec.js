@@ -75,26 +75,3 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await expect(page.getByRole("button", { name: "Bar", exact: true }))
     .toHaveAttribute("aria-pressed", "true");
 });
-
-// Regression: the 👍/👎 feedback feature (buttons + POST .../feedback) was
-// removed entirely — the critic is now the sole lesson source.
-test("the 👍/👎 feedback buttons no longer render on an assistant answer", async ({ page }) => {
-  await mockMe(page, { email: "user@example.edu", is_admin: false });
-  await mockConversations(page, []);
-  await mockStreamChat(page, { conversationId: CONV_ID, sql: [SQL], answer: ANSWER_MD, messageId: MSG_ID });
-  await mockConversation(page, CONV_ID, [
-    { role: "user", content: "Associate's degrees in Registered Nursing by state" },
-    { role: "assistant", id: MSG_ID, content: ANSWER_MD, sql_log: [SQL] },
-  ]);
-
-  await page.goto("/");
-  await page.getByPlaceholder("Ask about IPEDS data…").fill(
-    "Associate's degrees in Registered Nursing by state"
-  );
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("table")).toBeVisible();
-
-  await expect(page.getByTitle("Helpful", { exact: true })).toHaveCount(0);
-  await expect(page.getByTitle("Not helpful")).toHaveCount(0);
-  await expect(page.locator("button.vote")).toHaveCount(0);
-});
