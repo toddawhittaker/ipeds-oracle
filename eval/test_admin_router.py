@@ -18,7 +18,9 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -46,10 +48,22 @@ mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = (
     lambda to, link: captured.__setitem__("approved_link", link) or True)
 
+from app import auth as auth_mod  # noqa: E402
 from app import skills  # noqa: E402
+from app.config import get_settings  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import admin as admin_router  # noqa: E402
+
+
+def _set_email_domain(domain):
+    """Explicit, never ambient: EMAIL_DOMAIN="" (accept-any-domain) is the
+    DEFAULT several tests below depend on. Popping the OS var would just
+    fall through to whatever a real developer .env sets, which is exactly
+    the bleed run_ci_local.sh/ci_env.sh exist to prevent -- see CLAUDE.md's
+    "Test-env gotcha". An explicit "" always wins."""
+    os.environ["EMAIL_DOMAIN"] = domain or ""
+    get_settings.cache_clear()
 
 
 def _fake_embed(text):
@@ -79,6 +93,24 @@ def _login(c, email="admin@example.edu"):
     c.post("/api/auth/request", json={"email": email})
     token = captured["link"].split("token=")[1]
     assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
+
+
+def _seed_access_request(email, status="pending", created_at=None):
+    """Insert one access_requests row directly, bypassing request_login (which
+    has its own dedicated suite in eval/test_access_gate.py). Returns the new
+    row's id."""
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO access_requests(email, status, created_at) VALUES (?,?,?)",
+            (email, status, created_at if created_at is not None else time.time()))
+        con.commit()
+        row_id = con.execute(
+            "SELECT id FROM access_requests WHERE email=? ORDER BY id DESC LIMIT 1",
+            (email,)).fetchone()[0]
+    finally:
+        con.close()
+    return row_id
 
 
 class _SyncThread:
@@ -1242,6 +1274,749 @@ def test_server_logs_with_no_handler_returns_empty():
         assert r.json() == {"records": []}, r.text
 
 
+# ---------------------------------------------------------------------------
+# POST /api/admin/access-requests/{email}/deny -- not implemented yet (no such
+# route registered), so every test below is expected to fail red until the
+# implementer ships it. A request to an unregistered route 404s automatically
+# (FastAPI), which is itself the expected "not built yet" signal for most of
+# these -- the assertions below are still checking real behavior (status code,
+# rows written), not merely presence of a symbol.
+# ---------------------------------------------------------------------------
+
+def test_deny_access_request_marks_denied_and_clears_pending():
+    with TestClient(app) as c:
+        _login(c)
+        email = "denyme@example.edu"
+        _seed_access_request(email, status="pending")
+
+        r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert r.status_code == 200, r.text
+        assert r.json().get("ok") is True, r.text
+
+        con = connect()
+        row = con.execute(
+            "SELECT status FROM access_requests WHERE email=?", (email,)).fetchone()
+        con.close()
+        assert row is not None and row["status"] == "denied", row
+
+        reqs = c.get("/api/admin/access-requests").json()
+        assert not any(x["email"] == email for x in reqs), \
+            f"a denied address must be gone from the pending list, got {reqs}"
+
+
+def test_deny_keys_on_address_not_row_id():
+    with TestClient(app) as c:
+        _login(c)
+        email = "threerows@example.edu"
+        for _ in range(3):
+            _seed_access_request(email, status="pending")
+
+        r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        rows = con.execute(
+            "SELECT status FROM access_requests WHERE email=?", (email,)).fetchall()
+        con.close()
+        assert len(rows) == 3, rows
+        assert all(row["status"] == "denied" for row in rows), \
+            f"a single deny call must flip ALL pending rows for the address, got {rows}"
+
+
+def test_deny_unknown_or_already_handled_address_404s():
+    with TestClient(app) as c:
+        _login(c)
+        email = "nosuchrequest@example.edu"
+        con = connect()
+        before = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (email,)).fetchone()[0]
+        con.close()
+
+        r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert r.status_code == 404, r.text
+
+        con = connect()
+        after = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (email,)).fetchone()[0]
+        con.close()
+        assert after == before, "a 404 deny (nothing pending) must write nothing"
+
+
+def test_deny_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.post("/api/admin/access-requests/someone@example.edu/deny")
+        assert r.status_code == 401, r.text
+
+
+def test_deny_does_not_touch_an_approved_row():
+    with TestClient(app) as c:
+        _login(c)
+        email = "approved-then-reapply@example.edu"
+        _seed_access_request(email, status="approved")
+        _seed_access_request(email, status="pending")
+
+        r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        rows = con.execute(
+            "SELECT status FROM access_requests WHERE email=? ORDER BY id",
+            (email,)).fetchall()
+        con.close()
+        statuses = [row["status"] for row in rows]
+        assert statuses.count("approved") == 1, \
+            f"an existing approved row must never be touched by deny, got {statuses}"
+        assert statuses.count("denied") == 1, \
+            f"only the pending row should have flipped to denied, got {statuses}"
+
+
+def test_allowlisting_a_denied_address_converts_the_denied_row():
+    with TestClient(app) as c:
+        _login(c)
+        email = "denied-then-allow@example.edu"
+        _seed_access_request(email, status="pending")
+        deny_r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        r = c.post("/api/admin/allowlist", json={"email": email})
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        row = con.execute(
+            "SELECT status FROM access_requests WHERE email=?", (email,)).fetchone()
+        con.close()
+        assert row is not None and row["status"] == "approved", \
+            (f"allowlisting a denied address must convert its denied row to "
+             f"'approved' (the widened UPDATE), got {row['status'] if row else row}")
+
+
+def test_removing_from_allowlist_does_not_resurrect_a_denial():
+    """The entire justification for widening add_allowlist's UPDATE to
+    `status IN ('pending','denied')`: without it, "blocked" becomes a
+    two-place invariant (a denied row exists AND the address isn't currently
+    allowlisted), so routine offboarding (deny -> allowlist -> later remove
+    from the allowlist) silently re-blocks someone no admin meant to re-deny.
+    """
+    with TestClient(app) as c:
+        _login(c)
+        email = "offboarded@example.edu"
+        _seed_access_request(email, status="pending")
+        deny_r = c.post(f"/api/admin/access-requests/{email}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+        assert c.post("/api/admin/allowlist", json={"email": email}).status_code == 200
+        assert c.delete(f"/api/admin/allowlist/{email}").status_code == 200
+
+        con = connect()
+        try:
+            try:
+                still_denied = auth_mod.is_denied(con, email)
+            except AttributeError as e:
+                raise AssertionError(
+                    "app.auth.is_denied does not exist yet -- this test can only "
+                    f"run once the feature adds it: {e}") from e
+        finally:
+            con.close()
+        assert still_denied is False, \
+            "removing a converted address from the allowlist must not resurrect its old denial"
+
+        # A fresh request from this now-unblocked address must file a new row.
+        con = connect()
+        before = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (email,)).fetchone()[0]
+        con.close()
+        with TestClient(app) as c2:
+            r = c2.post("/api/auth/request", json={"email": email})
+            assert r.status_code == 200, r.text
+        con = connect()
+        after = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (email,)).fetchone()[0]
+        con.close()
+        assert after == before + 1, \
+            (f"a fresh request from the un-blocked address must file a new "
+             f"row, before={before} after={after}")
+
+
+def test_access_requests_list_collapses_duplicates_per_address():
+    with TestClient(app) as c:
+        _login(c)
+        email_a = "dup-a@example.edu"
+        email_b = "dup-b@example.edu"
+        t0 = time.time()
+        _seed_access_request(email_a, status="pending", created_at=t0)
+        _seed_access_request(email_a, status="pending", created_at=t0 + 10)
+        _seed_access_request(email_a, status="pending", created_at=t0 + 20)  # most recent
+        _seed_access_request(email_b, status="pending", created_at=t0 + 5)
+
+        reqs = c.get("/api/admin/access-requests").json()
+        a_rows = [r for r in reqs if r["email"] == email_a]
+        b_rows = [r for r in reqs if r["email"] == email_b]
+        assert len(a_rows) == 1, \
+            f"expected exactly ONE collapsed row for {email_a}, got {a_rows}"
+        assert len(b_rows) == 1, \
+            f"expected exactly ONE collapsed row for {email_b}, got {b_rows}"
+        assert set(a_rows[0].keys()) == {"id", "email", "reason", "status", "created_at"}, \
+            a_rows[0]
+        assert abs(a_rows[0]["created_at"] - (t0 + 20)) < 1, \
+            f"collapsed row's created_at must be the MOST RECENT pending request, got {a_rows[0]}"
+
+
+# ---------------------------------------------------------------------------
+# FIX ROUND -- Defect 2 (HIGH, security review, CONFIRMED): plus-addressing
+# bypasses a denial. Exact-string matching is fail-CLOSED for an allowlist but
+# fail-OPEN for a denylist. Denying mallory@example.edu did NOT block
+# mallory+1@example.edu or MALLORY+X@example.edu, so the admin's "block this
+# address" action was silently bypassable by anyone who controls the mailbox
+# (Gmail/Workspace/M365 all deliver user+tag@domain to user@domain -- this is
+# RFC-valid sub-addressing, not a hypothetical). The fix: match on a
+# CANONICAL form (lowercase + `+tag` local-part suffix stripped) via a new
+# `canon_email` column (migration 9), in BOTH directions.
+#
+# Every row below is created through the REAL public HTTP surface
+# (POST /api/auth/request, POST .../deny) rather than a raw SQL seed, so
+# canon_email -- however the implementation chooses to populate it (computed
+# at insert time, a DB trigger/generated column, whatever) -- gets populated
+# exactly the way it would in production. That also means these tests are
+# implementation-agnostic about the *mechanism* and only pin the observable
+# behavior, which is what actually matters here.
+#
+# Explicitly NOT covered / NOT wanted: gmail-style DOT-STRIPPING. Dots ARE
+# significant on many domains (john.smith@ and johnsmith@ can be two
+# different real people), so collapsing them risks blocking an innocent third
+# party. test_dots_in_local_part_are_not_canonicalized pins that this is
+# never "improved" into a false-positive generator.
+# ---------------------------------------------------------------------------
+
+def test_deny_canonicalizes_plus_tag_and_case_variants():
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        bare = "mallory@example.edu"
+        assert c.post("/api/auth/request", json={"email": bare}).status_code == 200
+
+        deny_r = c.post(f"/api/admin/access-requests/{bare}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        orig_send = auth_mod.send_access_request
+        spy_calls = []
+        auth_mod.send_access_request = lambda *a, **k: spy_calls.append(a) or True
+        try:
+            for variant in ("mallory+1@example.edu", "mallory+anything@example.edu",
+                           "MALLORY+X@example.edu"):
+                r = c.post("/api/auth/request", json={"email": variant})
+                assert r.status_code == 200, r.text
+        finally:
+            auth_mod.send_access_request = orig_send
+
+        con = connect()
+        try:
+            for variant in ("mallory+1@example.edu", "mallory+anything@example.edu",
+                           "mallory+x@example.edu"):  # request_login lowercases
+                rows = con.execute(
+                    "SELECT * FROM access_requests WHERE email=?", (variant,)).fetchall()
+                assert rows == [], (
+                    f"{variant} must be blocked by the bare-address denial "
+                    f"(canonical match required), got a new row: {rows}")
+        finally:
+            con.close()
+        assert spy_calls == [], (
+            f"a canonically-denied +tag/case variant must trigger NO admin "
+            f"notification email, got {spy_calls}")
+
+
+def test_deny_of_plus_tag_variant_also_blocks_the_bare_address():
+    """Canonicalization must work in BOTH directions: denying a +tag variant
+    must also block the bare address, not just the reverse (the case above)."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        variant = "bobdeny+work@example.edu"
+        bare = "bobdeny@example.edu"
+        assert c.post("/api/auth/request", json={"email": variant}).status_code == 200
+
+        deny_r = c.post(f"/api/admin/access-requests/{variant}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        r = c.post("/api/auth/request", json={"email": bare})
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        try:
+            rows = con.execute(
+                "SELECT * FROM access_requests WHERE email=?", (bare,)).fetchall()
+        finally:
+            con.close()
+        assert rows == [], (
+            f"the bare address must be blocked after denying its +tag "
+            f"variant (canonical match must work in BOTH directions), got {rows}")
+
+
+def test_deny_clears_all_pending_rows_sharing_canonical_address():
+    """Deny is keyed on the CANONICAL address: pending rows for the bare
+    address and its +tag variants must ALL flip to denied together when any
+    one of them is denied."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        addrs = ["caroldeny@example.edu", "caroldeny+1@example.edu",
+                "caroldeny+2@example.edu"]
+        for a in addrs:
+            assert c.post("/api/auth/request", json={"email": a}).status_code == 200
+
+        deny_r = c.post("/api/admin/access-requests/caroldeny@example.edu/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        con = connect()
+        try:
+            for a in addrs:
+                row = con.execute(
+                    "SELECT status FROM access_requests WHERE email=?", (a,)).fetchone()
+                assert row is not None and row["status"] == "denied", \
+                    f"expected {a} to be denied (shared canonical group), got {row}"
+        finally:
+            con.close()
+
+
+def test_dots_in_local_part_are_not_canonicalized():
+    """PIN this: dot-stripping is explicitly NOT performed. john.smith@ and
+    johnsmith@ can be two different real people on many mail systems (unlike
+    RFC-valid +tag sub-addressing, which really does deliver to the same
+    mailbox on Gmail/Workspace/M365). Denying the dotted address must leave
+    the un-dotted one completely untouched."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        dotted = "john.smithdeny@example.edu"
+        undotted = "johnsmithdeny@example.edu"
+        assert c.post("/api/auth/request", json={"email": dotted}).status_code == 200
+        assert c.post("/api/auth/request", json={"email": undotted}).status_code == 200
+
+        deny_r = c.post(f"/api/admin/access-requests/{dotted}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        con = connect()
+        try:
+            row = con.execute(
+                "SELECT status FROM access_requests WHERE email=?", (undotted,)).fetchone()
+        finally:
+            con.close()
+        assert row is not None and row["status"] == "pending", (
+            f"denying {dotted} must NOT block the un-dotted {undotted} -- "
+            f"dots are significant and must never be collapsed, got {row}")
+
+
+# ---------------------------------------------------------------------------
+# FIX ROUND -- Defect 3 (LOW, security review): test_deny_requires_admin above
+# only covers the UNAUTHENTICATED (401) case. Add the authenticated
+# NON-ADMIN -> 403 case, mirroring
+# test_promote_makes_user_admin_immediately_on_live_session's pattern
+# (allowlist a plain user, sign them in, hit an admin-only route).
+# ---------------------------------------------------------------------------
+
+def test_deny_requires_admin_403_for_authenticated_non_admin():
+    with TestClient(app) as c:
+        _login(c)
+        plain_email = "not-an-admin-deny-check@example.edu"
+        assert c.post("/api/admin/allowlist", json={"email": plain_email}).status_code == 200
+        target_email = "target-of-deny-403-check@example.edu"
+        _seed_access_request(target_email, status="pending")
+
+        non_admin = TestClient(app)
+        tok = captured["approved_link"].split("token=")[1]
+        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+        assert non_admin.get("/api/auth/me").json()["is_admin"] is False
+
+        r = non_admin.post(f"/api/admin/access-requests/{target_email}/deny")
+        assert r.status_code == 403, r.text
+
+
+# ---------------------------------------------------------------------------
+# ROUND 3 (.plan-undeny.md) -- see a denied-addresses list, and undo a
+# denial without granting access. GET /api/admin/access-requests/denied and
+# DELETE /api/admin/access-requests/{email}/denial do not exist yet (no such
+# routes registered), so every test below is expected to fail red until the
+# implementer ships them.
+#
+# THE ACCEPTANCE CRITERION: un-deny writes NO allowlist row, mints NO
+# login_tokens row, creates NO users row, and sends NO email. The only prior
+# way to un-block a denied address was allowlisting -- which does all four of
+# those. The absence of each is the requirement; see
+# test_undo_denial_grants_no_access_and_sends_no_email below, and do not
+# "tidy away" any of its negative assertions as vacuous.
+# ---------------------------------------------------------------------------
+
+def test_undo_denial_grants_no_access_and_sends_no_email():
+    """THE acceptance criterion. Patches app.routers.admin's OWN
+    send_access_approved name (not app.mailer's) -- admin.py imports the
+    symbol with `from app.mailer import send_access_approved` at module load,
+    so admin_router.send_access_approved is a name bound at import time;
+    patching app.mailer.send_access_approved afterward would not be observed
+    by the handler. This mirrors why this file's own module-level mailer
+    patches (top of file) are applied BEFORE `from app.routers import admin`
+    is imported."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "victim-noaccess@example.edu"
+        _seed_access_request(email, status="denied")
+
+        spy_calls = []
+        restore = _patch_attr(admin_router, "send_access_approved",
+                              lambda *a, **k: spy_calls.append(a) or True)
+        try:
+            r = c.delete(f"/api/admin/access-requests/{email}/denial")
+        finally:
+            restore()
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        try:
+            allow_n = con.execute(
+                "SELECT COUNT(*) FROM allowlist WHERE email=?", (email,)).fetchone()[0]
+            token_n = con.execute(
+                "SELECT COUNT(*) FROM login_tokens WHERE email=?", (email,)).fetchone()[0]
+            user_n = con.execute(
+                "SELECT COUNT(*) FROM users WHERE email=?", (email,)).fetchone()[0]
+        finally:
+            con.close()
+        assert allow_n == 0, \
+            f"undo must NOT add {email} to the allowlist, found {allow_n} row(s)"
+        assert token_n == 0, (
+            f"undo must NOT mint a login token (allowlisting does this, see "
+            f"admin.py:73 mint_login_link) -- this pins that undo did not "
+            f"silently fall back to the allowlist path, found {token_n} row(s)")
+        assert user_n == 0, \
+            f"undo must NOT create a users row, found {user_n} row(s)"
+        # The ABSENCE of this call IS the requirement -- do not remove or
+        # weaken this assertion as "vacuous". Granting access + emailing a
+        # welcome link was the ONLY prior way to un-block a denied address
+        # (via allowlisting), and reproducing that here would be the exact
+        # bug this endpoint exists to fix.
+        assert spy_calls == [], (
+            f"undo must send NO email whatsoever -- got {spy_calls}")
+
+
+def test_undo_denial_clears_the_whole_canonical_group():
+    """Undo via a VARIANT url (not the bare address that was originally
+    denied) -- proves canonicalization runs on the DELETE's input, not just
+    on the rows it matches. Without this, victim+1@ would stay blocked while
+    victim@ (and every other variant) worked."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        addrs = ["cangroup@example.edu", "cangroup+1@example.edu",
+                "Cangroup+X@example.edu"]
+        for a in addrs:
+            assert c.post("/api/auth/request", json={"email": a}).status_code == 200
+        deny_r = c.post("/api/admin/access-requests/cangroup@example.edu/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        con = connect()
+        try:
+            assert auth_mod.is_denied(con, "cangroup@example.edu") is True  # sanity
+        finally:
+            con.close()
+
+        undo_url = ("/api/admin/access-requests/"
+                   f"{quote('cangroup+1@example.edu', safe='')}/denial")
+        r = c.delete(undo_url)
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        try:
+            still_bare = auth_mod.is_denied(con, "cangroup@example.edu")
+            still_new_variant = auth_mod.is_denied(con, "cangroup+9@example.edu")
+        finally:
+            con.close()
+        assert still_bare is False, (
+            "undoing via a +tag variant must clear the WHOLE canonical "
+            "group, including the bare address")
+        assert still_new_variant is False, (
+            "undoing via one variant must also un-block a DIFFERENT, "
+            "never-seen-before variant of the same mailbox")
+
+
+def test_undo_denial_deletes_the_rows_not_restatuses_them():
+    """Pins the resolution against a future 'safer' restatus: the canonical
+    group must have ZERO rows after undo, not a row with some other status."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "gonecompletely@example.edu"
+        _seed_access_request(email, status="denied")
+
+        r = c.delete(f"/api/admin/access-requests/{email}/denial")
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        try:
+            count = con.execute(
+                "SELECT COUNT(*) FROM access_requests "
+                "WHERE COALESCE(canon_email, LOWER(email))=?",
+                (auth_mod.canon_email(email),)).fetchone()[0]
+        finally:
+            con.close()
+        assert count == 0, (
+            f"expected ZERO rows for the canonical group after undo (rows "
+            f"are DELETEd, not re-statused -- 'never requested' is the "
+            f"intended terminal state), got {count}")
+
+
+def test_undo_denial_does_not_touch_approved_or_pending_rows():
+    """Pins the status='denied' guard in the DELETE against ever being
+    widened -- an approved row is inert history and a pending row is a live
+    queue item; neither should be touched by clearing a denial."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "mixed-status-undo@example.edu"
+        _seed_access_request(email, status="denied")
+        _seed_access_request(email, status="approved")
+        _seed_access_request(email, status="pending")
+
+        r = c.delete(f"/api/admin/access-requests/{email}/denial")
+        assert r.status_code == 200, r.text
+
+        con = connect()
+        try:
+            rows = con.execute(
+                "SELECT status FROM access_requests WHERE email=? ORDER BY id",
+                (email,)).fetchall()
+        finally:
+            con.close()
+        statuses = [row["status"] for row in rows]
+        assert statuses.count("denied") == 0, \
+            f"the denied row must be gone after undo, got {statuses}"
+        assert statuses.count("approved") == 1, \
+            f"an approved row must survive undo untouched, got {statuses}"
+        assert statuses.count("pending") == 1, \
+            f"a pending row must survive undo untouched, got {statuses}"
+
+
+def test_undo_denial_is_idempotent_and_does_not_404():
+    """Deliberately asymmetric with /deny's 404-on-nothing-to-do: DELETE is
+    idempotent by contract, so a second undo on an already-cleared denial is
+    still a 200 with cleared=0, not a 404."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "idempotent-undo@example.edu"
+        _seed_access_request(email, status="denied")
+
+        r1 = c.delete(f"/api/admin/access-requests/{email}/denial")
+        assert r1.status_code == 200, r1.text
+        assert r1.json().get("cleared") == 1, r1.text
+
+        r2 = c.delete(f"/api/admin/access-requests/{email}/denial")
+        assert r2.status_code == 200, (
+            f"a second undo on an already-cleared denial must stay 200 "
+            f"(idempotent), not 404 like /deny -- got {r2.status_code}")
+        assert r2.json().get("cleared") == 0, r2.text
+
+
+def test_undo_denial_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.delete("/api/admin/access-requests/someone@example.edu/denial")
+        assert r.status_code == 401, r.text
+
+
+def test_denied_list_groups_canonically_and_shows_original_addresses():
+    """The API-contract non-swap test: canon_email is the canonical
+    (ACTUALLY BLOCKED) form -- what Undo's DELETE keys on -- while emails
+    carries the raw ORIGINAL addresses that were actually filed. (Which of
+    the two the UI renders, and when, is the UI's call -- see the SEC #1
+    security-review test below and web/e2e/undo-denial.spec.js; the
+    canon_email is NOT always hidden any more, since a denied group can have
+    NO original equal to it at all -- see that test.) This one only pins the
+    API payload itself: if a future edit swaps `canon_email` and `emails`,
+    or drops an original, this goes red."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        addrs = ["listvictim@example.edu", "Listvictim+1@example.edu"]
+        for a in addrs:
+            assert c.post("/api/auth/request", json={"email": a}).status_code == 200
+        deny_r = c.post("/api/admin/access-requests/listvictim@example.edu/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        r = c.get("/api/admin/access-requests/denied")
+        assert r.status_code == 200, r.text
+        items = r.json()
+        matches = [x for x in items if x.get("canon_email") == "listvictim@example.edu"]
+        assert len(matches) == 1, (
+            f"expected exactly ONE canonical group for listvictim@example.edu, "
+            f"got {items}")
+        item = matches[0]
+        # request_login lowercases on insert, so both originals are stored
+        # lowercase even though "Listvictim+1@example.edu" was sent mixed-case.
+        assert sorted(item["emails"]) == [
+            "listvictim+1@example.edu", "listvictim@example.edu"], (
+            f"expected BOTH original addresses to survive in `emails`, got "
+            f"{item['emails']}")
+
+
+# ---------------------------------------------------------------------------
+# SEC #1 (HIGH, security review of round 3) -- the API-side ground truth for
+# the tagged-only griefing bypass. An attacker files ONLY a +tag variant
+# (never the base address), the admin Rejects it, and the REAL victim
+# (the base address, which never filed anything) is the one actually
+# blocked. The backend already gets this right -- canon_email is the base,
+# emails contains only the variant that was actually requested -- this test
+# pins that API contract as ground truth so nobody "fixes" it into hiding
+# the mismatch. The bug this enables is a FRONTEND rendering bug (the UI
+# only ever showed `emails`, never `canon_email`) -- see
+# web/e2e/undo-denial.spec.js for the display-side RED tests.
+# ---------------------------------------------------------------------------
+
+def test_denied_list_surfaces_the_canonical_address_even_when_no_original_matches_it():
+    """Ground truth, reproduced directly: deny a +tag-only request and
+    confirm the API response's canon_email is the BASE address (the one
+    actually blocked) while emails contains ONLY the tagged variant that was
+    actually filed -- canon_email is not itself among emails. This is
+    already true today (no API change needed for SEC #1); it's pinned here
+    so the eventual UI fix has a stable contract to build on."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        tagged_only = "onlytagged+newsletter@example.edu"
+        base = "onlytagged@example.edu"
+        assert c.post("/api/auth/request", json={"email": tagged_only}).status_code == 200
+        deny_r = c.post(f"/api/admin/access-requests/{tagged_only}/deny")
+        assert deny_r.status_code == 200, deny_r.text
+
+        con = connect()
+        try:
+            assert auth_mod.is_denied(con, base) is True, (
+                "sanity: denying only a +tag variant must still block the base "
+                "address -- this is the actual griefing vector")
+        finally:
+            con.close()
+
+        r = c.get("/api/admin/access-requests/denied")
+        assert r.status_code == 200, r.text
+        matches = [x for x in r.json() if x.get("canon_email") == base]
+        assert len(matches) == 1, (
+            f"expected one canonical group keyed on the BASE address {base}, "
+            f"got {r.json()}")
+        item = matches[0]
+        assert item["emails"] == [tagged_only], (
+            f"expected emails to contain ONLY the tagged variant that was "
+            f"actually filed, got {item['emails']}")
+        assert base not in item["emails"], (
+            f"the base address was never itself filed, so it must not appear "
+            f"in `emails` (that would be a false claim) -- it belongs in "
+            f"canon_email, which it already does: {item}")
+
+
+def test_denied_list_excludes_pending_and_approved():
+    with TestClient(app) as c:
+        _login(c)
+        denied_email = "excl-denied@example.edu"
+        pending_email = "excl-pending@example.edu"
+        _seed_access_request(denied_email, status="denied")
+        _seed_access_request(pending_email, status="pending")
+
+        denied_resp = c.get("/api/admin/access-requests/denied")
+        # Check the status code BEFORE treating the body as a list -- pre-
+        # implementation this 404s with {"detail": "Not found"}, and
+        # iterating that dict yields its keys (strings), which would crash
+        # with an unhelpful AttributeError instead of a clean assertion.
+        assert denied_resp.status_code == 200, denied_resp.text
+        denied_list = denied_resp.json()
+        assert any(x.get("canon_email") == denied_email for x in denied_list), denied_list
+        assert not any(pending_email in x.get("emails", []) for x in denied_list), \
+            f"a pending address must not appear in the denied list, got {denied_list}"
+
+        pending_list = c.get("/api/admin/access-requests").json()
+        assert any(x["email"] == pending_email for x in pending_list), pending_list
+
+
+def test_denied_list_is_empty_when_nothing_is_denied():
+    con = connect()
+    con.execute("DELETE FROM access_requests")
+    con.commit()
+    con.close()
+    with TestClient(app) as c:
+        _login(c)
+        r = c.get("/api/admin/access-requests/denied")
+        assert r.status_code == 200, r.text
+        assert r.json() == [], r.json()
+
+
+def test_denied_list_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.get("/api/admin/access-requests/denied")
+        assert r.status_code == 401, r.text
+
+
+def test_pending_list_still_groups_by_raw_address_not_canonically():
+    """Pins the deliberate grouping asymmetry: Approve is EXACT (the
+    allowlist insert is a literal address), so the pending list must group by
+    the RAW address, never canonically -- unlike the denied list. If someone
+    "makes them consistent", Approve would silently collapse two real people
+    sharing a canonical group into one button."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        addrs = ["pendbob@example.edu", "pendbob+1@example.edu"]
+        for a in addrs:
+            assert c.post("/api/auth/request", json={"email": a}).status_code == 200
+
+        reqs = c.get("/api/admin/access-requests").json()
+        matches = [x for x in reqs if x["email"] in addrs]
+        assert len(matches) == 2, (
+            f"the pending list must show TWO separate rows for {addrs} "
+            f"(grouped by raw address, not canonically), got {matches}")
+        assert {x["email"] for x in matches} == set(addrs), matches
+
+
+def test_allowlisting_clears_a_denial_filed_under_a_variant():
+    """FOLDED-IN FIX 1 (round 3): add_allowlist's denial-clearing UPDATE
+    (admin.py:68) is EXACT ('WHERE email=?'), but a denial is CANONICAL
+    (spans +tag/case variants) -- so allowlisting the bare address converts
+    ONLY the bare row, leaving a variant's denied row behind. Offboarding
+    later (remove from allowlist) then finds that surviving variant row and
+    is_denied() resurrects the block: the EXACT scenario round 2's widened
+    UPDATE (status IN ('pending','denied')) was written to prevent,
+    reintroduced through the variant it forgot.
+
+    Without this test, making add_allowlist's UPDATE canonical looks like an
+    unmotivated behavior change to shipped code and would get reverted. RED
+    on today's code (the UPDATE is still exact)."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        bare = "resurrect@example.edu"
+        variant = "resurrect+work@example.edu"
+        assert c.post("/api/auth/request", json={"email": bare}).status_code == 200
+        assert c.post("/api/auth/request", json={"email": variant}).status_code == 200
+
+        deny_r = c.post(f"/api/admin/access-requests/{bare}/deny")
+        assert deny_r.status_code == 200, deny_r.text  # flips BOTH bare + variant
+
+        assert c.post("/api/admin/allowlist", json={"email": bare}).status_code == 200
+        assert c.delete(f"/api/admin/allowlist/{bare}").status_code == 200
+
+        con = connect()
+        try:
+            still_denied = auth_mod.is_denied(con, bare)
+        finally:
+            con.close()
+        assert still_denied is False, (
+            f"{bare} must NOT be re-blocked after offboarding -- a surviving "
+            f"denied row for {variant} (not converted by an EXACT allowlist "
+            f"UPDATE) is resurrecting the block")
+
+        con = connect()
+        before = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (bare,)).fetchone()[0]
+        con.close()
+        r = c.post("/api/auth/request", json={"email": bare})
+        assert r.status_code == 200, r.text
+        con = connect()
+        after = con.execute(
+            "SELECT COUNT(*) FROM access_requests WHERE email=?", (bare,)).fetchone()[0]
+        con.close()
+        assert after == before + 1, (
+            f"a fresh request from the un-blocked bare address must file a "
+            f"new row, before={before} after={after}")
+
+
 def run():
     print("admin router contract:")
     check("import rejects a non-.accdb upload", test_import_rejects_non_accdb_extension)
@@ -1342,6 +2117,56 @@ def run():
     check("server logs endpoint returns records", test_server_logs_returns_records)
     check("server logs endpoint handles no handler installed",
           test_server_logs_with_no_handler_returns_empty)
+    check("deny access request marks denied and clears the pending list",
+          test_deny_access_request_marks_denied_and_clears_pending)
+    check("deny keys on the address, not a single row id",
+          test_deny_keys_on_address_not_row_id)
+    check("deny of an unknown/already-handled address 404s and writes nothing",
+          test_deny_unknown_or_already_handled_address_404s)
+    check("deny requires admin", test_deny_requires_admin)
+    check("deny never touches an already-approved row",
+          test_deny_does_not_touch_an_approved_row)
+    check("allowlisting a denied address converts the denied row to approved",
+          test_allowlisting_a_denied_address_converts_the_denied_row)
+    check("removing from the allowlist does not resurrect a prior denial",
+          test_removing_from_allowlist_does_not_resurrect_a_denial)
+    check("access-requests list collapses duplicate pending rows per address",
+          test_access_requests_list_collapses_duplicates_per_address)
+    check("deny canonicalizes +tag/case variants (bare denial blocks variants) (defect 2)",
+          test_deny_canonicalizes_plus_tag_and_case_variants)
+    check("deny of a +tag variant also blocks the bare address (defect 2, both directions)",
+          test_deny_of_plus_tag_variant_also_blocks_the_bare_address)
+    check("deny clears all pending rows sharing a canonical address (defect 2)",
+          test_deny_clears_all_pending_rows_sharing_canonical_address)
+    check("dots in the local part are NOT canonicalized (defect 2, pinned)",
+          test_dots_in_local_part_are_not_canonicalized)
+    check("deny requires admin -- authenticated non-admin gets 403 (defect 3)",
+          test_deny_requires_admin_403_for_authenticated_non_admin)
+    check("undo denial grants NO access and sends NO email (round 3 acceptance criterion)",
+          test_undo_denial_grants_no_access_and_sends_no_email)
+    check("undo denial clears the whole canonical group, undone via a variant url",
+          test_undo_denial_clears_the_whole_canonical_group)
+    check("undo denial DELETEs the rows, does not re-status them",
+          test_undo_denial_deletes_the_rows_not_restatuses_them)
+    check("undo denial does not touch approved/pending rows",
+          test_undo_denial_does_not_touch_approved_or_pending_rows)
+    check("undo denial is idempotent and does not 404 on a second call",
+          test_undo_denial_is_idempotent_and_does_not_404)
+    check("undo denial requires admin", test_undo_denial_requires_admin)
+    check("denied list groups canonically, shows original addresses (display/match non-swap)",
+          test_denied_list_groups_canonically_and_shows_original_addresses)
+    check("denied list surfaces the canonical (actually-blocked) address even when "
+          "no original matches it (SEC #1 ground truth)",
+          test_denied_list_surfaces_the_canonical_address_even_when_no_original_matches_it)
+    check("denied list excludes pending/approved addresses",
+          test_denied_list_excludes_pending_and_approved)
+    check("denied list is empty when nothing is denied",
+          test_denied_list_is_empty_when_nothing_is_denied)
+    check("denied list requires admin", test_denied_list_requires_admin)
+    check("pending list still groups by the raw address, not canonically",
+          test_pending_list_still_groups_by_raw_address_not_canonically)
+    check("allowlisting clears a denial filed under a variant (fold-in fix 1)",
+          test_allowlisting_clears_a_denial_filed_under_a_variant)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

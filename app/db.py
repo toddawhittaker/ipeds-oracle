@@ -199,6 +199,47 @@ MIGRATIONS: list[tuple[int, str]] = [
     # at startup (app/main.py lifespan), since a pure-SQL migration can't
     # recompute embeddings.
     (7, "ALTER TABLE skills ADD COLUMN headline TEXT;"),
+    # is_denied() (app/auth.py) runs a per-address lookup on access_requests on
+    # EVERY unauthenticated POST /api/auth/request. The table is unbounded in
+    # principle (an attacker rotating in-domain addresses can grow it — see the
+    # open access-request-DDOS item), so index the lookup rather than leave a
+    # full scan on an unauth hot path.
+    (8, "CREATE INDEX IF NOT EXISTS idx_access_requests_email "
+        "ON access_requests(email);"),
+    # Canonical form for DENYLIST matching (app.auth.canon_email/is_denied):
+    # exact-string matching is fail-OPEN for a denylist — a "+tag" or case
+    # variant of a denied address was previously left completely unblocked,
+    # a real bypass (Gmail/Workspace/M365 all deliver user+tag@domain to the
+    # same mailbox as user@domain). Lowercase + `+tag` local-part suffix
+    # stripped, deliberately NOT dot-stripped (dots can be a different real
+    # person on many mail systems — see app.auth.canon_email's docstring).
+    # Backfills every pre-existing row so an address denied before this
+    # migration ran is still found by the canonical lookup; new rows are
+    # populated at insert time by app.auth.request_login.
+    (9, "ALTER TABLE access_requests ADD COLUMN canon_email TEXT;\n"
+        "UPDATE access_requests SET canon_email = LOWER(\n"
+        "    CASE WHEN INSTR(email, '+') > 0 AND INSTR(email, '+') < INSTR(email, '@')\n"
+        "      THEN SUBSTR(email, 1, INSTR(email, '+') - 1) || SUBSTR(email, INSTR(email, '@'))\n"
+        "      ELSE email\n"
+        "    END\n"
+        ") WHERE canon_email IS NULL;\n"
+        "CREATE INDEX IF NOT EXISTS idx_access_requests_canon_email "
+        "ON access_requests(canon_email);"),
+    # Round 3 (.plan-undeny.md, fold-in fix 2): is_denied() (app/auth.py)
+    # wraps the column in COALESCE(canon_email, LOWER(email)), and migration
+    # 9's idx_access_requests_canon_email is a PLAIN column index -- SQLite
+    # cannot match a plain index to an expression, so the lookup that
+    # migration 9 was written to protect still full-table-SCANs on every
+    # unauthenticated POST /api/auth/request (verified with EXPLAIN QUERY
+    # PLAN). An index on the EXPRESSION is what that predicate can actually
+    # use; COALESCE and LOWER are deterministic, so it's a legal index
+    # expression. Keep this expression textually identical to
+    # app.auth.is_denied's / admin.py's deny/undo/add_allowlist predicates,
+    # or the planner silently falls back to a scan again. Do NOT drop or
+    # renumber migrations 8 or 9 -- never edit a shipped migration; 9's plain
+    # index still serves nothing harmful, and removing it is a separate call.
+    (10, "CREATE INDEX IF NOT EXISTS idx_access_requests_canon_expr "
+         "ON access_requests(COALESCE(canon_email, LOWER(email)));"),
 ]
 
 

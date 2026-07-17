@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from fastapi import Depends, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Depends, HTTPException, Request, Response, status
 
 from app.config import get_settings
 from app.db import connect
@@ -15,8 +15,68 @@ from app.security import hash_token, magic_link_expiry, new_token, session_expir
 
 
 def is_allowlisted(con: sqlite3.Connection, email: str) -> bool:
+    """EXACT match only — and it must stay that way. Exact-string matching is
+    fail-CLOSED for an allowlist (an unmatched +tag/case variant of an
+    allowlisted address gets NO access — safe) but fail-OPEN for a denylist
+    (an unmatched variant of a denied address is left UNBLOCKED — unsafe; see
+    is_denied/canon_email below, deliberately the OPPOSITE polarity). Do not
+    "make this consistent" with is_denied — that would let a stranger sign in
+    as someone else's +tag variant of an allowlisted address."""
     return con.execute("SELECT 1 FROM allowlist WHERE email=?",
                        (email,)).fetchone() is not None
+
+
+def canon_email(email: str) -> str:
+    """Canonical form used ONLY for denylist matching (is_denied / the admin
+    deny endpoint) — never for the allowlist (see is_allowlisted's comment on
+    why the two must have opposite polarity). Lowercases and strips an
+    RFC-5233 `+tag` local-part suffix, e.g. `Mallory+1@Example.EDU` ->
+    `mallory@example.edu`: Gmail/Google Workspace/Microsoft 365 all deliver
+    `user+tag@domain` to the same mailbox as `user@domain`, so an admin's
+    "block this address" action must span every +tag variant or it is
+    trivially bypassable by anyone who controls that mailbox.
+
+    Deliberately does NOT collapse dots in the local part. Unlike +tags, dots
+    are not guaranteed to route to the same mailbox on every provider —
+    `john.smith@` and `johnsmith@` can be two different real people on many
+    mail systems — so stripping them would risk blocking an innocent third
+    party who was never the admin's actual target."""
+    email = email.strip().lower()
+    local, sep, domain = email.partition("@")
+    local = local.split("+", 1)[0]
+    return f"{local}{sep}{domain}"
+
+
+def is_denied(con: sqlite3.Connection, email: str) -> bool:
+    """True when an admin has denied this address, or a +tag/case variant of
+    it (see canon_email) — any denied row for the canonical address blocks,
+    so the address may not file a new access request. Checked AFTER the
+    allowlist, so allowlisting a denied person always wins.
+
+    COALESCE(canon_email, LOWER(email)): canon_email is populated on every
+    row this app inserts (request_login) and backfilled for pre-existing rows
+    (migration 9), so it is effectively never NULL in production — the
+    fallback to a plain lowercase match only covers a row that somehow reached
+    this table without going through either path, and keeps that case
+    conservative (exact-match) rather than silently matching nothing.
+
+    One more subtlety in that fallback, deliberately left alone: SQLite's
+    built-in LOWER() only folds ASCII A-Z (it has no Unicode casefolding
+    table), while Python's str.lower() — used by canon_email() above, and by
+    whatever wrote the row's canon_email in the first place — folds full
+    Unicode. So for a row with a non-ASCII uppercase local part, the
+    COALESCE fallback's LOWER(email) and this function's canon_email(email)
+    CAN disagree. That's fail-closed, not a live bug: it can only make a row
+    LESS matchable (nothing gets denied that shouldn't be, nothing un-blocks
+    that shouldn't), and it's unreachable in production because canon_email
+    is populated at write time by this same Python function for every row
+    the app itself ever inserts — the NULL-triggered fallback only exists
+    for a row that predates that. Do not "fix" this by teaching SQLite a
+    Unicode-aware LOWER() or similar; there is nothing here that needs it."""
+    return con.execute(
+        "SELECT 1 FROM access_requests "
+        "WHERE status='denied' AND COALESCE(canon_email, LOWER(email))=? LIMIT 1",
+        (canon_email(email),)).fetchone() is not None
 
 
 def admin_recipients(con: sqlite3.Connection) -> list[str]:
@@ -66,29 +126,58 @@ def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     return f"{base_url.rstrip('/')}/verify?token={token}"
 
 
-def request_login(email: str, base_url: str) -> dict:
+def request_login(email: str, base_url: str, tasks: BackgroundTasks) -> dict:
     """Start a login. Returns a neutral message either way (never reveals whether
-    an address is on the allowlist). Allowlisted → emails a link; otherwise →
+    an address is on the allowlist, denied, or simply unknown). Allowlisted →
+    emails a link; denied → nothing; otherwise (in-domain, not yet decided) →
     files an access request and notifies the admin.
 
     An allowlisted address ALWAYS gets its link, whatever its domain — the allowlist
     is the sole authority on sign-in, so a cross-domain admin or contractor keeps
-    working on an `EMAIL_DOMAIN`-configured deployment."""
+    working on an `EMAIL_DOMAIN`-configured deployment.
+
+    Branch ORDER is the security property, not just its outcome:
+    - allowlisted must be checked FIRST, so allowlisting a previously-denied
+      address un-blocks it for free (see app.routers.admin.add_allowlist,
+      which also converts the denied row to 'approved' so the block can't
+      resurrect if the address is later removed from the allowlist). An admin
+      can also clear a denial WITHOUT allowlisting — see
+      app.routers.admin.clear_access_denial (DELETE
+      /access-requests/{email}/denial) — which un-blocks the address but
+      grants no access and sends no email, unlike allowlisting.
+    - denied must be checked SECOND, before may_request_access — otherwise a
+      denied in-domain address would keep inserting rows and emailing admins
+      on every retry, i.e. the deny feature would do nothing.
+
+    Every outbound send is SCHEDULED via `tasks.add_task`, never called
+    inline, on EVERY branch that has one — this is a security property, not
+    an optimization. With the default EMPTY `EMAIL_DOMAIN`, `may_request_access`
+    is True for everyone, so a denied address is the ONLY branch that skips
+    outbound network I/O; if the allowlisted/fresh-pending branches sent their
+    email inline (a real Resend round-trip, ~100s of ms) while denied returned
+    immediately, wall-clock alone would tell a caller "denied" from every
+    other outcome — a 400x+ timing oracle, measured. Returning before any
+    network I/O happens, on every branch, closes that channel: the caller
+    can no longer distinguish "your email is being sent right now" from
+    "nothing is happening" by how long the response took."""
     email = email.strip().lower()
     con = connect()
     try:
         if is_allowlisted(con, email):
             link = mint_login_link(con, email, base_url)
             con.commit()
-            send_magic_link(email, link)
+            tasks.add_task(send_magic_link, email, link)
+        elif is_denied(con, email):
+            pass  # Blocked: nothing stored, nothing sent, no distinguishing work.
         elif may_request_access(email):
             con.execute(
-                "INSERT INTO access_requests(email, created_at) VALUES (?,?)",
-                (email, time.time()))
+                "INSERT INTO access_requests(email, canon_email, created_at) "
+                "VALUES (?,?,?)",
+                (email, canon_email(email), time.time()))
             con.commit()
             admins = admin_recipients(con)
             if admins:
-                send_access_request(admins, email)
+                tasks.add_task(send_access_request, admins, email)
         # An out-of-domain stranger falls through: nothing stored, nothing sent —
         # but it still returns the message below verbatim. Saying anything else
         # would reveal which domains the deployment serves.

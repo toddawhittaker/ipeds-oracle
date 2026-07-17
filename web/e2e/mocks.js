@@ -252,6 +252,85 @@ export async function mockImportJobPoll(page, jobId, sequence) {
 }
 
 /**
+ * POST /api/admin/access-requests/{email}/deny -> {ok:true, email} (or a
+ * non-200 httpStatus, e.g. 404/500). Captures the exact (decoded) email
+ * parsed out of the request URL for every call, so a spec can assert
+ * precisely which pending row's Reject button fired the request
+ * (web/src/api.js: denyAccessRequest(email) ->
+ * POST /api/admin/access-requests/${encodeURIComponent(email)}/deny).
+ */
+export async function mockDenyAccessRequest(page, { httpStatus = 200, detail } = {}) {
+  const calls = [];
+  await page.route("**/api/admin/access-requests/*/deny", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const url = new URL(route.request().url());
+    const parts = url.pathname.split("/");
+    const email = decodeURIComponent(parts[parts.length - 2]);
+    calls.push(email);
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, email }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "Could not reject that address." }) });
+    }
+  });
+  return { calls };
+}
+
+/**
+ * GET /api/admin/access-requests/denied ->
+ * [{id, canon_email, emails:[...], created_at}] (or a non-200 `httpStatus`,
+ * e.g. 500, to exercise the load-failure state -- see SEC #3,
+ * web/e2e/undo-denial.spec.js). One object per CANONICAL group (deliberately
+ * grouped differently from mockAccessRequests' raw-address pending list --
+ * see admin.py's access_requests_denied docstring): `canon_email` is the
+ * ACTUALLY-BLOCKED address (also the argument the Undo control's DELETE call
+ * keys on) and `emails` is every distinct ORIGINAL address in the group.
+ * Which the UI renders, and when, is a UI decision -- see SEC #1 in
+ * web/e2e/undo-denial.spec.js for why canon_email is NOT always hidden.
+ */
+export async function mockDeniedRequests(page, rows, { httpStatus = 200 } = {}) {
+  await page.route("**/api/admin/access-requests/denied", async (route) => {
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: "Could not load blocked addresses." }) });
+    }
+  });
+}
+
+/**
+ * DELETE /api/admin/access-requests/{email}/denial -> {ok:true, email,
+ * cleared} (or a non-200 httpStatus, e.g. 500). Captures the exact (decoded)
+ * address parsed out of the request URL for every call -- Admin.jsx's undo()
+ * calls this with the row's `canon_email`, never a displayed original, so a
+ * spec can assert precisely that (web/src/api.js: clearDenial(email) ->
+ * DELETE /api/admin/access-requests/${encodeURIComponent(email)}/denial).
+ * Routed on `.../denial` specifically so it never matches
+ * mockDenyAccessRequest's `.../deny` route on the same page.
+ */
+export async function mockClearDenial(page, { httpStatus = 200, cleared = 1, detail } = {}) {
+  const calls = [];
+  await page.route("**/api/admin/access-requests/*/denial", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    const url = new URL(route.request().url());
+    const parts = url.pathname.split("/");
+    const email = decodeURIComponent(parts[parts.length - 2]);
+    calls.push(email);
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, email, cleared }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "Could not undo that block." }) });
+    }
+  });
+  return { calls };
+}
+
+/**
  * GET /api/admin/import/catalog -> {probed_at, partial, years:[{start_year,
  * year, year_label, status, integrated, available, release, selectable,
  * zip_bytes}], disk:{free_bytes,total_bytes,used_bytes}, calibration:{
