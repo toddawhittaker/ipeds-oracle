@@ -519,6 +519,7 @@ function Imports({ onDataChanged }) {
   const [uploadMsg, setUploadMsg] = useState("");
   const [notice, setNotice] = useState("");
   const fileRef = useRef();
+  const dragDepth = useRef(0);
   const poll = useRef();
   const noticeRef = useRef();
   // Read inside `tick` below (a long-lived interval closure), so it must stay
@@ -604,15 +605,43 @@ function Imports({ onDataChanged }) {
   }
 
   function addFiles(fileList) {
-    const accdb = Array.from(fileList || []).filter((f) =>
-      f.name.toLowerCase().endsWith(".accdb"));
-    setUploadMsg("");
-    if (accdb.length) setDropFiles(accdb);
-    else if (fileList && fileList.length) setUploadMsg("Only .accdb files are accepted.");
+    const all = Array.from(fileList || []);
+    const accdb = all.filter((f) => f.name.toLowerCase().endsWith(".accdb"));
+    const ignored = all.length - accdb.length;
+    if (accdb.length) {
+      setDropFiles(accdb);
+      // A partial selection must announce what was dropped, not silently keep
+      // only the .accdb (role="alert" carries it to a screen reader).
+      setUploadMsg(ignored
+        ? `${ignored} non-.accdb file${ignored > 1 ? "s were" : " was"} ignored.`
+        : "");
+    } else if (all.length) {
+      setUploadMsg("Only .accdb files are accepted.");
+    } else {
+      setUploadMsg("");
+    }
   }
-  function onDragOver(e) { e.preventDefault(); if (!dragging) setDragging(true); }
-  function onDragLeave(e) { e.preventDefault(); setDragging(false); }
-  function onDrop(e) { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }
+  // Drag state via a depth counter so crossing child boundaries doesn't flicker
+  // it; the handlers no-op while an import is running (locked).
+  function onDragEnter(e) {
+    if (locked) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  }
+  function onDragOver(e) { if (!locked) e.preventDefault(); }
+  function onDragLeave(e) {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }
+  function onDrop(e) {
+    if (locked) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    addFiles(e.dataTransfer.files);
+  }
 
   async function upload(e) {
     e.preventDefault();
@@ -882,8 +911,8 @@ function Imports({ onDataChanged }) {
         </p>
         <form onSubmit={upload}>
           <div
-            className={"dropzone" + (dragging ? " dragging" : "")}
-            onDragEnter={onDragOver}
+            className={"dropzone" + (dragging ? " dragging" : "") + (locked ? " disabled" : "")}
+            onDragEnter={onDragEnter}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
@@ -903,13 +932,10 @@ function Imports({ onDataChanged }) {
               onChange={(e) => addFiles(e.target.files)}
             />
           </div>
-          {/* Screen-reader announcement for the (visual-only) drag + selection state. */}
+          {/* Announce the SELECTION to a screen reader. The drag phase is
+              mouse-only and would just churn the live region, so it's omitted. */}
           <div className="sr-only" role="status" aria-live="polite">
-            {dragging
-              ? "Release to drop the files"
-              : dropFiles.length
-                ? `${dropFiles.length} file${dropFiles.length > 1 ? "s" : ""} selected`
-                : ""}
+            {dropFiles.length ? `${dropFiles.length} file${dropFiles.length > 1 ? "s" : ""} selected` : ""}
           </div>
           {dropFiles.length > 0 && (
             <ul className="dropfile-list small">

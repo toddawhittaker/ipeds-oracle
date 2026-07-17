@@ -68,3 +68,6 @@ logs.db-*
 .coverage
 .coverage.*
 htmlcov/
+
+# Local review/dev server log (scripts start uvicorn detached into this)
+*.log
