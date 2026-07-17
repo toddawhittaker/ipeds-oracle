@@ -70,11 +70,28 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
     finally:
         con.close()
     invited = False
+    mail_configured = bool(get_settings().resend_api_key)
     if invite_link:
         try:
             invited = send_access_approved(email, invite_link)
         except Exception as e:  # noqa: BLE001 — approval must not fail if email does
             log.warning("approval email to %s failed: %s", email, e)
+        if not invited and mail_configured:
+            # Re-report the failure from a logger the admin can actually READ.
+            # send_email() swallows provider errors and returns False, so the
+            # except above never fires; its own log line lives on the `ipeds.mail`
+            # logger, which logbuffer.py drops WHOLESALE (dev mode logs the magic
+            # link there, and the Logs view is readable by any admin). Net effect
+            # without this line: a failed invite leaves NOTHING in the Logs tab
+            # while the UI tells the admin to go look there — the same lie this
+            # endpoint's message was just fixed to stop telling.
+            # Safe to store: names the address and the outcome, never the link.
+            log.warning(
+                "invite email to %s was NOT delivered — mail is configured, so the "
+                "provider rejected or errored (see the server console for the "
+                "provider's own error). Their sign-in link was minted but not "
+                "stored anywhere; they must request one from the sign-in page.",
+                email)
     # A failed send means two very different things and the admin has to act
     # differently in each: with no key configured (dev) the mailer logged the
     # whole email — link included — to the CONSOLE, so it's recoverable; with a
@@ -82,7 +99,7 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
     # anywhere, so the only way in is for them to request one themselves. Tell
     # the UI which world it's in rather than making it guess.
     return {"ok": True, "email": email, "invited": invited,
-            "mail_configured": bool(get_settings().resend_api_key)}
+            "mail_configured": mail_configured}
 
 
 class AllowlistAdminPatch(BaseModel):

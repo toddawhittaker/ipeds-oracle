@@ -12,7 +12,9 @@ loader, mdbtools, or sleep/poll needed. Allowlist add/remove and the
 oversized-upload 413 path are already covered by eval/test_backend.py and
 eval/test_security.py.
 """
+import contextlib
 import hashlib
+import logging
 import os
 import sys
 import tempfile
@@ -677,6 +679,166 @@ def test_allowlist_add_invited_false_mail_configured_true_is_reachable():
         assert body["mail_configured"] is True, body
 
 
+@contextlib.contextmanager
+def _attached_probe_handler():
+    """A REAL SqliteLogHandler (same class the app installs on the root
+    logger at startup — see app/logbuffer.py:install) attached to the root
+    logger for the duration of the `with` block, backed by its own throwaway
+    logs.db so this test's assertions are never polluted by unrelated log
+    traffic from the rest of the suite.
+
+    This is the whole point of the regression test below: a bare `caplog`-style
+    capture of "was log.warning() called" would pass even if the call target
+    were the excluded `ipeds.mail` logger and the record got silently dropped
+    — which is exactly the bug this fix addresses (see
+    app.logbuffer._EXCLUDED_LOGGERS). Routing through a real handler exercises
+    that exclusion filter for real.
+    """
+    from app.logbuffer import SqliteLogHandler
+    tmp_log_db = Path(tempfile.mkdtemp()) / "probe-logs.db"
+    handler = SqliteLogHandler(str(tmp_log_db), retention_days=30)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        root.removeHandler(handler)
+
+
+def test_allowlist_add_invite_failure_with_mail_configured_survives_logbuffer():
+    """The whole point of the fix: when mail IS configured and the send fails
+    (the realistic path — mailer.send_email() catches the provider error
+    internally and returns False; it never raises, so the existing `except`
+    branch is not what surfaces this), add_allowlist must emit a WARNING that
+    the persistent log store actually RETAINS, on a logger admins can read in
+    the Logs tab. Before this fix, nothing was stored at all: the only log
+    line lived on `ipeds.mail`, which app.logbuffer drops wholesale."""
+    with _attached_probe_handler() as handler:
+        with TestClient(app) as c:
+            _login(c)
+            restore = _patch_resend_key("re_test_key_survive")
+            orig_send = admin_router.send_access_approved
+            captured_link = {}
+
+            def _fails_without_raising(email, link):
+                captured_link["link"] = link
+                return False  # mirrors send_email()'s real swallow-and-False path
+            admin_router.send_access_approved = _fails_without_raising
+            try:
+                r = c.post("/api/admin/allowlist",
+                           json={"email": "logbuffer-probe@example.edu"})
+            finally:
+                admin_router.send_access_approved = orig_send
+                restore()
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["invited"] is False, body
+        assert body["mail_configured"] is True, body
+
+        recs = handler.records(limit=2000, q="logbuffer-probe@example.edu")
+        assert len(recs) == 1, \
+            f"expected exactly one STORED record about the failed invite, got {recs}"
+        rec = recs[0]
+        assert rec["name"] == "ipeds.admin", rec
+        assert rec["level"] == "WARNING", rec
+        assert "not delivered" in rec["msg"].lower(), rec
+
+
+def test_allowlist_add_invite_failure_warning_never_leaks_link_or_token():
+    """Security regression pin: ipeds.mail is excluded from the log store
+    specifically because dev-mode mail logging includes the raw magic-link
+    token, and the Logs view is readable by any admin. A "fix" that solved
+    the visibility bug by putting the link into the (retained) ipeds.admin
+    logger instead would be a genuine regression — assert that never
+    happens, independent of whether the invisibility bug itself is fixed."""
+    with _attached_probe_handler() as handler:
+        with TestClient(app) as c:
+            _login(c)
+            restore = _patch_resend_key("re_test_key_leak_check")
+            orig_send = admin_router.send_access_approved
+            captured_link = {}
+
+            def _fails_without_raising(email, link):
+                captured_link["link"] = link
+                return False
+            admin_router.send_access_approved = _fails_without_raising
+            try:
+                r = c.post("/api/admin/allowlist",
+                           json={"email": "leak-check@example.edu"})
+            finally:
+                admin_router.send_access_approved = orig_send
+                restore()
+        assert r.status_code == 200, r.text
+
+        link = captured_link.get("link")
+        assert link, "test setup bug: mock never received the minted link"
+        assert "token=" in link, \
+            f"test setup bug: mint_login_link didn't produce a token= link: {link}"
+
+        blob = str(handler.records(limit=2000))
+        assert link not in blob, blob
+        assert "token=" not in blob, blob
+
+
+def test_allowlist_add_no_stored_warning_when_send_succeeds():
+    with _attached_probe_handler() as handler:
+        with TestClient(app) as c:
+            _login(c)
+            restore = _patch_resend_key("re_test_key_success")
+            orig_send = admin_router.send_access_approved
+            admin_router.send_access_approved = lambda email, link: True
+            try:
+                r = c.post("/api/admin/allowlist",
+                           json={"email": "send-ok@example.edu"})
+            finally:
+                admin_router.send_access_approved = orig_send
+                restore()
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["invited"] is True, body
+        assert body["mail_configured"] is True, body
+
+        recs = handler.records(limit=2000, q="send-ok@example.edu")
+        assert recs == [], \
+            f"a successful send must not emit the invite-failure warning: {recs}"
+
+
+def test_allowlist_add_no_stored_warning_in_dev_no_key_case():
+    # No RESEND_API_KEY override here -- this suite's baseline env has
+    # RESEND_API_KEY="" (the dev/no-key world), where the mailer legitimately
+    # logs the whole email to the console instead: nothing failed, so no
+    # "was NOT delivered" warning should ever be stored.
+    with _attached_probe_handler() as handler:
+        with TestClient(app) as c:
+            _login(c)
+            orig_send = admin_router.send_access_approved
+
+            def _boom(email, link):
+                raise RuntimeError("smtp is down")
+            admin_router.send_access_approved = _boom
+            try:
+                r = c.post("/api/admin/allowlist",
+                           json={"email": "dev-no-key@example.edu"})
+            finally:
+                admin_router.send_access_approved = orig_send
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["invited"] is False, body
+        assert body["mail_configured"] is False, body
+
+        # A DIFFERENT warning legitimately fires here (the pre-existing
+        # `except Exception as e: log.warning("approval email to %s failed: "
+        # "%s", ...)` branch, since the mock raises) -- that's fine and
+        # expected. What must NOT appear is this fix's "was NOT delivered"
+        # message, since mail_configured is False here: nothing was
+        # genuinely lost, the console already has the full email.
+        recs = handler.records(limit=2000, q="dev-no-key@example.edu")
+        assert not any("not delivered" in r["msg"].lower() for r in recs), \
+            f"the no-key dev case must not emit the invite-failure-with-mail-" \
+            f"configured warning: {recs}"
+
+
 def _is_admin(c, email):
     row = next((x for x in c.get("/api/admin/allowlist").json()
                 if x["email"] == email), None)
@@ -967,6 +1129,16 @@ def run():
     check("allowlist add: invited=False + mail_configured=True is reachable "
           "(send failed WITH a key configured)",
           test_allowlist_add_invited_false_mail_configured_true_is_reachable)
+    check("allowlist add: a mail-configured send failure emits a WARNING that "
+          "survives the real logbuffer (not on the excluded ipeds.mail logger)",
+          test_allowlist_add_invite_failure_with_mail_configured_survives_logbuffer)
+    check("allowlist add: the stored invite-failure warning never leaks the "
+          "magic link or a token= value",
+          test_allowlist_add_invite_failure_warning_never_leaks_link_or_token)
+    check("allowlist add: no stored warning when the send succeeds",
+          test_allowlist_add_no_stored_warning_when_send_succeeds)
+    check("allowlist add: no stored warning in the dev/no-key case",
+          test_allowlist_add_no_stored_warning_in_dev_no_key_case)
     check("promote makes a user admin immediately on their live session",
           test_promote_makes_user_admin_immediately_on_live_session)
     check("demote an admin when another admin exists",
