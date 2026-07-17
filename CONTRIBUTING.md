@@ -202,7 +202,8 @@ Workflow:
 2. Keep PRs focused; don't split a single file across PRs.
 3. Add or update tests for behavior changes — the **test‑engineer** agent owns
    test files (see below); new behavior is written test‑first where practical.
-4. Open a PR; it merges only when lint · unit · backend · e2e · image are green.
+4. Open a PR; watch CI **in the background** (`gh pr checks <n> --watch`, so you
+   keep working) and merge only when lint · unit · backend · e2e · image are green.
 5. End commit messages with the `Co-Authored-By:` trailer.
 
 ## The agent team
@@ -213,6 +214,11 @@ orchestrator plus **architect**, **implementer**, **test‑engineer** (the only
 one that writes tests), **code‑reviewer**, **security‑reviewer**,
 **a11y‑reviewer**, **ui‑ux**, and **debugger**. They encode the conventions
 above; read their `.md` files for the rubrics each applies.
+
+**Keep them current.** A major architecture or infrastructure change — a new test
+tier, a new gate, a removed/renamed feature, a changed workflow rule — must sweep
+`.claude/agents/` in the same PR (or an immediate follow‑up). The definitions
+reference the tiers, features, and rules and go stale silently otherwise.
 
 ## Working with the database
 
