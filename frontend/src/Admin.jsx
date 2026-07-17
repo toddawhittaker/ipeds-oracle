@@ -1214,10 +1214,15 @@ function Skills() {
       lesson: description,
       notes: description,
       canonical_sql: draft.canonical_sql.trim(),
-    }).then(() => {
+    }).then(async () => {
       announce("Lesson updated.");
-      closeEdit(s.id);
-      load();
+      setEditingId(null);
+      // Restore focus only AFTER the list reload has re-rendered. Doing it in
+      // closeEdit's rAF while load() runs concurrently races the reload's
+      // setRows, which remounts the edit button under the just-focused node and
+      // drops focus to <body> — a timing-dependent flake under gate load.
+      await load();
+      requestAnimationFrame(() => editBtnRefs.current[s.id]?.focus?.());
     }).catch(() => announce("Couldn't save that lesson — nothing was changed."));
   }
   const reject = (s) => {
