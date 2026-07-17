@@ -145,8 +145,9 @@ test.describe("delete-conversation focus management", () => {
     // exact:true -- getByRole name-matching is substring by default, and the
     // sibling trash button's aria-label ("Delete chat: Solo Chat") now
     // CONTAINS this row's bare title, so an unscoped substring match would
-    // hit both buttons (strict-mode violation).
-    await expect(page.getByRole("button", { name: "Solo Chat", exact: true })).toBeVisible();
+    // hit both the row link and the trash button (strict-mode violation).
+    // The row itself is a real react-router <a> link.
+    await expect(page.getByRole("link", { name: "Solo Chat", exact: true })).toBeVisible();
 
     convos.setList([]);
 
@@ -154,7 +155,7 @@ test.describe("delete-conversation focus management", () => {
     await page.getByRole("button", { name: "Delete chat: Solo Chat" }).click();
 
     await expect.poll(() => del.calls).toEqual(["9"]);
-    await expect(page.getByRole("button", { name: "+ New chat" })).toBeFocused();
+    await expect(page.getByRole("link", { name: "+ New chat" })).toBeFocused();
 
     const announcer = page.getByTestId("delete-announcer");
     await expect(announcer).toHaveText('Deleted "Solo Chat". No chats remaining.');
@@ -175,7 +176,7 @@ test.describe("delete-conversation focus management", () => {
     const del = await mockDeleteConversation(page);
 
     await page.goto("/");
-    await expect(page.getByRole("button", { name: "+ New chat" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
 
     const announcer = page.getByTestId("delete-announcer");
 
@@ -250,7 +251,7 @@ test.describe("delete-conversation focus management", () => {
     await expect.poll(() => del.calls).toEqual(["2"]);
     // The row must still be there -- a failed DELETE must not optimistically
     // vanish it. exact:true -- see the same note in the "ONLY row" test above.
-    await expect(page.getByRole("button", { name: "Chat Two", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Chat Two", exact: true })).toBeVisible();
 
     const announcer = page.getByTestId("delete-announcer");
     await expect(announcer).toHaveText("Couldn't delete that chat.");

@@ -54,7 +54,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   ]);
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
 
   // Allowlist is the default subtab — do the form submission here, before
   // navigating anywhere else. Skills is still visited last purely to keep
@@ -75,11 +75,11 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
     is_admin: false,
   });
 
-  await page.getByRole("button", { name: "Imports" }).click();
+  await page.getByRole("link", { name: "Imports" }).click();
   await expect(page.getByText("IPEDS2526.accdb")).toBeVisible();
   await expect(page.getByRole("cell", { name: "9" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Usage" }).click();
+  await page.getByRole("link", { name: "Usage" }).click();
   // "Queries" also labels table columns further down the panel, so scope to
   // the first (summary stat) occurrence rather than asserting a unique match.
   await expect(page.getByText("123", { exact: true })).toBeVisible();
@@ -87,7 +87,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
 
   // Skills last — do not navigate away from it (see known-bug test below).
-  await page.getByRole("button", { name: "Skills" }).click();
+  await page.getByRole("link", { name: "Skills" }).click();
   await expect(page.getByText(/Match cipcode='51.3801' exactly/)).toBeVisible();
   await expect(page.getByText("verified", { exact: true })).toBeVisible();
 });
@@ -123,8 +123,8 @@ test("regression: navigating away from the Skills tab and back does not crash th
   ]);
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Admin" }).click();
-  await page.getByRole("button", { name: "Skills" }).click();
+  await page.getByRole("link", { name: "Admin" }).click();
+  await page.getByRole("link", { name: "Skills" }).click();
   await expect(page.getByText("example rule")).toBeVisible();
 
   // Unmount Skills by navigating to another subtab — this used to crash the
@@ -132,15 +132,15 @@ test("regression: navigating away from the Skills tab and back does not crash th
   // at expect's 5s default) rather than a raw .click(), which would otherwise
   // block for the full test timeout while the "Allowlist" -> "Users" rename
   // is still unimplemented.
-  const usersSub = page.getByRole("button", { name: "Users" });
+  const usersSub = page.getByRole("link", { name: "Users" });
   await expect(usersSub).toBeVisible();
   await usersSub.click();
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   // The rest of the shell must still be intact too, not just the Admin panel.
-  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
 
   // And back to Skills again, to be thorough about remounting.
-  await page.getByRole("button", { name: "Skills" }).click();
+  await page.getByRole("link", { name: "Skills" }).click();
   await expect(page.getByText("example rule")).toBeVisible();
 
   expect(pageErrors).toEqual([]);

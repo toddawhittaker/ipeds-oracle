@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { NavLink, Navigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
@@ -42,17 +42,15 @@ export function AdminRoute({ me, onDataChanged }) {
 }
 
 export default function Admin({ me, tab, onDataChanged }) {
-  const navigate = useNavigate();
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => (
-          <button key={t} className={tab === t ? "on" : ""}
-                  aria-current={tab === t ? "page" : undefined}
-                  onClick={() => navigate(`/admin/${t}`)}>
+          <NavLink key={t} to={`/admin/${t}`} end
+                   className={({ isActive }) => (isActive ? "on" : "")}>
             {t[0].toUpperCase() + t.slice(1)}
-          </button>
+          </NavLink>
         ))}
       </nav>
       {tab === "users" && <Allowlist me={me} />}

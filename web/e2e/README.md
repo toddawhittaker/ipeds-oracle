@@ -53,7 +53,8 @@ fulfilled by a mock before it leaves the page.
   plus the rebuild progress bar (`[data-testid="rebuild-progress"]`) driven by
   a polled job's `progress.rebuild` JSON.
 - `a11y.spec.js` — coverage for the accessibility fixes: conversation list
-  items are real buttons (with `aria-current` on the active one), the
+  items are real links (with `aria-current` on the active one -- see
+  `nav-links.spec.js` for the full link-conversion contract), the
   streamed assistant answer container has `aria-live`, the Login/Chat/Admin
   inputs are reachable via `getByLabel`/`getByRole`, primary-nav and Admin
   subtab active state uses `aria-current`, the markdown result-table wrapper
@@ -65,6 +66,15 @@ fulfilled by a mock before it leaves the page.
   leads, the longer description collapses behind its own "Details", the SQL
   worked example stays collapsed under "Example query", and verify/reject
   actions (incl. the destructive-delete confirm dialog).
+- `nav-links.spec.js` — the three nav surfaces (top-nav Chat/Admin, Admin
+  subtabs, sidebar conversation rows + "+ New chat") are real react-router
+  `<a href>` links, not click-only buttons: correct `href` per control,
+  `aria-current="page"` on the active one only, the sidebar trash button
+  stays a DOM sibling of the row link (never nested inside it), keyboard
+  Enter activates a focused link (Space does not), and a modifier/middle
+  click on a conversation row or "+ New chat" fires no client-side
+  side-effects (no navigation, no thread reset, no turnToken abandonment) --
+  letting the browser's native new-tab handling take over instead.
 - `delete-focus.spec.js` — focus management after deleting a conversation:
   deleting the open chat navigates to `/` and focuses the composer; deleting a
   different chat focuses whatever now occupies the deleted row's index (next

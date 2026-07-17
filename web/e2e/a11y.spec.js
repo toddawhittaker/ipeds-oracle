@@ -45,7 +45,7 @@ async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
 }
 
 test.describe("conversation list items", () => {
-  test("are real buttons reachable by accessible name; active one gets aria-current", async ({ page }) => {
+  test("are real links reachable by accessible name; active one gets aria-current", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, [
       { id: 1, title: "CA nursing associate's degrees" },
@@ -55,15 +55,17 @@ test.describe("conversation list items", () => {
 
     await page.goto("/");
 
-    // Before the a11y fix these were click-only <div>s with no button role.
-    // exact:true -- getByRole name-matching is substring by default, and the
-    // row's own trash-button aria-label ("Delete chat: <title>", added for
-    // the delete-focus a11y fix -- see web/e2e/delete-focus.spec.js) now
-    // CONTAINS this bare title, so an unscoped substring match would hit
-    // both buttons (strict-mode violation). This still tests the same
-    // intent -- the row is a real button, reachable by its accessible name --
-    // exact matching just disambiguates it from its sibling.
-    const convoBtn = page.getByRole("button", { name: "CA nursing associate's degrees", exact: true });
+    // Before the a11y fix these were click-only <div>s with no button role;
+    // now they're real react-router <a> links (see web/e2e/nav-links.spec.js
+    // for the full link-conversion contract). exact:true -- getByRole
+    // name-matching is substring by default, and the row's own trash-button
+    // aria-label ("Delete chat: <title>", added for the delete-focus a11y
+    // fix -- see web/e2e/delete-focus.spec.js) now CONTAINS this bare title,
+    // so an unscoped substring match would hit both controls (strict-mode
+    // violation). This still tests the same intent -- the row is a real
+    // link, reachable by its accessible name -- exact matching just
+    // disambiguates it from its sibling.
+    const convoBtn = page.getByRole("link", { name: "CA nursing associate's degrees", exact: true });
     await expect(convoBtn).toBeVisible();
     await expect(convoBtn).not.toHaveAttribute("aria-current", "page");
 
@@ -110,14 +112,14 @@ test.describe("labeled inputs", () => {
     await mockAccessRequests(page, []);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Admin" }).click();
+    await page.getByRole("link", { name: "Admin" }).click();
 
     await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
   });
 });
 
 test.describe("tabs selected state", () => {
-  test("active primary nav tab and active Admin subtab expose aria-current", async ({ page }) => {
+  test("active primary nav link and active Admin subtab link expose aria-current", async ({ page }) => {
     await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
@@ -126,8 +128,8 @@ test.describe("tabs selected state", () => {
 
     await page.goto("/");
 
-    const chatTab = page.getByRole("button", { name: "Chat", exact: true });
-    const adminTab = page.getByRole("button", { name: "Admin" });
+    const chatTab = page.getByRole("link", { name: "Chat", exact: true });
+    const adminTab = page.getByRole("link", { name: "Admin" });
     await expect(chatTab).toHaveAttribute("aria-current", "page");
     await expect(adminTab).not.toHaveAttribute("aria-current", "page");
 
@@ -135,8 +137,8 @@ test.describe("tabs selected state", () => {
     await expect(adminTab).toHaveAttribute("aria-current", "page");
     await expect(chatTab).not.toHaveAttribute("aria-current", "page");
 
-    const usersSub = page.getByRole("button", { name: "Users" });
-    const importsSub = page.getByRole("button", { name: "Imports" });
+    const usersSub = page.getByRole("link", { name: "Users" });
+    const importsSub = page.getByRole("link", { name: "Imports" });
     await expect(usersSub).toHaveAttribute("aria-current", "page");
     await expect(importsSub).not.toHaveAttribute("aria-current", "page");
 
@@ -165,7 +167,7 @@ test.describe("Admin landmark + login alert", () => {
     await mockAccessRequests(page, []);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Admin" }).click();
+    await page.getByRole("link", { name: "Admin" }).click();
 
     await expect(page.getByRole("main")).toBeVisible();
   });

@@ -11,8 +11,8 @@ test.describe("app shell / roles", () => {
     await page.goto("/");
 
     // exact: true — "Chat" is otherwise a substring match of "+ New chat" in the sidebar.
-    await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Admin" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Admin" })).toHaveCount(0);
     await expect(page.getByText("user@example.edu")).toBeVisible();
   });
 
@@ -22,7 +22,7 @@ test.describe("app shell / roles", () => {
 
     await page.goto("/");
 
-    await expect(page.getByRole("button", { name: "Admin" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Admin" })).toBeVisible();
   });
 
   test("sign out calls logout and returns to the Login screen", async ({ page }) => {
