@@ -3,6 +3,8 @@ import { NavLink, Navigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
+import { viewUsers } from "./userlist.js";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose } from "./icons.jsx";
 
 function humanBytes(n) {
   if (n == null || !isFinite(n)) return "?";
@@ -88,6 +90,16 @@ function Allowlist({ me }) {
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  // Users-table view state (client-side, per the plan): the list arrives whole
+  // and unpaginated, so search/sort/paginate all live here. Any change to the
+  // query, sort, or page size returns to page 1 (each preserves the other two).
+  const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState("email");
+  const [sortDir, setSortDir] = useState("asc");
+  const [perPage, setPerPage] = useState(25);
+  const [page, setPage] = useState(1);
+  const [busyEmail, setBusyEmail] = useState(""); // row action in flight
+  const searchRef = useRef(null);
   const [flash, setFlash] = useState("");
   // Focus target for the visible flash box (a11y): moved here whenever a
   // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
@@ -229,6 +241,7 @@ function Allowlist({ me }) {
   }
 
   async function toggleAdmin(r) {
+    setBusyEmail(r.email);
     try {
       await api.setAdmin(r.email, !r.is_admin);
       announce(r.is_admin
@@ -238,9 +251,44 @@ function Allowlist({ me }) {
       let msg = "Could not update admin status.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
       announce(msg);
+    } finally {
+      setBusyEmail("");
     }
     load();
   }
+
+  // Destructive: confirm (naming the email), then announce the outcome — closing
+  // the old inline remove's no-confirm/no-announce gap. After load() refetches,
+  // the derived viewUsers() clamp keeps the admin on their page (or drops to the
+  // previous one if this emptied the last page). Self-removal never reaches here
+  // — the current admin's row shows no actions (the backend also 400s it).
+  async function removeUser(r) {
+    if (!window.confirm(
+      `Remove ${r.email} from the allowlist? This drops any admin access and ` +
+      `signs them out. You can re-add them later.`)) return;
+    setBusyEmail(r.email);
+    try {
+      await api.removeAllow(r.email);
+      announce(`Removed ${r.email} from the allowlist.`);
+    } catch (err) {
+      let msg = `Couldn't remove ${r.email}.`;
+      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      announce(msg);
+    } finally {
+      setBusyEmail("");
+    }
+    load();
+  }
+
+  // Clicking a header toggles asc/desc on the active column, else switches to it
+  // ascending. Any sort change returns to page 1 (preserving search + page size).
+  function sortBy(key) {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+    setPage(1);
+  }
+
+  const view = viewUsers(rows, { query: q, sortKey, sortDir, page, perPage });
 
   return (
     <div className="panel">
@@ -290,34 +338,121 @@ function Allowlist({ me }) {
         <button type="submit">Add</button>
       </form>
 
-      <table className="grid">
-        <thead><tr><th scope="col">Email</th><th scope="col">Note</th><th scope="col">Admin</th><th scope="col">Last login</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+      <div className="row usersearch">
+        <div className="searchwrap">
+          <input id="user-search" ref={searchRef} type="search" className="logsearch"
+                 placeholder="Search email or note" value={q}
+                 aria-label="Search email or note"
+                 onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          {q && (
+            <button type="button" className="search-clear tip" data-tip="Clear search"
+                    aria-label="Clear search"
+                    onClick={() => { setQ(""); setPage(1); searchRef.current?.focus(); }}>
+              <IconClose />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <table className="grid users">
+        <thead>
+          <tr>
+            {[["email", "Email"], ["note", "Note"], ["admin", "Admin"], ["last_login", "Last login"]].map(
+              ([key, label]) => {
+                const active = sortKey === key;
+                return (
+                  <th key={key} scope="col"
+                      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                    <button type="button" className={"sortbtn" + (active ? " active" : "")}
+                            onClick={() => sortBy(key)}>
+                      {label}
+                      <span className="caret" aria-hidden="true">
+                        {active ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                      </span>
+                    </button>
+                  </th>
+                );
+              })}
+            <th scope="col"><span className="sr-only">Actions</span></th>
+          </tr>
+        </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.email}>
-              <td>{r.email}</td>
-              <td>{r.note}</td>
-              <td>
-                {me && r.email === me.email && r.is_admin ? (
-                  <span className="admintoggle on" title="You can't remove your own admin access">
-                    ✓ admin (you)
-                  </span>
-                ) : (
-                  <button type="button"
-                          className={"link admintoggle" + (r.is_admin ? " on" : "")}
-                          aria-pressed={r.is_admin ? "true" : "false"}
-                          onClick={() => toggleAdmin(r)}>
-                    {r.is_admin ? "✓ admin" : "make admin"}
-                  </button>
-                )}
+          {view.slice.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="empty">
+                {q.trim() ? "No users match your search." : "No users yet."}
               </td>
-              <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
-              <td><button className="link danger"
-                          onClick={() => api.removeAllow(r.email).then(load)}>remove</button></td>
             </tr>
-          ))}
+          ) : view.slice.map((r) => {
+            const isSelf = me && r.email === me.email;
+            const busy = busyEmail === r.email;
+            return (
+              <tr key={r.email}>
+                <td>{r.email}</td>
+                <td>{r.note}</td>
+                <td>
+                  {r.is_admin && (
+                    <span className="admintoggle on">
+                      {isSelf ? "✓ Admin (you)" : "✓ Admin"}
+                    </span>
+                  )}
+                </td>
+                <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
+                <td className="actions">
+                  {!isSelf && (
+                    <>
+                      {r.is_admin ? (
+                        <button type="button" className="icon-btn tip" data-tip="Remove admin"
+                                aria-label="Remove admin" disabled={busy} aria-busy={busy}
+                                onClick={() => toggleAdmin(r)}>
+                          <IconShieldMinus />
+                        </button>
+                      ) : (
+                        <button type="button" className="icon-btn tip" data-tip="Make admin"
+                                aria-label="Make admin" disabled={busy} aria-busy={busy}
+                                onClick={() => toggleAdmin(r)}>
+                          <IconShieldPlus />
+                        </button>
+                      )}
+                      <button type="button" className="icon-btn danger tip" data-tip="Remove user"
+                              aria-label="Remove user" disabled={busy} aria-busy={busy}
+                              onClick={() => removeUser(r)}>
+                        <IconTrash />
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+
+      <div className="pager">
+        <span className="pager-range">{view.label}</span>
+        {/* Announce the count/range politely to screen readers. A bare
+            aria-live div (NOT role="status") so it stays distinct from the
+            single action-outcome status region up top. */}
+        <div className="sr-only" aria-live="polite">{view.label}</div>
+        <label className="pager-size">
+          <span className="sr-only">Users per page</span>
+          <select value={perPage}
+                  onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}>
+            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} / page</option>)}
+          </select>
+        </label>
+        <div className="pager-nav">
+          <button type="button" className="pgbtn" aria-label="Previous page"
+                  disabled={view.page <= 1} onClick={() => setPage(view.page - 1)}>
+            ‹ Prev
+          </button>
+          <span className="pager-page">Page {view.page} of {view.totalPages}</span>
+          <button type="button" className="pgbtn" aria-label="Next page"
+                  disabled={view.page >= view.totalPages} onClick={() => setPage(view.page + 1)}>
+            Next ›
+          </button>
+        </div>
+      </div>
 
       {/* Plain subdued section, not the --user tint used above for "needs
           your action" — a block is the opposite: something already handled

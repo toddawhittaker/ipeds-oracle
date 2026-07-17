@@ -44,3 +44,19 @@ export const IconRerun = (p) => (
     <path d="M21 3v6h-6" />
   </Svg>
 );
+
+// Shield + / shield − for promote-to-admin / remove-admin. Shields (not up/down
+// arrows) so they never read as the table's sort carets.
+export const IconShieldPlus = (p) => (
+  <Svg {...p}>
+    <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
+    <path d="M12 8.5v5M9.5 11h5" />
+  </Svg>
+);
+
+export const IconShieldMinus = (p) => (
+  <Svg {...p}>
+    <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
+    <path d="M9.5 11h5" />
+  </Svg>
+);
