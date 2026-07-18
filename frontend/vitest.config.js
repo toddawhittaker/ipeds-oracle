@@ -30,6 +30,7 @@ export default defineConfig({
         "src/estimate.js",
         "src/mdnorm.js",
         "src/tabledata.js",
+        "src/userlist.js",
       ],
       all: true,
       thresholds: {

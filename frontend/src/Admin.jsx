@@ -3,6 +3,8 @@ import { NavLink, Navigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
+import { viewUsers } from "./userlist.js";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose } from "./icons.jsx";
 
 function humanBytes(n) {
   if (n == null || !isFinite(n)) return "?";
@@ -88,13 +90,46 @@ function Allowlist({ me }) {
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  // Users-table view state (client-side, per the plan): the list arrives whole
+  // and unpaginated, so search/sort/paginate all live here. Any change to the
+  // query, sort, or page size returns to page 1 (each preserves the other two).
+  const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState("email");
+  const [sortDir, setSortDir] = useState("asc");
+  const [perPage, setPerPage] = useState(25);
+  const [page, setPage] = useState(1);
+  const [busyEmail, setBusyEmail] = useState(""); // row action in flight
+  const searchRef = useRef(null);
+  // Focus targets so a control that self-disables (Prev/Next at an end) or a row
+  // action (promote) can hand focus somewhere sensible instead of dropping it to
+  // <body> — see the a11y fixes in sortBy/toggleAdmin/goPage below.
+  const actionBtnRefs = useRef({});
+  const prevRef = useRef(null);
+  const nextRef = useRef(null);
+  // A polite live region for the TABLE's own status (result range + sort), kept
+  // separate from the action-outcome flash below (which is role="status" and a
+  // focus target). Debounced so typing in the search box doesn't enqueue a range
+  // read-out on every keystroke (WCAG 4.1.3).
+  const [liveLabel, setLiveLabel] = useState("");
   const [flash, setFlash] = useState("");
+  const [flashLeaving, setFlashLeaving] = useState(false); // fade-out state
+  const flashTimers = useRef([]);
+  useEffect(() => () => flashTimers.current.forEach(clearTimeout), []);
   // Focus target for the visible flash box (a11y): moved here whenever a
   // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
   // — without it, an action that unmounts the row the user just activated
   // (e.g. Reject removing its own .req row on reload) drops focus to <body>.
   const flashRef = useRef(null);
-  useEffect(() => { if (flash) flashRef.current?.focus(); }, [flash]);
+  // Actions that UNMOUNT the row they were triggered from (reject/remove) need
+  // focus to land on this notice, or it drops to <body>. Actions whose row
+  // PERSISTS (promote/demote) restore focus to the row's own button instead, and
+  // set this flag so the flash doesn't yank focus up to the notice first.
+  const skipFlashFocus = useRef(false);
+  useEffect(() => {
+    if (!flash) return;
+    if (skipFlashFocus.current) { skipFlashFocus.current = false; return; }
+    flashRef.current?.focus();
+  }, [flash]);
 
   // aria-live only fires reliably on a genuine DOM mutation, and React bails
   // out of a re-render entirely when setState is called with the SAME value
@@ -103,13 +138,27 @@ function Allowlist({ me }) {
   // on the next frame, to force a real mutation every time. Same pattern as
   // Skills' announce() below (Admin.jsx), reused here rather than invented
   // fresh.
+  // Show the flash as a toast: it overlays (fixed-positioned, so it never shifts
+  // the page under the cursor), then auto-fades after a few seconds instead of
+  // lingering until navigation. The clear-then-set-next-frame dance still forces
+  // a real DOM mutation so the paired aria-live region re-announces identical text.
   function announce(text) {
+    flashTimers.current.forEach(clearTimeout);
+    flashTimers.current = [];
+    setFlashLeaving(false);
     setFlash("");
     requestAnimationFrame(() => setFlash(text));
+    flashTimers.current = [
+      setTimeout(() => setFlashLeaving(true), 4000),
+      setTimeout(() => { setFlash(""); setFlashLeaving(false); }, 4400),
+    ];
   }
 
   const load = () => {
-    api.allowlist().then(setRows);
+    // Return the allowlist fetch so a caller can sequence focus AFTER the table
+    // reload commits (the focus-restore-vs-reload race: restoring focus while a
+    // reload re-renders the row drops focus to <body>).
+    const loaded = api.allowlist().then(setRows);
     api.accessRequests().then(setReqs);
     // Unlike the two loaders above -- where an empty rendered result on
     // failure is indistinguishable from "genuinely nothing yet", which is
@@ -129,8 +178,9 @@ function Allowlist({ me }) {
         try { detail = JSON.parse(err.message).detail || ""; } catch { /* no JSON body to read */ }
         setDeniedError(detail || "Couldn't load blocked addresses.");
       });
+    return loaded;
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   // One message per outcome, keyed off the backend's `delivery` value. "No email
   // was sent" has THREE distinct causes needing different reactions, so never
@@ -229,6 +279,10 @@ function Allowlist({ me }) {
   }
 
   async function toggleAdmin(r) {
+    setBusyEmail(r.email);
+    // The row survives this action, so keep the flash from stealing focus to the
+    // top notice; focus is returned to the row's button after the reload below.
+    skipFlashFocus.current = true;
     try {
       await api.setAdmin(r.email, !r.is_admin);
       announce(r.is_admin
@@ -238,9 +292,73 @@ function Allowlist({ me }) {
       let msg = "Could not update admin status.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
       announce(msg);
+    } finally {
+      setBusyEmail("");
+    }
+    // The row PERSISTS (only its shield swaps Make<->Remove admin), so return
+    // focus to that same row's action button AFTER the reload commits — instead
+    // of stranding the keyboard user on the top notice announce() focused, or on
+    // <body> where the briefly-disabled button dropped it. Sequenced after
+    // load() per the focus-restore-vs-reload race rule.
+    await load();
+    requestAnimationFrame(() => actionBtnRefs.current[r.email]?.focus?.());
+  }
+
+  // Destructive: confirm (naming the email), then announce the outcome — closing
+  // the old inline remove's no-confirm/no-announce gap. After load() refetches,
+  // the derived viewUsers() clamp keeps the admin on their page (or drops to the
+  // previous one if this emptied the last page). Self-removal never reaches here
+  // — the current admin's row shows no actions (the backend also 400s it).
+  async function removeUser(r) {
+    if (!window.confirm(
+      `Remove ${r.email} from the allowlist? This drops any admin access and ` +
+      `signs them out. You can re-add them later.`)) return;
+    setBusyEmail(r.email);
+    try {
+      await api.removeAllow(r.email);
+      announce(`Removed ${r.email} from the allowlist.`);
+    } catch (err) {
+      let msg = `Couldn't remove ${r.email}.`;
+      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      announce(msg);
+    } finally {
+      setBusyEmail("");
     }
     load();
   }
+
+  // Clicking a header toggles asc/desc on the active column, else switches to it
+  // ascending. Any sort change returns to page 1 (preserving search + page size).
+  // Activating a sort gives no visual feedback a screen reader can catch (aria-
+  // sort on a <th> only surfaces on re-navigation), so announce the new order.
+  const SORT_LABELS = { email: "email", note: "note", admin: "admin status", last_login: "last login" };
+  function sortBy(key) {
+    const dir = key === sortKey ? (sortDir === "asc" ? "desc" : "asc") : "asc";
+    setSortKey(key);
+    setSortDir(dir);
+    setPage(1);
+    setLiveLabel(`Sorted by ${SORT_LABELS[key]}, ${dir === "asc" ? "ascending" : "descending"}.`);
+  }
+
+  // Page moves that land on an end DISABLE the button under focus (Prev on page
+  // 1, Next on the last page), dropping focus to <body>; hand it to the sibling.
+  function goPage(next) {
+    setPage(next);
+    if (next <= 1) requestAnimationFrame(() => nextRef.current?.focus());
+    else if (next >= view.totalPages) requestAnimationFrame(() => prevRef.current?.focus());
+  }
+
+  const view = viewUsers(rows, { query: q, sortKey, sortDir, page, perPage });
+
+  // Debounce the range read-out: coalesce rapid changes (typing, quick paging)
+  // into a single announcement once the view settles. Skip the initial mount so
+  // opening the tab doesn't announce the count unprompted.
+  const didAnnounce = useRef(false);
+  useEffect(() => {
+    if (!didAnnounce.current) { didAnnounce.current = true; return; }
+    const id = setTimeout(() => setLiveLabel(view.label), 450);
+    return () => clearTimeout(id);
+  }, [view.label]);
 
   return (
     <div className="panel">
@@ -252,7 +370,12 @@ function Allowlist({ me }) {
           status region further down) — role="status" lives there only, so
           sighted and screen-reader users each get exactly one announcement
           instead of two. */}
-      {flash && <div ref={flashRef} tabIndex={-1} className="notice">{flash}</div>}
+      {flash && (
+        <div ref={flashRef} tabIndex={-1}
+             className={"notice flash-toast" + (flashLeaving ? " leaving" : "")}>
+          {flash}
+        </div>
+      )}
       <div className="sr-only" role="status" aria-live="polite">{flash}</div>
       {reqs.length > 0 && (
         <div className="requests">
@@ -290,34 +413,125 @@ function Allowlist({ me }) {
         <button type="submit">Add</button>
       </form>
 
-      <table className="grid">
-        <thead><tr><th scope="col">Email</th><th scope="col">Note</th><th scope="col">Admin</th><th scope="col">Last login</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+      <div className="row usersearch">
+        <div className="searchwrap">
+          <input id="user-search" ref={searchRef} type="search" className="logsearch"
+                 placeholder="Search email or note" value={q}
+                 aria-label="Search email or note"
+                 onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          {q && (
+            <button type="button" className="search-clear" aria-label="Clear search"
+                    onClick={() => { setQ(""); setPage(1); searchRef.current?.focus(); }}>
+              <IconClose size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <table className="grid users">
+        <thead>
+          <tr>
+            {[["email", "Email"], ["note", "Note"], ["admin", "Admin"], ["last_login", "Last login"]].map(
+              ([key, label]) => {
+                const active = sortKey === key;
+                return (
+                  <th key={key} scope="col"
+                      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                    <button type="button" className={"sortbtn" + (active ? " active" : "")}
+                            onClick={() => sortBy(key)}>
+                      {label}
+                      <span className="caret" aria-hidden="true">
+                        {active ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                      </span>
+                    </button>
+                  </th>
+                );
+              })}
+            <th scope="col" className="actions-head">Actions</th>
+          </tr>
+        </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.email}>
-              <td>{r.email}</td>
-              <td>{r.note}</td>
-              <td>
-                {me && r.email === me.email && r.is_admin ? (
-                  <span className="admintoggle on" title="You can't remove your own admin access">
-                    ✓ admin (you)
-                  </span>
-                ) : (
-                  <button type="button"
-                          className={"link admintoggle" + (r.is_admin ? " on" : "")}
-                          aria-pressed={r.is_admin ? "true" : "false"}
-                          onClick={() => toggleAdmin(r)}>
-                    {r.is_admin ? "✓ admin" : "make admin"}
-                  </button>
-                )}
+          {view.slice.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="empty">
+                {q.trim() ? "No users match your search." : "No users yet."}
               </td>
-              <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
-              <td><button className="link danger"
-                          onClick={() => api.removeAllow(r.email).then(load)}>remove</button></td>
             </tr>
-          ))}
+          ) : view.slice.map((r) => {
+            const isSelf = me && r.email === me.email;
+            const busy = busyEmail === r.email;
+            return (
+              <tr key={r.email}>
+                <td>{r.email}</td>
+                <td>{r.note}</td>
+                <td>
+                  {/* Ternary, not `&&`: is_admin is a NUMBER (0/1), and
+                      `0 && ...` renders a literal "0" in a non-admin's cell. */}
+                  {r.is_admin ? (
+                    <span className="admintoggle on">
+                      {isSelf ? "✓ Admin (you)" : "✓ Admin"}
+                    </span>
+                  ) : null}
+                </td>
+                <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
+                <td className="actions">
+                  {!isSelf && (
+                    <>
+                      {r.is_admin ? (
+                        <button type="button" className="icon-btn tip" data-tip="Remove admin"
+                                aria-label="Remove admin" disabled={busy}
+                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
+                                onClick={() => toggleAdmin(r)}>
+                          <IconShieldMinus />
+                        </button>
+                      ) : (
+                        <button type="button" className="icon-btn tip" data-tip="Make admin"
+                                aria-label="Make admin" disabled={busy}
+                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
+                                onClick={() => toggleAdmin(r)}>
+                          <IconShieldPlus />
+                        </button>
+                      )}
+                      <button type="button" className="icon-btn danger tip" data-tip="Remove user"
+                              aria-label="Remove user" disabled={busy}
+                              onClick={() => removeUser(r)}>
+                        <IconTrash />
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+
+      <div className="pager">
+        <span className="pager-range">{view.label}</span>
+        {/* Table status (range + sort) announced politely. A bare aria-live div
+            (NOT role="status") so it stays distinct from the single action-
+            outcome status region up top; fed the DEBOUNCED liveLabel, never the
+            per-keystroke view.label, so search-as-you-type doesn't spam it. */}
+        <div className="sr-only" aria-live="polite">{liveLabel}</div>
+        <label className="pager-size">
+          <span className="sr-only">Users per page</span>
+          <select value={perPage}
+                  onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}>
+            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} / page</option>)}
+          </select>
+        </label>
+        <div className="pager-nav">
+          <button type="button" className="pgbtn" aria-label="Previous page" ref={prevRef}
+                  disabled={view.page <= 1} onClick={() => goPage(view.page - 1)}>
+            ‹ Prev
+          </button>
+          <span className="pager-page">Page {view.page} of {view.totalPages}</span>
+          <button type="button" className="pgbtn" aria-label="Next page" ref={nextRef}
+                  disabled={view.page >= view.totalPages} onClick={() => goPage(view.page + 1)}>
+            Next ›
+          </button>
+        </div>
+      </div>
 
       {/* Plain subdued section, not the --user tint used above for "needs
           your action" — a block is the opposite: something already handled

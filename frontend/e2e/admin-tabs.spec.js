@@ -64,7 +64,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   await expect(page.getByText("newperson@example.edu")).toBeVisible();
   await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
 
-  await page.getByPlaceholder("email").fill("newuser@example.edu");
+  await page.getByPlaceholder("email", { exact: true }).fill("newuser@example.edu");
   await page.getByPlaceholder("note (optional)").fill("added via e2e");
   await page.getByRole("button", { name: "Add" }).click();
 

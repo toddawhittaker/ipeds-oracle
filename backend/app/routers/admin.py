@@ -165,8 +165,15 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
 
 
 @router.delete("/allowlist/{email}")
-def remove_allowlist(email: str):
-    email = email.lower()
+def remove_allowlist(email: str, admin: sqlite3.Row = Depends(require_admin)):
+    """Remove a user from the allowlist (drops their admin + kills their sessions).
+
+    You can't remove YOURSELF — like the self-demote guard on the PATCH endpoint,
+    this stops an accidental self-lockout and keeps at least one admin in place."""
+    email = email.strip().lower()
+    if email == admin["email"].strip().lower():
+        raise HTTPException(
+            400, "You can't remove your own access — ask another admin.")
     con = connect()
     try:
         con.execute("DELETE FROM allowlist WHERE email=?", (email,))

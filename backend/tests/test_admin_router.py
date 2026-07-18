@@ -1081,6 +1081,31 @@ def test_cannot_demote_self():
         assert _is_admin(c, "admin@example.edu") is True  # guard left them admin
 
 
+def test_cannot_remove_self_from_allowlist():
+    # Removing your own allowlist row would drop your admin AND kill your own
+    # sessions — a self-lockout footgun that (unlike self-demote) had no guard.
+    with TestClient(app) as c:
+        _login(c)  # signed in as admin@example.edu
+        r = c.delete("/api/admin/allowlist/admin@example.edu")
+        assert r.status_code == 400, r.text
+        # still on the allowlist and still admin afterward
+        assert any(x["email"] == "admin@example.edu"
+                   for x in c.get("/api/admin/allowlist").json())
+        assert _is_admin(c, "admin@example.edu") is True
+
+
+def test_can_remove_another_user():
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/api/admin/allowlist", json={"email": "leaver@example.edu"})
+        assert any(x["email"] == "leaver@example.edu"
+                   for x in c.get("/api/admin/allowlist").json())
+        r = c.delete("/api/admin/allowlist/leaver@example.edu")
+        assert r.status_code == 200, r.text
+        assert not any(x["email"] == "leaver@example.edu"
+                       for x in c.get("/api/admin/allowlist").json())
+
+
 def test_usage_since_after_until_is_swapped():
     with TestClient(app) as c:
         _login(c)
@@ -2228,6 +2253,10 @@ def run():
           test_patch_admin_404_for_non_allowlisted)
     check("cannot demote yourself (prevents self-lockout + keeps an admin)",
           test_cannot_demote_self)
+    check("cannot remove yourself from the allowlist (self-lockout guard)",
+          test_cannot_remove_self_from_allowlist)
+    check("can remove another user from the allowlist",
+          test_can_remove_another_user)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
     check("usage dashboard response has no 'recent' key",

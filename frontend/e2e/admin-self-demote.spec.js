@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./mocks.js";
 
-// The signed-in admin can promote/demote others, but their OWN admin row is a
-// non-interactive "✓ admin (you)" label — you can't demote yourself from the UI.
-test("admin cannot demote themselves from the allowlist UI", async ({ page }) => {
+// The signed-in admin can promote/demote others, but their OWN row shows a
+// non-interactive "✓ Admin (you)" status and an EMPTY Actions cell — you can
+// neither demote nor remove yourself from the UI (the backend also 400s both).
+test("admin cannot demote or remove themselves from the allowlist UI", async ({ page }) => {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAllowlist(page, [
@@ -15,12 +16,12 @@ test("admin cannot demote themselves from the allowlist UI", async ({ page }) =>
   await page.goto("/");
   await page.getByRole("link", { name: "Admin" }).click();
 
-  // Own row: a plain "(you)" label, NOT a toggle button.
-  await expect(page.getByText("✓ admin (you)")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: /admin \(you\)/i }),
-  ).toHaveCount(0);
+  // Own row: a plain status label, and no self-directed action buttons at all.
+  await expect(page.getByText("✓ Admin (you)")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove admin" })).toHaveCount(0);
+  // The only Remove user button is the colleague's, never the signed-in admin's.
+  await expect(page.getByRole("button", { name: "Remove user" })).toHaveCount(1);
 
-  // Another user: a working "make admin" toggle button is present.
-  await expect(page.getByRole("button", { name: "make admin" })).toBeVisible();
+  // Another user: the promote (Make admin) action is present and labelled.
+  await expect(page.getByRole("button", { name: "Make admin" })).toBeVisible();
 });
