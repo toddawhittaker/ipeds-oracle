@@ -5,6 +5,7 @@ import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
 import { viewUsers } from "./userlist.js";
 import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose } from "./icons.jsx";
+import { useToast } from "./Toast.jsx";
 
 function humanBytes(n) {
   if (n == null || !isFinite(n)) return "?";
@@ -106,53 +107,20 @@ function Allowlist({ me }) {
   const actionBtnRefs = useRef({});
   const prevRef = useRef(null);
   const nextRef = useRef(null);
-  // A polite live region for the TABLE's own status (result range + sort), kept
-  // separate from the action-outcome flash below (which is role="status" and a
-  // focus target). Debounced so typing in the search box doesn't enqueue a range
-  // read-out on every keystroke (WCAG 4.1.3).
+  // A polite live region for the TABLE's own status (result range + sort).
+  // Debounced so typing in the search box doesn't enqueue a range read-out on
+  // every keystroke (WCAG 4.1.3).
   const [liveLabel, setLiveLabel] = useState("");
-  const [flash, setFlash] = useState("");
-  const [flashLeaving, setFlashLeaving] = useState(false); // fade-out state
-  const flashTimers = useRef([]);
-  useEffect(() => () => flashTimers.current.forEach(clearTimeout), []);
-  // Focus target for the visible flash box (a11y): moved here whenever a
-  // flash appears, mirroring Imports' noticeRef/focus-to-notice effect below
-  // — without it, an action that unmounts the row the user just activated
-  // (e.g. Reject removing its own .req row on reload) drops focus to <body>.
-  const flashRef = useRef(null);
-  // Actions that UNMOUNT the row they were triggered from (reject/remove) need
-  // focus to land on this notice, or it drops to <body>. Actions whose row
-  // PERSISTS (promote/demote) restore focus to the row's own button instead, and
-  // set this flag so the flash doesn't yank focus up to the notice first.
-  const skipFlashFocus = useRef(false);
-  useEffect(() => {
-    if (!flash) return;
-    if (skipFlashFocus.current) { skipFlashFocus.current = false; return; }
-    flashRef.current?.focus();
-  }, [flash]);
+  // Action outcomes go to the app-wide toast (announce below). Toasts don't take
+  // focus, so an action that UNMOUNTS the control it was fired from must hand
+  // focus to a stable element or it drops to <body>: row removal -> the search
+  // box; a pending-request reject / denial undo -> this add-email anchor.
+  const toast = useToast();
+  const addEmailRef = useRef(null);
 
-  // aria-live only fires reliably on a genuine DOM mutation, and React bails
-  // out of a re-render entirely when setState is called with the SAME value
-  // (Object.is) — so re-flashing identical text (e.g. rejecting a second
-  // request in a row) would silently announce nothing. Clear first, then set
-  // on the next frame, to force a real mutation every time. Same pattern as
-  // Skills' announce() below (Admin.jsx), reused here rather than invented
-  // fresh.
-  // Show the flash as a toast: it overlays (fixed-positioned, so it never shifts
-  // the page under the cursor), then auto-fades after a few seconds instead of
-  // lingering until navigation. The clear-then-set-next-frame dance still forces
-  // a real DOM mutation so the paired aria-live region re-announces identical text.
-  function announce(text) {
-    flashTimers.current.forEach(clearTimeout);
-    flashTimers.current = [];
-    setFlashLeaving(false);
-    setFlash("");
-    requestAnimationFrame(() => setFlash(text));
-    flashTimers.current = [
-      setTimeout(() => setFlashLeaving(true), 4000),
-      setTimeout(() => { setFlash(""); setFlashLeaving(false); }, 4400),
-    ];
-  }
+  // Route an action outcome to the app-wide toast (overlays, auto-fades,
+  // announced once via the toast host's live region). kind: "" | "ok" | "error".
+  const announce = (text, kind = "") => toast(text, kind);
 
   const load = () => {
     // Return the allowlist fetch so a caller can sequence focus AFTER the table
@@ -216,14 +184,21 @@ function Allowlist({ me }) {
     return (INVITE_FLASH[res.delivery] ?? ((a) => `${a} added.`))(addr);
   }
 
+  // Toast color for the invite outcome: red when nothing was added or the email
+  // bounced, green when the link actually went out, neutral for the informational
+  // "already on the list" / "no mail key" branches.
+  function inviteKind(res) {
+    if (!res?.ok || res.delivery === "failed") return "error";
+    if (res.delivery === "emailed") return "ok";
+    return "";
+  }
+
   async function invite(addr, noteText, admin = false) {
     const res = await api.addAllow(addr, noteText, admin).catch(() => ({}));
-    // Merge of two concerns, both load-bearing: main's inviteFlash() reports the
-    // backend-supplied `delivery` value instead of inferring a cause from proxies
-    // (#60), and announce() routes it through the live region so a screen reader
-    // actually hears it -- a bare setFlash of identical text hits React's
-    // Object.is bailout and announces nothing.
-    announce(inviteFlash(addr, res));
+    // inviteFlash() reports the backend-supplied `delivery` value instead of
+    // inferring a cause from proxies (#60); announce() routes it through the
+    // toast so a screen reader hears it once.
+    announce(inviteFlash(addr, res), inviteKind(res));
     load();
   }
 
@@ -247,16 +222,15 @@ function Allowlist({ me }) {
       `list at the bottom of this tab.`)) return;
     try {
       await api.denyAccessRequest(addr);
-      // Set BEFORE load() below removes addr's .req row from the DOM, so
-      // flashRef is already focused by the time that row unmounts (mirrors
-      // Imports' removeYear: "set an interim notice BEFORE ... the very
-      // button the user just activated" unmounts). Naming the address is
-      // fine here — the .req-scoped e2e locator no longer over-matches it.
       announce(`Rejected the access request from ${addr}.`);
     } catch {
-      announce(`Could not reject ${addr}.`);
+      announce(`Could not reject ${addr}.`, "error");
     }
-    load();
+    // The reject button just unmounted with its .req row; hand focus to the
+    // stable add-email anchor so it doesn't drop to <body>. Sequence after the
+    // reload commits (focus-restore-vs-reload race).
+    await load();
+    requestAnimationFrame(() => addEmailRef.current?.focus?.());
   }
 
   // Reversible, non-destructive: worst case of a misclick is the address
@@ -273,33 +247,33 @@ function Allowlist({ me }) {
                `given access, and no email was sent.`);
     } catch {
       announce(`Could not undo the block on ${shown}. They are still blocked from ` +
-               `requesting access.`);
+               `requesting access.`, "error");
     }
-    load();
+    // The undo control unmounted with its denied row; anchor focus on the stable
+    // add-email input after the reload commits.
+    await load();
+    requestAnimationFrame(() => addEmailRef.current?.focus?.());
   }
 
   async function toggleAdmin(r) {
     setBusyEmail(r.email);
-    // The row survives this action, so keep the flash from stealing focus to the
-    // top notice; focus is returned to the row's button after the reload below.
-    skipFlashFocus.current = true;
     try {
       await api.setAdmin(r.email, !r.is_admin);
       announce(r.is_admin
         ? `${r.email} is no longer an admin.`
-        : `${r.email} is now an admin.`);
+        : `${r.email} is now an admin.`, "ok");
     } catch (err) {
       let msg = "Could not update admin status.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      announce(msg);
+      announce(msg, "error");
     } finally {
       setBusyEmail("");
     }
     // The row PERSISTS (only its shield swaps Make<->Remove admin), so return
     // focus to that same row's action button AFTER the reload commits — instead
-    // of stranding the keyboard user on the top notice announce() focused, or on
-    // <body> where the briefly-disabled button dropped it. Sequenced after
-    // load() per the focus-restore-vs-reload race rule.
+    // of <body> where the briefly-disabled button dropped it. Sequenced after
+    // load() per the focus-restore-vs-reload race rule. (Toasts never take focus,
+    // so there's no notice to race here anymore.)
     await load();
     requestAnimationFrame(() => actionBtnRefs.current[r.email]?.focus?.());
   }
@@ -320,11 +294,14 @@ function Allowlist({ me }) {
     } catch (err) {
       let msg = `Couldn't remove ${r.email}.`;
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      announce(msg);
+      announce(msg, "error");
     } finally {
       setBusyEmail("");
     }
-    load();
+    // The trash button unmounted with its row; hand focus to the search box
+    // (stable, in-context) after the reload commits so it doesn't drop to <body>.
+    await load();
+    requestAnimationFrame(() => searchRef.current?.focus?.());
   }
 
   // Clicking a header toggles asc/desc on the active column, else switches to it
@@ -362,21 +339,8 @@ function Allowlist({ me }) {
 
   return (
     <div className="panel">
-      {/* Visible box is a focus target (a11y — see flashRef above), not the
-          live region itself: it unmounts/remounts on every announce(), and a
-          brand-new node isn't a reliably-announced shape across screen
-          readers. The ALWAYS-MOUNTED .sr-only region right below is the
-          single source of ARIA announcements (same pattern as Skills'
-          status region further down) — role="status" lives there only, so
-          sighted and screen-reader users each get exactly one announcement
-          instead of two. */}
-      {flash && (
-        <div ref={flashRef} tabIndex={-1}
-             className={"notice flash-toast" + (flashLeaving ? " leaving" : "")}>
-          {flash}
-        </div>
-      )}
-      <div className="sr-only" role="status" aria-live="polite">{flash}</div>
+      {/* Action outcomes surface via the app-wide toast (useToast) — overlays,
+          auto-fades, announced once — not an in-flow flash box. */}
       {reqs.length > 0 && (
         <div className="requests">
           <h2>Pending access requests</h2>
@@ -401,7 +365,7 @@ function Allowlist({ me }) {
       <h2>Users</h2>
       <form className="row" onSubmit={add}>
         <label htmlFor="allow-email" className="sr-only">Email</label>
-        <input id="allow-email" type="email" placeholder="email" required value={email}
+        <input id="allow-email" ref={addEmailRef} type="email" placeholder="email" required value={email}
                onChange={(e) => setEmail(e.target.value)} />
         <label htmlFor="allow-note" className="sr-only">Note</label>
         <input id="allow-note" placeholder="note (optional)" value={note}
@@ -543,14 +507,10 @@ function Allowlist({ me }) {
         <section className="denied">
           <h2>Blocked from requesting access</h2>
           {deniedError ? (
-            // A DIFFERENT class from the flash `.notice` above (not reused)
-            // deliberately -- several existing e2e specs open this tab
-            // without mocking GET .../denied at all (it predates this
-            // endpoint) and assert on an unscoped `.notice` locator for
-            // something else entirely (e.g. deny-access-request.spec.js's
-            // failed-Reject test); sharing the class would make that
-            // locator resolve to two elements and fail on a strict-mode
-            // violation that has nothing to do with what that test covers.
+            // Its own class (not a bare `.notice`): this is a persistent
+            // in-flow error, distinct from the transient action toasts, and
+            // keeping it off `.notice` also avoids colliding with specs that
+            // assert an unscoped `.notice`/`.toast` locator elsewhere.
             <p className="denied-error" role="alert">{deniedError}</p>
           ) : (
             <>

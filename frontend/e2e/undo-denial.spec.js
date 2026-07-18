@@ -190,8 +190,8 @@ test.describe("see and undo a denied-address block", () => {
 
     await page.getByRole("button", { name: /allow to request again/i }).click();
 
-    await expect(page.locator(".notice")).toBeVisible();
-    await expect(page.locator(".notice")).toContainText(/not given access|no email/i);
+    await expect(page.locator(".toast")).toBeVisible();
+    await expect(page.locator(".toast")).toContainText(/not given access|no email/i);
   });
 
   test("a failed undo surfaces a notice and doesn't wedge the UI", async ({ page }) => {
@@ -212,7 +212,7 @@ test.describe("see and undo a denied-address block", () => {
     // access.") share this clause; matching on it leaves the verb free
     // while still turning red if the failure path shows no notice, or a
     // notice that never says the block persisted.
-    await expect(page.locator(".notice")).toContainText(/still blocked from requesting access/i);
+    await expect(page.locator(".toast")).toContainText(/still blocked from requesting access/i);
     // The row (and its control) must still be there, still operable.
     await expect(
       page.getByRole("button", { name: /allow to request again/i }),

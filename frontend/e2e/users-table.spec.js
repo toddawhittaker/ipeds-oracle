@@ -194,4 +194,7 @@ test("Remove user confirms by email, then deletes the row", async ({ page }) => 
   await expect(page.getByRole("cell", { name: "other@example.edu" })).toBeVisible();
   expect(dialogMessage).toContain("colleague@example.edu");
   expect(api.deletes).toEqual(["colleague@example.edu"]);
+  // The trash button unmounted with its row; focus must land on the search box,
+  // not drop to <body> (the toast never takes focus).
+  await expect(page.getByRole("searchbox", { name: "Search email or note" })).toBeFocused();
 });
