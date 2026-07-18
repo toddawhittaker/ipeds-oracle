@@ -161,6 +161,7 @@ Every setting is listed in [`.env.example`](.env.example); the essentials:
 | `MODEL_DEFAULT` / `MODEL_ESCALATION` | primary + escalation model (defaults: `deepseek/deepseek-v4-flash` → `deepseek/deepseek-v4-pro`; see below) |
 | `LLM_MAX_TOOL_ITERS` | max agent tool‑call rounds per question (default 12) |
 | `LLM_APP_TITLE` | attribution title sent to the provider (OpenRouter's `X-Title` header) |
+| `TRUST_LLM_PROVIDER` | `true` hides the chat's proprietary/confidential-info privacy warning. Default `false` (warning shown). Set `true` **only** once the org has determined its provider, contract, deployment, and data-use terms permit non-public data — it suppresses the warning, it does **not** make the provider trustworthy or change any data handling. True values (case-insensitive): `true`/`t`/`yes`/`y`/`1`; all else false |
 | `RESEND_API_KEY` / `MAIL_FROM` | magic-link + access-request email |
 | `ADMIN_EMAILS` | comma-separated bootstrap admins (auto-allowlisted) |
 | `APP_PUBLIC_URL` | base URL for magic-link/invite emails + the LLM provider's attribution header |

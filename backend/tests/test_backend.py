@@ -67,6 +67,25 @@ def run():
         assert me_nodata.json().get("has_data") is False, me_nodata.text
         print("  ✓ /me reports has_data=False when patched to the no-data state")
 
+        # --- TRUST_LLM_PROVIDER parse (privacy warning gate) ----------------
+        # The parser must FAIL SAFE: only explicit opt-in tokens are True; every
+        # false-ish, blank, or unrecognized value is False so the chat privacy
+        # warning stays visible. (Undefined can't be passed to a str parser; the
+        # setting's default of "false" covers the "variable absent" acceptance
+        # criterion — asserted via /me below.)
+        from app.config import is_truthy
+        for v in ["true", "TRUE", " True ", "t", "T", "yes", "Yes", "y", "1"]:
+            assert is_truthy(v) is True, f"{v!r} should resolve True"
+        for v in ["false", "FALSE", "f", "no", "n", "0", "", "   ",
+                  "maybe", "trueish", "2", "01", "yep", "on"]:
+            assert is_truthy(v) is False, f"{v!r} should resolve False (fail-safe)"
+        print("  ✓ is_truthy: only true/t/yes/y/1 are True; all else (incl. blank/invalid) False")
+
+        # /me exposes the RESOLVED boolean (not the raw string), defaulting to
+        # False when TRUST_LLM_PROVIDER is unset — so the warning shows.
+        assert me.json().get("trust_llm_provider") is False, me.text
+        print("  ✓ /me exposes trust_llm_provider=False by default (warning visible)")
+
         # reused token must fail (already consumed by the POST above)
         c2 = TestClient(app)
         assert c2.post("/api/auth/verify", json={"token": token}).status_code == 400

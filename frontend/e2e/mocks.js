@@ -17,6 +17,10 @@
  * feature existed) keeps rendering Chat/Admin normally without having to be
  * touched. Pass `has_data: false` explicitly to exercise the fresh-deploy
  * no-data state (see web/e2e/no-data-onboarding.spec.js).
+ *
+ * `trust_llm_provider` is likewise absent (falsy) by default, so the chat
+ * privacy warning shows unless a spec passes `trust_llm_provider: true` to
+ * exercise the trusted-deployment suppression (see chat-empty-state.spec.js).
  */
 export async function mockMe(page, user) {
   await page.route("**/api/auth/me", async (route) => {

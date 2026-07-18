@@ -68,7 +68,10 @@ def verify_post(body: VerifyRequest, response: Response):
 @router.get("/me")
 def me(user: sqlite3.Row = Depends(current_user)):
     return {"email": user["email"], "is_admin": bool(user["is_admin"]),
-            "has_data": has_ipeds_data()}
+            "has_data": has_ipeds_data(),
+            # Only the RESOLVED boolean crosses to the browser — never the raw
+            # setting or any other config. Gates the chat privacy warning only.
+            "trust_llm_provider": get_settings().trust_llm_provider_enabled}
 
 
 @router.post("/logout")
