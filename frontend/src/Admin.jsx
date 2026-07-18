@@ -420,10 +420,9 @@ function Allowlist({ me }) {
                  aria-label="Search email or note"
                  onChange={(e) => { setQ(e.target.value); setPage(1); }} />
           {q && (
-            <button type="button" className="search-clear tip" data-tip="Clear search"
-                    aria-label="Clear search"
+            <button type="button" className="search-clear" aria-label="Clear search"
                     onClick={() => { setQ(""); setPage(1); searchRef.current?.focus(); }}>
-              <IconClose />
+              <IconClose size={14} />
             </button>
           )}
         </div>

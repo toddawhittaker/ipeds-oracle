@@ -629,13 +629,15 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
    controls overlapping — our own keyboard/tooltip-labelled button is the one. */
 .searchwrap .logsearch::-webkit-search-cancel-button,
 .searchwrap .logsearch::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
-.search-clear {
-  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+/* Descendant selector (0,2,0) so nothing later in the sheet (e.g. .tip's
+   position:relative) can knock this out of its absolute right-aligned slot. */
+.searchwrap .search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; padding: 0;
   background: none; border: none; color: var(--muted); cursor: pointer;
-  display: grid; place-items: center; min-width: 24px; min-height: 24px;
-  border-radius: 4px;
+  display: grid; place-items: center; border-radius: 4px;
 }
-.search-clear:hover { color: var(--text); }
+.searchwrap .search-clear:hover { color: var(--text); }
 
 /* Click-to-sort column headers (keyboard-operable buttons inheriting the th).
    Vertical padding brings the target box to >=24px tall (WCAG 2.5.8). */
