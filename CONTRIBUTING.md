@@ -196,6 +196,19 @@ No feature may fall back to a browser-native dialog. Reversible actions (undo a
 denial, delete a fresh unreviewed lesson) deliberately skip confirmation. The
 component's browser behavior is pinned in `frontend/e2e/confirm-modal.spec.js`.
 
+**Admin tables use `<DataTable>`, never a hand-rolled table.** `DataTable.jsx` is
+the single reusable admin table — search, sortable `aria-sort` headers, page-size
+select (10/25/50/100), Prev/Next + range label, a debounced `aria-live` status,
+filler rows (constant height), and focus management (a `forwardRef` imperative
+handle: `focusSearch()`, `focusRowAction(rowKey)`). Feature code passes a `columns`
+config, a `rowKey`, a `renderActions(row)` slot, and a **pure pipeline `config`**
+(`{ fields, comparators, tiebreak, nouns }`). The pipeline itself — filter → sort →
+paginate → range label — lives in `datatable.js` and is unit-tested in
+`datatable.test.js` (vitest); the Users list config is `userlist.js`'s `USER_CONFIG`.
+The component's browser truth is covered by Playwright (`users-table.spec.js`,
+`deny-access-request.spec.js`, `undo-denial.spec.js`). Add a new admin table as a
+config over `<DataTable>`, not a copy.
+
 ## Lint & format
 
 ```bash
