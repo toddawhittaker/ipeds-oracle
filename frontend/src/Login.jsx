@@ -54,7 +54,8 @@ export default function Login() {
           Access is by invitation.
         </p>
         {msg && (
-          <div className="notice" role="alert" tabIndex={-1} ref={noticeRef}>{msg}</div>
+          <div className={"notice " + (ok ? "ok" : "error")} role="alert"
+               tabIndex={-1} ref={noticeRef}>{msg}</div>
         )}
         {!ok && (
           <form onSubmit={submit}>

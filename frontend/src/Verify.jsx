@@ -59,7 +59,7 @@ export default function Verify() {
         )}
         {state === "error" && (
           <>
-            <div className="notice" role="alert">{error}</div>
+            <div className="notice error" role="alert">{error}</div>
             <p>
               <a className="link" href="/">Return to sign in</a>
             </p>

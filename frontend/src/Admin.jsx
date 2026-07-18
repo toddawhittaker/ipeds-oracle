@@ -732,6 +732,11 @@ function Imports({ onDataChanged }) {
   const [dragging, setDragging] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeKind, setNoticeKind] = useState(""); // "" | "ok" | "error"
+  // Set the job-result notice AND its semantic color together, so a failed
+  // import/removal reads red and a completed one reads green instead of both
+  // being the same neutral box.
+  const notify = (text, kind = "") => { setNotice(text); setNoticeKind(kind); };
   const fileRef = useRef();
   const dragDepth = useRef(0);
   const poll = useRef();
@@ -804,13 +809,13 @@ function Imports({ onDataChanged }) {
                   .map((y) => `${y}-${String(y + 1).slice(-2)}`).join(", ")}`
               : (job.filename || "the file");
           }
-          setNotice(isRemoval
+          notify(isRemoval
             ? `Removal complete — ${what} removed from the live database.`
-            : `Integration complete — ${what} added to the live database.`);
+            : `Integration complete — ${what} added to the live database.`, "ok");
         } else if (job.status === "failed") {
-          setNotice(isRemoval
+          notify(isRemoval
             ? "Removal failed — the live database was not changed."
-            : "Import failed — the live database was not changed.");
+            : "Import failed — the live database was not changed.", "error");
         }
       }
     };
@@ -945,7 +950,7 @@ function Imports({ onDataChanged }) {
   const diskOver = diskEstimate != null && !diskEstimate.sufficient;
 
   async function submitIntegrate() {
-    setNotice("");
+    notify("");
     setIntegrating(true);
     const years = Array.from(selected);
     try {
@@ -955,7 +960,7 @@ function Imports({ onDataChanged }) {
     } catch (err) {
       let msg = "Could not start the import.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      setNotice(msg);
+      notify(msg, "error");
       if (/already running/i.test(msg)) {
         // Someone else's import is mid-flight — find it and watch its progress.
         const list = await api.importJobs().catch(() => []);
@@ -975,7 +980,7 @@ function Imports({ onDataChanged }) {
     // very trashcan button the user just activated) — otherwise notice stays
     // empty right when focus needs somewhere to land, and the
     // focus-to-notice effect above never fires, dropping focus to <body>.
-    setNotice(`Removing ${entry.year_label}…`);
+    notify(`Removing ${entry.year_label}…`);
     try {
       const body = await api.deintegrateYear(entry.start_year);
       setActiveYears(null);
@@ -983,7 +988,7 @@ function Imports({ onDataChanged }) {
     } catch (err) {
       let msg = "Could not start the removal.";
       try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      setNotice(msg);
+      notify(msg, "error");
       if (/already running/i.test(msg)) {
         // Someone else's import/removal is mid-flight — find it and watch it.
         const list = await api.importJobs().catch(() => []);
@@ -1012,7 +1017,8 @@ function Imports({ onDataChanged }) {
       )}
 
       {notice && (
-        <div ref={noticeRef} tabIndex={-1} className="notice" role="status">{notice}</div>
+        <div ref={noticeRef} tabIndex={-1} role="status"
+             className={"notice" + (noticeKind ? " " + noticeKind : "")}>{notice}</div>
       )}
       {jobRunning && (
         <div className="notice">
@@ -1041,7 +1047,7 @@ function Imports({ onDataChanged }) {
         )}
 
         {catalogError && (
-          <div className="notice" role="alert">
+          <div className="notice error" role="alert">
             Could not reach NCES to check available years.{" "}
             <button type="button" className="link" onClick={() => loadCatalog(true)}>Retry</button>
           </div>
@@ -1050,7 +1056,7 @@ function Imports({ onDataChanged }) {
         {catalog && (
           <>
             {catalog.partial && (
-              <div className="notice" role="status">
+              <div className="notice warn" role="status">
                 Some years could not be checked.{" "}
                 <button type="button" className="link" onClick={() => loadCatalog(true)}>Retry</button>
               </div>
