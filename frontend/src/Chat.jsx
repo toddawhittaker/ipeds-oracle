@@ -4,7 +4,7 @@ import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
-import { useToast } from "./Toast.jsx";
+import { useConfirm } from "./ConfirmModal.jsx";
 
 // Clickable starter prompts shown on the empty chat screen.
 const EXAMPLES = [
@@ -134,7 +134,7 @@ export default function Chat({ me }) {
   const [convos, setConvos] = useState([]);
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
-  const toast = useToast();
+  const confirm = useConfirm();
   const [openId, setOpenId] = useState(routeId);
   const [notice, setNotice] = useState("");
   const loadedFor = useRef(null); // routeId this conversation's messages were last fetched for
@@ -393,39 +393,45 @@ export default function Chat({ me }) {
     submit(msg.content, { editMessageId: msg.id });
   }
 
-  async function deleteConvo(e, id) {
+  function deleteConvo(e, id) {
     e.stopPropagation();
     // Snapshot everything the post-delete UI needs from THIS render's convos
-    // BEFORE the await -- refreshConvos() resolves when setConvos is called,
-    // not after commit (React 18 batches), so `convos` read after the await
-    // could already be stale/wrong. idx/next/remaining below are all derived
-    // from this pre-delete snapshot.
+    // at confirm-request time. idx/next/remaining/isOpen/title are captured in
+    // the onSuccess closure below, so they reflect the pre-delete list even
+    // though refreshConvos() (which resolves when setConvos is called, not
+    // after commit) runs later.
     const idx = convos.findIndex((c) => c.id === id);
     const title = (idx >= 0 ? convos[idx].title : "") || "Untitled";
-    if (!window.confirm(`Delete "${title}"? This can't be undone.`)) return;
     const isOpen = id === convId;
     const next = convos[idx + 1] || convos[idx - 1] || null;
     const remaining = Math.max(convos.length - 1, 0);
-    const ok = await api.deleteConversation(id).then(() => true).catch(() => false);
-    if (!ok) { toast(DELETE_FAILED, "error"); return; }
-    if (isOpen) {
-      // Case 1: deleting the OPEN conversation. Focus goes to the composer,
-      // via the same navigate()+rAF precedent as fillExample/saveEdit --
-      // deliberately NOT through focusAfterDelete/the [convos] effect below,
-      // which targets a sidebar row on a different clock (refreshConvos()
-      // landing later would otherwise steal focus back out of the composer).
-      toast(deleteAnnouncement({ title, open: true, remaining }));
-      navigate("/");
-      requestAnimationFrame(() => taRef.current?.focus());
-    } else {
-      // Case 2: deleting a DIFFERENT conversation. Focus whatever now
-      // occupies the deleted row's index once refreshConvos() actually
-      // commits -- see the [convos] effect above. The announcement's
-      // remaining-count is load-bearing for re-announcement -- see announce.js.
-      focusAfterDelete.current = next ? { id: next.id } : { newchat: true };
-      toast(deleteAnnouncement({ title, open: false, remaining }));
-    }
-    refreshConvos();
+    confirm({
+      variant: "danger",
+      title: `Delete "${title}"?`,
+      body: "This will permanently delete the chat and all of its messages. This action cannot be undone.",
+      confirmLabel: "Delete chat",
+      onConfirm: () => api.deleteConversation(id), // throws -> in-modal error + DELETE_FAILED toast
+      successToast: deleteAnnouncement({ title, open: isOpen, remaining }),
+      errorToast: DELETE_FAILED,
+      onSuccess: () => {
+        if (isOpen) {
+          // Deleting the OPEN conversation: focus the composer via the same
+          // navigate()+rAF precedent as fillExample/saveEdit -- deliberately
+          // NOT through focusAfterDelete/the [convos] effect, which targets a
+          // sidebar row on a different clock (refreshConvos() landing later
+          // would otherwise steal focus back out of the composer).
+          navigate("/");
+          requestAnimationFrame(() => taRef.current?.focus());
+        } else {
+          // Deleting a DIFFERENT conversation: focus whatever now occupies the
+          // deleted row's index once refreshConvos() commits (the [convos]
+          // effect). The announcement's remaining-count is load-bearing for
+          // re-announcement -- see announce.js.
+          focusAfterDelete.current = next ? { id: next.id } : { newchat: true };
+        }
+        refreshConvos();
+      },
+    });
   }
 
   async function submit(q, { editMessageId = null } = {}) {

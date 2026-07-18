@@ -205,10 +205,12 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
     await expect(page.getByText("Here you go.")).toBeVisible();
 
-    page.once("dialog", (d) => d.accept());
     // Per-row accessible name (WCAG 4.1.2, see web/e2e/delete-focus.spec.js):
     // every trash button used to be identically named "Delete chat".
     await page.getByRole("button", { name: "Delete chat: CA nursing associate's degrees" }).click();
+    // Confirm via the app-styled modal (scoped so "Delete chat" doesn't collide
+    // with the row trash buttons).
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
 
     await expect.poll(() => del.calls).toEqual(["3"]);
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
@@ -231,8 +233,8 @@ test.describe("chat routing", () => {
     await expect(page.getByText("Here you go.")).toBeVisible();
 
     const otherRow = page.locator(".convo-row", { has: page.getByRole("link", { name: "Other chat" }) });
-    page.once("dialog", (d) => d.accept());
     await otherRow.getByRole("button", { name: "Delete chat: Other chat" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
 
     await expect.poll(() => del.calls).toEqual(["5"]);
     expect(new URL(page.url()).pathname).toBe("/chat/3");

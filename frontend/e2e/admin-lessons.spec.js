@@ -63,7 +63,7 @@ test("lessons view leads with the headline, collapses description and SQL separa
   expect(body).toMatchObject({ verified: true });
 });
 
-test("rejecting a verified lesson asks for confirmation before deleting", async ({ page }) => {
+test("rejecting a verified lesson opens a confirmation modal before deleting", async ({ page }) => {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockSkills(page, [
@@ -81,16 +81,16 @@ test("rejecting a verified lesson asks for confirmation before deleting", async 
   await page.getByRole("link", { name: "Admin" }).click();
   await page.getByRole("link", { name: "Skills" }).click();
 
-  // Dismissing the confirm must NOT fire a DELETE.
+  // Cancelling the confirm modal must NOT fire a DELETE.
   let deleted = false;
   page.on("request", (r) => {
     if (r.method() === "DELETE" && r.url().includes("/api/admin/skills/3")) deleted = true;
   });
-  page.once("dialog", (d) => {
-    expect(d.message()).toMatch(/can't be undone/i);
-    d.dismiss();
-  });
   await page.getByRole("button", { name: /Reject lesson:/ }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText(/cannot be undone|can't be undone/i);
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
   await page.waitForTimeout(200);
   expect(deleted).toBe(false);
 });

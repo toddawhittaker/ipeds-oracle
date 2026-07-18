@@ -44,7 +44,10 @@ frontend/             React + Vite front end
   src/                Chat, Admin, Chart, Markdown, Login, … — client-side
                       routed (react-router-dom); route table in App.jsx
                       ("/", "/chat/:id", "/admin", "/admin/:tab", "/verify",
-                      catch-all -> "/"); co-located *.test.js are vitest units
+                      catch-all -> "/"); co-located *.test.js are vitest units.
+                      App-wide UI services mounted once at the root: Toast.jsx
+                      (useToast) for transient result toasts; ConfirmModal.jsx
+                      (useConfirm) — the SINGLE confirmation mechanism
   e2e/                Playwright specs (network-mocked)
 docs/               SCHEMA.md (data model + query guide), DEPLOY.md
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
@@ -173,6 +176,25 @@ land on `main`.
 > `EMAIL_DOMAIN`: nothing could catch it, because the pre‑push gate exported the
 > blank before calling it and CI has no `.env` to bleed. It only failed when run
 > directly on a dev box, where it looked like a real test failure.
+
+## Frontend UI conventions
+
+**Confirmations use `useConfirm()`, never `window.confirm`.** `ConfirmModal.jsx`
+(mounted once at the app root, inside `ToastProvider`) is the single, app-styled
+confirmation mechanism — an accessible `role="alertdialog"`/`dialog` over a dimmed,
+`inert` background with a focus trap, neutral/warning/danger variants, and async
+processing built in. Feature code calls `confirm({ variant, title, body,
+confirmLabel, onConfirm, onSuccess, successToast, errorToast, … })` and supplies
+only the content, severity, action callback, and result messages; the component
+owns overlay/dimming, focus (Cancel is focused first — a destructive action is
+never auto-focused), dismissal (Escape/overlay/Cancel, disabled while
+processing), the loading state, the in-modal error + retry on failure, and
+returning focus to the opener on cancel. `onConfirm` runs the mutation (throw →
+in-modal error + `errorToast`, modal stays open); `onSuccess` runs after the modal
+closes and owns any post-reload focus move (the [focus-restore-vs-reload race]).
+No feature may fall back to a browser-native dialog. Reversible actions (undo a
+denial, delete a fresh unreviewed lesson) deliberately skip confirmation. The
+component's browser behavior is pinned in `frontend/e2e/confirm-modal.spec.js`.
 
 ## Lint & format
 
@@ -358,8 +380,8 @@ touching the real network, filesystem, or loader.
 ### Removing an integrated year (the trashcan)
 
 Each already-integrated (or "update") year card on **Admin → Imports** shows a
-`.year-remove` trashcan; clicking it (after a confirm dialog) calls `DELETE
-/api/admin/import/year/{start_year}`, which — after the same single-flight
+`.year-remove` trashcan; clicking it (after the `useConfirm()` confirmation modal)
+calls `DELETE /api/admin/import/year/{start_year}`, which — after the same single-flight
 `_import_lock` and a not-integrated/only-remaining-year 400 check as the
 router does — spawns `importer.run_deintegrate()` in a background thread.
 `run_deintegrate` is a fully **offline** de-integration: it copies live

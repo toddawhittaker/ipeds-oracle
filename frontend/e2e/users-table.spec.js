@@ -197,16 +197,17 @@ test("Remove user confirms by email, then deletes the row", async ({ page }) => 
     { email: "other@example.edu", note: "x", is_admin: false, last_login: 1700000000 },
   ]);
 
-  // The confirm dialog must name the affected email.
-  let dialogMessage = "";
-  page.on("dialog", (d) => { dialogMessage = d.message(); d.accept(); });
-
+  // The confirmation modal must name the affected email. Its confirm button is
+  // also "Remove user", so scope to the dialog (the row button is aria-hidden
+  // behind the inert background while the modal is open anyway).
   await page.getByRole("row", { name: /colleague@example\.edu/ })
     .getByRole("button", { name: "Remove user" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("colleague@example.edu");
+  await dialog.getByRole("button", { name: "Remove user" }).click();
 
   await expect(page.getByRole("cell", { name: "colleague@example.edu" })).toHaveCount(0);
   await expect(page.getByRole("cell", { name: "other@example.edu" })).toBeVisible();
-  expect(dialogMessage).toContain("colleague@example.edu");
   expect(api.deletes).toEqual(["colleague@example.edu"]);
   // The trash button unmounted with its row; focus must land on the search box,
   // not drop to <body> (the toast never takes focus).

@@ -13,10 +13,12 @@ import {
 // ships it. Contract (see .plan-deny.md):
 //   * a Reject button, aria-label `Reject the access request from {email}`,
 //     renders next to Approve for each pending request row.
-//   * clicking it asks window.confirm, and only on accept POSTs
+//   * clicking it opens the app-styled confirmation modal (role="alertdialog",
+//     confirm button "Reject request"), and only on confirm POSTs
 //     /api/admin/access-requests/{email}/deny for that address.
-//   * dismissing the confirm fires no request.
-//   * a failed deny (non-2xx) surfaces a `.notice` and does not wedge the UI.
+//   * cancelling the modal fires no request.
+//   * a failed deny (non-2xx) surfaces an error toast + in-modal error and does
+//     not wedge the UI (the modal stays recoverable).
 //   * a successful deny reloads the pending-requests list.
 
 async function openAllowlistTab(page, { allowlist = [], reqs = [] } = {}) {
@@ -55,39 +57,47 @@ test.describe("reject an access request", () => {
     const deny = await mockDenyAccessRequest(page, { httpStatus: 200 });
     await openAllowlistTab(page, { reqs: TWO_PENDING });
 
-    let dialogMessage = "";
-    page.once("dialog", (dialog) => {
-      dialogMessage = dialog.message();
-      dialog.accept();
-    });
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
-
-    expect(dialogMessage).toMatch(/reject|request access again|allowlist/i);
+    const dialog = page.getByRole("alertdialog");
+    // The modal names the address and explains the block, then a specific confirm.
+    await expect(dialog).toContainText("one@example.edu");
+    await expect(dialog).toContainText(/block/i);
+    await dialog.getByRole("button", { name: "Reject request" }).click();
 
     await expect.poll(() => deny.calls.length).toBe(1);
     expect(deny.calls[0]).toBe("one@example.edu");
   });
 
-  test("dismissing the confirm dialog does not fire a POST", async ({ page }) => {
+  test("cancelling the confirm modal does not fire a POST", async ({ page }) => {
     const deny = await mockDenyAccessRequest(page, { httpStatus: 200 });
     await openAllowlistTab(page, { reqs: TWO_PENDING });
 
-    page.once("dialog", (dialog) => dialog.dismiss());
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
     await page.waitForTimeout(200);
 
     expect(deny.calls.length).toBe(0);
   });
 
-  test("a failed deny surfaces a notice and doesn't wedge the UI", async ({ page }) => {
+  test("a failed deny surfaces an error toast + in-modal error and stays recoverable", async ({ page }) => {
     await mockDenyAccessRequest(page, { httpStatus: 500 });
     await openAllowlistTab(page, { reqs: TWO_PENDING });
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Reject request" }).click();
 
     await expect(page.locator(".toast")).toContainText(/Could not reject/i);
-    // The UI must still be responsive -- the other row's Reject button works.
+    // The modal stays open on failure with a contextual in-modal error, and stays
+    // recoverable (Cancel works) -- the background is inert by design meanwhile.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".notice.error")).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    // Background restored: the other row's Reject button works again.
     await expect(
       page.getByRole("button", { name: "Reject the access request from two@example.edu" }),
     ).toBeEnabled();
@@ -117,8 +127,8 @@ test.describe("reject an access request", () => {
     const pendingRow = page.locator(".req", { hasText: "one@example.edu" });
     await expect(pendingRow).toBeVisible();
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Reject request" }).click();
 
     await expect(pendingRow).toHaveCount(0);
     // The Reject button unmounted with its row; focus must land on the stable
