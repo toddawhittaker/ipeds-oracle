@@ -136,6 +136,15 @@ class Settings(BaseSettings):
     auth_rate_window_seconds: float = Field(default=900.0)  # 15-minute sliding window
     auth_rate_max_per_email: int = Field(default=5)
     auth_rate_max_per_ip: int = Field(default=20)
+    # How many trusted reverse proxies sit in front of the app. The per-IP rate
+    # limiter's real client IP comes from X-Forwarded-For, but that header is
+    # attacker-controlled — a client can prepend a bogus left-most entry. A
+    # trusted proxy (Caddy) APPENDS the real peer as the right-most hop, so we
+    # read the Nth entry FROM THE RIGHT, where N = this count. 0 (the safe
+    # default, and CI's) means "no trusted proxy" → ignore XFF entirely and use
+    # the socket peer, so a spoofed header can't split or evade the per-IP bucket.
+    # Set to 1 in production behind a single Caddy hop (see docs/DEPLOY.md).
+    trusted_proxy_count: int = Field(default=0)
 
     # --- Email (Resend) ----------------------------------------------------
     resend_api_key: str = Field(default="")

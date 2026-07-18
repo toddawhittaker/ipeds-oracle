@@ -33,9 +33,13 @@
 #   * TRUST_LLM_PROVIDER blank — a prod true suppresses the chat privacy warning,
 #     so test_backend.py's /me trust_llm_provider=False-by-default assertion would
 #     fail locally while GitHub (no .env) stays green.
+#   * TRUSTED_PROXY_COUNT=0 — a prod 1 makes client_ip trust X-Forwarded-For, so
+#     a dev .env would change per-IP rate-limit resolution in the tests vs CI
+#     (which has no .env → 0). Explicit 0 pins the key-free/no-proxy behavior.
 
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
 export RESEND_API_KEY=""
 export EMAIL_DOMAIN=""
 export TRUST_LLM_PROVIDER=""
+export TRUSTED_PROXY_COUNT=0

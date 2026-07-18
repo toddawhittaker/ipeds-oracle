@@ -12,6 +12,7 @@ is model-agnostic via the OpenAI-compatible /chat/completions API.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -23,6 +24,8 @@ from app.llmhttp import DEFAULT_TIMEOUT, chat_completion
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
+
+log = logging.getLogger("ipeds.llm")
 
 _FAIL_MARKERS = ("SQL REJECTED", "SQL ERROR", "SQL TIMEOUT", "ERROR")
 
@@ -93,7 +96,12 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             try:
                 data = await _chat(client, model, messages, tools)
             except httpx.HTTPStatusError as e:
-                res.error = f"LLM API error ({e.response.status_code}): {e.response.text[:300]}"
+                # The upstream body can carry provider/proxy detail; log it
+                # server-side but return only the status to the client — never
+                # reflect an unbounded upstream body into the UI or logs stream.
+                log.warning("LLM API error %s: %s", e.response.status_code,
+                            e.response.text[:300])
+                res.error = f"LLM API error ({e.response.status_code})"
                 yield {"type": "error", "text": res.error}
                 yield {"type": "done", "result": res}
                 return

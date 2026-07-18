@@ -167,6 +167,8 @@ Every setting is listed in [`.env.example`](.env.example); the essentials:
 | `APP_PUBLIC_URL` | base URL for magic-link/invite emails + the LLM provider's attribution header |
 | `DOMAIN` | hostname Caddy obtains a TLS cert for |
 | `COOKIE_SECURE` | `true` in production (HTTPS) |
+| `TRUSTED_PROXY_COUNT` | number of trusted reverse proxies in front of the app (**`1`** behind the standard single Caddy hop; already pinned in `compose.yaml`). The per-IP auth rate limiter reads the real client from the right-most `X-Forwarded-For` hop, so a client-spoofed header can't evade it. `0` (dev/no proxy) ignores `X-Forwarded-For` and uses the socket peer. Bump if you add another proxy (e.g. Cloudflare) in front of Caddy |
+| `EMAIL_DOMAIN` | restrict who may file an access request (blank = anyone). Set it in production so a stranger can't flood admins / burn Resend quota — a real defense alongside `TRUSTED_PROXY_COUNT` for the access-request-spam surface |
 | `SQL_TIMEOUT_SECONDS` | per-query watchdog (default 25) |
 | `NCES_WORK_DIR` | scratch dir for the Imports year-catalog's fetched `.accdb`s (default `./data/work`; put it on the data volume) |
 | `NCES_ZIP_MAX_MB` / `NCES_ACCDB_MAX_MB` / `NCES_TOTAL_MAX_MB` | per-year download/extract caps + a ceiling across one integrate run's whole union (defaults 512 / 3072 / 51200) |

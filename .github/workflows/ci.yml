@@ -111,6 +111,9 @@ jobs:
       - name: Security regression tests
         run: python backend/tests/test_security.py
 
+      - name: CSRF Origin-guard tests
+        run: python backend/tests/test_csrf.py
+
       - name: Auth rate-limit tests
         run: python backend/tests/test_rate_limit.py
 

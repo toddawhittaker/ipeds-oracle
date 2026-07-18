@@ -141,15 +141,16 @@ def has_ipeds_data(db_path: Path | None = None) -> bool:
     return bool(ipeds_years(db_path))
 
 
-def run_sql(sql: str, *, limit: int | None = None,
+def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
             timeout: float | None = None,
             db_path: Path | None = None) -> QueryResult:
     """Execute a validated read-only query with a hard timeout + row cap.
 
-    `limit` caps the rows returned (default: settings.sql_row_cap_model). If the
-    query has no LIMIT of its own, we don't rewrite it — we fetch up to limit+1
-    rows and mark `truncated`, so aggregates stay correct while result sets stay
-    bounded.
+    `params` are bound positionally (`?` placeholders) so caller-supplied values
+    are never string-interpolated into SQL. `limit` caps the rows returned
+    (default: settings.sql_row_cap_model). If the query has no LIMIT of its own,
+    we don't rewrite it — we fetch up to limit+1 rows and mark `truncated`, so
+    aggregates stay correct while result sets stay bounded.
     """
     s = get_settings()
     limit = s.sql_row_cap_model if limit is None else limit
@@ -186,7 +187,7 @@ def run_sql(sql: str, *, limit: int | None = None,
     timer = threading.Timer(timeout, _watchdog)
     timer.start()
     try:
-        cur = con.execute(cleaned)
+        cur = con.execute(cleaned, params)
         columns = [d[0] for d in cur.description] if cur.description else []
         rows = cur.fetchmany(limit + 1)
         truncated = len(rows) > limit

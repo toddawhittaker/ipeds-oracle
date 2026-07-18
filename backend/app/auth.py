@@ -159,7 +159,17 @@ def request_login(email: str, base_url: str, tasks: BackgroundTasks) -> dict:
     other outcome — a 400x+ timing oracle, measured. Returning before any
     network I/O happens, on every branch, closes that channel: the caller
     can no longer distinguish "your email is being sent right now" from
-    "nothing is happening" by how long the response took."""
+    "nothing is happening" by how long the response took.
+
+    A residual, DB-local difference is ACCEPTED, not equalized: the denied and
+    unknown branches skip the INSERT+commit that the allowlisted and pending
+    branches do, so they do marginally less work (sub-millisecond, swamped by
+    network jitter). Crucially it does NOT isolate the sensitive states — it
+    groups {allowlisted, pending} against {denied, unknown}, so it can't tell
+    "denied" from "unknown" nor "allowlisted" from "pending". Equalizing it would
+    mean performing throwaway INSERT/commit work on a path whose whole contract
+    is "store nothing on deny", trading a real invariant for a non-exploitable
+    micro-signal — deliberately not done."""
     email = email.strip().lower()
     con = connect()
     try:

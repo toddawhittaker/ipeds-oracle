@@ -103,8 +103,52 @@ def test_limit_is_allowlist_neutral():
         assert r.status_code == 429, f"non-allowlisted should also be limited, got {r.status_code}"
 
 
+def _fake_request(xff, peer="203.0.113.9"):
+    from types import SimpleNamespace
+    headers = {} if xff is None else {"x-forwarded-for": xff}
+    return SimpleNamespace(headers=headers, client=SimpleNamespace(host=peer))
+
+
+def test_client_ip_ignores_xff_without_trusted_proxy():
+    # Regression: reading the left-most X-Forwarded-For entry let an attacker
+    # spoof a fresh IP per request and evade the per-IP cap. With no trusted
+    # proxy configured (the default) XFF must be ignored entirely.
+    from app.config import get_settings
+    from app.ratelimit import client_ip
+    os.environ.pop("TRUSTED_PROXY_COUNT", None)
+    get_settings.cache_clear()
+    try:
+        assert client_ip(_fake_request("9.9.9.9, 203.0.113.9")) == "203.0.113.9", \
+            "XFF must not be trusted when TRUSTED_PROXY_COUNT=0"
+        assert client_ip(_fake_request(None, peer="10.0.0.5")) == "10.0.0.5"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_client_ip_uses_rightmost_hop_behind_one_proxy():
+    # Behind one trusted proxy (Caddy appends the real peer as the RIGHT-most
+    # hop), a spoofed left-most entry is ignored: both requests map to the same
+    # real-IP bucket, so the per-IP limiter can't be split by header spoofing.
+    from app.config import get_settings
+    from app.ratelimit import client_ip
+    os.environ["TRUSTED_PROXY_COUNT"] = "1"
+    get_settings.cache_clear()
+    try:
+        assert client_ip(_fake_request("9.9.9.9, 198.51.100.7")) == "198.51.100.7"
+        assert client_ip(_fake_request("1.1.1.1, 198.51.100.7")) == "198.51.100.7"
+        # No XFF at all still falls back to the socket peer.
+        assert client_ip(_fake_request(None, peer="10.0.0.5")) == "10.0.0.5"
+    finally:
+        os.environ.pop("TRUSTED_PROXY_COUNT", None)
+        get_settings.cache_clear()
+
+
 def run():
     print("Rate-limit contract for /api/auth/request:")
+    check("client_ip ignores spoofable XFF without a trusted proxy",
+          test_client_ip_ignores_xff_without_trusted_proxy)
+    check("client_ip uses the right-most hop behind one trusted proxy",
+          test_client_ip_uses_rightmost_hop_behind_one_proxy)
     check("per-email limit returns 429 after cap", test_per_email_limit)
     check("per-IP limit returns 429 after cap (distinct emails)", test_per_ip_limit_distinct_emails)
     check("expired attempts outside window don't count", test_sliding_window_expires_old_attempts)
