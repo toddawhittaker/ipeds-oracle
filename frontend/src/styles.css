@@ -138,22 +138,38 @@ input, textarea, button { font-family: inherit; }
 .notice.error { background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border-color: var(--danger); }
 .notice.ok    { background: color-mix(in srgb, var(--ok) 12%, var(--panel));     border-color: var(--ok); }
 .notice.warn  { background: color-mix(in srgb, var(--warn) 14%, var(--panel));   border-color: var(--warn); }
-/* The admin action flash as a TOAST: fixed so it overlays instead of pushing the
-   page down under the cursor, an accent bar + shadow so it stands out, and a
-   fade-out (driven by a `leaving` class + an auto-dismiss timer in Admin.jsx) so
-   it doesn't linger until navigation. */
-.flash-toast {
-  position: fixed; top: 16px; right: 16px; left: auto; z-index: 100;
-  max-width: min(360px, calc(100vw - 32px));
-  border-left: 4px solid var(--accent);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
-  animation: flash-in .18s ease-out;
-  transition: opacity .35s ease;
+/* App-wide toast stack (Toast.jsx): fixed top-right so toasts overlay instead of
+   shifting the page, newest at the bottom, each an accent-barred card with a
+   shadow that fades in and (via .leaving) out. The ok/error variants reuse the
+   semantic notice colors above. */
+.toast-host {
+  position: fixed; top: 16px; right: 16px; z-index: 100;
+  display: flex; flex-direction: column; gap: 10px;
+  max-width: min(360px, calc(100vw - 32px)); pointer-events: none;
 }
-.flash-toast.leaving { opacity: 0; }
-@keyframes flash-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-left: 4px solid var(--accent);
+  border-radius: 8px; padding: 12px 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
+  animation: toast-in .18s ease-out; transition: opacity .3s ease;
+}
+.toast.leaving { opacity: 0; }
+.toast.ok    { border-left-color: var(--ok);     background: color-mix(in srgb, var(--ok) 10%, var(--panel)); }
+.toast.error { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--panel)); }
+.toast-msg { flex: 1; font-size: 14px; line-height: 1.4; }
+.toast-close {
+  flex: none; width: 24px; height: 24px; padding: 0; margin: -2px -2px 0 0;
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  display: grid; place-items: center; border-radius: 4px;
+}
+.toast-close:hover { color: var(--text); }
+.toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .flash-toast { animation: none; transition: none; }
+  .toast { animation: none; transition: none; }
 }
 .errbound { max-width: 440px; width: 100%; text-align: center; }
 .errbound h1 { margin: 0 0 10px; color: var(--accent); font-size: 20px; }

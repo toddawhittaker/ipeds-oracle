@@ -5,6 +5,7 @@ import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import { AdminRoute } from "./Admin.jsx";
 import Verify from "./Verify.jsx";
+import { ToastProvider } from "./Toast.jsx";
 
 function currentTheme() {
   const forced = document.documentElement.getAttribute("data-theme");
@@ -115,6 +116,7 @@ function Shell() {
   const adminOnly = (el) => (user.is_admin ? el : <Navigate to="/" replace />);
 
   return (
+    <ToastProvider>
     <div className="app">
       {/* No role="status" here, deliberately -- several OTHER live regions on
           these pages already use it (Admin's flash box, Skills' status
@@ -168,5 +170,6 @@ function Shell() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
+    </ToastProvider>
   );
 }

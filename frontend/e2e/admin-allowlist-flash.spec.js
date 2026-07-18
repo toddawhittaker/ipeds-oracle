@@ -35,7 +35,7 @@ test("delivery=emailed -> 'a sign-in link was emailed to' flash", async ({ page 
 
   await openAllowlistAndSubmit(page);
 
-  await expect(page.getByRole("status")).toHaveText(
+  await expect(page.locator(".toast-msg")).toHaveText(
     "Approved — a sign-in link was emailed to newperson@example.edu.");
 });
 
@@ -53,7 +53,7 @@ test("delivery=failed (send failed WITH a key configured) -> "
 
   await openAllowlistAndSubmit(page);
 
-  const status = page.getByRole("status");
+  const status = page.locator(".toast-msg");
   await expect(status).toContainText("newperson@example.edu added, but the invite email FAILED to send");
   await expect(status).toContainText("check the Logs tab for the error");
   await expect(status).toContainText("ask them to request one from the sign-in page");
@@ -73,7 +73,7 @@ test("delivery=logged_to_console (no key configured, dev mode) -> "
 
   await openAllowlistAndSubmit(page);
 
-  const status = page.getByRole("status");
+  const status = page.locator(".toast-msg");
   await expect(status).toContainText("newperson@example.edu added. No email was sent");
   await expect(status).toContainText("the sign-in link is in the server console, not the Logs tab");
 });
@@ -99,7 +99,7 @@ test("delivery=already_allowlisted -> 'was already on the allowlist' flash, "
 
   await openAllowlistAndSubmit(page, "existing@example.edu");
 
-  const status = page.getByRole("status");
+  const status = page.locator(".toast-msg");
   await expect(status).toContainText("existing@example.edu was already on the allowlist");
   await expect(status).toContainText("They can sign in from the sign-in page whenever they like");
   await expect(status).not.toContainText("FAILED to send");
@@ -119,7 +119,7 @@ test("POST failure -> \"Couldn't add ... the request failed\" flash, "
 
   await openAllowlistAndSubmit(page);
 
-  const status = page.getByRole("status");
+  const status = page.locator(".toast-msg");
   await expect(status).toHaveText(
     "Couldn't add newperson@example.edu — the request failed. Try again.");
   await expect(status).not.toContainText("added");
@@ -140,5 +140,5 @@ test("missing delivery field -> bare '{addr} added.' fallback, never a "
 
   await openAllowlistAndSubmit(page);
 
-  await expect(page.getByRole("status")).toHaveText("newperson@example.edu added.");
+  await expect(page.locator(".toast-msg")).toHaveText("newperson@example.edu added.");
 });

@@ -86,7 +86,7 @@ test.describe("reject an access request", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
 
-    await expect(page.locator(".notice")).toContainText(/Could not reject/i);
+    await expect(page.locator(".toast")).toContainText(/Could not reject/i);
     // The UI must still be responsive -- the other row's Reject button works.
     await expect(
       page.getByRole("button", { name: "Reject the access request from two@example.edu" }),
@@ -121,6 +121,9 @@ test.describe("reject an access request", () => {
     await page.getByRole("button", { name: "Reject the access request from one@example.edu" }).click();
 
     await expect(pendingRow).toHaveCount(0);
+    // The Reject button unmounted with its row; focus must land on the stable
+    // add-email input rather than dropping to <body> (the toast takes no focus).
+    await expect(page.getByLabel("Email", { exact: true })).toBeFocused();
   });
 
   // Regression: `.req` used to right-align Approve with a bare
