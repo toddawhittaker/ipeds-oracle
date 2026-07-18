@@ -297,11 +297,20 @@ export async function mockAllowlist(page, rows, { postStatus = 200, postBody = {
   return { posts };
 }
 
-/** GET /api/admin/access-requests -> [{id,email}]. */
+/**
+ * GET /api/admin/access-requests -> [{id,email}].
+ * Returns a handle whose `setList` changes what later GETs return (e.g. a new
+ * request filed while the admin panel is open), without re-registering the
+ * route — mirrors mockConversations. Lets a spec assert the Allowlist tab's
+ * live refresh (visibility/focus + poll) picks up a new pending row with no
+ * page reload (see admin-pending-live.spec.js).
+ */
 export async function mockAccessRequests(page, rows) {
+  let list = rows;
   await page.route("**/api/admin/access-requests", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(list) });
   });
+  return { setList: (l) => { list = l; } };
 }
 
 /** GET /api/admin/usage?since&until -> {totals, series, top_users, bucket}. */

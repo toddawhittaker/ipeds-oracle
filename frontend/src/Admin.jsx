@@ -91,6 +91,20 @@ function canonEmailForDisplay(email) {
 // App-standard date+time; null/absent → an em dash. Unix seconds in.
 const fmtDateTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
 
+// dd/mm/yyyy — used for the audit note stored on a user allowlisted by approving
+// their access request ("approved on <date> by <admin>"). Zero-padded and
+// locale-independent so the stored note reads the same everywhere.
+const fmtApprovalDate = (d = new Date()) =>
+  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+// Live-refresh cadence for the Allowlist tab so a request filed by someone else
+// (or actioned in another admin session) shows up without a manual reload. The
+// poll runs only while the tab is visible; a tick within COOLDOWN of the last
+// load() is skipped so a background refresh can never commit its re-render on top
+// of a mutation handler's rAF focus restore (the focus-restore-vs-reload race).
+const ALLOWLIST_POLL_MS = 15000;
+const ALLOWLIST_RELOAD_COOLDOWN_MS = 1500;
+
 function Allowlist({ me }) {
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
@@ -107,6 +121,14 @@ function Allowlist({ me }) {
   const usersTableRef = useRef(null);
   const pendingTableRef = useRef(null);
   const blockedTableRef = useRef(null);
+  // Timestamp of the last committed reload. The background poll (below) skips a
+  // tick within ALLOWLIST_RELOAD_COOLDOWN_MS of it so two polls don't stack.
+  const lastLoadAt = useRef(0);
+  // True while a mutation handler is reloading-then-restoring-focus. A live
+  // refresh (poll OR visibility/focus) must NOT fire load() in that window: its
+  // setState re-render would land on top of the rAF focus restore and drop focus
+  // to <body> (the focus-restore-vs-reload race). Set via reloadThenRestoreFocus.
+  const restoringFocus = useRef(false);
   // Action outcomes go to the app-wide toast (announce below). Toasts don't take
   // focus, so an action that UNMOUNTS the control it was fired from must hand
   // focus to a stable element or it drops to <body>: each table action -> that
@@ -119,14 +141,36 @@ function Allowlist({ me }) {
   // announced once via the toast host's live region). kind: "" | "ok" | "error".
   const announce = (text, kind = "") => toast(text, kind);
 
+  // Run a focus move AFTER React has committed the reload's re-render. A single
+  // requestAnimationFrame can fire BEFORE the commit under load, focusing a
+  // stale/just-removed node and dropping focus to <body> (the
+  // focus-restore-vs-reload race); waiting for the frame past the commit (double
+  // rAF) lands it reliably. Every reload-then-focus site below goes through this.
+  const focusNextCommit = (fn) => requestAnimationFrame(() => requestAnimationFrame(fn));
+
   // Focus the acting table's search box after a reload commits. If that table
   // just UNMOUNTED because its last row was actioned (pending → zero-state,
   // blocked → the whole section is removed), its ref is null; fall back to the
   // always-present add-email input so focus never drops to <body> (WCAG 2.4.3).
-  const focusAfterRowAction = (tableRef) => requestAnimationFrame(() => {
+  const focusAfterRowAction = (tableRef) => focusNextCommit(() => {
     if (tableRef.current) tableRef.current.focusSearch();
     else addEmailRef.current?.focus?.();
   });
+
+  // Reload the lists, then run a mutation's focus restoration, with the live
+  // refresh (poll + visibility/focus) suppressed for the whole sequence so a
+  // background load() can't re-render on top of the focus move and drop focus to
+  // <body>. `restore` schedules the focus via focusNextCommit, so release the
+  // guard on the same double-rAF horizon (after the focus has landed).
+  const reloadThenRestoreFocus = async (restore) => {
+    restoringFocus.current = true;
+    try {
+      await load();
+      restore();
+    } finally {
+      focusNextCommit(() => { restoringFocus.current = false; });
+    }
+  };
 
   const load = () => {
     // Return the allowlist fetch so a caller can sequence focus AFTER the table
@@ -152,9 +196,39 @@ function Allowlist({ me }) {
         try { detail = JSON.parse(err.message).detail || ""; } catch { /* no JSON body to read */ }
         setDeniedError(detail || "Couldn't load blocked addresses.");
       });
+    // Anchor the poll's cooldown to when this reload settles (see lastLoadAt),
+    // on both success and failure. Kept off the returned `loaded` chain (which
+    // callers await) so this bookkeeping never adds its own unhandled rejection.
+    const stamp = () => { lastLoadAt.current = Date.now(); };
+    loaded.then(stamp, stamp);
     return loaded;
   };
   useEffect(() => { load(); }, []);
+
+  // Keep the three lists live so a request filed by someone else -- or a change
+  // made in another admin session -- appears without a manual page reload:
+  // refresh instantly when the admin returns to the tab, and poll lightly while
+  // it's visible. Neither path fires while a mutation is restoring focus
+  // (restoringFocus), so a refresh can never steal it; load() itself moves no
+  // focus. The poll additionally skips a tick within the cooldown so two polls
+  // (or a poll right after a just-committed reload) don't stack.
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (!document.hidden && !restoringFocus.current) load();
+    };
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener("focus", refreshIfVisible);
+    const id = setInterval(() => {
+      if (document.hidden || restoringFocus.current) return;
+      if (Date.now() - lastLoadAt.current < ALLOWLIST_RELOAD_COOLDOWN_MS) return;
+      load();
+    }, ALLOWLIST_POLL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener("focus", refreshIfVisible);
+      clearInterval(id);
+    };
+  }, []);
 
   // One message per outcome, keyed off the backend's `delivery` value. "No email
   // was sent" has THREE distinct causes needing different reactions, so never
@@ -210,7 +284,10 @@ function Allowlist({ me }) {
 
   async function add(e) {
     e.preventDefault();
-    await invite(email, note, isAdmin);
+    // An empty note defaults to an audit trail: who added the user, and when.
+    // A note the admin actually typed is passed through unchanged.
+    const noteText = note.trim() || `added on ${fmtApprovalDate()} by ${me?.email || "an admin"}`;
+    await invite(email, noteText, isAdmin);
     setEmail(""); setNote(""); setIsAdmin(false);
   }
 
@@ -297,10 +374,10 @@ function Allowlist({ me }) {
       ? `, ${report.length} row${report.length === 1 ? "" : "s"} skipped — see the report below` : "";
     announce(`${res.added} user${res.added === 1 ? "" : "s"} added from CSV${skipped}.`,
       res.added ? "ok" : "");
-    await load();
     // The "Add N users" button just unmounted; move focus to the result instead
     // of letting it fall to <body> (WCAG 2.4.3), sequenced AFTER load() commits.
-    requestAnimationFrame(() => csvResultRef.current?.focus());
+    await reloadThenRestoreFocus(() =>
+      focusNextCommit(() => csvResultRef.current?.focus()));
   }
 
   function onCsvDragEnter(e) { e.preventDefault(); csvDragDepth.current += 1; setCsvDragging(true); }
@@ -321,13 +398,16 @@ function Allowlist({ me }) {
   // emails a welcome link, so it's confirmed), then the delivery-aware toast.
   function approve(addr) {
     let outcome = null; // stash the backend delivery result for the onSuccess toast
+    // Audit note stored on the allowlisted user: who approved the request, and
+    // when. me is the signed-in admin doing the approving.
+    const note = `approved on ${fmtApprovalDate()} by ${me?.email || "an admin"}`;
     confirm({
       variant: "neutral",
       title: `Approve access for ${addr}?`,
       body: "This adds them to the allowlist and emails them a sign-in link.",
       confirmLabel: "Approve access",
       onConfirm: async () => {
-        const res = await api.addAllow(addr, "approved request", false);
+        const res = await api.addAllow(addr, note, false);
         if (!res?.ok) throw new Error(JSON.stringify({ detail: `Couldn't add ${addr}.` }));
         outcome = res;
       },
@@ -337,8 +417,7 @@ function Allowlist({ me }) {
         // logged to console) — see INVITE_FLASH. The Approve button unmounted
         // with its pending row; hand focus to the pending table's search box.
         announce(inviteFlash(addr, outcome), inviteKind(outcome));
-        await load();
-        focusAfterRowAction(pendingTableRef);
+        await reloadThenRestoreFocus(() => focusAfterRowAction(pendingTableRef));
       },
     });
   }
@@ -363,8 +442,7 @@ function Allowlist({ me }) {
         // The reject button just unmounted with its pending row; hand focus to
         // the pending table's search box so it doesn't drop to <body>. Sequence
         // after the reload commits (focus-restore-vs-reload race).
-        await load();
-        focusAfterRowAction(pendingTableRef);
+        await reloadThenRestoreFocus(() => focusAfterRowAction(pendingTableRef));
       },
     });
   }
@@ -388,8 +466,7 @@ function Allowlist({ me }) {
       onSuccess: async () => {
         // The unblock button unmounted with its blocked row; hand focus to the
         // blocked table's search box after the reload commits.
-        await load();
-        focusAfterRowAction(blockedTableRef);
+        await reloadThenRestoreFocus(() => focusAfterRowAction(blockedTableRef));
       },
     });
   }
@@ -408,13 +485,13 @@ function Allowlist({ me }) {
     } finally {
       setBusyEmail("");
     }
-    // The row PERSISTS (only its shield swaps Make<->Remove admin), so return
+    // The row PERSISTS (only its shield swaps Promote<->Demote admin), so return
     // focus to that same row's action button AFTER the reload commits — instead
     // of <body> where the briefly-disabled button dropped it. Sequenced after
     // load() per the focus-restore-vs-reload race rule. (Toasts never take focus,
     // so there's no notice to race here anymore.)
-    await load();
-    requestAnimationFrame(() => usersTableRef.current?.focusRowAction(r.email));
+    await reloadThenRestoreFocus(() =>
+      focusNextCommit(() => usersTableRef.current?.focusRowAction(r.email)));
   }
 
   // Destructive: a danger confirmation modal (naming the email), then the
@@ -424,6 +501,14 @@ function Allowlist({ me }) {
   // drops to the previous one if this emptied the last page). Self-removal never
   // reaches here — the current admin's row shows no actions (backend also 400s it).
   function removeUser(r) {
+    // Client-side guard: you must demote an admin before removing them. The trash
+    // button is aria-disabled (not `disabled`, so it stays hoverable to show why;
+    // see renderActions), which does NOT block the click, so early-return here
+    // makes it a safe no-op. This is a UX guard against accidental clicks, not a
+    // security control -- the DELETE endpoint itself still allows removing an
+    // admin (it only refuses self-removal), which is fine: the caller is already
+    // an admin who could demote-then-remove anyway.
+    if (r.is_admin) return;
     confirm({
       variant: "danger",
       title: `Remove ${r.email} from the allowlist?`,
@@ -437,8 +522,8 @@ function Allowlist({ me }) {
         // search box (stable, in-context) after the reload commits so it doesn't
         // drop to <body>. The viewRows() page-clamp keeps the admin on a valid
         // page (or the previous one if this emptied the last page).
-        await load();
-        requestAnimationFrame(() => usersTableRef.current?.focusSearch());
+        await reloadThenRestoreFocus(() =>
+          focusNextCommit(() => usersTableRef.current?.focusSearch()));
       },
     });
   }
@@ -664,18 +749,25 @@ jamie@example.com,External reviewer,`}</pre>
           return (
             <>
               {r.is_admin ? (
-                <button type="button" className="icon-btn tip" data-tip="Remove admin"
-                        aria-label="Remove admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                <button type="button" className="icon-btn tip" data-tip="Demote admin"
+                        aria-label="Demote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
                   <IconShieldMinus />
                 </button>
               ) : (
-                <button type="button" className="icon-btn tip" data-tip="Make admin"
-                        aria-label="Make admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                <button type="button" className="icon-btn tip" data-tip="Promote admin"
+                        aria-label="Promote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
                   <IconShieldPlus />
                 </button>
               )}
-              <button type="button" className="icon-btn danger tip" data-tip="Remove user"
-                      aria-label="Remove user" disabled={busy} onClick={() => removeUser(r)}>
+              {/* An admin can't be removed while they hold admin -- demote first.
+                  aria-disabled (not `disabled`) keeps the button hoverable/
+                  focusable so the tooltip explains WHY; removeUser early-returns
+                  on an admin so the click is a safe no-op. */}
+              <button type="button" className="icon-btn danger tip"
+                      data-tip={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
+                      aria-label={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
+                      aria-disabled={r.is_admin ? "true" : undefined}
+                      disabled={busy} onClick={() => removeUser(r)}>
                 <IconTrash />
               </button>
             </>

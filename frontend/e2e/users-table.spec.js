@@ -162,22 +162,22 @@ test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) 
     { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
 
-  await page.getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("button", { name: "Promote admin" }).click();
   await expect(page.getByText("✓ Admin", { exact: true })).toBeVisible();
-  // The action moved to Remove admin now that they're an admin.
-  await expect(page.getByRole("button", { name: "Remove admin" })).toBeVisible();
+  // The action moved to Demote admin now that they're an admin.
+  await expect(page.getByRole("button", { name: "Demote admin" })).toBeVisible();
   expect(api.patches).toEqual([{ email: "colleague@example.edu", is_admin: true }]);
 });
 
 test("promoting returns focus to the row's action button, not the top notice", async ({ page }) => {
   // Guards the focus-restore-vs-reload race: the row persists (shield swaps
-  // Make->Remove admin) and focus must land back on that button after the
+  // Promote->Demote admin) and focus must land back on that button after the
   // reload — not on <body> (briefly-disabled button) or the top flash notice.
   await openUsers(page, [
     { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
-  await page.getByRole("button", { name: "Make admin" }).click();
-  const removeAdmin = page.getByRole("button", { name: "Remove admin" });
+  await page.getByRole("button", { name: "Promote admin" }).click();
+  const removeAdmin = page.getByRole("button", { name: "Demote admin" });
   await expect(removeAdmin).toBeVisible();
   await expect(removeAdmin).toBeFocused();
 });
@@ -212,4 +212,31 @@ test("Remove user confirms by email, then deletes the row", async ({ page }) => 
   // The trash button unmounted with its row; focus must land on the search box,
   // not drop to <body> (the toast never takes focus).
   await expect(page.getByRole("searchbox", { name: "Search email or note" })).toBeFocused();
+});
+
+test("an admin's trash button is disabled + explains why; removing is a no-op until demoted", async ({ page }) => {
+  // colleague is a DIFFERENT admin than the signed-in one, so their row shows
+  // actions (your own row shows none). You must demote before you can remove.
+  const api = await openUsers(page, [
+    { email: "colleague@example.edu", note: "staff", is_admin: true, last_login: 1700000000 },
+  ]);
+
+  const trash = page.getByRole("button", { name: "Can't remove an admin — demote first" });
+  await expect(trash).toBeVisible();
+  await expect(trash).toHaveAttribute("aria-disabled", "true");
+
+  // aria-disabled (not `disabled`) means a click still reaches the handler, but
+  // removeUser early-returns for an admin: no confirm dialog opens, no DELETE
+  // fires. force:true bypasses Playwright's own enabled-actionability wait so we
+  // exercise that guard the way a real click would.
+  await trash.click({ force: true });
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await page.waitForTimeout(150);
+  expect(api.deletes).toEqual([]);
+
+  // Demote first -> the same button becomes a live, enabled "Remove user".
+  await page.getByRole("button", { name: "Demote admin" }).click();
+  const liveTrash = page.getByRole("button", { name: "Remove user" });
+  await expect(liveTrash).toBeVisible();
+  await expect(liveTrash).not.toHaveAttribute("aria-disabled", "true");
 });

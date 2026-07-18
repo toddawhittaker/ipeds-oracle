@@ -142,3 +142,36 @@ test("missing delivery field -> bare '{addr} added.' fallback, never a "
 
   await expect(page.locator(".toast-msg")).toHaveText("newperson@example.edu added.");
 });
+
+// The manual-add form stores its note verbatim, EXCEPT an empty note defaults to
+// an audit trail ("added on <date> by <admin>") built from the signed-in admin
+// (me.email) -- so a blank note is never persisted as an empty string. A note the
+// admin actually typed must be passed through unchanged.
+test("manual add: empty note defaults to an 'added on <date> by <admin>' audit "
+  + "note; a typed note is kept verbatim", async ({ page }) => {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockAccessRequests(page, []);
+  const allow = await mockAllowlist(page, [], {
+    postBody: {
+      ok: true, email: "newperson@example.edu",
+      invited: true, mail_configured: true, delivery: "emailed",
+    },
+  });
+
+  await page.goto("/");
+  await page.getByRole("link", { name: "Admin" }).click();
+
+  // Empty note -> defaulted audit trail derived from the acting admin + date.
+  await page.getByPlaceholder("email", { exact: true }).fill("newperson@example.edu");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect.poll(() => allow.posts.length).toBe(1);
+  expect(allow.posts[0].note).toMatch(/^added on \d{2}\/\d{2}\/\d{4} by admin@example\.edu$/);
+
+  // A note the admin actually typed survives unchanged (no defaulting).
+  await page.getByPlaceholder("email", { exact: true }).fill("second@example.edu");
+  await page.getByPlaceholder("note (optional)").fill("VIP — approved by the dean");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect.poll(() => allow.posts.length).toBe(2);
+  expect(allow.posts[1].note).toBe("VIP — approved by the dean");
+});
