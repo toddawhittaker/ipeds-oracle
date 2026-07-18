@@ -91,11 +91,10 @@ function canonEmailForDisplay(email) {
 // App-standard date+time; null/absent → an em dash. Unix seconds in.
 const fmtDateTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
 
-// dd/mm/yyyy — used for the audit note stored on a user allowlisted by approving
-// their access request ("approved on <date> by <admin>"). Zero-padded and
-// locale-independent so the stored note reads the same everywhere.
-const fmtApprovalDate = (d = new Date()) =>
-  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+// Local-date string for the audit note stored on a user added/allowlisted
+// ("approved|added on <date> by <admin>"). Rendered in the viewer's locale, like
+// every other date in the app (last_login, the CSV "Imported on" default, etc.).
+const fmtApprovalDate = (d = new Date()) => d.toLocaleDateString();
 
 // Live-refresh cadence for the Allowlist tab so a request filed by someone else
 // (or actioned in another admin session) shows up without a manual reload. The
@@ -501,13 +500,12 @@ function Allowlist({ me }) {
   // drops to the previous one if this emptied the last page). Self-removal never
   // reaches here — the current admin's row shows no actions (backend also 400s it).
   function removeUser(r) {
-    // Client-side guard: you must demote an admin before removing them. The trash
-    // button is aria-disabled (not `disabled`, so it stays hoverable to show why;
-    // see renderActions), which does NOT block the click, so early-return here
-    // makes it a safe no-op. This is a UX guard against accidental clicks, not a
-    // security control -- the DELETE endpoint itself still allows removing an
-    // admin (it only refuses self-removal), which is fine: the caller is already
-    // an admin who could demote-then-remove anyway.
+    // You must demote an admin before removing them. The trash button is
+    // aria-disabled (not `disabled`, so it stays hoverable to show why; see
+    // renderActions), which does NOT block the click, so this early-return makes
+    // it a safe no-op against accidental clicks. The backend enforces the same
+    // rule authoritatively (DELETE /allowlist 400s a still-admin user) -- this
+    // client guard is defense in depth so the modal never even opens.
     if (r.is_admin) return;
     confirm({
       variant: "danger",

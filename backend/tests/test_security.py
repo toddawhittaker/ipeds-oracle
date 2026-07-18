@@ -114,7 +114,15 @@ def test_deauthorization_revokes_session_and_admin() -> None:
         me = prof_c.get("/api/auth/me")
         assert me.status_code == 200 and me.json().get("is_admin") is True, me.text
 
-        # admin revokes prof's access
+        # admin revokes prof's access. A user who still HOLDS admin can't be
+        # removed directly (the demote-first guard) — so the removal is a demote
+        # (clears is_admin) followed by the remove (kills the session).
+        blocked = admin_c.delete("/api/admin/allowlist/prof@example.edu")
+        assert blocked.status_code == 400, (
+            f"removing a still-admin user must be refused (demote first), "
+            f"got {blocked.status_code}: {blocked.text}")
+        assert admin_c.patch("/api/admin/allowlist/prof@example.edu",
+                             json={"is_admin": False}).status_code == 200
         d = admin_c.delete("/api/admin/allowlist/prof@example.edu")
         assert d.status_code == 200, d.text
 

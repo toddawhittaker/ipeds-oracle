@@ -146,8 +146,9 @@ test.describe("pending access requests table", () => {
     await expect.poll(() => allow.posts.length).toBe(1);
     expect(allow.posts[0].email).toBe("one@example.edu");
     // The stored note is an audit trail derived from the acting admin (me.email)
-    // and today's date -- not the old static "approved request" string.
-    expect(allow.posts[0].note).toMatch(/^approved on \d{2}\/\d{2}\/\d{4} by admin@example\.edu$/);
+    // and today's (locale-formatted) date -- not the old static "approved request"
+    // string. Date shape is locale-dependent, so match structurally.
+    expect(allow.posts[0].note).toMatch(/^approved on .+ by admin@example\.edu$/);
     await expect(page.locator(".toast")).toContainText(/emailed to one@example.edu/i);
   });
 
