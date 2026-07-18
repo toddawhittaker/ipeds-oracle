@@ -124,12 +124,17 @@ test("pagination pages through and disables Prev/Next at the ends", async ({ pag
   await expect(range).toHaveText("Showing 1–25 of 30 users");
   await expect(page.getByText("Page 1 of 2")).toBeVisible();
   await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled();
+  // A full page needs no spacer.
+  await expect(page.locator("tbody tr.filler")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Next page" }).click();
   await expect(range).toHaveText("Showing 26–30 of 30 users");
   await expect(page.getByText("Page 2 of 2")).toBeVisible();
   await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Previous page" })).toBeEnabled();
+  // The short last page is padded to full height (one spacer row) so the pager
+  // below doesn't shift when you page back — the cursor stays over "‹ Prev".
+  await expect(page.locator("tbody tr.filler")).toHaveCount(1);
 });
 
 test("changing page size returns to page 1 and resizes the window", async ({ page }) => {
@@ -141,6 +146,8 @@ test("changing page size returns to page 1 and resizes the window", async ({ pag
   await page.getByRole("combobox", { name: "Users per page" }).selectOption("50");
   await expect(page.locator(".pager-range")).toHaveText("Showing 1–30 of 30 users");
   await expect(page.getByText("Page 1 of 1")).toBeVisible();
+  // A single page is never padded (that would leave a big empty gap).
+  await expect(page.locator("tbody tr.filler")).toHaveCount(0);
 });
 
 test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) => {
