@@ -23,6 +23,19 @@ ROOT = Path(__file__).resolve().parents[2]
 # so importing this constant elsewhere never risks a cycle.
 PRODUCT_NAME = "IPEDS Query"
 
+# Values (case-insensitive, whitespace-trimmed) that turn an opt-in string
+# setting ON. Everything else — "false"/"f"/"no"/"n"/"0", blank, and any
+# unrecognized text — is OFF. Kept as a plain string parse (not a pydantic bool
+# field) so an invalid value FAILS SAFE to off rather than raising at startup:
+# a bool field would reject "maybe" and crash the app, whereas a privacy flag
+# must default to its protective state on anything it doesn't understand.
+_TRUTHY = {"true", "t", "yes", "y", "1"}
+
+
+def is_truthy(value: str) -> bool:
+    """True only for an explicit opt-in token; everything else is False."""
+    return value.strip().lower() in _TRUTHY
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -66,6 +79,14 @@ class Settings(BaseSettings):
     # provider attribution headers are optional in general.
     app_public_url: str = Field(default="http://localhost:8000")
     llm_app_title: str = Field(default=PRODUCT_NAME)
+    # Suppresses the chat privacy warning ("don't enter proprietary/confidential
+    # info") ONLY. Off by default so the warning always shows unless a deployment
+    # has DELIBERATELY judged its provider/contract/deployment/data-use terms safe
+    # for non-public data. Stored raw (not a bool field) so an invalid value fails
+    # safe to false instead of crashing startup; read via trust_llm_provider_enabled.
+    # This flag changes no provider, model, logging, retention, or data-handling
+    # behavior — it hides a warning, nothing more.
+    trust_llm_provider: str = Field(default="false")
 
     # --- Query safety ------------------------------------------------------
     sql_timeout_seconds: float = Field(default=25.0)
@@ -132,6 +153,12 @@ class Settings(BaseSettings):
     skill_similarity_floor: float = Field(default=0.35)  # min cos to inject a lesson
     skill_dedup_threshold: float = Field(default=0.92)  # collapse near-duplicate lessons
     cache_similarity_threshold: float = Field(default=0.93)  # reuse SQL above this
+
+    @property
+    def trust_llm_provider_enabled(self) -> bool:
+        """Resolved boolean the chat UI reads to decide whether to hide the
+        privacy warning. False for absent/blank/invalid/false-ish values."""
+        return is_truthy(self.trust_llm_provider)
 
     @property
     def admin_email_list(self) -> list[str]:

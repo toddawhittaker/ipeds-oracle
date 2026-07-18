@@ -630,14 +630,16 @@ export default function Chat({ me }) {
                   </button>
                 ))}
               </div>
-              <div className="privacy-warning" role="note">
-                <strong>⚠️ Do not enter proprietary or confidential
-                information.</strong> This tool sends your questions to a
-                third-party AI service that may use submitted data to improve
-                its models. Ask only about public IPEDS data —{" "}
-                <strong>no</strong> student records, internal figures, or
-                other non-public information.
-              </div>
+              {!me?.trust_llm_provider && (
+                <div className="privacy-warning" role="note">
+                  <strong>⚠️ Do not enter proprietary or confidential
+                  information.</strong> This tool sends your questions to a
+                  third-party AI service that may use submitted data to improve
+                  its models. Ask only about public IPEDS data —{" "}
+                  <strong>no</strong> student records, internal figures, or
+                  other non-public information.
+                </div>
+              )}
             </div>
           )}
           {messages.map((m, i) => (

@@ -30,8 +30,12 @@
 #   * EMAIL_DOMAIN blank — a real domain gates access requests to that domain, so
 #     test_backend.py's out-of-domain stranger@x.com never records a request row
 #     and the suite fails locally while GitHub (no .env) stays green.
+#   * TRUST_LLM_PROVIDER blank — a prod true suppresses the chat privacy warning,
+#     so test_backend.py's /me trust_llm_provider=False-by-default assertion would
+#     fail locally while GitHub (no .env) stays green.
 
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
 export RESEND_API_KEY=""
 export EMAIL_DOMAIN=""
+export TRUST_LLM_PROVIDER=""

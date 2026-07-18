@@ -38,3 +38,23 @@ test("empty chat: privacy warning, example chips fill the composer, sidebar resi
   const after = Number(await sep.getAttribute("aria-valuenow"));
   expect(after).toBeGreaterThan(before);
 });
+
+// TRUST_LLM_PROVIDER=true (resolved to me.trust_llm_provider) suppresses the
+// warning entirely — icon and text gone, and nothing else about the empty
+// screen changes (examples still there, no reserved gap where it used to be).
+test("trusted provider: privacy warning is absent, examples remain", async ({ page }) => {
+  await mockMe(page, { email: "user@example.edu", is_admin: false, trust_llm_provider: true });
+  await mockConversations(page, []);
+  await page.goto("/");
+
+  // The example chips still render — the trusted flag hides ONLY the warning.
+  await expect(
+    page.getByRole("button", { name: /Registered Nursing/i }).first(),
+  ).toBeVisible();
+
+  // No part of the warning survives: neither the ⚠️ icon+text nor its container.
+  await expect(
+    page.getByText(/Do not enter proprietary or confidential information/i),
+  ).toHaveCount(0);
+  await expect(page.locator(".privacy-warning")).toHaveCount(0);
+});
