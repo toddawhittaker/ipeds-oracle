@@ -4,6 +4,7 @@ import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
+import { useToast } from "./Toast.jsx";
 
 // Clickable starter prompts shown on the empty chat screen.
 const EXAMPLES = [
@@ -133,9 +134,9 @@ export default function Chat({ me }) {
   const [convos, setConvos] = useState([]);
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
   const [openId, setOpenId] = useState(routeId);
   const [notice, setNotice] = useState("");
-  const [deleteAnnounce, setDeleteAnnounce] = useState("");
   const loadedFor = useRef(null); // routeId this conversation's messages were last fetched for
   const [messages, setMessages] = useState([]); // {role, content, id?, sql_log?, status?}
   const [input, setInput] = useState("");
@@ -406,14 +407,14 @@ export default function Chat({ me }) {
     const next = convos[idx + 1] || convos[idx - 1] || null;
     const remaining = Math.max(convos.length - 1, 0);
     const ok = await api.deleteConversation(id).then(() => true).catch(() => false);
-    if (!ok) { setDeleteAnnounce(DELETE_FAILED); return; }
+    if (!ok) { toast(DELETE_FAILED, "error"); return; }
     if (isOpen) {
       // Case 1: deleting the OPEN conversation. Focus goes to the composer,
       // via the same navigate()+rAF precedent as fillExample/saveEdit --
       // deliberately NOT through focusAfterDelete/the [convos] effect below,
       // which targets a sidebar row on a different clock (refreshConvos()
       // landing later would otherwise steal focus back out of the composer).
-      setDeleteAnnounce(deleteAnnouncement({ title, open: true, remaining }));
+      toast(deleteAnnouncement({ title, open: true, remaining }));
       navigate("/");
       requestAnimationFrame(() => taRef.current?.focus());
     } else {
@@ -422,7 +423,7 @@ export default function Chat({ me }) {
       // commits -- see the [convos] effect above. The announcement's
       // remaining-count is load-bearing for re-announcement -- see announce.js.
       focusAfterDelete.current = next ? { id: next.id } : { newchat: true };
-      setDeleteAnnounce(deleteAnnouncement({ title, open: false, remaining }));
+      toast(deleteAnnouncement({ title, open: false, remaining }));
     }
     refreshConvos();
   }
@@ -581,19 +582,6 @@ export default function Chat({ me }) {
             ))}
           </div>
         )}
-        {/* Always mounted (outside the collapsed ternary above) so a delete
-            while the sidebar is collapsed still announces. Deliberately a
-            BARE aria-live, never role="status" -- Chat's bad-conversation
-            notice below is already a role="status" node, and several e2e
-            specs assert an UNSCOPED page.getByRole("status") resolves to
-            exactly one match (same reasoning as App.jsx's route-announcer).
-            A separate `deleteAnnounce` state, not `notice` -- the render-time
-            reset above (openId !== routeId) does setNotice("") on every route
-            change, which would wipe this out from under case 1 (delete the
-            open chat navigates to "/") before it could be heard. */}
-        <div className="sr-only" aria-live="polite" data-testid="delete-announcer">
-          {deleteAnnounce}
-        </div>
       </aside>
 
       {!collapsed && (

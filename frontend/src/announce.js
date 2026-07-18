@@ -1,16 +1,19 @@
-// Pure text builders for the delete-conversation aria-live announcer.
+// Pure text builders for the delete-conversation confirmation. Chat.jsx pushes
+// these strings to the app-wide TOAST (useToast); the toast host owns the
+// visible render, the live-region announcement, and the (focus-independent)
+// lifecycle.
 //
 // Only the WORDING lives here — the singular/plural, the "no chats remaining"
 // empty branch, and the "started a new chat" open-conversation branch. The
-// browser behaviour around it (window.confirm, focus management, navigation,
-// and the fact that a live region only re-announces on a text MUTATION) stays
-// in Chat.jsx and is covered by web/e2e/delete-focus.spec.js. The exact strings
-// are pinned by web/src/announce.test.js (vitest) — no browser needed.
+// browser behaviour around it (window.confirm, focus management, navigation)
+// stays in Chat.jsx and is covered by frontend/e2e/delete-focus.spec.js. The
+// exact strings are pinned by frontend/src/announce.test.js (vitest).
 //
-// The remaining-count in the wording is LOAD-BEARING, not chatty: two deletes of
-// identically-titled ("Untitled") conversations must yield DIFFERENT strings, or
-// the aria-live region would not re-announce the second one. The count strictly
-// decreases, so consecutive announcements always differ.
+// The remaining-count in the wording is informative UX. It USED to be strictly
+// load-bearing (a single shared aria-live region only re-announces on a text
+// change, so two same-titled deletes needed different strings); the toast host
+// now gives each push its own live-region child, so re-announcement is
+// structural. The count still keeps consecutive messages distinct + useful.
 
 // Shown when the DELETE request itself fails — a constant, not a builder.
 export const DELETE_FAILED = "Couldn't delete that chat.";

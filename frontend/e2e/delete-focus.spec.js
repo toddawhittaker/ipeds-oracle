@@ -19,9 +19,9 @@ import {
 //   previous sibling (deleted row was last), else "+ New chat" (no rows
 //   left), else the composer (defensive last resort). Never <body>.
 //
-// A separate, always-mounted, BARE aria-live="polite" node (data-testid
-// "delete-announcer" — deliberately NOT role="status", see the last test in
-// this file) carries a human-readable announcement of what happened.
+// The deletion outcome is surfaced via the app-wide TOAST (useToast) — a
+// visible, self-announcing confirmation. (It used to be an sr-only
+// delete-announcer node; that was removed when the toast took over.)
 //
 // The implementer is expected to add id={`convo-${c.id}`} to each .convo
 // button (used throughout this file to target a specific row), a per-row
@@ -65,11 +65,9 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     await expect(page.locator("#composer-input")).toBeFocused();
 
-    // The live region announces the deletion -- browser truth is that it
-    // mutated so an AT would read it. The exact wording (open vs. count vs.
-    // empty branches, singular/plural) is unit-tested in src/announce.test.js.
-    const announcer = page.getByTestId("delete-announcer");
-    await expect(announcer).not.toHaveText("");
+    // The deletion surfaces as a toast (was an sr-only announcer; now visible +
+    // announced via the toast host). Wording branches are in src/announce.test.js.
+    await expect(page.locator(".toast-msg")).toContainText("Deleted");
   });
 
   test("Case 2: deleting a DIFFERENT conversation leaves the open one untouched and moves focus to the NEXT sibling row", async ({ page }) => {
@@ -107,8 +105,7 @@ test.describe("delete-conversation focus management", () => {
     // now occupies the deleted row's index.
     await expect(page.locator("#convo-3")).toBeFocused();
 
-    const announcer = page.getByTestId("delete-announcer");
-    await expect(announcer).not.toHaveText(""); // wording pinned in src/announce.test.js
+    await expect(page.locator(".toast-msg")).toContainText("Deleted"); // wording in src/announce.test.js
   });
 
   test("deleting the LAST row falls back to the PREVIOUS sibling (no next sibling exists)", async ({ page }) => {
@@ -160,17 +157,16 @@ test.describe("delete-conversation focus management", () => {
     await expect.poll(() => del.calls).toEqual(["9"]);
     await expect(page.getByRole("link", { name: "+ New chat" })).toBeFocused();
 
-    const announcer = page.getByTestId("delete-announcer");
-    await expect(announcer).not.toHaveText(""); // wording pinned in src/announce.test.js
+    await expect(page.locator(".toast-msg")).toContainText("Deleted"); // wording in src/announce.test.js
   });
 
-  // Regression guard: a live region only announces to a screen reader on a
-  // TEXT MUTATION. Two identically-titled ("Untitled") conversations deleted
-  // back to back would produce an IDENTICAL announcement string if the
-  // wording were just `Deleted "Untitled".` -- the second delete would be
-  // silently swallowed. The remaining-chat count is what forces the two
-  // messages to differ, so this pins that the count is actually load-bearing.
-  test("REGRESSION: two consecutive deletes of identically-titled conversations produce DIFFERENT announcer text", async ({ page }) => {
+  // Regression guard: two identically-titled ("Untitled") conversations deleted
+  // back to back must each be ANNOUNCED. With the toast host each push is its own
+  // keyed live-region child, so a screen reader re-announces even when the two
+  // messages are worded identically — the guarantee is now STRUCTURAL (two
+  // distinct toasts), not "the single region's text happened to change". (The
+  // count still differentiates the wording as UX — pinned in src/announce.test.js.)
+  test("REGRESSION: two consecutive deletes of identically-titled conversations each raise their own toast", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     const convos = await mockConversations(page, [
       { id: 5, title: "" },
@@ -181,30 +177,23 @@ test.describe("delete-conversation focus management", () => {
     await page.goto("/");
     await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
 
-    const announcer = page.getByTestId("delete-announcer");
-
     convos.setList([{ id: 6, title: "" }]);
     page.once("dialog", (d) => d.accept());
     // Both rows are identically named "Delete chat: Untitled" at this point --
     // .first() targets the earlier (id 5) row in DOM order.
     await page.getByRole("button", { name: "Delete chat: Untitled" }).first().click();
     await expect.poll(() => del.calls).toEqual(["5"]);
-    await expect(announcer).not.toHaveText("");
-    const firstText = await announcer.textContent();
+    await expect(page.locator(".toast")).toHaveCount(1);
 
     convos.setList([]);
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Delete chat: Untitled" }).click();
     await expect.poll(() => del.calls).toEqual(["5", "6"]);
-    // The browser truth this test exists for: the live region RE-ANNOUNCES a
-    // DIFFERENT string on the second same-titled delete (a bare "Deleted
-    // Untitled." would repeat and be silently swallowed by an AT). Waiting for
-    // the text to change from the first IS that guarantee; the count in the
-    // wording that makes them differ is unit-tested in src/announce.test.js.
-    await expect(announcer).not.toHaveText(firstText);
+    // A SECOND toast (not a mutation of the first) — each announces on its own.
+    await expect(page.locator(".toast")).toHaveCount(2);
   });
 
-  test("dismissing the confirm dialog returns focus to that row's trash button, fires no DELETE, and leaves the announcer empty", async ({ page }) => {
+  test("dismissing the confirm dialog returns focus to that row's trash button, fires no DELETE, and raises no toast", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, [
       { id: 1, title: "Chat One" },
@@ -219,9 +208,6 @@ test.describe("delete-conversation focus management", () => {
     await page.goto("/chat/1");
     await expect(page.getByText("A1")).toBeVisible();
 
-    const announcer = page.getByTestId("delete-announcer");
-    await expect(announcer).toHaveText("");
-
     const trashBtn = page.getByRole("button", { name: "Delete chat: Chat Two" });
     page.once("dialog", (d) => d.dismiss());
     await trashBtn.click();
@@ -232,7 +218,7 @@ test.describe("delete-conversation focus management", () => {
     await page.waitForTimeout(200);
     expect(del.calls).toEqual([]);
     await expect(trashBtn).toBeFocused();
-    await expect(announcer).toHaveText("");
+    await expect(page.locator(".toast")).toHaveCount(0);
   });
 
   test("a failed delete (500) keeps the row, announces failure -- never 'Deleted' -- and never leaves focus on <body>", async ({ page }) => {
@@ -258,12 +244,12 @@ test.describe("delete-conversation focus management", () => {
     // vanish it. exact:true -- see the same note in the "ONLY row" test above.
     await expect(page.getByRole("link", { name: "Chat Two", exact: true })).toBeVisible();
 
-    // A failed delete must announce SOMETHING (non-empty) and must NEVER falsely
-    // claim success. The exact failure copy is a constant in src/announce.js;
-    // the load-bearing guarantee here is the "never Deleted" negative.
-    const announcer = page.getByTestId("delete-announcer");
-    await expect(announcer).not.toHaveText("");
-    await expect(announcer).not.toContainText("Deleted");
+    // A failed delete must surface an ERROR toast and must NEVER falsely claim
+    // success. Exact failure copy is a constant in src/announce.js; the
+    // load-bearing guarantee here is the "never Deleted" negative.
+    const toast = page.locator(".toast");
+    await expect(toast).toHaveClass(/\berror\b/);
+    await expect(toast).not.toContainText("Deleted");
 
     // globalThis.document (not `document` directly) -- this callback runs in
     // the browser, but the e2e eslint config only has Node globals, and
@@ -324,10 +310,10 @@ test.describe("delete-conversation focus management", () => {
   });
 
   // Several pre-existing specs (routing-chat.spec.js) use an UNSCOPED
-  // page.locator('[role="status"].sr-only') and rely on it resolving to
-  // exactly one node. The new delete announcer must therefore be a BARE
-  // aria-live region, never role="status" -- otherwise it collides and those
-  // specs break with a Playwright strict-mode violation.
+  // page.locator('[role="status"].sr-only') and rely on it resolving to exactly
+  // one node (Chat's bad-conversation notice). The toast host's live regions are
+  // bare aria-live, never role="status", so they don't collide -- this pins that
+  // the count stays exactly one.
   test("[role=status].sr-only still resolves to exactly ONE node on the Chat page", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, []);
