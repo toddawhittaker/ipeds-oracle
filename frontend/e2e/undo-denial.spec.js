@@ -17,7 +17,7 @@ import {
 //   * the section heading is "Blocked from requesting access", hidden
 //     entirely when the denied list is empty.
 //   * each row renders the ORIGINAL address(es) (`emails.join(", ")`).
-//   * clicking Undo fires the DELETE immediately -- NO window.confirm.
+//   * clicking Undo fires the DELETE immediately -- NO confirmation modal.
 //   * the success flash states BOTH negatives: no access granted, no email
 //     sent (matches /not given access|no email/i).
 //   * a failed undo (non-2xx) surfaces a `.notice` and doesn't wedge the UI.
@@ -164,16 +164,9 @@ test.describe("see and undo a denied-address block", () => {
     await expect(page.getByText(/blocked from requesting access/i)).toBeVisible();
   });
 
-  test("undo fires with NO confirm dialog, and DELETEs the CANONICAL address", async ({ page }) => {
+  test("undo fires with NO confirmation modal, and DELETEs the CANONICAL address", async ({ page }) => {
     const clear = await mockClearDenial(page, { httpStatus: 200 });
     await openAllowlistTab(page, { denied: ONE_DENIED_GROUP });
-
-    // Pins the deliberate no-confirm decision (.plan-undeny.md section on
-    // Admin.jsx) against a future cargo-cult "for symmetry with Reject":
-    // if a confirm() is ever added, this dialog handler firing would hang
-    // the click (no listener accepts/dismisses it) and the test times out.
-    let dialogFired = false;
-    page.on("dialog", () => { dialogFired = true; });
 
     await page.getByRole("button", { name: /allow to request again/i }).click();
 
@@ -181,7 +174,11 @@ test.describe("see and undo a denied-address block", () => {
     // The argument sent is the row's canon_email, not either displayed
     // original -- the display/match non-swap holds for the API call too.
     expect(clear.calls[0]).toBe("victim@example.edu");
-    expect(dialogFired).toBe(false);
+    // Pins the deliberate no-confirm decision (.plan-undeny.md section on
+    // Admin.jsx) against a future cargo-cult "for symmetry with Reject": undo is
+    // reversible, so it must NOT open a confirmation modal.
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
   test("the success flash states BOTH negatives: no access granted, no email sent", async ({ page }) => {
@@ -230,14 +227,10 @@ test.describe("see and undo a denied-address block", () => {
     ];
     await openAllowlistTab(page, { reqs });
 
-    let dialogMessage = "";
-    page.once("dialog", (dialog) => {
-      dialogMessage = dialog.message();
-      dialog.dismiss();
-    });
     await page.getByRole("button", { name: "Reject the access request from onepending@example.edu" }).click();
-
-    expect(dialogMessage).not.toMatch(
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).not.toContainText(
       /unless you add them to the allowlist|only.*way|can't be undone/i);
   });
 
@@ -253,16 +246,10 @@ test.describe("see and undo a denied-address block", () => {
     ];
     await openAllowlistTab(page, { reqs });
 
-    let dialogMessage = "";
-    page.once("dialog", (dialog) => {
-      dialogMessage = dialog.message();
-      dialog.dismiss();
-    });
     await page.getByRole(
       "button", { name: "Reject the access request from victim+newsletter@example.edu" },
     ).click();
-
-    expect(dialogMessage).toContain("victim@example.edu");
+    await expect(page.getByRole("alertdialog")).toContainText("victim@example.edu");
   });
 
   test("SEC #3: a failed denied-list load keeps the section visible with an error state, not silent absence", async ({ page }) => {

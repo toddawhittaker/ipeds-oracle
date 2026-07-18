@@ -23,16 +23,21 @@ import {
 // visible, self-announcing confirmation. (It used to be an sr-only
 // delete-announcer node; that was removed when the toast took over.)
 //
-// The implementer is expected to add id={`convo-${c.id}`} to each .convo
-// button (used throughout this file to target a specific row), a per-row
-// aria-label of `Delete chat: ${c.title || "Untitled"}` on the trash button
-// (replacing today's identical "Delete chat" on every row -- WCAG 4.1.2),
-// and a window.confirm message of `Delete "<title>"? This can't be undone.`
-//
-// Renaming the trash button's accessible name is a BREAKING change to
-// existing selectors -- routing-chat.spec.js's two `getByRole("button",
-// { name: "Delete chat" })` locators were updated in the same commit as this
-// new file to the per-row name.
+// Deletion is now gated by the app-styled confirmation modal (ConfirmModal.jsx),
+// NOT window.confirm: clicking a row's trash opens a role="alertdialog" titled
+// `Delete "<title>"?` with a "Delete chat" confirm button and a "Cancel" button.
+// Each .convo button carries id={`convo-${c.id}`} and each trash button a per-row
+// aria-label `Delete chat: ${c.title || "Untitled"}` (WCAG 4.1.2).
+
+// Open the delete modal for a given row and click through its confirm button.
+// Scoped to the dialog so the "Delete chat" name doesn't collide with the row
+// trash buttons (whose labels also contain "Delete chat").
+async function confirmDelete(page, rowLabel) {
+  await page.getByRole("button", { name: rowLabel }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
+}
 
 test.describe("delete-conversation focus management", () => {
   test("Case 1: deleting the CURRENTLY-OPEN conversation navigates to / and moves focus to the composer", async ({ page }) => {
@@ -51,15 +56,14 @@ test.describe("delete-conversation focus management", () => {
     await page.goto("/chat/2");
     await expect(page.getByText("A2")).toBeVisible();
 
-    let confirmMessage = null;
-    page.once("dialog", (d) => { confirmMessage = d.message(); d.accept(); });
+    // The modal names the specific chat before confirming (specific title, not a
+    // vague "Are you sure?").
     await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText('Delete "Chat Two"?');
+    await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
 
     await expect.poll(() => del.calls).toEqual(["2"]);
-    // Assert the exact confirm wording outside the dialog handler -- an
-    // expect() thrown inside a Playwright dialog callback doesn't reliably
-    // fail the test.
-    expect(confirmMessage).toBe("Delete \"Chat Two\"? This can't be undone.");
 
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
@@ -94,8 +98,7 @@ test.describe("delete-conversation focus management", () => {
       { id: 3, title: "Chat Three" },
     ]);
 
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    await confirmDelete(page, "Delete chat: Chat Two");
 
     await expect.poll(() => del.calls).toEqual(["2"]);
     expect(new URL(page.url()).pathname).toBe("/chat/1");
@@ -129,8 +132,7 @@ test.describe("delete-conversation focus management", () => {
       { id: 2, title: "Chat Two" },
     ]);
 
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat: Chat Three" }).click();
+    await confirmDelete(page, "Delete chat: Chat Three");
 
     await expect.poll(() => del.calls).toEqual(["3"]);
     await expect(page.locator("#convo-2")).toBeFocused();
@@ -151,8 +153,7 @@ test.describe("delete-conversation focus management", () => {
 
     convos.setList([]);
 
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat: Solo Chat" }).click();
+    await confirmDelete(page, "Delete chat: Solo Chat");
 
     await expect.poll(() => del.calls).toEqual(["9"]);
     await expect(page.getByRole("link", { name: "+ New chat" })).toBeFocused();
@@ -178,22 +179,21 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
 
     convos.setList([{ id: 6, title: "" }]);
-    page.once("dialog", (d) => d.accept());
     // Both rows are identically named "Delete chat: Untitled" at this point --
     // .first() targets the earlier (id 5) row in DOM order.
     await page.getByRole("button", { name: "Delete chat: Untitled" }).first().click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
     await expect.poll(() => del.calls).toEqual(["5"]);
     await expect(page.locator(".toast")).toHaveCount(1);
 
     convos.setList([]);
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat: Untitled" }).click();
+    await confirmDelete(page, "Delete chat: Untitled");
     await expect.poll(() => del.calls).toEqual(["5", "6"]);
     // A SECOND toast (not a mutation of the first) — each announces on its own.
     await expect(page.locator(".toast")).toHaveCount(2);
   });
 
-  test("dismissing the confirm dialog returns focus to that row's trash button, fires no DELETE, and raises no toast", async ({ page }) => {
+  test("cancelling the confirm modal returns focus to that row's trash button, fires no DELETE, and raises no toast", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, [
       { id: 1, title: "Chat One" },
@@ -209,19 +209,50 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByText("A1")).toBeVisible();
 
     const trashBtn = page.getByRole("button", { name: "Delete chat: Chat Two" });
-    page.once("dialog", (d) => d.dismiss());
     await trashBtn.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
 
     // Let anything an errant implementation might do asynchronously settle
     // before asserting zero -- see the same pattern in routing-chat.spec.js's
     // "must NEVER be called" assertions.
     await page.waitForTimeout(200);
     expect(del.calls).toEqual([]);
+    // Cancel/dismiss returns focus to the opener (still mounted -- nothing
+    // mutated) and, per the locked spec decision, raises NO toast.
     await expect(trashBtn).toBeFocused();
     await expect(page.locator(".toast")).toHaveCount(0);
   });
 
-  test("a failed delete (500) keeps the row, announces failure -- never 'Deleted' -- and never leaves focus on <body>", async ({ page }) => {
+  test("pressing Escape on the confirm modal cancels it: no DELETE, focus back on the trash button", async ({ page }) => {
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
+    await mockConversations(page, [
+      { id: 1, title: "Chat One" },
+      { id: 2, title: "Chat Two" },
+    ]);
+    await mockConversation(page, 1, [
+      { role: "user", content: "Q1" },
+      { role: "assistant", content: "A1" },
+    ]);
+    const del = await mockDeleteConversation(page);
+
+    await page.goto("/chat/1");
+    await expect(page.getByText("A1")).toBeVisible();
+
+    const trashBtn = page.getByRole("button", { name: "Delete chat: Chat Two" });
+    await trashBtn.click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    await page.waitForTimeout(200);
+    expect(del.calls).toEqual([]);
+    await expect(trashBtn).toBeFocused();
+  });
+
+  test("a failed delete (500) keeps the modal open with an in-modal error, keeps the row, and never claims 'Deleted'", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, [
       { id: 1, title: "Chat One" },
@@ -236,13 +267,20 @@ test.describe("delete-conversation focus management", () => {
     await page.goto("/chat/1");
     await expect(page.getByText("A1")).toBeVisible();
 
-    page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
 
     await expect.poll(() => del.calls).toEqual(["2"]);
-    // The row must still be there -- a failed DELETE must not optimistically
-    // vanish it. exact:true -- see the same note in the "ONLY row" test above.
-    await expect(page.getByRole("link", { name: "Chat Two", exact: true })).toBeVisible();
+    // The modal STAYS OPEN on failure, showing a contextual in-modal error, and
+    // the row must still be there (a failed DELETE must not optimistically
+    // vanish it). exact:true -- see the "ONLY row" note above.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".notice.error")).toBeVisible();
+    // The row survives a failed delete. A CSS locator (not getByRole) because the
+    // background is aria-hidden while the modal is open -- so it's absent from the
+    // accessibility tree by design, but still present + visible in the DOM.
+    await expect(page.locator("#convo-2")).toBeVisible();
 
     // A failed delete must surface an ERROR toast and must NEVER falsely claim
     // success. Exact failure copy is a constant in src/announce.js; the
@@ -251,10 +289,9 @@ test.describe("delete-conversation focus management", () => {
     await expect(toast).toHaveClass(/\berror\b/);
     await expect(toast).not.toContainText("Deleted");
 
-    // globalThis.document (not `document` directly) -- this callback runs in
-    // the browser, but the e2e eslint config only has Node globals, and
-    // globalThis dodges the no-undef complaint the same way routing-chat.spec.js's
-    // globalThis.history reference does.
+    // Focus stays trapped in the still-open modal, never dropped to <body>.
+    // globalThis.document (not `document`) -- this callback runs in the browser,
+    // but the e2e eslint config only has Node globals.
     const activeTag = await page.evaluate(() => globalThis.document.activeElement?.tagName);
     expect(activeTag).not.toBe("BODY");
   });
@@ -287,8 +324,7 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByText("A1")).toBeVisible();
 
     convos.setList([{ id: 1, title: "Chat One" }]);
-    page.once("dialog", (d) => d.accept());
-    await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    await confirmDelete(page, "Delete chat: Chat Two");
     await expect.poll(() => del.calls).toEqual(["2"]);
     // Deleted row (Chat Two) was the last/only other row -> falls back to
     // the previous sibling, Chat One's own row button.

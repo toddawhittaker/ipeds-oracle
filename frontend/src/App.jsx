@@ -6,6 +6,7 @@ import Chat from "./Chat.jsx";
 import { AdminRoute } from "./Admin.jsx";
 import Verify from "./Verify.jsx";
 import { ToastProvider } from "./Toast.jsx";
+import { ConfirmProvider } from "./ConfirmModal.jsx";
 
 function currentTheme() {
   const forced = document.documentElement.getAttribute("data-theme");
@@ -117,6 +118,7 @@ function Shell() {
 
   return (
     <ToastProvider>
+    <ConfirmProvider>
     <div className="app">
       {/* No role="status" here, deliberately -- several OTHER live regions on
           these pages already use it (Admin's flash box, Skills' status
@@ -170,6 +172,7 @@ function Shell() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
+    </ConfirmProvider>
     </ToastProvider>
   );
 }

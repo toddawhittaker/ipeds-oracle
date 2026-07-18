@@ -18,7 +18,8 @@ import {
 //     database`, appears as a SIBLING of an integrated/update year's
 //     `.year-card` tile (never on a non-integrated card), and is absent when
 //     locked (a job is running).
-//   * clicking it asks window.confirm, then DELETEs
+//   * clicking it opens the app-styled confirmation modal (role="alertdialog",
+//     confirm button "Remove year"), then DELETEs
 //     /api/admin/import/year/{start_year} and watches the returned job like
 //     any other import/integrate job.
 //   * when a polled job's `progress` JSON carries a `rebuild` key
@@ -67,14 +68,11 @@ test.describe("trashcan: remove an integrated year", () => {
     ]);
     await openImportsTab(page);
 
-    let dialogMessage = "";
-    page.once("dialog", (dialog) => {
-      dialogMessage = dialog.message();
-      dialog.accept();
-    });
     await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
-
-    expect(dialogMessage).toMatch(/remove|can't be undone|rebuilds/i);
+    const dialog = page.getByRole("alertdialog");
+    // The modal explains the consequence, then a specific "Remove year" confirm.
+    await expect(dialog).toContainText(/rebuilds|can't be undone/i);
+    await dialog.getByRole("button", { name: "Remove year" }).click();
 
     await expect.poll(() => del.calls.length).toBe(1);
     expect(del.calls[0]).toBe(2022);
@@ -83,27 +81,60 @@ test.describe("trashcan: remove an integrated year", () => {
     await expect(page.locator(".notice").first()).toBeVisible();
   });
 
-  test("dismissing the confirm dialog does not fire a DELETE", async ({ page }) => {
+  test("cancelling the confirm modal does not fire a DELETE", async ({ page }) => {
     await mockImportCatalog(page, CATALOG);
     const del = await mockDeintegrate(page, { jobId: 56, status: "pending" });
     await openImportsTab(page);
 
-    page.once("dialog", (dialog) => dialog.dismiss());
     await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
     await page.waitForTimeout(200);
 
     expect(del.calls.length).toBe(0);
   });
 
-  test("a 409 response while another import is running shows the already-running notice", async ({ page }) => {
+  test("a 409 with no locatable running job keeps the modal open showing the already-running error", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    await mockDeintegrate(page, { httpStatus: 409 });
+    await openImportsTab(page); // mockImportJobs is [] here -> nothing to hand off to
+
+    await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Remove year" }).click();
+
+    // No job found to attach to, so it's a genuine failure: the modal stays open
+    // with the already-running detail as its in-modal error.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/already running/i)).toBeVisible();
+  });
+
+  test("a 409 with a job already in flight HANDS OFF: the modal closes and that job's progress surfaces", async ({ page }) => {
+    // Regression guard (code review, PR #85): the already-running recovery must
+    // NOT rethrow and trap the just-attached live job behind the inert error
+    // modal. It closes the modal, shows the already-running notice, and watches
+    // the running job so its progress is reachable.
     await mockImportCatalog(page, CATALOG);
     await mockDeintegrate(page, { httpStatus: 409 });
     await openImportsTab(page);
+    // Override: a job IS mid-flight, and it polls to completion.
+    await mockImportJobs(page, [
+      { id: 77, filename: "integrate:2023", status: "running", log: "", report: null, updated_at: 1 },
+    ]);
+    await mockImportJobPoll(page, 77, [
+      { id: 77, filename: "integrate:2023", status: "running", log: "working…", report: null, updated_at: 1 },
+      { id: 77, filename: "integrate:2023", status: "swapped", log: "done", report: "ok", updated_at: 2 },
+    ]);
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Remove year" }).click();
 
+    // Handed off, not trapped: modal closed, notice shown, running job surfaced.
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(page.getByText(/already running/i)).toBeVisible();
+    await expect(page.getByText("swapped")).toBeVisible();
   });
 });
 

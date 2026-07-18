@@ -5,9 +5,10 @@
 //
 // Only the WORDING lives here — the singular/plural, the "no chats remaining"
 // empty branch, and the "started a new chat" open-conversation branch. The
-// browser behaviour around it (window.confirm, focus management, navigation)
-// stays in Chat.jsx and is covered by frontend/e2e/delete-focus.spec.js. The
-// exact strings are pinned by frontend/src/announce.test.js (vitest).
+// browser behaviour around it (the confirmation modal, focus management,
+// navigation) stays in Chat.jsx and is covered by
+// frontend/e2e/delete-focus.spec.js. The exact strings are pinned by
+// frontend/src/announce.test.js (vitest).
 //
 // The remaining-count in the wording is informative UX. It USED to be strictly
 // load-bearing (a single shared aria-live region only re-announces on a text
@@ -22,7 +23,7 @@ export const DELETE_FAILED = "Couldn't delete that chat.";
 //   open      — the deleted conversation was the one currently open
 //   remaining — how many conversations remain after the delete (>= 0)
 // `title` is passed already-resolved (Chat.jsx defaults a blank title to
-// "Untitled" before the confirm dialog, so it's non-empty here).
+// "Untitled" before opening the confirm modal, so it's non-empty here).
 export function deleteAnnouncement({ title, open, remaining }) {
   if (open) return `Deleted "${title}". Started a new chat.`;
   if (remaining === 0) return `Deleted "${title}". No chats remaining.`;

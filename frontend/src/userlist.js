@@ -1,9 +1,9 @@
 // Pure filter -> sort -> paginate pipeline for the admin Users list table.
 //
 // Only the DATA LOGIC lives here; the browser behaviour around it (the search
-// input, the click-to-sort headers, the page-size <select>, window.confirm on
-// remove, aria-live announcements, focus) stays in Admin.jsx and is covered by
-// frontend/e2e/. The exact input->output behaviour below is pinned by
+// input, the click-to-sort headers, the page-size <select>, the remove-user
+// confirmation modal, aria-live announcements, focus) stays in Admin.jsx and is
+// covered by frontend/e2e/. The exact input->output behaviour below is pinned by
 // frontend/src/userlist.test.js (vitest) — no browser needed.
 //
 // A user row is { email, note, is_admin, last_login } where last_login is unix

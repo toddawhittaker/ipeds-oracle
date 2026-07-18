@@ -8,6 +8,7 @@ import { buildImportPlan } from "./csvimport.js";
 import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose, IconUpload } from "./icons.jsx";
 import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
+import { useConfirm } from "./ConfirmModal.jsx";
 
 function humanBytes(n) {
   if (n == null || !isFinite(n)) return "?";
@@ -118,6 +119,7 @@ function Allowlist({ me }) {
   // focus to a stable element or it drops to <body>: row removal -> the search
   // box; a pending-request reject / denial undo -> this add-email anchor.
   const toast = useToast();
+  const confirm = useConfirm();
   const addEmailRef = useRef(null);
 
   // Route an action outcome to the app-wide toast (overlays, auto-fades,
@@ -313,34 +315,35 @@ function Allowlist({ me }) {
     onCsvFile(e.dataTransfer.files?.[0]);
   }
 
-  async function reject(addr) {
+  function reject(addr) {
     // Name the address that will ACTUALLY be blocked (SEC #2) -- canon_email
     // propagates the block toward the BASE address, so for a +tag input like
     // "victim+newsletter@example.edu" the address actually blocked is
     // "victim@example.edu", which the old copy's "+tag variants of THIS
     // address" phrasing had backwards.
     const target = canonEmailForDisplay(addr);
-    if (!window.confirm(
-      `Reject the access request from ${addr}? That blocks ${target} ` +
-      `(and every +tag/case variant of it) from requesting access again. ` +
-      `You can undo the block from the "Blocked from requesting access" ` +
-      `list at the bottom of this tab.`)) return;
-    try {
-      await api.denyAccessRequest(addr);
-      announce(`Rejected the access request from ${addr}.`);
-    } catch {
-      announce(`Could not reject ${addr}.`, "error");
-    }
-    // The reject button just unmounted with its .req row; hand focus to the
-    // stable add-email anchor so it doesn't drop to <body>. Sequence after the
-    // reload commits (focus-restore-vs-reload race).
-    await load();
-    requestAnimationFrame(() => addEmailRef.current?.focus?.());
+    confirm({
+      variant: "danger",
+      title: `Reject the request from ${addr}?`,
+      body: `This blocks ${target} (and every +tag/case variant of it) from requesting access again.`,
+      details: `You can undo the block from the "Blocked from requesting access" list at the bottom of this tab.`,
+      confirmLabel: "Reject request",
+      onConfirm: () => api.denyAccessRequest(addr),
+      successToast: `Rejected the access request from ${addr}.`,
+      errorToast: `Could not reject ${addr}.`,
+      onSuccess: async () => {
+        // The reject button just unmounted with its .req row; hand focus to the
+        // stable add-email anchor so it doesn't drop to <body>. Sequence after
+        // the reload commits (focus-restore-vs-reload race).
+        await load();
+        requestAnimationFrame(() => addEmailRef.current?.focus?.());
+      },
+    });
   }
 
   // Reversible, non-destructive: worst case of a misclick is the address
   // filing a request again (lands in the pending queue, emails admins —
-  // exactly as it would anyway). No window.confirm, deliberately unlike
+  // exactly as it would anyway). No confirmation modal, deliberately unlike
   // reject() above — see .plan-undeny.md's ui-ux spec for the reasoning.
   // `r.canon_email` is what the DELETE call keys on; `r.emails` (the
   // ORIGINAL addresses) is all that's ever shown to the admin.
@@ -383,30 +386,28 @@ function Allowlist({ me }) {
     requestAnimationFrame(() => actionBtnRefs.current[r.email]?.focus?.());
   }
 
-  // Destructive: confirm (naming the email), then announce the outcome — closing
-  // the old inline remove's no-confirm/no-announce gap. After load() refetches,
-  // the derived viewUsers() clamp keeps the admin on their page (or drops to the
-  // previous one if this emptied the last page). Self-removal never reaches here
-  // — the current admin's row shows no actions (the backend also 400s it).
-  async function removeUser(r) {
-    if (!window.confirm(
-      `Remove ${r.email} from the allowlist? This drops any admin access and ` +
-      `signs them out. You can re-add them later.`)) return;
-    setBusyEmail(r.email);
-    try {
-      await api.removeAllow(r.email);
-      announce(`Removed ${r.email} from the allowlist.`);
-    } catch (err) {
-      let msg = `Couldn't remove ${r.email}.`;
-      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      announce(msg, "error");
-    } finally {
-      setBusyEmail("");
-    }
-    // The trash button unmounted with its row; hand focus to the search box
-    // (stable, in-context) after the reload commits so it doesn't drop to <body>.
-    await load();
-    requestAnimationFrame(() => searchRef.current?.focus?.());
+  // Destructive: a danger confirmation modal (naming the email), then the
+  // app-styled result toast. The modal owns the in-flight/error state, so no
+  // setBusyEmail here (the background is inert while it processes). After load()
+  // refetches, the derived viewUsers() clamp keeps the admin on their page (or
+  // drops to the previous one if this emptied the last page). Self-removal never
+  // reaches here — the current admin's row shows no actions (backend also 400s it).
+  function removeUser(r) {
+    confirm({
+      variant: "danger",
+      title: `Remove ${r.email} from the allowlist?`,
+      body: "This drops any admin access and signs them out. You can re-add them later.",
+      confirmLabel: "Remove user",
+      onConfirm: () => api.removeAllow(r.email),
+      successToast: `Removed ${r.email} from the allowlist.`,
+      errorToast: `Couldn't remove ${r.email}.`,
+      onSuccess: async () => {
+        // The trash button unmounted with its row; hand focus to the search box
+        // (stable, in-context) after the reload commits so it doesn't drop to <body>.
+        await load();
+        requestAnimationFrame(() => searchRef.current?.focus?.());
+      },
+    });
   }
 
   // Clicking a header toggles asc/desc on the active column, else switches to it
@@ -935,6 +936,7 @@ function Imports({ onDataChanged }) {
   // import/removal reads red and a completed one reads green instead of both
   // being the same neutral box.
   const notify = (text, kind = "") => { setNotice(text); setNoticeKind(kind); };
+  const confirm = useConfirm();
   const fileRef = useRef();
   const dragDepth = useRef(0);
   const poll = useRef();
@@ -1170,30 +1172,45 @@ function Imports({ onDataChanged }) {
     }
   }
 
-  async function removeYear(entry) {
-    if (!window.confirm(
-      `Remove ${entry.year_label} from the live database? This rebuilds the database ` +
-      "without that year and can't be undone.")) return;
-    // Set an interim notice BEFORE watch() flips `locked` (which unmounts the
-    // very trashcan button the user just activated) — otherwise notice stays
-    // empty right when focus needs somewhere to land, and the
-    // focus-to-notice effect above never fires, dropping focus to <body>.
-    notify(`Removing ${entry.year_label}…`);
-    try {
-      const body = await api.deintegrateYear(entry.start_year);
-      setActiveYears(null);
-      watch(body.job_id);
-    } catch (err) {
-      let msg = "Could not start the removal.";
-      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
-      notify(msg, "error");
-      if (/already running/i.test(msg)) {
-        // Someone else's import/removal is mid-flight — find it and watch it.
-        const list = await api.importJobs().catch(() => []);
-        const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
-        if (runningJob) watch(runningJob.id);
-      }
-    }
+  function removeYear(entry) {
+    // The outcome is resolved in onConfirm and consumed by onSuccess (after the
+    // modal closes + un-inerts): either a started removal, or a HAND-OFF to a
+    // job already mid-flight. Both close the modal and surface a job to watch —
+    // rethrowing on "already running" would trap that live job behind the inert
+    // error modal (and drop focus to <body> once watch() unmounts the trashcan).
+    let outcome = null; // { jobId, message, kind }
+    confirm({
+      variant: "danger",
+      title: `Remove ${entry.year_label} from the database?`,
+      body: "This rebuilds the database without that year and can't be undone.",
+      confirmLabel: "Remove year",
+      onConfirm: async () => {
+        try {
+          const body = await api.deintegrateYear(entry.start_year);
+          outcome = { jobId: body.job_id, message: `Removing ${entry.year_label}…`, kind: "" };
+        } catch (err) {
+          let msg = "Could not start the removal.";
+          try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+          if (/already running/i.test(msg)) {
+            const list = await api.importJobs().catch(() => []);
+            const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
+            // Hand off to the running job: close the modal and show ITS progress
+            // (matches the old inline path, which surfaced it immediately).
+            if (runningJob) { outcome = { jobId: runningJob.id, message: msg, kind: "error" }; return; }
+          }
+          throw err; // genuine failure -> modal stays open with the error
+        }
+      },
+      errorToast: "Could not start the removal.",
+      onSuccess: () => {
+        // Set the notice BEFORE watch() flips `locked` — the focus-to-notice
+        // effect above then lands focus on the notice (the trashcan that opened
+        // the modal has since unmounted).
+        notify(outcome.message, outcome.kind);
+        setActiveYears(null);
+        watch(outcome.jobId);
+      },
+    });
   }
 
   return (
@@ -1571,6 +1588,7 @@ function ruleName(s) {
 
 function Skills() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);   // at most one card at a time
   const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
@@ -1580,6 +1598,7 @@ function Skills() {
   // Keep a per-lesson ref map instead and re-find the freshly mounted button.
   const editBtnRefs = useRef({});   // skill id -> its "edit" button node
   const headlineRef = useRef(null);
+  const headingRef = useRef(null);  // focus target after a card is deleted
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
   const pending = rows.filter((r) => !r.verified).length;
@@ -1641,18 +1660,36 @@ function Skills() {
       requestAnimationFrame(() => editBtnRefs.current[s.id]?.focus?.());
     }).catch(() => announce("Couldn't save that lesson — nothing was changed.", "error"));
   }
+  const focusHeading = () => requestAnimationFrame(() => headingRef.current?.focus?.());
   const reject = (s) => {
     // Confirm only when there's curated/used data to lose — a fresh unreviewed
     // proposal (verified=false, no votes/hits) can be dismissed without nagging.
     const risky = s.verified || s.upvotes > 0 || s.hits > 0;
-    if (risky && !window.confirm(
-      `Delete this ${s.verified ? "verified " : ""}lesson? This can't be undone.`)) return;
-    api.deleteSkill(s.id).then(() => { announce("Lesson rejected.", "ok"); load(); });
+    if (!risky) {
+      // No modal, but still route the outcome through a toast + move focus off
+      // the card that's about to unmount (it previously dropped to <body>).
+      api.deleteSkill(s.id)
+        .then(() => { announce("Lesson rejected.", "ok"); return load(); })
+        .then(focusHeading)
+        .catch(() => announce("Couldn't delete that lesson.", "error"));
+      return;
+    }
+    confirm({
+      variant: "danger",
+      title: `Delete this ${s.verified ? "verified " : ""}lesson?`,
+      body: "This permanently deletes the lesson. This action cannot be undone.",
+      details: ruleName(s),
+      confirmLabel: "Delete lesson",
+      onConfirm: () => api.deleteSkill(s.id),
+      successToast: "Lesson rejected.",
+      errorToast: "Couldn't delete that lesson.",
+      onSuccess: async () => { await load(); focusHeading(); },
+    });
   };
 
   return (
     <div className="panel">
-      <h2>Learned lessons ({rows.length})</h2>
+      <h2 ref={headingRef} tabIndex={-1}>Learned lessons ({rows.length})</h2>
       <p className="muted small">
         Rules the assistant applies as guidance. The post-answer critic proposes a
         lesson when it catches a mistake — a short headline plus a longer
