@@ -284,7 +284,10 @@ function Allowlist({ me }) {
 
   async function add(e) {
     e.preventDefault();
-    await invite(email, note, isAdmin);
+    // An empty note defaults to an audit trail: who added the user, and when.
+    // A note the admin actually typed is passed through unchanged.
+    const noteText = note.trim() || `added on ${fmtApprovalDate()} by ${me?.email || "an admin"}`;
+    await invite(email, noteText, isAdmin);
     setEmail(""); setNote(""); setIsAdmin(false);
   }
 
