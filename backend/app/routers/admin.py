@@ -242,13 +242,24 @@ def remove_allowlist(email: str, admin: sqlite3.Row = Depends(require_admin)):
     """Remove a user from the allowlist (drops their admin + kills their sessions).
 
     You can't remove YOURSELF — like the self-demote guard on the PATCH endpoint,
-    this stops an accidental self-lockout and keeps at least one admin in place."""
+    this stops an accidental self-lockout and keeps at least one admin in place.
+
+    You also can't remove someone who still HOLDS admin — demote them first. The
+    UI disables the trash on an admin's row (Admin.jsx), and this is the
+    authoritative enforcement of the same rule (defense in depth)."""
     email = email.strip().lower()
     if email == admin["email"].strip().lower():
         raise HTTPException(
             400, "You can't remove your own access — ask another admin.")
     con = connect()
     try:
+        # Refuse to remove a still-admin user (a never-signed-in allowlist entry
+        # has no users row → not admin → removal proceeds, as before).
+        row = con.execute(
+            "SELECT is_admin FROM users WHERE email=?", (email,)).fetchone()
+        if row and row["is_admin"]:
+            raise HTTPException(
+                400, "Demote this user from admin before removing them.")
         con.execute("DELETE FROM allowlist WHERE email=?", (email,))
         con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
         con.execute(

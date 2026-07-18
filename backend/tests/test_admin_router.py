@@ -1106,6 +1106,33 @@ def test_can_remove_another_user():
                        for x in c.get("/api/admin/allowlist").json())
 
 
+def test_remove_refuses_a_still_admin_user_until_demoted():
+    # The authoritative half of #90's "demote before remove" guard (the UI just
+    # disables the trash on an admin's row). The API must refuse to remove a user
+    # while they still HOLD admin, and change nothing; removal proceeds only after
+    # they're demoted. Regression: a direct DELETE could otherwise drop an admin.
+    with TestClient(app) as c:
+        _login(c)
+        target = "stilladmin@example.edu"
+        assert c.post("/api/admin/allowlist", json={"email": target}).status_code == 200
+        assert c.patch(f"/api/admin/allowlist/{target}",
+                       json={"is_admin": True}).status_code == 200
+        # Refused while admin, and nothing changes (still allowlisted, still admin).
+        r = c.delete(f"/api/admin/allowlist/{target}")
+        assert r.status_code == 400, r.text
+        assert "demote" in r.json()["detail"].lower(), r.json()
+        assert any(x["email"] == target
+                   for x in c.get("/api/admin/allowlist").json()), \
+            "a still-admin user was removed anyway"
+        assert _is_admin(c, target) is True
+        # After demoting, removal succeeds and the row is gone.
+        assert c.patch(f"/api/admin/allowlist/{target}",
+                       json={"is_admin": False}).status_code == 200
+        assert c.delete(f"/api/admin/allowlist/{target}").status_code == 200
+        assert not any(x["email"] == target
+                       for x in c.get("/api/admin/allowlist").json())
+
+
 def _emails(c):
     return {x["email"] for x in c.get("/api/admin/allowlist").json()}
 
@@ -2401,6 +2428,8 @@ def run():
           test_cannot_remove_self_from_allowlist)
     check("can remove another user from the allowlist",
           test_can_remove_another_user)
+    check("cannot remove a user while they still hold admin (demote first)",
+          test_remove_refuses_a_still_admin_user_until_demoted)
     check("bulk add creates multiple users (email normalized)",
           test_bulk_add_creates_multiple_users)
     check("bulk add grants admin and counts admins_granted",

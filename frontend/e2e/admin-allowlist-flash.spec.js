@@ -166,7 +166,8 @@ test("manual add: empty note defaults to an 'added on <date> by <admin>' audit "
   await page.getByPlaceholder("email", { exact: true }).fill("newperson@example.edu");
   await page.getByRole("button", { name: "Add" }).click();
   await expect.poll(() => allow.posts.length).toBe(1);
-  expect(allow.posts[0].note).toMatch(/^added on \d{2}\/\d{2}\/\d{4} by admin@example\.edu$/);
+  // Date shape is locale-dependent (toLocaleDateString), so match structurally.
+  expect(allow.posts[0].note).toMatch(/^added on .+ by admin@example\.edu$/);
 
   // A note the admin actually typed survives unchanged (no defaulting).
   await page.getByPlaceholder("email", { exact: true }).fill("second@example.edu");
