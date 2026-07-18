@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import PRODUCT_NAME, ROOT, get_settings
+from app.csrf import CSRFMiddleware
 from app.db import init_db
 from app.routers import admin, auth, chat
 
@@ -57,6 +58,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan)
+# Origin-based CSRF guard (defense in depth over the SameSite=Lax session
+# cookie); pure-ASGI so it never buffers the chat SSE stream. See app/csrf.py.
+app.add_middleware(CSRFMiddleware)
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(admin.router)

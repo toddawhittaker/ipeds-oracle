@@ -258,6 +258,10 @@ def test_chat_transport_http_status_error_surfaces_as_agent_error():
     resp = _json_response({"error": "server exploded"}, status=500)
     res = _with_fake_transport(resp, lambda: _run("q"))
     assert res.error and "LLM API error (500)" in res.error, res.error
+    # The raw upstream body must NOT be reflected to the client (it can carry
+    # provider/proxy detail); only the status code is surfaced.
+    assert "server exploded" not in res.error, \
+        f"upstream response body leaked into the client error: {res.error!r}"
 
 
 def test_chat_transport_generic_http_error_surfaces_as_agent_error():

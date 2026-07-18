@@ -1,5 +1,10 @@
 """Discovery tools — let the model look up families, columns, and code labels
 on demand (the §3 Discovery queries from SCHEMA.md), instead of guessing.
+
+Model-supplied arguments (family/keyword/varname/value) are always passed to
+`run_sql` as BOUND parameters, never string-interpolated — so even though these
+run on the read-only + immutable sandbox connection, there's no hand-escaping to
+get wrong.
 """
 from __future__ import annotations
 
@@ -20,8 +25,7 @@ def list_families() -> str:
 def get_columns(family: str) -> str:
     """Column names of a family (the actual unified columns)."""
     fam = family.strip().strip("'\"")
-    fam_q = fam.replace("'", "''")
-    r = run_sql(f"SELECT name, type FROM pragma_table_info('{fam_q}')", limit=1000)
+    r = run_sql("SELECT name, type FROM pragma_table_info(?)", params=(fam,), limit=1000)
     if not r.rows:
         return (f"No family named '{fam}'. Use list_families to see valid names "
                 "(query the family name, lowercase — never the year-specific name).")
@@ -31,20 +35,19 @@ def get_columns(family: str) -> str:
 def describe_variables(family: str, keyword: str | None = None) -> str:
     """Variable titles/descriptions for a family (from vartable, latest year)."""
     fam = family.strip().strip("'\"")
-    fam_q = fam.replace("'", "''")
     src = run_sql(
-        "SELECT src_table FROM _family_map WHERE family = ? "
-        "ORDER BY year DESC LIMIT 1".replace("?", f"'{fam_q}'"))
+        "SELECT src_table FROM _family_map WHERE family = ? ORDER BY year DESC LIMIT 1",
+        params=(fam,))
     if not src.rows:
         return f"No family named '{fam}'. Use list_families."
     phys = src.rows[0][0]
-    where = f"tablename='{phys}'"
+    sql = "SELECT varname, vartitle FROM vartable WHERE tablename=?"
+    params: list = [phys]
     if keyword:
-        kw = keyword.replace("'", "''")
-        where += f" AND (vartitle LIKE '%{kw}%' OR varname LIKE '%{kw}%')"
-    r = run_sql(
-        f"SELECT varname, vartitle FROM vartable WHERE {where} ORDER BY varorder",
-        limit=400)
+        sql += " AND (vartitle LIKE '%'||?||'%' OR varname LIKE '%'||?||'%')"
+        params += [keyword, keyword]
+    sql += " ORDER BY varorder"
+    r = run_sql(sql, params=params, limit=400)
     return (f"Variables in `{fam}` (source `{phys}`)"
             + (f" matching '{keyword}'" if keyword else "")
             + ":\n\n" + r.to_markdown(max_rows=400))
@@ -52,14 +55,15 @@ def describe_variables(family: str, keyword: str | None = None) -> str:
 
 def lookup_code(varname: str, value: str | None = None) -> str:
     """Code → label for a categorical variable (valuesets), latest year."""
-    var = varname.strip().strip("'\"").upper().replace("'", "''")
-    where = f"UPPER(varname)='{var}' AND year=(SELECT MAX(year) FROM _years)"
+    var = varname.strip().strip("'\"").upper()
+    sql = ("SELECT DISTINCT codevalue, valuelabel FROM valuesets "
+           "WHERE UPPER(varname)=? AND year=(SELECT MAX(year) FROM _years)")
+    params: list = [var]
     if value is not None:
-        v = str(value).strip().strip("'\"").replace("'", "''")
-        where += f" AND codevalue='{v}'"
-    r = run_sql(
-        "SELECT DISTINCT codevalue, valuelabel FROM valuesets "
-        f"WHERE {where} ORDER BY LENGTH(codevalue), codevalue", limit=500)
+        sql += " AND codevalue=?"
+        params.append(str(value).strip().strip("'\""))
+    sql += " ORDER BY LENGTH(codevalue), codevalue"
+    r = run_sql(sql, params=params, limit=500)
     if not r.rows:
         return (f"No codes found for variable '{varname}'"
                 + (f" value '{value}'" if value else "")
@@ -69,20 +73,21 @@ def lookup_code(varname: str, value: str | None = None) -> str:
 
 def find_variable(keyword: str) -> str:
     """Search all variables by keyword across tables (latest year)."""
-    kw = keyword.strip().replace("'", "''")
+    kw = keyword.strip()
     r = run_sql(
         "SELECT DISTINCT tablename, varname, vartitle FROM vartable "
-        f"WHERE (vartitle LIKE '%{kw}%' OR varname LIKE '%{kw}%') "
+        "WHERE (vartitle LIKE '%'||?||'%' OR varname LIKE '%'||?||'%') "
         "AND year=(SELECT MAX(year) FROM _years) ORDER BY tablename, varname",
-        limit=300)
+        params=(kw, kw), limit=300)
     return f"Variables matching '{keyword}':\n\n" + r.to_markdown(max_rows=300)
 
 
 def find_cip(keyword: str) -> str:
     """Look up CIP program codes by name (valuesets for CIPCODE)."""
-    kw = keyword.strip().replace("'", "''")
+    kw = keyword.strip()
     r = run_sql(
         "SELECT DISTINCT codevalue, valuelabel FROM valuesets "
         "WHERE varname='CIPCODE' AND year=(SELECT MAX(year) FROM _years) "
-        f"AND valuelabel LIKE '%{kw}%' ORDER BY codevalue", limit=200)
+        "AND valuelabel LIKE '%'||?||'%' ORDER BY codevalue",
+        params=(kw,), limit=200)
     return f"CIP codes matching '{keyword}':\n\n" + r.to_markdown(max_rows=200)

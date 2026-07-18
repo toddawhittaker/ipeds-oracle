@@ -17,11 +17,25 @@ from app.db import connect
 
 
 def client_ip(request: Request) -> str:
-    """Best-effort client IP. Behind Caddy/Cloudflare the real address is in
-    X-Forwarded-For (left-most entry); fall back to the socket peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    """Client IP for per-IP rate limiting, resilient to X-Forwarded-For spoofing.
+
+    X-Forwarded-For is a client-settable header. A trusted reverse proxy (Caddy)
+    APPENDS the connecting peer to it, so the genuine client is the Nth entry
+    counting FROM THE RIGHT, where N = `trusted_proxy_count`. Reading the
+    left-most entry (as we used to) trusts whatever the client prepended, letting
+    an attacker set a random IP per request and evade the per-IP cap entirely.
+
+    With `trusted_proxy_count == 0` (the default, and CI) we don't trust XFF at
+    all and use the socket peer, so a spoofed header is inert. When there are
+    fewer hops than configured (a request that didn't traverse all proxies) we
+    also fall back to the socket peer rather than trusting a short chain."""
+    n = get_settings().trusted_proxy_count
+    if n > 0:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if len(parts) >= n:
+                return parts[-n]
     return request.client.host if request.client else "unknown"
 
 

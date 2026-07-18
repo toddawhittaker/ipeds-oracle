@@ -113,7 +113,23 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 - **No enumeration oracle:** every branch's outbound send is scheduled via
   `BackgroundTasks`, never inline, so denial leaks nothing by response body **or**
   by wall-clock (a synchronous Resend call on only some branches was a measured
-  400×+ timing oracle).
+  400×+ timing oracle). A residual sub-ms DB-local timing difference (denied/unknown
+  skip the INSERT the allowlisted/pending branches do) is **accepted** — it doesn't
+  isolate the sensitive states, and equalizing it would violate "store nothing on
+  deny"; see `auth.request_login`'s docstring.
+- **Per-IP rate-limit is spoof-resistant:** `POST /api/auth/request` is capped
+  per-email and per-IP (`ratelimit.py`), but `X-Forwarded-For` is client-settable.
+  `client_ip` trusts it only `TRUSTED_PROXY_COUNT` hops **from the right** (Caddy
+  appends the real peer); `0` (dev/CI default) ignores XFF and uses the socket peer.
+  Set it to **`1`** in production behind the single Caddy hop (pinned in
+  `compose.yaml`); combine with `EMAIL_DOMAIN` to close the access-request-spam surface.
+- **CSRF defense in depth:** the session cookie is `HttpOnly`+`Secure`+`SameSite=Lax`;
+  on top of that a pure-ASGI `CSRFMiddleware` (`csrf.py`) refuses any state-changing
+  request whose `Origin` matches neither the request `Host` nor `APP_PUBLIC_URL`.
+  Origin-less/non-browser requests pass (SameSite still covers browsers); it's raw
+  ASGI so it never buffers the chat SSE stream. In the **dev posture only** (insecure
+  cookies) it also accepts loopback origins so the Vite dev-proxy (`changeOrigin`)
+  works — production (Secure cookies) enforces strict same-origin.
 - A denial is **reversible**. The Allowlist tab lists every active block ("Blocked
   from requesting access", grouped **canonically** since a block spans `+tag`
   variants — deliberately unlike the pending list above it, grouped by the **raw**
