@@ -34,6 +34,7 @@ export const api = {
   allowlist: () => j("GET", "/api/admin/allowlist"),
   addAllow: (email, note, is_admin) =>
     j("POST", "/api/admin/allowlist", { email, note, is_admin }),
+  bulkAllow: (users) => j("POST", "/api/admin/allowlist/bulk", { users }),
   removeAllow: (email) => j("DELETE", `/api/admin/allowlist/${encodeURIComponent(email)}`),
   setAdmin: (email, is_admin) =>
     j("PATCH", `/api/admin/allowlist/${encodeURIComponent(email)}`, { is_admin }),

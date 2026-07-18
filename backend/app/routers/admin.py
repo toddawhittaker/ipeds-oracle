@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 import app.nces as nces
 from app import estimate, importer, skills
@@ -128,6 +128,76 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
             delivery = "logged_to_console"
     return {"ok": True, "email": email, "invited": invited,
             "mail_configured": mail_configured, "delivery": delivery}
+
+
+# --- Bulk allowlist (CSV import) ----------------------------------------------
+# The item email is a PLAIN str, not EmailStr: a single bad address in a batch of
+# 200 must be skipped-and-reported, not 422 the whole request. Validate per row
+# below via _valid_email() so one bad row never aborts the import.
+class AllowlistBulkItem(BaseModel):
+    email: str
+    note: str | None = None
+    is_admin: bool = False
+
+
+class AllowlistBulkAdd(BaseModel):
+    users: list[AllowlistBulkItem]
+
+
+class _EmailProbe(BaseModel):
+    email: EmailStr
+
+
+def _valid_email(raw: str) -> str | None:
+    """Authoritative per-row email check reusing pydantic's EmailStr. Returns the
+    normalized (stripped, lowercased) address, or None if invalid."""
+    try:
+        return str(_EmailProbe(email=raw).email).strip().lower()
+    except ValidationError:
+        return None
+
+
+@router.post("/allowlist/bulk")
+def add_allowlist_bulk(body: AllowlistBulkAdd, admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk-add users from a CSV import. Deliberately a SIDE-EFFECT-FREE add versus
+    the single-add path: it inserts allowlist rows (and grants admin) but mints NO
+    sign-in link, sends NO email, and does NOT touch access_requests. Bulk sign-in
+    links (15-min TTL) would expire before recipients act and would burst the mail
+    quota; imported users request their own link from the sign-in page when ready.
+    (Single-add clears a matching denial; bulk intentionally doesn't — a denied
+    address surfaces here as any other row and, if not already allowlisted, is
+    added, but no denial state is mutated.) Each row is independent: an invalid
+    email or an in-request duplicate is skipped-and-reported, never fatal."""
+    con = connect()
+    added = 0
+    admins_granted = 0
+    skipped: list[dict] = []
+    seen: set[str] = set()
+    try:
+        now = time.time()
+        for item in body.users:
+            email = _valid_email(item.email)
+            if not email:
+                skipped.append({"email": item.email, "reason": "invalid email"})
+                continue
+            if email in seen:
+                skipped.append({"email": email, "reason": "duplicate in file"})
+                continue
+            seen.add(email)
+            if con.execute("SELECT 1 FROM allowlist WHERE email=?", (email,)).fetchone():
+                skipped.append({"email": email, "reason": "already a user"})
+                continue
+            con.execute("INSERT INTO allowlist(email, note, added_by, added_at) VALUES (?,?,?,?)",
+                        (email, item.note, admin["email"], now))
+            if item.is_admin:
+                con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
+                            "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, now))
+                admins_granted += 1
+            added += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "added": added, "admins_granted": admins_granted, "skipped": skipped}
 
 
 class AllowlistAdminPatch(BaseModel):
