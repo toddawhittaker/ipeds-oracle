@@ -213,3 +213,30 @@ test("Remove user confirms by email, then deletes the row", async ({ page }) => 
   // not drop to <body> (the toast never takes focus).
   await expect(page.getByRole("searchbox", { name: "Search email or note" })).toBeFocused();
 });
+
+test("an admin's trash button is disabled + explains why; removing is a no-op until demoted", async ({ page }) => {
+  // colleague is a DIFFERENT admin than the signed-in one, so their row shows
+  // actions (your own row shows none). You must demote before you can remove.
+  const api = await openUsers(page, [
+    { email: "colleague@example.edu", note: "staff", is_admin: true, last_login: 1700000000 },
+  ]);
+
+  const trash = page.getByRole("button", { name: "Can't remove an admin — demote first" });
+  await expect(trash).toBeVisible();
+  await expect(trash).toHaveAttribute("aria-disabled", "true");
+
+  // aria-disabled (not `disabled`) means a click still reaches the handler, but
+  // removeUser early-returns for an admin: no confirm dialog opens, no DELETE
+  // fires. force:true bypasses Playwright's own enabled-actionability wait so we
+  // exercise that guard the way a real click would.
+  await trash.click({ force: true });
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await page.waitForTimeout(150);
+  expect(api.deletes).toEqual([]);
+
+  // Demote first -> the same button becomes a live, enabled "Remove user".
+  await page.getByRole("button", { name: "Remove admin" }).click();
+  const liveTrash = page.getByRole("button", { name: "Remove user" });
+  await expect(liveTrash).toBeVisible();
+  await expect(liveTrash).not.toHaveAttribute("aria-disabled", "true");
+});

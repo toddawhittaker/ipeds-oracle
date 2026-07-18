@@ -794,6 +794,13 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
 .icon-btn.danger { color: var(--danger); }
 .icon-btn.danger:hover, .icon-btn.danger:focus-visible { border-color: var(--danger); }
 .icon-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* aria-disabled (not :disabled) keeps the button hoverable/focusable so its .tip
+   still explains why it's unavailable — e.g. a trash button on an admin row. Look
+   disabled, and suppress the danger hover/focus border so it doesn't read as
+   armed-to-click. */
+.icon-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.icon-btn.danger[aria-disabled="true"]:hover,
+.icon-btn.danger[aria-disabled="true"]:focus-visible { border-color: var(--line); }
 .grid .empty { text-align: center; color: var(--muted); padding: 18px 10px; }
 
 /* Tooltip shown on BOTH hover and keyboard focus (native title() never appears

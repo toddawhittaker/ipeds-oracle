@@ -501,6 +501,14 @@ function Allowlist({ me }) {
   // drops to the previous one if this emptied the last page). Self-removal never
   // reaches here — the current admin's row shows no actions (backend also 400s it).
   function removeUser(r) {
+    // Client-side guard: you must demote an admin before removing them. The trash
+    // button is aria-disabled (not `disabled`, so it stays hoverable to show why;
+    // see renderActions), which does NOT block the click, so early-return here
+    // makes it a safe no-op. This is a UX guard against accidental clicks, not a
+    // security control -- the DELETE endpoint itself still allows removing an
+    // admin (it only refuses self-removal), which is fine: the caller is already
+    // an admin who could demote-then-remove anyway.
+    if (r.is_admin) return;
     confirm({
       variant: "danger",
       title: `Remove ${r.email} from the allowlist?`,
@@ -751,8 +759,15 @@ jamie@example.com,External reviewer,`}</pre>
                   <IconShieldPlus />
                 </button>
               )}
-              <button type="button" className="icon-btn danger tip" data-tip="Remove user"
-                      aria-label="Remove user" disabled={busy} onClick={() => removeUser(r)}>
+              {/* An admin can't be removed while they hold admin -- demote first.
+                  aria-disabled (not `disabled`) keeps the button hoverable/
+                  focusable so the tooltip explains WHY; removeUser early-returns
+                  on an admin so the click is a safe no-op. */}
+              <button type="button" className="icon-btn danger tip"
+                      data-tip={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
+                      aria-label={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
+                      aria-disabled={r.is_admin ? "true" : undefined}
+                      disabled={busy} onClick={() => removeUser(r)}>
                 <IconTrash />
               </button>
             </>
