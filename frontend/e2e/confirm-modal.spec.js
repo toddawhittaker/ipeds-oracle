@@ -104,6 +104,8 @@ test.describe("confirmation modal — component contract", () => {
     // The confirm button enters a busy/loading state; both controls disable.
     await expect(confirm).toHaveAttribute("aria-busy", "true");
     await expect(dialog.locator(".modal-confirm .spinner")).toBeVisible();
+    // The in-flight state is announced politely to AT (WCAG 4.1.3).
+    await expect(dialog.locator('[aria-live="polite"]')).toHaveText("Working…");
     await expect(confirm).toBeDisabled();
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeDisabled();
     // Escape must NOT dismiss mid-flight.
@@ -123,6 +125,9 @@ test.describe("confirmation modal — component contract", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.locator(".notice.error")).toBeVisible();
     await expect(page.locator(".toast.error")).toBeVisible();
+    // The in-modal error is wired into the dialog's accessible description, so it's
+    // re-exposed if the dialog is re-queried (WCAG — a11y review finding 5).
+    await expect(dialog).toHaveAttribute("aria-describedby", /confirm-error-/);
     // Focus is back on the confirm button for a one-keystroke retry.
     await expect(confirm).toBeFocused();
 

@@ -96,17 +96,45 @@ test.describe("trashcan: remove an integrated year", () => {
     expect(del.calls.length).toBe(0);
   });
 
-  test("a 409 response while another import is running shows the already-running notice", async ({ page }) => {
+  test("a 409 with no locatable running job keeps the modal open showing the already-running error", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    await mockDeintegrate(page, { httpStatus: 409 });
+    await openImportsTab(page); // mockImportJobs is [] here -> nothing to hand off to
+
+    await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("button", { name: "Remove year" }).click();
+
+    // No job found to attach to, so it's a genuine failure: the modal stays open
+    // with the already-running detail as its in-modal error.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/already running/i)).toBeVisible();
+  });
+
+  test("a 409 with a job already in flight HANDS OFF: the modal closes and that job's progress surfaces", async ({ page }) => {
+    // Regression guard (code review, PR #85): the already-running recovery must
+    // NOT rethrow and trap the just-attached live job behind the inert error
+    // modal. It closes the modal, shows the already-running notice, and watches
+    // the running job so its progress is reachable.
     await mockImportCatalog(page, CATALOG);
     await mockDeintegrate(page, { httpStatus: 409 });
     await openImportsTab(page);
+    // Override: a job IS mid-flight, and it polls to completion.
+    await mockImportJobs(page, [
+      { id: 77, filename: "integrate:2023", status: "running", log: "", report: null, updated_at: 1 },
+    ]);
+    await mockImportJobPoll(page, 77, [
+      { id: 77, filename: "integrate:2023", status: "running", log: "working…", report: null, updated_at: 1 },
+      { id: 77, filename: "integrate:2023", status: "swapped", log: "done", report: "ok", updated_at: 2 },
+    ]);
 
     await page.getByRole("button", { name: "Remove 2022-23 from the database" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Remove year" }).click();
 
-    // The already-running detail surfaces as the modal's in-modal error (the
-    // modal stays open on failure).
+    // Handed off, not trapped: modal closed, notice shown, running job surfaced.
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(page.getByText(/already running/i)).toBeVisible();
+    await expect(page.getByText("swapped")).toBeVisible();
   });
 });
 

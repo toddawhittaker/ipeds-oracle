@@ -65,6 +65,7 @@ function ConfirmDialog({ req, onClose }) {
     onSuccess,
     successToast,
     errorToast,
+    busyLabel = "Working…",
     dismissable = true,
     focusConfirm = false,
     role,
@@ -80,7 +81,7 @@ function ConfirmDialog({ req, onClose }) {
   // Stable, unique ids for aria-labelledby/-describedby (computed once).
   const [ids] = useState(() => {
     const n = ++idSeq;
-    return { title: `confirm-title-${n}`, body: `confirm-body-${n}` };
+    return { title: `confirm-title-${n}`, body: `confirm-body-${n}`, error: `confirm-error-${n}` };
   });
 
   const dialogRole = role || (variant === "neutral" ? "dialog" : "alertdialog");
@@ -149,7 +150,10 @@ function ConfirmDialog({ req, onClose }) {
 
   function onKeyDown(e) {
     if (e.key === "Escape") {
-      if (dismissable && !processing) { e.stopPropagation(); cancel(); }
+      // The modal owns Escape while open (processing or not) -- never let it leak
+      // out of the trap to an ancestor handler.
+      e.stopPropagation();
+      if (dismissable && !processing) cancel();
       return;
     }
     if (e.key !== "Tab") return;
@@ -183,7 +187,7 @@ function ConfirmDialog({ req, onClose }) {
         role={dialogRole}
         aria-modal="true"
         aria-labelledby={ids.title}
-        aria-describedby={ids.body}
+        aria-describedby={error ? `${ids.body} ${ids.error}` : ids.body}
         ref={dialogRef}
         tabIndex={-1}
         onKeyDown={onKeyDown}
@@ -196,7 +200,11 @@ function ConfirmDialog({ req, onClose }) {
           {body}
           {details && <div className="modal-details">{details}</div>}
         </div>
-        {error && <div className="notice error modal-error" role="alert">{error}</div>}
+        {error && <div className="notice error modal-error" id={ids.error} role="alert">{error}</div>}
+        {/* Polite busy announcement so a screen-reader user hears the in-flight
+            state -- aria-busy on the (just-blurred) confirm button isn't a live
+            message and the spinner is aria-hidden (WCAG 4.1.3). */}
+        <div className="sr-only" aria-live="polite">{processing ? busyLabel : ""}</div>
         <div className="modal-actions">
           <button
             type="button"

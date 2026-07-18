@@ -1173,7 +1173,12 @@ function Imports({ onDataChanged }) {
   }
 
   function removeYear(entry) {
-    let body;
+    // The outcome is resolved in onConfirm and consumed by onSuccess (after the
+    // modal closes + un-inerts): either a started removal, or a HAND-OFF to a
+    // job already mid-flight. Both close the modal and surface a job to watch —
+    // rethrowing on "already running" would trap that live job behind the inert
+    // error modal (and drop focus to <body> once watch() unmounts the trashcan).
+    let outcome = null; // { jobId, message, kind }
     confirm({
       variant: "danger",
       title: `Remove ${entry.year_label} from the database?`,
@@ -1181,29 +1186,29 @@ function Imports({ onDataChanged }) {
       confirmLabel: "Remove year",
       onConfirm: async () => {
         try {
-          body = await api.deintegrateYear(entry.start_year);
+          const body = await api.deintegrateYear(entry.start_year);
+          outcome = { jobId: body.job_id, message: `Removing ${entry.year_label}…`, kind: "" };
         } catch (err) {
-          // If a removal/import is ALREADY mid-flight, attach to it (so its
-          // progress still surfaces once the modal closes), then rethrow so the
-          // modal shows the error rather than a false success.
           let msg = "Could not start the removal.";
           try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
           if (/already running/i.test(msg)) {
             const list = await api.importJobs().catch(() => []);
             const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
-            if (runningJob) watch(runningJob.id);
+            // Hand off to the running job: close the modal and show ITS progress
+            // (matches the old inline path, which surfaced it immediately).
+            if (runningJob) { outcome = { jobId: runningJob.id, message: msg, kind: "error" }; return; }
           }
-          throw err;
+          throw err; // genuine failure -> modal stays open with the error
         }
       },
       errorToast: "Could not start the removal.",
       onSuccess: () => {
-        // Set an interim notice BEFORE watch() flips `locked` — the
-        // focus-to-notice effect above then lands focus on the notice (the
-        // trashcan that opened the modal has since unmounted).
-        notify(`Removing ${entry.year_label}…`);
+        // Set the notice BEFORE watch() flips `locked` — the focus-to-notice
+        // effect above then lands focus on the notice (the trashcan that opened
+        // the modal has since unmounted).
+        notify(outcome.message, outcome.kind);
         setActiveYears(null);
-        watch(body.job_id);
+        watch(outcome.jobId);
       },
     });
   }
