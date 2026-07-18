@@ -27,6 +27,7 @@ export default defineConfig({
       // unit tests, so JS coverage never silently escapes a gate.
       include: [
         "src/announce.js",
+        "src/csvimport.js",
         "src/estimate.js",
         "src/mdnorm.js",
         "src/tabledata.js",

@@ -1106,6 +1106,92 @@ def test_can_remove_another_user():
                        for x in c.get("/api/admin/allowlist").json())
 
 
+def _emails(c):
+    return {x["email"] for x in c.get("/api/admin/allowlist").json()}
+
+
+def test_bulk_add_creates_multiple_users():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "b1@example.edu", "note": "one"},
+            {"email": "B2@Example.edu", "note": "two"},
+        ]})
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == 2, r.json()
+        emails = _emails(c)
+        # both present, email normalized to lowercase
+        assert {"b1@example.edu", "b2@example.edu"} <= emails, emails
+
+
+def test_bulk_add_grants_admin_and_counts():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "boss@example.edu", "is_admin": True},
+            {"email": "worker@example.edu", "is_admin": False},
+        ]})
+        assert r.status_code == 200, r.text
+        assert r.json()["admins_granted"] == 1, r.json()
+        assert _is_admin(c, "boss@example.edu") is True
+        assert _is_admin(c, "worker@example.edu") is False
+
+
+def test_bulk_add_skips_existing_and_in_batch_duplicates():
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/api/admin/allowlist", json={"email": "already@example.edu"})
+        r = c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "already@example.edu"},            # existing -> skip
+            {"email": "fresh@example.edu"},               # add
+            {"email": "Fresh@example.edu"},               # dup of the above -> skip
+        ]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["added"] == 1, body
+        reasons = {(s["email"], s["reason"]) for s in body["skipped"]}
+        assert ("already@example.edu", "already a user") in reasons, body
+        assert ("fresh@example.edu", "duplicate in file") in reasons, body
+        # existing row was NOT duplicated
+        assert sum(1 for e in _emails(c) if e == "already@example.edu") == 1
+
+
+def test_bulk_add_reports_invalid_email_and_keeps_going():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "not-an-email"},                    # invalid -> skip, not fatal
+            {"email": "valid@example.edu"},               # still added
+        ]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["added"] == 1, body
+        assert ("not-an-email", "invalid email") in {
+            (s["email"], s["reason"]) for s in body["skipped"]}, body
+        assert "valid@example.edu" in _emails(c)
+
+
+def test_bulk_add_sends_no_email_and_mints_no_token():
+    # The defining contract of the bulk path (vs single-add): NO invite email and
+    # NO sign-in token are produced. If this regresses, a CSV import silently
+    # blasts the mail provider and mints a token per row.
+    with TestClient(app) as c:
+        _login(c)
+        captured.pop("approved_link", None)
+        c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "silent@example.edu"},
+        ]})
+        assert "approved_link" not in captured, \
+            "bulk add must not send an approval email"
+        con = connect()
+        try:
+            n = con.execute("SELECT COUNT(*) FROM login_tokens WHERE email=?",
+                            ("silent@example.edu",)).fetchone()[0]
+        finally:
+            con.close()
+        assert n == 0, f"bulk add must not mint a sign-in token (found {n})"
+
+
 def test_usage_since_after_until_is_swapped():
     with TestClient(app) as c:
         _login(c)
@@ -2257,6 +2343,16 @@ def run():
           test_cannot_remove_self_from_allowlist)
     check("can remove another user from the allowlist",
           test_can_remove_another_user)
+    check("bulk add creates multiple users (email normalized)",
+          test_bulk_add_creates_multiple_users)
+    check("bulk add grants admin and counts admins_granted",
+          test_bulk_add_grants_admin_and_counts)
+    check("bulk add skips existing + in-batch duplicate rows",
+          test_bulk_add_skips_existing_and_in_batch_duplicates)
+    check("bulk add reports an invalid email and keeps going",
+          test_bulk_add_reports_invalid_email_and_keeps_going)
+    check("bulk add CONTRACT: sends no email and mints no token",
+          test_bulk_add_sends_no_email_and_mints_no_token)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
     check("usage dashboard response has no 'recent' key",

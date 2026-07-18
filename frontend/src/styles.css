@@ -534,6 +534,59 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .dropfile-list { list-style: none; padding: 0; margin: 8px 0; }
 .dropfile-list li { padding: 2px 0; }
 
+/* CSV bulk import (Users tab). Reuses the .dropzone base above. */
+.csv-import { margin: 6px 0 18px; }
+.csv-import summary { cursor: pointer; color: var(--muted); }
+.csv-import-body { margin-top: 10px; }
+/* Positioning context so the help popover can sit in the corner. */
+.csv-dropwrap { position: relative; }
+/* The whole zone is a clickable <label>; stack the icon over the hint, centered. */
+.csv-dropzone {
+  flex-direction: column; justify-content: center; text-align: center;
+  cursor: pointer; min-height: 92px;
+}
+.csv-help-slot { position: absolute; top: 8px; right: 8px; }
+.csv-filename { margin: 8px 0; font-size: 13px; color: var(--muted); }
+.csv-summary { margin: 10px 0; }
+.csv-summary ul { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13.5px; }
+.csv-summary li { padding: 2px 0; }
+.csv-result { margin: 10px 0; }
+.csv-report { margin: 6px 0 10px; }
+.csv-report-cap { text-align: left; color: var(--muted); font-size: 13px; padding: 4px 0; }
+
+/* Hoverable/focusable help popover (HelpPopover.jsx). A real node the pointer
+   can enter (unlike .tip's ::after) so it satisfies WCAG 1.4.13. */
+.help { position: relative; display: inline-flex; }
+.help-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  cursor: pointer;
+}
+.help-trigger:hover, .help-trigger:focus-visible { color: var(--text); border-color: var(--accent); }
+.help-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-popover {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 6;
+  width: min(320px, 78vw); pointer-events: auto;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+  padding: 12px 14px; font-size: 12.5px; line-height: 1.5; text-align: left;
+}
+.help-popover[hidden] { display: none; }
+.help-body p { margin: 0 0 8px; }
+.help-body ul { margin: 0 0 8px; padding-left: 18px; }
+.help-body li { margin: 3px 0; }
+.help-body code {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 4px; font-size: 12px;
+}
+.help-body pre {
+  margin: 0; padding: 8px 10px; overflow-x: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  font-size: 12px; line-height: 1.45;
+}
+
 /* Disk-headroom meter (Imports -> selecting years to integrate). */
 .disk-estimate { margin: 4px 0 14px; }
 .disk-meter {

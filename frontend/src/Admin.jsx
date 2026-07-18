@@ -4,7 +4,9 @@ import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
 import { viewUsers } from "./userlist.js";
-import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose } from "./icons.jsx";
+import { buildImportPlan } from "./csvimport.js";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose, IconUpload } from "./icons.jsx";
+import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
 
 function humanBytes(n) {
@@ -208,6 +210,109 @@ function Allowlist({ me }) {
     setEmail(""); setNote(""); setIsAdmin(false);
   }
 
+  // --- CSV bulk import: drop a .csv -> parse+preview -> confirm -> report -----
+  // Parsing/validation/dedupe all live in csvimport.js (unit-tested); this owns
+  // only the drop zone, file read, and the summary/confirm/result flow.
+  const [csvFileName, setCsvFileName] = useState("");
+  const [csvPlan, setCsvPlan] = useState(null);     // buildImportPlan result (preview)
+  const [csvError, setCsvError] = useState("");      // unsupported file / read failure
+  const [csvBusy, setCsvBusy] = useState(false);     // bulk POST in flight
+  const [csvResult, setCsvResult] = useState(null);  // { added, adminsGranted, report[] }
+  const [csvDragging, setCsvDragging] = useState(false);
+  const csvDragDepth = useRef(0);  // depth counter so child boundaries don't flicker
+  const csvFileRef = useRef(null);
+  const csvResultRef = useRef(null);  // focus anchor after a confirmed import
+
+  function resetCsv() {
+    setCsvFileName(""); setCsvPlan(null); setCsvError(""); setCsvResult(null);
+    if (csvFileRef.current) csvFileRef.current.value = "";
+    // Cancel / "Import another" both unmount the region under focus; hand focus
+    // back to the drop target instead of dropping it to <body> (WCAG 2.4.3).
+    requestAnimationFrame(() => csvFileRef.current?.focus());
+  }
+
+  async function onCsvFile(file) {
+    if (!file) return;
+    setCsvResult(null);
+    setCsvFileName(file.name);
+    // Don't trust the input's accept filter (a drop bypasses it); check here.
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setCsvPlan(null);
+      setCsvError("That's not a .csv file — please choose a CSV.");
+      return;
+    }
+    setCsvError("");
+    let text = "";
+    try {
+      text = await file.text();
+    } catch {
+      setCsvPlan(null);
+      setCsvError("Couldn't read that file.");
+      return;
+    }
+    const p = buildImportPlan(text, rows.map((r) => r.email),
+      { today: new Date().toLocaleDateString() });
+    setCsvPlan(p);
+    // Announce the parse outcome once (the visible summary is the durable copy).
+    // A header error is already announced by its inline role="alert" node below,
+    // so don't ALSO toast it (that double-announces to a screen reader).
+    if (!p.headerError) {
+      announce(`CSV read: ${p.ready.length} ready, `
+        + `${p.existingOrDuplicate.length} existing or duplicate, ${p.invalid.length} invalid.`);
+    }
+  }
+
+  async function confirmCsv() {
+    if (!csvPlan?.ready?.length) return;
+    setCsvBusy(true);
+    const res = await api.bulkAllow(
+      csvPlan.ready.map(({ email: e, note: n, is_admin }) => ({ email: e, note: n, is_admin })),
+    ).catch(() => null);
+    setCsvBusy(false);
+    if (!res?.ok) {
+      setCsvError("Import failed — the request didn't go through. Try again.");
+      return;
+    }
+    // Error report = client-detected invalid + existing/duplicate rows, PLUS any
+    // rows the backend additionally skipped (mapped back to their file row via
+    // the ready list). Sorted by file row; backend-only skips with no known row
+    // sink to the end.
+    const rowByEmail = new Map(csvPlan.ready.map((r) => [r.email, r.row]));
+    const backendSkips = (res.skipped || []).map((s) => ({
+      row: rowByEmail.get(s.email) ?? null, email: s.email, reason: s.reason,
+    }));
+    const report = [...csvPlan.invalid, ...csvPlan.existingOrDuplicate, ...backendSkips]
+      .sort((a, b) => (a.row == null ? 1 : b.row == null ? -1 : a.row - b.row));
+    setCsvResult({ added: res.added, adminsGranted: res.admins_granted, report });
+    setCsvPlan(null);
+    setCsvFileName("");
+    if (csvFileRef.current) csvFileRef.current.value = "";
+    // Announce BOTH sides — a screen-reader user who hears only "5 added" has no
+    // cue the skipped-rows report appeared below (WCAG 4.1.3).
+    const skipped = report.length
+      ? `, ${report.length} row${report.length === 1 ? "" : "s"} skipped — see the report below` : "";
+    announce(`${res.added} user${res.added === 1 ? "" : "s"} added from CSV${skipped}.`,
+      res.added ? "ok" : "");
+    await load();
+    // The "Add N users" button just unmounted; move focus to the result instead
+    // of letting it fall to <body> (WCAG 2.4.3), sequenced AFTER load() commits.
+    requestAnimationFrame(() => csvResultRef.current?.focus());
+  }
+
+  function onCsvDragEnter(e) { e.preventDefault(); csvDragDepth.current += 1; setCsvDragging(true); }
+  function onCsvDragOver(e) { e.preventDefault(); }
+  function onCsvDragLeave(e) {
+    e.preventDefault();
+    csvDragDepth.current = Math.max(0, csvDragDepth.current - 1);
+    if (csvDragDepth.current === 0) setCsvDragging(false);
+  }
+  function onCsvDrop(e) {
+    e.preventDefault();
+    csvDragDepth.current = 0;
+    setCsvDragging(false);
+    onCsvFile(e.dataTransfer.files?.[0]);
+  }
+
   async function reject(addr) {
     // Name the address that will ACTUALLY be blocked (SEC #2) -- canon_email
     // propagates the block toward the BASE address, so for a +tag input like
@@ -376,6 +481,117 @@ function Allowlist({ me }) {
         </label>
         <button type="submit">Add</button>
       </form>
+
+      <details className="csv-import">
+        <summary>Import from CSV</summary>
+        <div className="csv-import-body">
+          <div className="csv-dropwrap">
+            <label
+              className={"dropzone csv-dropzone" + (csvDragging ? " dragging" : "")}
+              htmlFor="csv-file"
+              onDragEnter={onCsvDragEnter}
+              onDragOver={onCsvDragOver}
+              onDragLeave={onCsvDragLeave}
+              onDrop={onCsvDrop}
+            >
+              <IconUpload size={22} />
+              <span className="csv-dropzone-hint" aria-hidden="true">
+                {csvDragging ? "Drop the CSV file" : "Drop a CSV file here or click to select one"}
+              </span>
+              <input id="csv-file" ref={csvFileRef} type="file" accept=".csv"
+                     className="sr-only" aria-label="Choose a CSV file to import"
+                     onChange={(e) => onCsvFile(e.target.files?.[0])} />
+            </label>
+            <span className="csv-help-slot">
+              <HelpPopover label="CSV format help">
+                <div className="help-body">
+                  <p>Upload a CSV with a <strong>header row</strong>. Only{" "}
+                    <code>email</code> is required; <code>note</code> and{" "}
+                    <code>admin</code> are optional.</p>
+                  <ul>
+                    <li>Column names are matched loosely — capitalization,
+                      punctuation, and spacing variants all work
+                      (<code>Email</code>, <code>E-mail</code>, <code>e_mail</code>).</li>
+                    <li>A blank <code>admin</code> value means <em>not</em> an admin.
+                      Accepted true values (any case): <code>yes, y, t, true, 1, x</code>.
+                      Everything else is false.</li>
+                    <li>A blank <code>note</code> becomes <em>Imported on {"{date}"}</em>.</li>
+                  </ul>
+                  <pre>{`email,note,admin
+alex@example.com,Department chair,yes
+jamie@example.com,External reviewer,`}</pre>
+                </div>
+              </HelpPopover>
+            </span>
+          </div>
+
+          {csvError && <p className="notice error small" role="alert">{csvError}</p>}
+
+          {csvFileName && !csvError && (
+            <p className="csv-filename">Selected: <strong>{csvFileName}</strong></p>
+          )}
+
+          {csvPlan?.headerError && (
+            <p className="notice error small" role="alert">{csvPlan.headerError}</p>
+          )}
+
+          {csvPlan && !csvPlan.headerError && (
+            <div className="csv-summary">
+              <ul>
+                <li>Total rows detected: <strong>{csvPlan.totalRows}</strong></li>
+                <li>Users ready to add: <strong>{csvPlan.ready.length}</strong></li>
+                <li>Existing or duplicate: <strong>{csvPlan.existingOrDuplicate.length}</strong></li>
+                <li>Invalid rows: <strong>{csvPlan.invalid.length}</strong></li>
+                <li>Receiving administrator access: <strong>{csvPlan.adminCount}</strong></li>
+              </ul>
+              <div className="row">
+                <button type="button" onClick={confirmCsv}
+                        disabled={csvBusy || !csvPlan.ready.length} aria-busy={csvBusy}>
+                  {csvBusy ? "Adding…"
+                    : `Add ${csvPlan.ready.length} user${csvPlan.ready.length === 1 ? "" : "s"}`}
+                </button>
+                <button type="button" className="link" onClick={resetCsv} disabled={csvBusy}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {csvResult && (
+            <div className="csv-result">
+              <p className="notice ok small">
+                {csvResult.added} user{csvResult.added === 1 ? "" : "s"} added
+                {csvResult.adminsGranted
+                  ? ` (${csvResult.adminsGranted} with admin)` : ""}.
+              </p>
+              {csvResult.report.length > 0 && (
+                <table className="grid csv-report">
+                  <caption className="csv-report-cap">Skipped rows</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Row</th>
+                      <th scope="col">Email</th>
+                      <th scope="col">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvResult.report.map((s, i) => (
+                      <tr key={i}>
+                        <td>{s.row ?? "—"}</td>
+                        <td>{s.email || "—"}</td>
+                        <td>{s.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <button type="button" className="link" ref={csvResultRef} onClick={resetCsv}>
+                Import another file
+              </button>
+            </div>
+          )}
+        </div>
+      </details>
 
       <div className="row usersearch">
         <div className="searchwrap">

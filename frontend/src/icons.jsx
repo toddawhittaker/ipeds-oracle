@@ -60,3 +60,20 @@ export const IconShieldMinus = (p) => (
     <path d="M9.5 11h5" />
   </Svg>
 );
+
+// Upload glyph (tray + up-arrow) for the CSV drop target.
+export const IconUpload = (p) => (
+  <Svg {...p}>
+    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    <path d="M12 15V3M7 8l5-5 5 5" />
+  </Svg>
+);
+
+// Question mark in a circle for the format-help popover trigger.
+export const IconHelp = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3.5" />
+    <path d="M12 17.5h.01" />
+  </Svg>
+);
