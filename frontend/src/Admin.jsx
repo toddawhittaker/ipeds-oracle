@@ -91,6 +91,12 @@ function canonEmailForDisplay(email) {
 // App-standard date+time; null/absent → an em dash. Unix seconds in.
 const fmtDateTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
 
+// dd/mm/yyyy — used for the audit note stored on a user allowlisted by approving
+// their access request ("approved on <date> by <admin>"). Zero-padded and
+// locale-independent so the stored note reads the same everywhere.
+const fmtApprovalDate = (d = new Date()) =>
+  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
 // Live-refresh cadence for the Allowlist tab so a request filed by someone else
 // (or actioned in another admin session) shows up without a manual reload. The
 // poll runs only while the tab is visible; a tick within COOLDOWN of the last
@@ -389,13 +395,16 @@ function Allowlist({ me }) {
   // emails a welcome link, so it's confirmed), then the delivery-aware toast.
   function approve(addr) {
     let outcome = null; // stash the backend delivery result for the onSuccess toast
+    // Audit note stored on the allowlisted user: who approved the request, and
+    // when. me is the signed-in admin doing the approving.
+    const note = `approved on ${fmtApprovalDate()} by ${me?.email || "an admin"}`;
     confirm({
       variant: "neutral",
       title: `Approve access for ${addr}?`,
       body: "This adds them to the allowlist and emails them a sign-in link.",
       confirmLabel: "Approve access",
       onConfirm: async () => {
-        const res = await api.addAllow(addr, "approved request", false);
+        const res = await api.addAllow(addr, note, false);
         if (!res?.ok) throw new Error(JSON.stringify({ detail: `Couldn't add ${addr}.` }));
         outcome = res;
       },
