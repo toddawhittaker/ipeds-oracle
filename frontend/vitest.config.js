@@ -28,6 +28,7 @@ export default defineConfig({
       include: [
         "src/announce.js",
         "src/csvimport.js",
+        "src/datatable.js",
         "src/estimate.js",
         "src/mdnorm.js",
         "src/tabledata.js",

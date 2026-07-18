@@ -3,9 +3,10 @@ import { NavLink, Navigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
-import { viewUsers } from "./userlist.js";
+import { USER_CONFIG } from "./userlist.js";
+import DataTable from "./DataTable.jsx";
 import { buildImportPlan } from "./csvimport.js";
-import { IconShieldPlus, IconShieldMinus, IconTrash, IconClose, IconUpload } from "./icons.jsx";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload } from "./icons.jsx";
 import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -94,30 +95,16 @@ function Allowlist({ me }) {
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  // Users-table view state (client-side, per the plan): the list arrives whole
-  // and unpaginated, so search/sort/paginate all live here. Any change to the
-  // query, sort, or page size returns to page 1 (each preserves the other two).
-  const [q, setQ] = useState("");
-  const [sortKey, setSortKey] = useState("email");
-  const [sortDir, setSortDir] = useState("asc");
-  const [perPage, setPerPage] = useState(25);
-  const [page, setPage] = useState(1);
   const [busyEmail, setBusyEmail] = useState(""); // row action in flight
-  const searchRef = useRef(null);
-  // Focus targets so a control that self-disables (Prev/Next at an end) or a row
-  // action (promote) can hand focus somewhere sensible instead of dropping it to
-  // <body> — see the a11y fixes in sortBy/toggleAdmin/goPage below.
-  const actionBtnRefs = useRef({});
-  const prevRef = useRef(null);
-  const nextRef = useRef(null);
-  // A polite live region for the TABLE's own status (result range + sort).
-  // Debounced so typing in the search box doesn't enqueue a range read-out on
-  // every keystroke (WCAG 4.1.3).
-  const [liveLabel, setLiveLabel] = useState("");
+  // The Users table is the reusable <DataTable> (search/sort/paginate/aria-live/
+  // focus all live there); this ref reaches its focusSearch()/focusRowAction()
+  // imperative handle so a row action that unmounts or swaps its control can hand
+  // focus somewhere sensible instead of dropping it to <body>.
+  const usersTableRef = useRef(null);
   // Action outcomes go to the app-wide toast (announce below). Toasts don't take
   // focus, so an action that UNMOUNTS the control it was fired from must hand
-  // focus to a stable element or it drops to <body>: row removal -> the search
-  // box; a pending-request reject / denial undo -> this add-email anchor.
+  // focus to a stable element or it drops to <body>: row removal -> the table's
+  // search box; a pending-request reject / denial undo -> this add-email anchor.
   const toast = useToast();
   const confirm = useConfirm();
   const addEmailRef = useRef(null);
@@ -383,7 +370,7 @@ function Allowlist({ me }) {
     // load() per the focus-restore-vs-reload race rule. (Toasts never take focus,
     // so there's no notice to race here anymore.)
     await load();
-    requestAnimationFrame(() => actionBtnRefs.current[r.email]?.focus?.());
+    requestAnimationFrame(() => usersTableRef.current?.focusRowAction(r.email));
   }
 
   // Destructive: a danger confirmation modal (naming the email), then the
@@ -402,52 +389,15 @@ function Allowlist({ me }) {
       successToast: `Removed ${r.email} from the allowlist.`,
       errorToast: `Couldn't remove ${r.email}.`,
       onSuccess: async () => {
-        // The trash button unmounted with its row; hand focus to the search box
-        // (stable, in-context) after the reload commits so it doesn't drop to <body>.
+        // The trash button unmounted with its row; hand focus to the table's
+        // search box (stable, in-context) after the reload commits so it doesn't
+        // drop to <body>. The viewRows() page-clamp keeps the admin on a valid
+        // page (or the previous one if this emptied the last page).
         await load();
-        requestAnimationFrame(() => searchRef.current?.focus?.());
+        requestAnimationFrame(() => usersTableRef.current?.focusSearch());
       },
     });
   }
-
-  // Clicking a header toggles asc/desc on the active column, else switches to it
-  // ascending. Any sort change returns to page 1 (preserving search + page size).
-  // Activating a sort gives no visual feedback a screen reader can catch (aria-
-  // sort on a <th> only surfaces on re-navigation), so announce the new order.
-  const SORT_LABELS = { email: "email", note: "note", admin: "admin status", last_login: "last login" };
-  function sortBy(key) {
-    const dir = key === sortKey ? (sortDir === "asc" ? "desc" : "asc") : "asc";
-    setSortKey(key);
-    setSortDir(dir);
-    setPage(1);
-    setLiveLabel(`Sorted by ${SORT_LABELS[key]}, ${dir === "asc" ? "ascending" : "descending"}.`);
-  }
-
-  // Page moves that land on an end DISABLE the button under focus (Prev on page
-  // 1, Next on the last page), dropping focus to <body>; hand it to the sibling.
-  function goPage(next) {
-    setPage(next);
-    if (next <= 1) requestAnimationFrame(() => nextRef.current?.focus());
-    else if (next >= view.totalPages) requestAnimationFrame(() => prevRef.current?.focus());
-  }
-
-  const view = viewUsers(rows, { query: q, sortKey, sortDir, page, perPage });
-  // Pad short pages (the last page, or any page when a page-size change leaves a
-  // remainder) up to a full page's height with one spacer row, but only when
-  // there's more than one page. Otherwise the last page is shorter than the rest
-  // and the pager below jumps up/down as you move between pages — landing the
-  // cursor over the table after a click that was aimed at "‹ Prev".
-  const fillerRows = view.totalPages > 1 ? Math.max(0, perPage - view.slice.length) : 0;
-
-  // Debounce the range read-out: coalesce rapid changes (typing, quick paging)
-  // into a single announcement once the view settles. Skip the initial mount so
-  // opening the tab doesn't announce the count unprompted.
-  const didAnnounce = useRef(false);
-  useEffect(() => {
-    if (!didAnnounce.current) { didAnnounce.current = true; return; }
-    const id = setTimeout(() => setLiveLabel(view.label), 450);
-    return () => clearTimeout(id);
-  }, [view.label]);
 
   return (
     <div className="panel">
@@ -600,141 +550,62 @@ jamie@example.com,External reviewer,`}</pre>
         </div>
       </details>
 
-      <div className="row usersearch">
-        <div className="searchwrap">
-          <input id="user-search" ref={searchRef} type="search" className="logsearch"
-                 placeholder="Search email or note" value={q}
-                 aria-label="Search email or note"
-                 onChange={(e) => { setQ(e.target.value); setPage(1); }} />
-          {q && (
-            <button type="button" className="search-clear" aria-label="Clear search"
-                    onClick={() => { setQ(""); setPage(1); searchRef.current?.focus(); }}>
-              <IconClose size={14} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      <table className="grid users">
-        <colgroup>
-          <col className="col-email" />
-          <col className="col-note" />
-          <col className="col-admin" />
-          <col className="col-login" />
-          <col className="col-actions" />
-        </colgroup>
-        <thead>
-          <tr>
-            {[["email", "Email"], ["note", "Note"], ["admin", "Admin"], ["last_login", "Last login"]].map(
-              ([key, label]) => {
-                const active = sortKey === key;
-                return (
-                  <th key={key} scope="col"
-                      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
-                    <button type="button" className={"sortbtn" + (active ? " active" : "")}
-                            onClick={() => sortBy(key)}>
-                      {label}
-                      <span className="caret" aria-hidden="true">
-                        {active ? (sortDir === "asc" ? "▲" : "▼") : ""}
-                      </span>
-                    </button>
-                  </th>
-                );
-              })}
-            <th scope="col" className="actions-head">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {view.slice.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="empty">
-                {q.trim() ? "No users match your search." : "No users yet."}
-              </td>
-            </tr>
-          ) : view.slice.map((r) => {
-            const isSelf = me && r.email === me.email;
-            const busy = busyEmail === r.email;
-            return (
-              <tr key={r.email}>
-                <td className="cell-trunc" title={r.email}>{r.email}</td>
-                <td className="cell-trunc" title={r.note || undefined}>{r.note}</td>
-                <td>
-                  {/* Ternary, not `&&`: is_admin is a NUMBER (0/1), and
-                      `0 && ...` renders a literal "0" in a non-admin's cell. */}
-                  {r.is_admin ? (
-                    <span className="admintoggle on">
-                      {isSelf ? "✓ Admin (you)" : "✓ Admin"}
-                    </span>
-                  ) : null}
-                </td>
-                <td>{r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—"}</td>
-                <td className="actions">
-                  {!isSelf && (
-                    <>
-                      {r.is_admin ? (
-                        <button type="button" className="icon-btn tip" data-tip="Remove admin"
-                                aria-label="Remove admin" disabled={busy}
-                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
-                                onClick={() => toggleAdmin(r)}>
-                          <IconShieldMinus />
-                        </button>
-                      ) : (
-                        <button type="button" className="icon-btn tip" data-tip="Make admin"
-                                aria-label="Make admin" disabled={busy}
-                                ref={(el) => { actionBtnRefs.current[r.email] = el; }}
-                                onClick={() => toggleAdmin(r)}>
-                          <IconShieldPlus />
-                        </button>
-                      )}
-                      <button type="button" className="icon-btn danger tip" data-tip="Remove user"
-                              aria-label="Remove user" disabled={busy}
-                              onClick={() => removeUser(r)}>
-                        <IconTrash />
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          {/* One empty row per missing slot (NOT a single tall spacer): real rows
-              are 48px + a 1px border each, so a pixel-computed spacer undercounts
-              by ~1px/row and the pager still drifts. Structurally-identical rows
-              match the height exactly; transparent borders keep them invisible. */}
-          {Array.from({ length: fillerRows }).map((_, i) => (
-            <tr key={`filler-${i}`} className="filler" aria-hidden="true">
-              <td colSpan={5} />
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div className="pager">
-        <span className="pager-range">{view.label}</span>
-        {/* Table status (range + sort) announced politely. A bare aria-live div
-            (NOT role="status") so it stays distinct from the single action-
-            outcome status region up top; fed the DEBOUNCED liveLabel, never the
-            per-keystroke view.label, so search-as-you-type doesn't spam it. */}
-        <div className="sr-only" aria-live="polite">{liveLabel}</div>
-        <label className="pager-size">
-          <span className="sr-only">Users per page</span>
-          <select value={perPage}
-                  onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}>
-            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} / page</option>)}
-          </select>
-        </label>
-        <div className="pager-nav">
-          <button type="button" className="pgbtn" aria-label="Previous page" ref={prevRef}
-                  disabled={view.page <= 1} onClick={() => goPage(view.page - 1)}>
-            ‹ Prev
-          </button>
-          <span className="pager-page">Page {view.page} of {view.totalPages}</span>
-          <button type="button" className="pgbtn" aria-label="Next page" ref={nextRef}
-                  disabled={view.page >= view.totalPages} onClick={() => goPage(view.page + 1)}>
-            Next ›
-          </button>
-        </div>
-      </div>
+      <DataTable
+        ref={usersTableRef}
+        rows={rows}
+        rowKey={(r) => r.email}
+        config={USER_CONFIG}
+        tableClass="grid data users"
+        ariaLabel="Allowlisted users"
+        searchId="user-search"
+        searchPlaceholder="Search email or note"
+        searchLabel="Search email or note"
+        sizeLabel="Users per page"
+        emptyNoData="No users yet."
+        emptyNoMatch="No users match your search."
+        initialSort={{ key: "email", dir: "asc" }}
+        sortLabels={{ email: "email", note: "note", admin: "admin status", last_login: "last login" }}
+        columns={[
+          { key: "email", label: "Email", sortable: true, colClass: "col-email",
+            cellClass: "cell-trunc", cellTitle: (r) => r.email },
+          { key: "note", label: "Note", sortable: true, colClass: "col-note",
+            cellClass: "cell-trunc", cellTitle: (r) => r.note || undefined },
+          { key: "admin", label: "Admin", sortable: true, colClass: "col-admin",
+            // Ternary, not `&&`: is_admin is a NUMBER (0/1), and `0 && …` would
+            // render a literal "0" in a non-admin's cell.
+            render: (r) => (r.is_admin ? (
+              <span className="admintoggle on">
+                {me && r.email === me.email ? "✓ Admin (you)" : "✓ Admin"}
+              </span>
+            ) : null) },
+          { key: "last_login", label: "Last login", sortable: true, colClass: "col-login",
+            render: (r) => (r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—") },
+        ]}
+        renderActions={(r) => {
+          const isSelf = me && r.email === me.email;
+          if (isSelf) return null;
+          const busy = busyEmail === r.email;
+          return (
+            <>
+              {r.is_admin ? (
+                <button type="button" className="icon-btn tip" data-tip="Remove admin"
+                        aria-label="Remove admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                  <IconShieldMinus />
+                </button>
+              ) : (
+                <button type="button" className="icon-btn tip" data-tip="Make admin"
+                        aria-label="Make admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                  <IconShieldPlus />
+                </button>
+              )}
+              <button type="button" className="icon-btn danger tip" data-tip="Remove user"
+                      aria-label="Remove user" disabled={busy} onClick={() => removeUser(r)}>
+                <IconTrash />
+              </button>
+            </>
+          );
+        }}
+      />
 
       {/* Plain subdued section, not the --user tint used above for "needs
           your action" — a block is the opposite: something already handled
