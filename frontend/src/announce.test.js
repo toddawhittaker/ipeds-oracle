@@ -25,10 +25,10 @@ describe("deleteAnnouncement", () => {
     });
   }
 
-  // The regression this wording exists to prevent: two deletes of same-titled
-  // conversations MUST yield different strings, or the aria-live region won't
-  // re-announce the second. (delete-focus.spec.js proves the DOM re-announces;
-  // this proves the wording is what differentiates them.)
+  // Two deletes of same-titled conversations yield different strings because the
+  // remaining-count is in the wording. (The toast host now re-announces each push
+  // structurally regardless — delete-focus.spec.js proves that — so this is a UX
+  // distinctness property, not a re-announce prerequisite.)
   it("consecutive same-title deletes differ because the count is in the text", () => {
     const first = deleteAnnouncement({ title: "Untitled", open: false, remaining: 1 });
     const second = deleteAnnouncement({ title: "Untitled", open: false, remaining: 0 });

@@ -275,8 +275,9 @@ test("Save PATCHes exactly {headline, lesson, notes, canonical_sql} trimmed, rel
   // The list is re-loaded after a successful save.
   await expect.poll(() => getCount).toBeGreaterThanOrEqual(2);
 
-  // The existing status live region (not a new one) reports the save.
-  await expect(page.getByRole("status")).toHaveText("Lesson updated.");
+  // The save outcome surfaces as an app-wide toast (Skills' old sr-only status
+  // region was replaced by useToast — sighted admins now get visible feedback).
+  await expect(page.locator(".toast-msg")).toHaveText("Lesson updated.");
 
   // Edit mode has closed and focus returns to the edit button that opened it.
   await expect(page.getByLabel("Headline", { exact: true })).toHaveCount(0);

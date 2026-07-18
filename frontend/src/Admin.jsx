@@ -1332,8 +1332,8 @@ function ruleName(s) {
 }
 
 function Skills() {
+  const toast = useToast();
   const [rows, setRows] = useState([]);
-  const [status, setStatus] = useState("");
   const [editingId, setEditingId] = useState(null);   // at most one card at a time
   const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
   // Focus returns to the "edit" button when the editor closes (a11y). We can't
@@ -1346,17 +1346,15 @@ function Skills() {
   useEffect(() => { load(); }, []);
   const pending = rows.filter((r) => !r.verified).length;
 
-  // aria-live only fires when the DOM text actually changes, so re-announcing
-  // the same message (editing two lessons in a row) would say nothing. Clear
-  // first, then set on the next frame, to force a real mutation.
-  function announce(text) {
-    setStatus("");
-    requestAnimationFrame(() => setStatus(text));
-  }
+  // Action outcomes go to the app-wide toast (visible + announced once) — the
+  // Skills tab previously had only an sr-only status region, so sighted admins
+  // got no confirmation at all. Focus management (editBtnRefs) is independent
+  // and unchanged below.
+  const announce = (text, kind = "") => toast(text, kind);
 
   const setVerified = (s, verified) =>
     api.patchSkill(s.id, { verified }).then(() => {
-      announce(verified ? "Lesson verified." : "Lesson moved back to unverified.");
+      announce(verified ? "Lesson verified." : "Lesson moved back to unverified.", "ok");
       load();
     });
 
@@ -1403,7 +1401,7 @@ function Skills() {
       // drops focus to <body> — a timing-dependent flake under gate load.
       await load();
       requestAnimationFrame(() => editBtnRefs.current[s.id]?.focus?.());
-    }).catch(() => announce("Couldn't save that lesson — nothing was changed."));
+    }).catch(() => announce("Couldn't save that lesson — nothing was changed.", "error"));
   }
   const reject = (s) => {
     // Confirm only when there's curated/used data to lose — a fresh unreviewed
@@ -1411,7 +1409,7 @@ function Skills() {
     const risky = s.verified || s.upvotes > 0 || s.hits > 0;
     if (risky && !window.confirm(
       `Delete this ${s.verified ? "verified " : ""}lesson? This can't be undone.`)) return;
-    api.deleteSkill(s.id).then(() => { announce("Lesson rejected."); load(); });
+    api.deleteSkill(s.id).then(() => { announce("Lesson rejected.", "ok"); load(); });
   };
 
   return (
@@ -1424,7 +1422,6 @@ function Skills() {
         it here.
         {pending > 0 && ` ${pending} awaiting review.`}
       </p>
-      <div className="sr-only" role="status" aria-live="polite">{status}</div>
       {rows.length === 0 && (
         <p className="muted small">
           No lessons yet — they’ll appear here as the critic proposes them.
