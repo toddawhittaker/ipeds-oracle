@@ -114,6 +114,9 @@ jobs:
       - name: CSRF Origin-guard tests
         run: python backend/tests/test_csrf.py
 
+      - name: Security-headers (CSP) tests
+        run: python backend/tests/test_secheaders.py
+
       - name: Auth rate-limit tests
         run: python backend/tests/test_rate_limit.py
 

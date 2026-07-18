@@ -16,6 +16,7 @@ from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
 from app.routers import admin, auth, chat
+from app.secheaders import SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -61,6 +62,10 @@ app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan)
 # Origin-based CSRF guard (defense in depth over the SameSite=Lax session
 # cookie); pure-ASGI so it never buffers the chat SSE stream. See app/csrf.py.
 app.add_middleware(CSRFMiddleware)
+# Security response headers (CSP + anti-framing + nosniff) on EVERY response —
+# added last so it's the OUTERMOST layer and stamps even the CSRF 403. See
+# app/secheaders.py.
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(admin.router)

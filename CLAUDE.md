@@ -130,6 +130,14 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   ASGI so it never buffers the chat SSE stream. In the **dev posture only** (insecure
   cookies) it also accepts loopback origins so the Vite dev-proxy (`changeOrigin`)
   works — production (Secure cookies) enforces strict same-origin.
+- **Security headers on every response:** a pure-ASGI `SecurityHeadersMiddleware`
+  (`secheaders.py`, outermost so it stamps even the CSRF 403) sets a restrictive
+  **CSP** (`script-src 'self'`, no `unsafe-inline`/`unsafe-eval`; `img-src 'self'
+  data:` for chart export; `frame-ancestors 'none'`), plus `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. The CSP is the
+  **second line of defense** under the LLM-markdown render surface — that surface is
+  safe today only because react-markdown emits no raw HTML (**no `rehype-raw`, default
+  URL sanitizer intact — keep it that way**; a DOM-XSS review confirmed it clean).
 - A denial is **reversible**. The Allowlist tab lists every active block ("Blocked
   from requesting access", grouped **canonically** since a block spans `+tag`
   variants — deliberately unlike the pending list above it, grouped by the **raw**
