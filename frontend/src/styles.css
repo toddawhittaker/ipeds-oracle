@@ -15,8 +15,8 @@
   --bg: #14171c; --panel: #1c2027; --line: #2b313a; --text: #e7ebf0;
   --muted: #9aa4b2; --accent: #5b9bd5; --accent-d: #4a86bd;
   /* --danger lightened from #e06a5c to #e5776a: the darker value only gave
-     4.29:1 against --user (the .requests pending-access-request panel's
-     background, WCAG 1.4.3 needs 4.5:1). #e5776a clears every background
+     4.29:1 against --user (the .denied-error panel's background, WCAG 1.4.3
+     needs 4.5:1). #e5776a clears every background
      --danger is used on (--user 4.82, --panel 5.59, --bg 6.14), so
      lightening it is globally safe rather than a one-off exception. Fixed
      via the token, not opacity — opacity composites the label toward
@@ -107,8 +107,8 @@ input, textarea, button { font-family: inherit; }
 /* Primary action in an approval queue — approving should read louder than the
    destructive "reject" link beside it. Shared by the lessons queue and the
    access-request queue: same affordance, same pairing, so same treatment. */
-.btn-verify, .btn-approve { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; }
-.btn-verify:hover, .btn-approve:hover { background: var(--accent-d); }
+.btn-verify { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; }
+.btn-verify:hover { background: var(--accent-d); }
 .ico { display: inline-flex; align-items: center; gap: 5px; }
 .ico svg { flex: none; }
 .link.danger { color: var(--danger); }
@@ -419,52 +419,33 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .chk { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .grid th, .grid td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; font-size: 14px; }
-.requests { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
-.req { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
-/* The EMAIL absorbs the free space, not the buttons. `margin-left:auto` on
-   `.req button` worked while there was exactly one button, but flexbox splits
-   free space EQUALLY between multiple auto margins — so once Reject joined
-   Approve, each row divided its slack between them and Approve landed at a
-   different x in every row (measured: both buttons ml=227.578px, Approve at
-   x=489 with a 227px gap before Reject). Pushing from the email instead keeps
-   the pair together and right-aligned, so they line up across rows whatever
-   the address length. min-width:0 lets a long address wrap rather than shove
-   the buttons out of the row (see .lesson-rule — same trap, PR #55). */
-.req > span { margin-right: auto; min-width: 0; overflow-wrap: break-word; }
-.req button { flex: none; }
-.denied { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
-.denied h2 { font-size: 15px; margin: 0 0 4px; }
+/* Pending access requests: a restrained attention treatment (accent left rule +
+   faintly tinted header) applied ONLY while there's something to review, so it
+   draws the eye without ever reading as an error. Removed when empty. */
+.requests-section { margin-bottom: 20px; }
+.requests-section.attention { border-left: 3px solid var(--accent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); padding: 2px 14px 12px; }
+.section-head { display: flex; align-items: baseline; gap: 8px; }
+.pending-badge { color: var(--accent); font-weight: 700; }
+.empty-note { color: var(--muted); margin: 6px 0 0; font-size: 14px; }
+
+.blocked-section { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
+.blocked-section h2 { font-size: 15px; margin: 0 0 4px; }
 .denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
-/* SEC #3: the "Blocked from requesting access" section's own error state —
-   a distinct class from the flash `.notice` above (see Admin.jsx's comment
-   at this element's render site for why the two must not share one). Same
-   visual language (border/radius/padding) as `.notice` with a danger-toned
-   border so it reads as a failure, not an ordinary status message. */
+/* SEC #3: the Blocked-users section's own error state — a distinct class from
+   the flash `.notice` (see Admin.jsx's render-site comment for why the two must
+   not share one). Same visual language as `.notice` with a danger-toned border
+   so it reads as a failure, not an ordinary status message. */
 .denied-error { background: var(--user); border: 1px solid var(--danger); border-radius: 8px; padding: 14px; }
-.denied-row { display: flex; align-items: baseline; gap: 12px; padding: 5px 0; font-size: 14px; }
-.denied-who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-/* canon_email is the primary label (the address actually blocked — see
-   Admin.jsx's comment at this row's render site); weight it so it reads as
-   the headline, with the original(s) in .denied-note as subdued context. */
+/* Blocked-users Email cell: canon_email is the primary label (the address
+   actually blocked); the original address(es) follow as subdued context. The
+   cell wraps (no ellipsis) so the "requested as …" note is never clipped. */
+.grid.data td.blocked-email { white-space: normal; }
 .denied-primary { font-weight: 600; }
-.denied-when, .denied-row button { flex: none; }
-.denied-when { font-size: 13px; }
 .denied-note { font-size: 13px; color: var(--muted); }
-/* A11Y #2: at a 320px viewport, two flex:none siblings (date, button) claimed
-   ~208px of a ~238px row, leaving the address column ~5px wide and the row
-   ~1500px tall (overflow-wrap:anywhere breaking it one character per line).
-   flex-wrap is the WRONG tool here — flexbox wraps on BASE size, so a long
-   text sibling just drops the whole flex group to its own line rather than
-   freeing up room (min-width:0 above is what handles the normal-width case).
-   Below the app's one existing breakpoint (@media (max-width: 559.98px),
-   styles.css:507's .skill-head — reused rather than inventing a new one),
-   stop being a single row at all and stack top-to-bottom instead. MUST sit
-   BELOW the .denied-row rule above: a media query adds no specificity, so it
-   only wins by coming later in the stylesheet (same principle as
-   .skill-head's override further down). */
-@media (max-width: 559.98px) {
-  .denied-row { flex-direction: column; align-items: flex-start; gap: 4px; }
-}
+/* The two timestamp columns (Requested / Denied) get a fixed width; Email takes
+   the remaining space under the table's fixed layout. */
+.grid.data .col-when { width: 168px; }
 .usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
 .usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }

@@ -22,6 +22,17 @@ export const IconTrash = (p) => (
 
 export const IconClose = (p) => (<Svg {...p}><path d="M6 6l12 12M18 6L6 18" /></Svg>);
 
+// Approve a pending access request (checkmark).
+export const IconCheck = (p) => (<Svg {...p}><path d="M20 6 9 17l-5-5" /></Svg>);
+
+// Allow a blocked address to request access again (open padlock).
+export const IconUnlock = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="11" width="18" height="11" rx="2" />
+    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+  </Svg>
+);
+
 export const IconSend = (p) => (<Svg {...p}><path d="M4 12h14M12 5l7 7-7 7" /></Svg>);
 
 export const IconEdit = (p) => (

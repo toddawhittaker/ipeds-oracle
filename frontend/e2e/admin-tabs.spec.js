@@ -60,8 +60,8 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   // navigating anywhere else. Skills is still visited last purely to keep
   // this happy-path spec's flow linear; the Skills-unmount crash regression
   // itself is covered separately below.
-  await expect(page.getByRole("heading", { name: "Pending access requests" })).toBeVisible();
-  await expect(page.getByText("newperson@example.edu")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pending requests" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "newperson@example.edu", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
 
   await page.getByPlaceholder("email", { exact: true }).fill("newuser@example.edu");

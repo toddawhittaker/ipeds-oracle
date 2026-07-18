@@ -138,8 +138,12 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **second line of defense** under the LLM-markdown render surface — that surface is
   safe today only because react-markdown emits no raw HTML (**no `rehype-raw`, default
   URL sanitizer intact — keep it that way**; a DOM-XSS review confirmed it clean).
-- A denial is **reversible**. The Allowlist tab lists every active block ("Blocked
-  from requesting access", grouped **canonically** since a block spans `+tag`
+- A denied row records **both** `created_at` (when the request was filed →
+  "Requested") **and** `denied_at` (when it was rejected → "Denied", added in
+  migration 11) — kept separate so the admin Blocked-users table shows each; a
+  pre-migration denial has a NULL `denied_at` (rendered "—").
+- A denial is **reversible**. The Allowlist tab lists every active block (the
+  "Blocked users" table, grouped **canonically** since a block spans `+tag`
   variants — deliberately unlike the pending list above it, grouped by the **raw**
   address since Approve is exact). Its undo control
   (`DELETE /api/admin/access-requests/{email}/denial`) DELETEs the denied rows

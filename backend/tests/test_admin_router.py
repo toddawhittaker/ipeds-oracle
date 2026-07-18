@@ -2160,6 +2160,50 @@ def test_denied_list_surfaces_the_canonical_address_even_when_no_original_matche
             f"canon_email, which it already does: {item}")
 
 
+def test_deny_records_a_separate_denied_at_timestamp():
+    """Deny stamps denied_at (when the request was REJECTED) without touching
+    created_at (when it was REQUESTED); the denied list returns both, separately.
+    Guards the spec's "store Requested and Denied separately; don't replace the
+    original request timestamp with the denial timestamp."""
+    _set_email_domain("")
+    with TestClient(app) as c:
+        _login(c)
+        addr = "stamp-victim@example.edu"
+        before = time.time()
+        assert c.post("/api/auth/request", json={"email": addr}).status_code == 200
+        con = connect()
+        requested_at = con.execute(
+            "SELECT created_at FROM access_requests WHERE email=?", (addr,)).fetchone()[0]
+        con.close()
+        assert c.post(f"/api/admin/access-requests/{addr}/deny").status_code == 200
+        after = time.time()
+
+        item = next(x for x in c.get("/api/admin/access-requests/denied").json()
+                    if x["canon_email"] == addr)
+        assert item["denied_at"] is not None, f"deny must record a denial time: {item}"
+        assert before <= item["denied_at"] <= after + 1, item
+        # The request time is preserved separately, NOT overwritten by the denial.
+        assert item["created_at"] == requested_at, (
+            f"deny must not rewrite created_at (requested time): "
+            f"{item['created_at']} != {requested_at}")
+        assert item["denied_at"] >= item["created_at"], item
+
+
+def test_denied_list_tolerates_a_legacy_denial_with_no_denied_at():
+    """A row denied before migration 11 has denied_at NULL; it must still list,
+    with denied_at None (the Blocked table renders "—")."""
+    con = connect()
+    con.execute("DELETE FROM access_requests")
+    con.commit()
+    con.close()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_access_request("legacy-denied@example.edu", status="denied")
+        item = next(x for x in c.get("/api/admin/access-requests/denied").json()
+                    if x["canon_email"] == "legacy-denied@example.edu")
+        assert item["denied_at"] is None, f"a pre-migration denial has no denied_at: {item}"
+
+
 def test_denied_list_excludes_pending_and_approved():
     with TestClient(app) as c:
         _login(c)

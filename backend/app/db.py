@@ -240,6 +240,12 @@ MIGRATIONS: list[tuple[int, str]] = [
     # index still serves nothing harmful, and removing it is a separate call.
     (10, "CREATE INDEX IF NOT EXISTS idx_access_requests_canon_expr "
          "ON access_requests(COALESCE(canon_email, LOWER(email)));"),
+    # The admin Blocked-users table shows WHEN a request was rejected, kept
+    # separate from `created_at` (when it was REQUESTED) — the two are distinct
+    # facts and neither should overwrite the other. Deny (admin.py) stamps this;
+    # pre-existing denied rows keep NULL (rendered "—"), which is honest: the app
+    # genuinely never recorded their denial time.
+    (11, "ALTER TABLE access_requests ADD COLUMN denied_at REAL;"),
 ]
 
 
