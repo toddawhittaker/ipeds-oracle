@@ -696,11 +696,15 @@ jamie@example.com,External reviewer,`}</pre>
               </tr>
             );
           })}
-          {fillerRows > 0 && (
-            <tr className="filler" aria-hidden="true">
-              <td colSpan={5} style={{ height: fillerRows * 48 }} />
+          {/* One empty row per missing slot (NOT a single tall spacer): real rows
+              are 48px + a 1px border each, so a pixel-computed spacer undercounts
+              by ~1px/row and the pager still drifts. Structurally-identical rows
+              match the height exactly; transparent borders keep them invisible. */}
+          {Array.from({ length: fillerRows }).map((_, i) => (
+            <tr key={`filler-${i}`} className="filler" aria-hidden="true">
+              <td colSpan={5} />
             </tr>
-          )}
+          ))}
         </tbody>
       </table>
 

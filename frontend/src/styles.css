@@ -737,12 +737,20 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .grid.users .col-login { width: 116px; }
 .grid.users .col-actions { width: 96px; }
 .grid.users td.cell-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Keep "✓ Admin (you)" on one line so it can't wrap the row taller than 48px. */
+/* Keep "✓ Admin (you)" on one line so it can't wrap the row taller than one line. */
 .grid.users .admintoggle { white-space: nowrap; }
-.grid.users tbody td { height: 48px; }
-/* Spacer row that pads a short (last) page to a full page's height so the pager
-   below never shifts between pages. Non-interactive, borderless, AT-hidden. */
-.grid.users tr.filler td { height: auto; padding: 0; border-bottom: none; }
+/* 49px, not 48: with box-sizing:border-box the 32px action buttons + 16px padding
+   + 1px border need 49px, so a button row would otherwise render 1px TALLER than
+   the 48px minimum — leaving button-less rows (an empty-Actions filler, or the
+   signed-in admin's own row) 1px short and drifting the layout. 49 makes every
+   row uniform. */
+.grid.users tbody td { height: 49px; }
+/* Empty rows that pad a short (last) page to a full page's height so the pager
+   below never shifts between pages. Same 48px box as a data row, and the bottom
+   border keeps its 1px WIDTH (matching real rows to the pixel) but is painted in
+   the background colour so it's invisible — a transparent border collapses to 0
+   width under border-collapse and would leave the table 1px short per row. */
+.grid.users tr.filler td { border-bottom-color: var(--bg); }
 .grid.users td.actions { text-align: right; white-space: nowrap; width: 1%; }
 td.actions .icon-btn { display: inline-grid; vertical-align: middle; }
 td.actions .icon-btn + .icon-btn { margin-left: 6px; }
