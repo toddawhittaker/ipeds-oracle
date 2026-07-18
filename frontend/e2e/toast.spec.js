@@ -53,3 +53,21 @@ test("a failed action shows an error-colored toast", async ({ page }) => {
   await expect(toast).toHaveClass(/\berror\b/);
   await expect(toast).toContainText(/could not|nope/i);
 });
+
+test("dismissing a mid-stack toast hands focus to a sibling, not <body>", async ({ page }) => {
+  // Two persistent error toasts (errors don't auto-dismiss); dismissing the
+  // first must move focus to the second's Dismiss button, never drop to <body>.
+  await openUsers(page, [
+    { email: "aa@example.edu", note: "", is_admin: 0, last_login: null },
+    { email: "bb@example.edu", note: "", is_admin: 0, last_login: null },
+  ], { patchStatus: 500 });
+
+  await page.getByRole("row", { name: /aa@example\.edu/ }).getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("row", { name: /bb@example\.edu/ }).getByRole("button", { name: "Make admin" }).click();
+
+  const dismissers = page.getByRole("button", { name: "Dismiss" });
+  await expect(dismissers).toHaveCount(2);
+  await dismissers.first().click();
+  await expect(dismissers).toHaveCount(1);
+  await expect(dismissers).toBeFocused();
+});
