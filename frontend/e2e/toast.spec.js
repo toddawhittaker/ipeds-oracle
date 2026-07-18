@@ -35,7 +35,7 @@ const ONE = [{ email: "colleague@example.edu", note: "staff", is_admin: 0, last_
 
 test("a successful action shows an ok-colored toast that can be dismissed", async ({ page }) => {
   await openUsers(page, ONE);
-  await page.getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("button", { name: "Promote admin" }).click();
 
   const toast = page.locator(".toast");
   await expect(toast).toHaveClass(/\bok\b/);
@@ -47,7 +47,7 @@ test("a successful action shows an ok-colored toast that can be dismissed", asyn
 
 test("a failed action shows an error-colored toast", async ({ page }) => {
   await openUsers(page, ONE, { patchStatus: 500 });
-  await page.getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("button", { name: "Promote admin" }).click();
 
   const toast = page.locator(".toast");
   await expect(toast).toHaveClass(/\berror\b/);
@@ -62,8 +62,8 @@ test("dismissing a mid-stack toast hands focus to a sibling, not <body>", async 
     { email: "bb@example.edu", note: "", is_admin: 0, last_login: null },
   ], { patchStatus: 500 });
 
-  await page.getByRole("row", { name: /aa@example\.edu/ }).getByRole("button", { name: "Make admin" }).click();
-  await page.getByRole("row", { name: /bb@example\.edu/ }).getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("row", { name: /aa@example\.edu/ }).getByRole("button", { name: "Promote admin" }).click();
+  await page.getByRole("row", { name: /bb@example\.edu/ }).getByRole("button", { name: "Promote admin" }).click();
 
   const dismissers = page.getByRole("button", { name: "Dismiss" });
   await expect(dismissers).toHaveCount(2);

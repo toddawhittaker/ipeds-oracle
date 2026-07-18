@@ -162,22 +162,22 @@ test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) 
     { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
 
-  await page.getByRole("button", { name: "Make admin" }).click();
+  await page.getByRole("button", { name: "Promote admin" }).click();
   await expect(page.getByText("✓ Admin", { exact: true })).toBeVisible();
-  // The action moved to Remove admin now that they're an admin.
-  await expect(page.getByRole("button", { name: "Remove admin" })).toBeVisible();
+  // The action moved to Demote admin now that they're an admin.
+  await expect(page.getByRole("button", { name: "Demote admin" })).toBeVisible();
   expect(api.patches).toEqual([{ email: "colleague@example.edu", is_admin: true }]);
 });
 
 test("promoting returns focus to the row's action button, not the top notice", async ({ page }) => {
   // Guards the focus-restore-vs-reload race: the row persists (shield swaps
-  // Make->Remove admin) and focus must land back on that button after the
+  // Promote->Demote admin) and focus must land back on that button after the
   // reload — not on <body> (briefly-disabled button) or the top flash notice.
   await openUsers(page, [
     { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
   ]);
-  await page.getByRole("button", { name: "Make admin" }).click();
-  const removeAdmin = page.getByRole("button", { name: "Remove admin" });
+  await page.getByRole("button", { name: "Promote admin" }).click();
+  const removeAdmin = page.getByRole("button", { name: "Demote admin" });
   await expect(removeAdmin).toBeVisible();
   await expect(removeAdmin).toBeFocused();
 });
@@ -235,7 +235,7 @@ test("an admin's trash button is disabled + explains why; removing is a no-op un
   expect(api.deletes).toEqual([]);
 
   // Demote first -> the same button becomes a live, enabled "Remove user".
-  await page.getByRole("button", { name: "Remove admin" }).click();
+  await page.getByRole("button", { name: "Demote admin" }).click();
   const liveTrash = page.getByRole("button", { name: "Remove user" });
   await expect(liveTrash).toBeVisible();
   await expect(liveTrash).not.toHaveAttribute("aria-disabled", "true");

@@ -485,7 +485,7 @@ function Allowlist({ me }) {
     } finally {
       setBusyEmail("");
     }
-    // The row PERSISTS (only its shield swaps Make<->Remove admin), so return
+    // The row PERSISTS (only its shield swaps Promote<->Demote admin), so return
     // focus to that same row's action button AFTER the reload commits — instead
     // of <body> where the briefly-disabled button dropped it. Sequenced after
     // load() per the focus-restore-vs-reload race rule. (Toasts never take focus,
@@ -749,13 +749,13 @@ jamie@example.com,External reviewer,`}</pre>
           return (
             <>
               {r.is_admin ? (
-                <button type="button" className="icon-btn tip" data-tip="Remove admin"
-                        aria-label="Remove admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                <button type="button" className="icon-btn tip" data-tip="Demote admin"
+                        aria-label="Demote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
                   <IconShieldMinus />
                 </button>
               ) : (
-                <button type="button" className="icon-btn tip" data-tip="Make admin"
-                        aria-label="Make admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                <button type="button" className="icon-btn tip" data-tip="Promote admin"
+                        aria-label="Promote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
                   <IconShieldPlus />
                 </button>
               )}

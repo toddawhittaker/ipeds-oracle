@@ -18,10 +18,10 @@ test("admin cannot demote or remove themselves from the allowlist UI", async ({ 
 
   // Own row: a plain status label, and no self-directed action buttons at all.
   await expect(page.getByText("✓ Admin (you)")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove admin" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Demote admin" })).toHaveCount(0);
   // The only Remove user button is the colleague's, never the signed-in admin's.
   await expect(page.getByRole("button", { name: "Remove user" })).toHaveCount(1);
 
-  // Another user: the promote (Make admin) action is present and labelled.
-  await expect(page.getByRole("button", { name: "Make admin" })).toBeVisible();
+  // Another user: the Promote admin action is present and labelled.
+  await expect(page.getByRole("button", { name: "Promote admin" })).toBeVisible();
 });
