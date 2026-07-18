@@ -431,6 +431,12 @@ function Allowlist({ me }) {
   }
 
   const view = viewUsers(rows, { query: q, sortKey, sortDir, page, perPage });
+  // Pad short pages (the last page, or any page when a page-size change leaves a
+  // remainder) up to a full page's height with one spacer row, but only when
+  // there's more than one page. Otherwise the last page is shorter than the rest
+  // and the pager below jumps up/down as you move between pages — landing the
+  // cursor over the table after a click that was aimed at "‹ Prev".
+  const fillerRows = view.totalPages > 1 ? Math.max(0, perPage - view.slice.length) : 0;
 
   // Debounce the range read-out: coalesce rapid changes (typing, quick paging)
   // into a single announcement once the view settles. Skip the initial mount so
@@ -609,6 +615,13 @@ jamie@example.com,External reviewer,`}</pre>
       </div>
 
       <table className="grid users">
+        <colgroup>
+          <col className="col-email" />
+          <col className="col-note" />
+          <col className="col-admin" />
+          <col className="col-login" />
+          <col className="col-actions" />
+        </colgroup>
         <thead>
           <tr>
             {[["email", "Email"], ["note", "Note"], ["admin", "Admin"], ["last_login", "Last login"]].map(
@@ -642,8 +655,8 @@ jamie@example.com,External reviewer,`}</pre>
             const busy = busyEmail === r.email;
             return (
               <tr key={r.email}>
-                <td>{r.email}</td>
-                <td>{r.note}</td>
+                <td className="cell-trunc" title={r.email}>{r.email}</td>
+                <td className="cell-trunc" title={r.note || undefined}>{r.note}</td>
                 <td>
                   {/* Ternary, not `&&`: is_admin is a NUMBER (0/1), and
                       `0 && ...` renders a literal "0" in a non-admin's cell. */}
@@ -683,6 +696,15 @@ jamie@example.com,External reviewer,`}</pre>
               </tr>
             );
           })}
+          {/* One empty row per missing slot (NOT a single tall spacer): real rows
+              are 48px + a 1px border each, so a pixel-computed spacer undercounts
+              by ~1px/row and the pager still drifts. Structurally-identical rows
+              match the height exactly; transparent borders keep them invisible. */}
+          {Array.from({ length: fillerRows }).map((_, i) => (
+            <tr key={`filler-${i}`} className="filler" aria-hidden="true">
+              <td colSpan={5} />
+            </tr>
+          ))}
         </tbody>
       </table>
 

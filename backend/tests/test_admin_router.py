@@ -1171,6 +1171,20 @@ def test_bulk_add_reports_invalid_email_and_keeps_going():
         assert "valid@example.edu" in _emails(c)
 
 
+def test_bulk_added_rows_list_in_stable_email_order():
+    # Bulk-imported rows all share one added_at, so ORDER BY added_at alone is
+    # arbitrary (and shuffles between requests, which reshuffles the paged UI on a
+    # delete). The email tiebreak must return them consistently email-ascending.
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/api/admin/allowlist/bulk", json={"users": [
+            {"email": "zed@ex.edu"}, {"email": "alpha@ex.edu"}, {"email": "mid@ex.edu"},
+        ]})
+        listed = [x["email"] for x in c.get("/api/admin/allowlist").json()]
+        imported = [e for e in listed if e in {"zed@ex.edu", "alpha@ex.edu", "mid@ex.edu"}]
+        assert imported == ["alpha@ex.edu", "mid@ex.edu", "zed@ex.edu"], imported
+
+
 def test_bulk_add_sends_no_email_and_mints_no_token():
     # The defining contract of the bulk path (vs single-add): NO invite email and
     # NO sign-in token are produced. If this regresses, a CSV import silently
@@ -2351,6 +2365,8 @@ def run():
           test_bulk_add_skips_existing_and_in_batch_duplicates)
     check("bulk add reports an invalid email and keeps going",
           test_bulk_add_reports_invalid_email_and_keeps_going)
+    check("bulk-added rows (tied added_at) list in stable email order",
+          test_bulk_added_rows_list_in_stable_email_order)
     check("bulk add CONTRACT: sends no email and mints no token",
           test_bulk_add_sends_no_email_and_mints_no_token)
     check("usage dashboard swaps since/until when reversed",

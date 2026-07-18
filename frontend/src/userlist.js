@@ -39,18 +39,23 @@ const COMPARATORS = {
   last_login: (a, b) => loginValue(a) - loginValue(b),
 };
 
-// Stable sort by sortKey/sortDir. Unknown keys fall back to email. Stability is
-// via a decorated index tiebreak so equal keys keep their incoming order.
+// Sort by sortKey/sortDir with a DETERMINISTIC tiebreak on the unique email.
+// Unknown keys fall back to email. Tiebreaking on email (not the incoming array
+// index) matters: many rows can tie on note/admin/last_login — e.g. a batch of
+// CSV-imported users all share one added_at and one "Imported on …" note — and if
+// the tiebreak deferred to fetch order, an unstable backend ordering would let a
+// refetch (after a delete) reshuffle which rows land on the current page, so a row
+// you didn't touch could vanish off the page. email is the primary key, so this
+// makes the order total and stable. The tiebreak is always email ASC (not flipped
+// by dir) so the secondary order stays consistent.
 export function sortUsers(rows, sortKey, sortDir) {
   const cmp = COMPARATORS[sortKey] || COMPARATORS.email;
   const dir = sortDir === "desc" ? -1 : 1;
-  return rows
-    .map((r, i) => [r, i])
-    .sort(([a, ai], [b, bi]) => {
-      const c = cmp(a, b);
-      return c !== 0 ? c * dir : ai - bi;
-    })
-    .map(([r]) => r);
+  return rows.slice().sort((a, b) => {
+    const c = cmp(a, b) * dir;
+    if (c !== 0) return c;
+    return (a.email || "").localeCompare(b.email || "", undefined, { sensitivity: "base" });
+  });
 }
 
 // Slice `rows` to one page. `page` is clamped to [1, totalPages]; this clamp is
