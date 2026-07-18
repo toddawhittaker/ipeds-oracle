@@ -40,7 +40,10 @@ def list_allowlist():
             "SELECT a.email, a.note, a.added_by, a.added_at, "
             "COALESCE(u.is_admin,0) AS is_admin, u.last_login "
             "FROM allowlist a LEFT JOIN users u ON u.email=a.email "
-            "ORDER BY a.added_at DESC").fetchall()
+            # email is the tiebreak so a batch of CSV-imported rows (all sharing
+            # one added_at) comes back in a STABLE order, not an arbitrary one that
+            # shuffles between requests.
+            "ORDER BY a.added_at DESC, a.email ASC").fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()

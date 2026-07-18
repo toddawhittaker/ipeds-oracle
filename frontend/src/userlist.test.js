@@ -73,10 +73,19 @@ describe("sortUsers", () => {
       ["never@x.edu", "old@x.edu", "new@x.edu"]);
   });
 
-  it("is stable — equal keys keep incoming order", () => {
-    const rows = [U("a@x.edu", { note: "same" }), U("b@x.edu", { note: "same" }),
-      U("c@x.edu", { note: "same" })];
-    expect(sortUsers(rows, "note", "asc").map((r) => r.email)).toEqual(
+  it("breaks ties on the unique email, NOT the incoming order — so an unstable "
+    + "fetch order can't reshuffle a page after a delete", () => {
+    // All three tie on note; the input order is deliberately shuffled. The result
+    // must be email-ascending regardless, so a refetch that returns the same rows
+    // in a different order yields the SAME page (no row jumping off on delete).
+    const shuffled = [U("c@x.edu", { note: "same" }), U("a@x.edu", { note: "same" }),
+      U("b@x.edu", { note: "same" })];
+    expect(sortUsers(shuffled, "note", "asc").map((r) => r.email)).toEqual(
+      ["a@x.edu", "b@x.edu", "c@x.edu"]);
+    // Same rows, different incoming order -> identical output (determinism).
+    const other = [U("b@x.edu", { note: "same" }), U("c@x.edu", { note: "same" }),
+      U("a@x.edu", { note: "same" })];
+    expect(sortUsers(other, "note", "asc").map((r) => r.email)).toEqual(
       ["a@x.edu", "b@x.edu", "c@x.edu"]);
   });
   it("does not mutate the input array", () => {
