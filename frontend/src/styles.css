@@ -130,6 +130,14 @@ input, textarea, button { font-family: inherit; }
    border on top of .notice's existing AA-safe background/text tokens, so it
    stays readable in both themes without introducing a new color pairing. */
 .notice-cta { border-left: 3px solid var(--accent); padding-left: 12px; }
+/* Semantic notice variants — a tinted wash + a bold colored left bar so an error,
+   success, or warning actually stands out instead of reading as the same neutral
+   box. Tokens exist in both themes; the color-mix wash degrades gracefully to the
+   base .notice tint on a browser without color-mix (the colored border remains). */
+.notice.error, .notice.ok, .notice.warn { border-style: solid; border-width: 1px 1px 1px 4px; }
+.notice.error { background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border-color: var(--danger); }
+.notice.ok    { background: color-mix(in srgb, var(--ok) 12%, var(--panel));     border-color: var(--ok); }
+.notice.warn  { background: color-mix(in srgb, var(--warn) 14%, var(--panel));   border-color: var(--warn); }
 /* The admin action flash as a TOAST: fixed so it overlays instead of pushing the
    page down under the cursor, an accent bar + shadow so it stands out, and a
    fade-out (driven by a `leaving` class + an auto-dismiss timer in Admin.jsx) so
@@ -509,7 +517,6 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .dropzone:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dropfile-list { list-style: none; padding: 0; margin: 8px 0; }
 .dropfile-list li { padding: 2px 0; }
-.notice.error { color: var(--danger); }
 
 /* Disk-headroom meter (Imports -> selecting years to integrate). */
 .disk-estimate { margin: 4px 0 14px; }
