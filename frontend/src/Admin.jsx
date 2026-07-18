@@ -4,9 +4,10 @@ import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
 import { USER_CONFIG } from "./userlist.js";
+import { PENDING_CONFIG, BLOCKED_CONFIG } from "./accesstables.js";
 import DataTable from "./DataTable.jsx";
 import { buildImportPlan } from "./csvimport.js";
-import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload } from "./icons.jsx";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload, IconCheck, IconClose, IconUnlock } from "./icons.jsx";
 import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -87,6 +88,9 @@ function canonEmailForDisplay(email) {
   return trimmed.slice(0, at).split("+")[0] + trimmed.slice(at);
 }
 
+// App-standard date+time; null/absent → an em dash. Unix seconds in.
+const fmtDateTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
+
 function Allowlist({ me }) {
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
@@ -101,10 +105,12 @@ function Allowlist({ me }) {
   // imperative handle so a row action that unmounts or swaps its control can hand
   // focus somewhere sensible instead of dropping it to <body>.
   const usersTableRef = useRef(null);
+  const pendingTableRef = useRef(null);
+  const blockedTableRef = useRef(null);
   // Action outcomes go to the app-wide toast (announce below). Toasts don't take
   // focus, so an action that UNMOUNTS the control it was fired from must hand
-  // focus to a stable element or it drops to <body>: row removal -> the table's
-  // search box; a pending-request reject / denial undo -> this add-email anchor.
+  // focus to a stable element or it drops to <body>: each table action -> that
+  // table's own search box.
   const toast = useToast();
   const confirm = useConfirm();
   const addEmailRef = useRef(null);
@@ -112,6 +118,15 @@ function Allowlist({ me }) {
   // Route an action outcome to the app-wide toast (overlays, auto-fades,
   // announced once via the toast host's live region). kind: "" | "ok" | "error".
   const announce = (text, kind = "") => toast(text, kind);
+
+  // Focus the acting table's search box after a reload commits. If that table
+  // just UNMOUNTED because its last row was actioned (pending → zero-state,
+  // blocked → the whole section is removed), its ref is null; fall back to the
+  // always-present add-email input so focus never drops to <body> (WCAG 2.4.3).
+  const focusAfterRowAction = (tableRef) => requestAnimationFrame(() => {
+    if (tableRef.current) tableRef.current.focusSearch();
+    else addEmailRef.current?.focus?.();
+  });
 
   const load = () => {
     // Return the allowlist fetch so a caller can sequence focus AFTER the table
@@ -302,6 +317,32 @@ function Allowlist({ me }) {
     onCsvFile(e.dataTransfer.files?.[0]);
   }
 
+  // Approve a pending request: neutral confirmation modal (it grants access AND
+  // emails a welcome link, so it's confirmed), then the delivery-aware toast.
+  function approve(addr) {
+    let outcome = null; // stash the backend delivery result for the onSuccess toast
+    confirm({
+      variant: "neutral",
+      title: `Approve access for ${addr}?`,
+      body: "This adds them to the allowlist and emails them a sign-in link.",
+      confirmLabel: "Approve access",
+      onConfirm: async () => {
+        const res = await api.addAllow(addr, "approved request", false);
+        if (!res?.ok) throw new Error(JSON.stringify({ detail: `Couldn't add ${addr}.` }));
+        outcome = res;
+      },
+      errorToast: `Couldn't approve ${addr}.`,
+      onSuccess: async () => {
+        // Delivery-aware toast (emailed / already on the list / mail failed /
+        // logged to console) — see INVITE_FLASH. The Approve button unmounted
+        // with its pending row; hand focus to the pending table's search box.
+        announce(inviteFlash(addr, outcome), inviteKind(outcome));
+        await load();
+        focusAfterRowAction(pendingTableRef);
+      },
+    });
+  }
+
   function reject(addr) {
     // Name the address that will ACTUALLY be blocked (SEC #2) -- canon_email
     // propagates the block toward the BASE address, so for a +tag input like
@@ -313,41 +354,44 @@ function Allowlist({ me }) {
       variant: "danger",
       title: `Reject the request from ${addr}?`,
       body: `This blocks ${target} (and every +tag/case variant of it) from requesting access again.`,
-      details: `You can undo the block from the "Blocked from requesting access" list at the bottom of this tab.`,
+      details: `You can undo the block from the "Blocked users" table below — that only lets them request again, it grants no access.`,
       confirmLabel: "Reject request",
       onConfirm: () => api.denyAccessRequest(addr),
       successToast: `Rejected the access request from ${addr}.`,
       errorToast: `Could not reject ${addr}.`,
       onSuccess: async () => {
-        // The reject button just unmounted with its .req row; hand focus to the
-        // stable add-email anchor so it doesn't drop to <body>. Sequence after
-        // the reload commits (focus-restore-vs-reload race).
+        // The reject button just unmounted with its pending row; hand focus to
+        // the pending table's search box so it doesn't drop to <body>. Sequence
+        // after the reload commits (focus-restore-vs-reload race).
         await load();
-        requestAnimationFrame(() => addEmailRef.current?.focus?.());
+        focusAfterRowAction(pendingTableRef);
       },
     });
   }
 
-  // Reversible, non-destructive: worst case of a misclick is the address
-  // filing a request again (lands in the pending queue, emails admins —
-  // exactly as it would anyway). No confirmation modal, deliberately unlike
-  // reject() above — see .plan-undeny.md's ui-ux spec for the reasoning.
-  // `r.canon_email` is what the DELETE call keys on; `r.emails` (the
-  // ORIGINAL addresses) is all that's ever shown to the admin.
-  async function undo(r) {
+  // Unblock: a neutral confirmation modal explaining that this only lets the
+  // address request access again — it grants NO access and sends NO email.
+  // `r.canon_email` is what the DELETE keys on; `r.emails` (the ORIGINAL
+  // addresses) is what's shown.
+  function undo(r) {
     const shown = r.emails.join(", ");
-    try {
-      await api.clearDenial(r.canon_email); // match on canonical, display the original
-      announce(`Unblocked ${shown}. They can request access again — they were not ` +
-               `given access, and no email was sent.`);
-    } catch {
-      announce(`Could not undo the block on ${shown}. They are still blocked from ` +
-               `requesting access.`, "error");
-    }
-    // The undo control unmounted with its denied row; anchor focus on the stable
-    // add-email input after the reload commits.
-    await load();
-    requestAnimationFrame(() => addEmailRef.current?.focus?.());
+    confirm({
+      variant: "neutral",
+      title: `Allow ${r.canon_email} to request access again?`,
+      body: "This will remove the user from the blocklist. It will not approve access; the user must submit a new request.",
+      details: shown !== r.canon_email
+        ? `Unblocks the whole mailbox — it was requested as ${shown}.` : undefined,
+      confirmLabel: "Allow new request",
+      onConfirm: () => api.clearDenial(r.canon_email), // match on canonical
+      successToast: `${shown} may request access again — they were not given access, and no email was sent.`,
+      errorToast: `Could not unblock ${shown}. They are still blocked from requesting access.`,
+      onSuccess: async () => {
+        // The unblock button unmounted with its blocked row; hand focus to the
+        // blocked table's search box after the reload commits.
+        await load();
+        focusAfterRowAction(blockedTableRef);
+      },
+    });
   }
 
   async function toggleAdmin(r) {
@@ -402,27 +446,59 @@ function Allowlist({ me }) {
   return (
     <div className="panel">
       {/* Action outcomes surface via the app-wide toast (useToast) — overlays,
-          auto-fades, announced once — not an in-flow flash box. */}
-      {reqs.length > 0 && (
-        <div className="requests">
-          <h2>Pending access requests</h2>
-          {reqs.map((r) => (
-            <div key={r.id} className="req">
-              <span>{r.email}</span>
-              <button className="btn-approve"
-                      aria-label={`Approve the access request from ${r.email}`}
-                      onClick={() => invite(r.email, "approved request", false)}>
-                Approve
-              </button>
-              <button className="link danger"
-                      aria-label={`Reject the access request from ${r.email}`}
-                      onClick={() => reject(r.email)}>
-                Reject
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+          auto-fades, announced once — not an in-flow flash box. Pending requests
+          get a restrained attention treatment (accent border + tinted header +
+          count badge) ONLY while there's something to review, so it draws the eye
+          without ever looking like an error. Empty = plain header + a clear
+          "nothing awaiting" note (distinct from a search-miss). */}
+      <section className={"requests-section" + (reqs.length ? " attention" : "")}>
+        <h2 className="section-head">
+          Pending requests
+          {reqs.length > 0 && (
+            <span className="pending-badge">
+              <span aria-hidden="true">· {reqs.length}</span>
+              <span className="sr-only">{reqs.length} awaiting review</span>
+            </span>
+          )}
+        </h2>
+        {reqs.length === 0 ? (
+          <p className="empty-note">No access requests are awaiting review.</p>
+        ) : (
+          <DataTable
+            ref={pendingTableRef}
+            rows={reqs}
+            rowKey={(r) => r.id}
+            config={PENDING_CONFIG}
+            ariaLabel="Pending access requests"
+            searchPlaceholder="Search by email"
+            searchLabel="Search pending requests by email"
+            sizeLabel="Requests per page"
+            emptyNoMatch="No pending requests match your search."
+            initialSort={{ key: "requested", dir: "desc" }}
+            sortLabels={{ email: "email", requested: "requested" }}
+            columns={[
+              { key: "email", label: "Email", sortable: true, colClass: "col-req-email",
+                cellClass: "cell-trunc", cellTitle: (r) => r.email },
+              { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
+                render: (r) => fmtDateTime(r.created_at) },
+            ]}
+            renderActions={(r) => (
+              <>
+                <button type="button" className="icon-btn tip" data-tip="Approve request"
+                        aria-label={`Approve request from ${r.email}`}
+                        onClick={() => approve(r.email)}>
+                  <IconCheck />
+                </button>
+                <button type="button" className="icon-btn danger tip" data-tip="Reject request"
+                        aria-label={`Reject request from ${r.email}`}
+                        onClick={() => reject(r.email)}>
+                  <IconClose />
+                </button>
+              </>
+            )}
+          />
+        )}
+      </section>
 
       <h2>Users</h2>
       <form className="row" onSubmit={add}>
@@ -613,87 +689,85 @@ jamie@example.com,External reviewer,`}</pre>
           nothing denied AND nothing failed to load — same as the
           pending-requests block above, except a load failure (SEC #3) must
           still show something rather than looking identical to "empty". */}
+      {/* Blocked users. Hidden entirely when nothing is denied AND nothing
+          failed to load — EXCEPT a load failure (SEC #3) must still show a
+          visible error rather than looking identical to "nobody is blocked",
+          the one thing this section exists to state with confidence. */}
       {(denied.length > 0 || deniedError) && (
-        <section className="denied">
-          <h2>Blocked from requesting access</h2>
+        <section className="blocked-section">
+          <h2>Blocked users</h2>
           {deniedError ? (
-            // Its own class (not a bare `.notice`): this is a persistent
-            // in-flow error, distinct from the transient action toasts, and
-            // keeping it off `.notice` also avoids colliding with specs that
-            // assert an unscoped `.notice`/`.toast` locator elsewhere.
+            // Its own class (not a bare `.notice`): a persistent in-flow error,
+            // distinct from transient toasts, and off `.notice` so it doesn't
+            // collide with unscoped `.notice`/`.toast` locators elsewhere.
             <p className="denied-error" role="alert">{deniedError}</p>
           ) : (
             <>
               <p className="denied-help">
-                Rejecting a request blocks that address from asking again. Undoing
-                a block only lets the address request access again — it grants no
+                Rejecting a request blocks that address from asking again. Allowing
+                a blocked user only lets them request access again — it grants no
                 access and sends no email.
               </p>
-              {denied.map((r) => {
-                // DELIBERATELY the opposite display rule from the pending
-                // list above (which renders the raw typed address, never
-                // canon_email): Approve is EXACT-match, so up there the raw
-                // string IS the resource. Here canon_email IS the resource —
-                // it's what is_denied() actually matches and what Undo's
-                // DELETE keys on — so it has to be the PRIMARY label, not
-                // hidden. Round-3 hid it always; a security review (SEC #1)
-                // found that lets an attacker file ONLY a +tag variant, get
-                // the admin to Reject it, and block the real victim's base
-                // address without that address ever appearing anywhere in
-                // this UI. Do NOT "make the two lists consistent" — that
-                // symmetry is the bug.
-                // Everything ELSE the group was requested as, besides the
-                // canonical address itself -- kept out of the "requested as"
-                // note so the base address's text isn't rendered a second
-                // time on the page (an unscoped getByText(canon_email) has
-                // to resolve to exactly one element; see undo-denial.spec.js).
-                const others = r.emails.filter((e) => e !== r.canon_email);
-                const differs = others.length > 0;
-                const whoId = `denied-who-${r.id}`;
-                return (
-                  <div key={r.id} className="denied-row">
-                    <span className="denied-who" id={whoId}>
-                      <span className="denied-primary">{r.canon_email}</span>
-                      {differs && (
-                        <span className="denied-note">
-                          {" "}— requested as {others.join(", ")}; the block covers
-                          this whole mailbox
-                        </span>
-                      )}
-                    </span>
-                    {/* SEC #4: this is MAX(created_at) from access_requests
-                        -- when the request was FILED, not a denial
-                        timestamp (there is no decided_at column). Rendered
-                        as a bare date it read as "blocked on", overstating
-                        what the app actually knows -- label it honestly. */}
-                    <span className="denied-when">
-                      requested {r.created_at ? new Date(r.created_at * 1000).toLocaleDateString() : "—"}
-                    </span>
-                    {/* A11Y #1 (WCAG 2.5.3 Label in Name): no aria-label —
-                        the old one interpolated the address into the MIDDLE
-                        of the phrase ("Allow {emails} to request access
-                        again"), so the visible label was never a prefix of
-                        the accessible name and the button was unreachable by
-                        speech input ("click Allow to request again"). Visible
-                        text stays verbatim and IS the whole accessible name;
-                        the disambiguating address context (needed when a
-                        screen-reader user browses several identically-worded
-                        "Allow to request again" buttons by role) is wired via
-                        aria-describedby at .denied-who instead of appended
-                        into the name itself -- appending it there (as this
-                        repo's own review comment on this row suggested)
-                        would re-render the address as a SECOND text node on
-                        the page, breaking every unscoped getByText(address)
-                        assertion right above this. describedby reuses the
-                        already-rendered node rather than duplicating it, and
-                        still reads out via the accessible DESCRIPTION on
-                        focus in every screen reader that supports it. */}
-                    <button className="link" aria-describedby={whoId} onClick={() => undo(r)}>
-                      Allow to request again
-                    </button>
-                  </div>
-                );
-              })}
+              <DataTable
+                ref={blockedTableRef}
+                rows={denied}
+                rowKey={(r) => r.id}
+                config={BLOCKED_CONFIG}
+                ariaLabel="Blocked users"
+                searchPlaceholder="Search by email"
+                searchLabel="Search blocked users by email"
+                sizeLabel="Blocked users per page"
+                emptyNoMatch="No blocked users match your search."
+                initialSort={{ key: "denied", dir: "desc" }}
+                sortLabels={{ email: "email", requested: "requested", denied: "denied" }}
+                columns={[
+                  // SEC #1: canon_email (the ACTUALLY-blocked mailbox — what
+                  // is_denied() matches and Undo's DELETE keys on) is the PRIMARY
+                  // label, never hidden, with the original addresses as a note when
+                  // they differ. Do NOT collapse to just `emails`: a +tag-only
+                  // griefing request would then hide the real victim's base address.
+                  // `others` excludes canon so it's never rendered as a second text
+                  // node (an unscoped getByText(canon_email) must resolve to one).
+                  { key: "email", label: "Email", sortable: true, colClass: "col-blocked-email",
+                    cellClass: "blocked-email", cellTitle: (r) => r.canon_email,
+                    render: (r) => {
+                      const others = r.emails.filter((e) => e !== r.canon_email);
+                      return (
+                        <>
+                          <span className="denied-primary">{r.canon_email}</span>
+                          {others.length > 0 && (
+                            <span className="denied-note">
+                              {" "}— requested as {others.join(", ")}; the block covers this whole mailbox
+                            </span>
+                          )}
+                        </>
+                      );
+                    } },
+                  // SEC #4: created_at is when the request was FILED (labeled
+                  // "Requested"); denied_at (migration 11) is when it was rejected
+                  // ("Denied"). The two are separate columns — neither overwrites
+                  // the other. denied_at is null for pre-migration denials → "—".
+                  { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
+                    render: (r) => fmtDateTime(r.created_at) },
+                  { key: "denied", label: "Denied", sortable: true, colClass: "col-when",
+                    // A pre-migration denial has no denied_at — a bare "—" reads
+                    // as silence/"dash" to a screen reader, so name it.
+                    render: (r) => (r.denied_at ? fmtDateTime(r.denied_at) : (
+                      <><span aria-hidden="true">—</span><span className="sr-only">Not recorded</span></>
+                    )) },
+                ]}
+                renderActions={(r) => (
+                  // Icon-only: the data-tip "Allow new access request" is a prefix
+                  // of the accessible name (WCAG 2.5.3 Label in Name); the canonical
+                  // address in the name disambiguates rows for speech/SR nav. The
+                  // address is only an attribute here, never a duplicate text node.
+                  <button type="button" className="icon-btn tip" data-tip="Allow new access request"
+                          aria-label={`Allow new access request for ${r.canon_email}`}
+                          onClick={() => undo(r)}>
+                    <IconUnlock />
+                  </button>
+                )}
+              />
             </>
           )}
         </section>

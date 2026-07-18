@@ -300,18 +300,23 @@ def access_requests_denied():
     LoginRequest.email (EmailStr), which cannot contain one."""
     con = connect()
     try:
+        # created_at = when the group was REQUESTED (MAX = most recent request);
+        # denied_at = when it was REJECTED (MAX = most recent denial). Kept
+        # separate — the Blocked-users table shows both columns. denied_at is NULL
+        # for rows denied before migration 11 (rendered "—" client-side).
         rows = con.execute(
             "SELECT MIN(id) AS id, "
             "COALESCE(canon_email, LOWER(email)) AS canon_email, "
             "GROUP_CONCAT(DISTINCT email) AS emails, "
-            "MAX(created_at) AS created_at "
+            "MAX(created_at) AS created_at, "
+            "MAX(denied_at) AS denied_at "
             "FROM access_requests WHERE status='denied' "
             "GROUP BY COALESCE(canon_email, LOWER(email)) "
-            "ORDER BY created_at DESC").fetchall()
+            "ORDER BY denied_at DESC").fetchall()
         return [
             {"id": r["id"], "canon_email": r["canon_email"],
              "emails": sorted(set(r["emails"].split(","))),
-             "created_at": r["created_at"]}
+             "created_at": r["created_at"], "denied_at": r["denied_at"]}
             for r in rows
         ]
     finally:
@@ -343,9 +348,9 @@ def deny_access_request(email: str):
         # docstring for why (canon_email is populated for every row this app
         # writes; the fallback only covers a row that predates that).
         cur = con.execute(
-            "UPDATE access_requests SET status='denied' "
+            "UPDATE access_requests SET status='denied', denied_at=? "
             "WHERE status='pending' AND COALESCE(canon_email, LOWER(email))=?",
-            (target,))
+            (time.time(), target))
         con.commit()
         if cur.rowcount == 0:
             raise HTTPException(404, "No pending access request for that address.")

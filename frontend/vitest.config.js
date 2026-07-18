@@ -26,6 +26,7 @@ export default defineConfig({
       // exist to guarantee. Add a module here when (and only when) it gets real
       // unit tests, so JS coverage never silently escapes a gate.
       include: [
+        "src/accesstables.js",
         "src/announce.js",
         "src/csvimport.js",
         "src/datatable.js",
