@@ -5,6 +5,8 @@ import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx
 import Markdown from "./Markdown.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { useConfirm } from "./ConfirmModal.jsx";
+import { useToast } from "./Toast.jsx";
+import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 
 // Clickable starter prompts ("query slips") shown on the empty chat screen.
 // Each carries a small mono tag naming the kind of record it pulls, which
@@ -141,6 +143,7 @@ export default function Chat({ me }) {
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
+  const toast = useToast();
   const [openId, setOpenId] = useState(routeId);
   const [notice, setNotice] = useState("");
   const loadedFor = useRef(null); // routeId this conversation's messages were last fetched for
@@ -149,6 +152,25 @@ export default function Chat({ me }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(null); // `${i}:${kind}` most recently copied
+  // True from a conversation route change until its messages fetch settles —
+  // drives the loading skeleton so switching chats never flashes the
+  // "What would you like to know" empty state (initial value covers a direct
+  // deep-link page load, where the render-time reset below never fires).
+  const [loadingConvo, setLoadingConvo] = useState(
+    () => routeId !== null && NUMERIC_ID.test(routeId));
+  // Inline sidebar rename: which conversation id is being renamed (null =
+  // none) + the draft text. renameDone guards the input's blur-commit from
+  // double-firing after Enter/Escape already settled it.
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameText, setRenameText] = useState("");
+  const renameDone = useRef(false);
+  // Scroll containment: nearBottom tracks whether the viewer is (close to)
+  // the bottom of the thread — the auto-scroll effect only follows new
+  // content when they are, so scrolling up to read is never yanked away.
+  // showJump renders the "Jump to latest" pill while they're scrolled up.
+  const nearBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const messagesRef = useRef(null); // the .messages scroll container
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = parseInt(localStorage.getItem("sidebarWidth"), 10);
@@ -194,6 +216,13 @@ export default function Chat({ me }) {
     // the time this render runs).
     setOpenId(routeId); setMessages([]); setNotice(""); setEditingIdx(null);
     setBusy(false); setStatus("");
+    // Entering a conversation route -> skeleton until its fetch settles
+    // (the loader effect's callbacks flip it back). Entering "/" -> no load.
+    setLoadingConvo(routeId !== null && NUMERIC_ID.test(routeId));
+    // A fresh view starts pinned to the latest message (the nearBottom ref
+    // itself is reset in the [routeId] effect below — a ref can't legally be
+    // written during render).
+    setShowJump(false);
   }
   const badFormat = routeId !== null && !NUMERIC_ID.test(routeId);
   const showNotice = notice || (badFormat ? NOT_AVAILABLE : "");
@@ -232,10 +261,39 @@ export default function Chat({ me }) {
       || taRef.current;
     el?.focus();
   }, [convos]);
+  // A fresh view starts pinned to the latest message. Declared BEFORE the
+  // follow effect below so that, on a route-change commit, the pin is reset
+  // before the follow decision reads it (effects run in declaration order).
+  useEffect(() => { nearBottom.current = true; }, [routeId]);
+
+  // Follow new content only while the viewer is at (or near) the bottom.
+  // Scrolled up to read an earlier answer, they stay put — streaming status
+  // ticks and the final answer must never yank the view (the pill below is
+  // the way back). nearBottom is a ref, not state: scroll position is not
+  // render input, and making it state would re-render on every scroll frame.
   useEffect(() => {
+    if (!nearBottom.current) return;
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
   }, [messages, status]);
+
+  // Track whether the viewer is near the bottom of the thread (within ~1.5
+  // messages). Drives both the auto-scroll gate above and the pill's
+  // visibility.
+  function onMessagesScroll() {
+    const el = messagesRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    nearBottom.current = near;
+    setShowJump(!near && messages.length > 0);
+  }
+
+  function jumpToLatest() {
+    nearBottom.current = true;
+    setShowJump(false);
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+  }
   // Auto-grow the composer to fit multi-line input (Shift-Enter adds a line).
   useEffect(() => {
     const el = taRef.current;
@@ -262,10 +320,36 @@ export default function Chat({ me }) {
       .then((msgs) => {
         if (cancelled) return;
         setMessages(msgs.map((m) => ({ ...m, sql_log: m.sql_log ? JSON.parse(m.sql_log) : [] })));
+        setLoadingConvo(false);
       })
-      .catch(() => { if (!cancelled) setNotice(NOT_AVAILABLE); });
+      .catch(() => { if (!cancelled) { setNotice(NOT_AVAILABLE); setLoadingConvo(false); } });
     return () => { cancelled = true; };
   }, [routeId]);
+
+  // Land focus in the composer on mount and whenever the viewed conversation
+  // changes (sidebar click, "+ New chat", Back/Forward) — asking is the
+  // page's one job, so the box is always ready. Skipped while an inline
+  // prompt-edit is open (its own textarea holds focus).
+  useEffect(() => {
+    if (editingIdx === null) taRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeId]);
+
+  // "Type anywhere": a printable character typed while nothing editable has
+  // focus is redirected into the composer, so a user can just start typing
+  // after clicking a sidebar chat (predicate + misfire contract: typeahead.js,
+  // vitest-pinned). Focus lands during keydown, BEFORE the browser's default
+  // text-insertion runs, so the keystroke itself lands in the box too.
+  useEffect(() => {
+    function onKey(e) {
+      if (editingIdx !== null || renamingId !== null) return;
+      if (!shouldRedirectTyping(e, targetInfo(e.target))) return;
+      const ta = taRef.current;
+      if (ta && document.activeElement !== ta) ta.focus();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [editingIdx, renamingId]);
 
   // A real route change -- sidebar click to a different chat, browser Back/
   // Forward, delete-the-open-chat -- means the viewer has moved on from
@@ -320,8 +404,48 @@ export default function Chat({ me }) {
       e.preventDefault();
       setMessages([]); setNotice(""); setEditingIdx(null);
       setBusy(false); setStatus("");
+      // The [routeId] focus effect can't fire here (routeId never changes) —
+      // land focus in the composer directly, ready for the next question.
+      requestAnimationFrame(() => taRef.current?.focus());
     }
     // else: let the Link push "/"; routeId flips, the render-time reset fires.
+  }
+
+  // --- Inline sidebar rename -----------------------------------------------
+  // Pencil -> the row's title swaps to an input. Enter/blur commit, Escape
+  // cancels; commit is optimistic (title updates instantly, reverted with a
+  // toast if the PATCH fails). renameDone guards blur from re-committing
+  // after Enter/Escape already settled the edit in the same tick.
+  function startRename(c) {
+    renameDone.current = false;
+    setRenamingId(c.id);
+    setRenameText(c.title || "Untitled");
+  }
+  // After the input unmounts, focus would drop to <body> (WCAG 2.4.3) — hand
+  // it back to the row's own link on the next frame instead.
+  const refocusRow = (id) => requestAnimationFrame(() =>
+    document.getElementById(`convo-${id}`)?.focus());
+  function cancelRename(c) {
+    if (renameDone.current) return;
+    renameDone.current = true;
+    setRenamingId(null); setRenameText("");
+    refocusRow(c.id);
+  }
+  function commitRename(c) {
+    if (renameDone.current) return;
+    renameDone.current = true;
+    const title = renameText.trim();
+    setRenamingId(null); setRenameText("");
+    refocusRow(c.id);
+    // Unchanged or emptied -> a cancel, not a rename (the server would 400 an
+    // empty title anyway; don't round-trip a no-op).
+    if (!title || title === (c.title || "Untitled")) return;
+    const prev = c.title;
+    setConvos((cs) => cs.map((x) => (x.id === c.id ? { ...x, title } : x)));
+    api.renameConversation(c.id, title).catch(() => {
+      setConvos((cs) => cs.map((x) => (x.id === c.id ? { ...x, title: prev } : x)));
+      toast("Couldn't rename the chat. Try again.", "error");
+    });
   }
 
   function toggleSidebar() {
@@ -367,7 +491,26 @@ export default function Chat({ me }) {
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
+    nearBottom.current = true; // your own question always scrolls into view
     submit(q);
+  }
+
+  // Stop generating: abandon the in-flight turn exactly the way navigating
+  // away already does (turnToken), then mark the pending bubble "stopped" and
+  // free the composer. Deliberately NO network abort — the request keeps
+  // draining in the background, so the server still finishes and PERSISTS the
+  // answer (an aborted mid-turn request is the known server-side data-loss
+  // path; see the backlog note on chat.py's pre-gen() writes). Reopening the
+  // chat later shows the completed answer — the stopped note says so.
+  function stopGenerating() {
+    turnToken.current++;
+    setBusy(false); setStatus("");
+    setMessages((m) => {
+      const c = [...m]; const i = c.length - 1;
+      if (i >= 0 && c[i].pending) c[i] = { ...c[i], pending: false, stopped: true };
+      return c;
+    });
+    requestAnimationFrame(() => taRef.current?.focus());
   }
 
   // Edit a prior prompt inline, then re-run it — replacing that exchange and
@@ -464,6 +607,7 @@ export default function Chat({ me }) {
       patchLast((last) => ({ ...last, thinking: [...(last.thinking || []), item] }));
 
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
+    let failed = false; // drives the finalized message's inline "Try again"
     try {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
         if (ev.type === "conversation") {
@@ -526,7 +670,7 @@ export default function Chat({ me }) {
         else if (ev.type === "thinking") { if (isMine()) addThought({ kind: "reason", text: ev.text }); }
         else if (ev.type === "tool") { if (isMine()) addThought({ kind: "tool", text: `${ev.name}${ev.ok ? " ✓" : " ✗"}` }); }
         else if (ev.type === "answer") answer = ev.text;
-        else if (ev.type === "error") answer = "⚠️ " + ev.text;
+        else if (ev.type === "error") { answer = "⚠️ " + ev.text; failed = true; }
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
           if (ev.user_message_id) userMsgId = ev.user_message_id;
@@ -535,6 +679,7 @@ export default function Chat({ me }) {
       });
     } catch (err) {
       answer = "⚠️ " + err.message;
+      failed = true;
     }
     // VIEW writes -- gated: a stale (abandoned) turn's final answer must not
     // land in whatever conversation is now on screen, and must not leave
@@ -545,7 +690,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, id: msgId ?? c[ai].id, pending: false };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, id: msgId ?? c[ai].id, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -581,15 +726,37 @@ export default function Chat({ me }) {
           <div className="convo-list thin-scroll">
             {convos.map((c) => (
               <div key={c.id} className={"convo-row" + (c.id === convId ? " on" : "")}>
-                <Link to={`/chat/${c.id}`} id={`convo-${c.id}`}
-                      className={"convo" + (c.id === convId ? " on" : "")}
-                      aria-current={c.id === convId ? "page" : undefined}>
-                  {c.title || "Untitled"}
-                </Link>
-                <button type="button" className="convo-del"
-                        onClick={(e) => deleteConvo(e, c.id)}
-                        title="Delete chat"
-                        aria-label={`Delete chat: ${c.title || "Untitled"}`}><IconTrash /></button>
+                {renamingId === c.id ? (
+                  <input
+                    className="convo-rename" value={renameText} autoFocus
+                    maxLength={200}
+                    aria-label={`Rename chat: ${c.title || "Untitled"}`}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setRenameText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); commitRename(c); }
+                      else if (e.key === "Escape") cancelRename(c);
+                    }}
+                    onBlur={() => commitRename(c)}
+                  />
+                ) : (
+                  <>
+                    <Link to={`/chat/${c.id}`} id={`convo-${c.id}`}
+                          className={"convo" + (c.id === convId ? " on" : "")}
+                          title={c.title || "Untitled"}
+                          aria-current={c.id === convId ? "page" : undefined}>
+                      {c.title || "Untitled"}
+                    </Link>
+                    <button type="button" className="convo-act"
+                            onClick={() => startRename(c)}
+                            title="Rename chat"
+                            aria-label={`Rename chat: ${c.title || "Untitled"}`}><IconEdit /></button>
+                    <button type="button" className="convo-act convo-del"
+                            onClick={(e) => deleteConvo(e, c.id)}
+                            title="Delete chat"
+                            aria-label={`Delete chat: ${c.title || "Untitled"}`}><IconTrash /></button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -606,7 +773,7 @@ export default function Chat({ me }) {
 
       <main className="thread">
         <h1 className="sr-only">Chat</h1>
-        <div className="messages thin-scroll">
+        <div className="messages thin-scroll" ref={messagesRef} onScroll={onMessagesScroll}>
           <div className="messages-inner">
           {/* Rendered ABOVE the empty state, URL left as-is -- navigating away
               would re-run the render-time reset above and wipe the notice
@@ -616,7 +783,18 @@ export default function Chat({ me }) {
               enumerate other users' conversation ids. */}
           {showNotice && <div className="notice">{showNotice}</div>}
           <div className="sr-only" role="status" aria-live="polite">{showNotice}</div>
-          {messages.length === 0 && !me?.has_data && (
+          {/* Switching chats: skeleton bubbles until the fetch settles, so the
+              empty-state prompt never flashes over a conversation that's
+              merely loading. aria-hidden — the sr experience is the (quiet)
+              moment before messages render, not three fake gray bars. */}
+          {loadingConvo && messages.length === 0 && !showNotice && (
+            <div className="convo-skeleton" aria-hidden="true" data-testid="convo-skeleton">
+              <div className="skel skel-user" />
+              <div className="skel skel-answer" />
+              <div className="skel skel-answer short" />
+            </div>
+          )}
+          {!loadingConvo && messages.length === 0 && !me?.has_data && (
             <div className="empty">
               <h2>No IPEDS data loaded yet</h2>
               <p>
@@ -628,7 +806,7 @@ export default function Chat({ me }) {
               </p>
             </div>
           )}
-          {messages.length === 0 && me?.has_data && (
+          {!loadingConvo && messages.length === 0 && me?.has_data && (
             <div className="empty">
               <span className="field-label">Ask the record</span>
               <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>
@@ -673,6 +851,11 @@ export default function Chat({ me }) {
                           </details>
                         )}
                       </div>
+                    ) : m.stopped ? (
+                      <p className="stopped-note">
+                        Stopped. If the answer finishes generating, it will be
+                        saved to this chat — reopen it in a moment to check.
+                      </p>
                     ) : (
                       <Markdown>{m.content || ""}</Markdown>
                     )}
@@ -708,6 +891,12 @@ export default function Chat({ me }) {
                 )}
                 {m.role === "assistant" && !m.pending && (
                   <div className="msg-actions">
+                    {/* A failed turn's recovery lives ON the failure, not
+                        hidden up on the user message's Rerun. */}
+                    {m.error && messages[i - 1]?.role === "user" && (
+                      <button className="link ico" onClick={() => rerun(i - 1)} disabled={busy}
+                              title="Ask this question again"><IconRerun />Try again</button>
+                    )}
                     {m.thinking?.length > 0 && (
                       <details className="sql">
                         <summary>Thinking</summary>
@@ -717,6 +906,14 @@ export default function Chat({ me }) {
                     {m.sql_log?.length > 0 && (
                       <details className="sql">
                         <summary>SQL</summary>
+                        <button className="link sql-copy"
+                                onClick={async () => {
+                                  if (await copyText(m.sql_log.join(";\n\n"))) {
+                                    setCopied(`${i}:sql`); setTimeout(() => setCopied(null), 1400);
+                                  }
+                                }}>
+                          {copied === `${i}:sql` ? "Copied!" : "Copy SQL"}
+                        </button>
                         <pre>{m.sql_log.join(";\n\n")}</pre>
                       </details>
                     )}
@@ -741,6 +938,17 @@ export default function Chat({ me }) {
           </div>
         </div>
 
+        {/* Above the composer, only while scrolled up: the way back down. */}
+        {showJump && (
+          <button type="button" className="jump-latest" onClick={jumpToLatest}
+                  aria-label="Jump to latest message">
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v13M6 12l6 6 6-6" fill="none" stroke="currentColor"
+                    strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Latest
+          </button>
+        )}
         <form className="composer" onSubmit={send}>
           <div className="composer-box">
             <label htmlFor="composer-input" className="sr-only">Ask about IPEDS data</label>
@@ -750,13 +958,22 @@ export default function Chat({ me }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) send(e); }}
             />
-            <button type="submit" className="send" disabled={busy || !input.trim()}
-                    aria-label="Send" title="Send">
-              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor"
-                      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            {busy ? (
+              <button type="button" className="send stop" onClick={stopGenerating}
+                      aria-label="Stop generating" title="Stop generating">
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+                </svg>
+              </button>
+            ) : (
+              <button type="submit" className="send" disabled={!input.trim()}
+                      aria-label="Send" title="Send">
+                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor"
+                        strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
           </div>
         </form>
       </main>

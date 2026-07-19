@@ -31,7 +31,7 @@ backend/              the Python side (all Python tooling runs from here)
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
     tools/            run_sql (sandboxed), schema/discovery, skills
-    routers/          auth, chat (stream/history/CSV), admin
+    routers/          auth, chat (stream/history/rename/CSV), admin
     auth.py, security.py, mailer.py, ratelimit.py
     skills.py         skill library + semantic cache (fastembed)
     importer.py       background "load a new year" job (upload + NCES integrate)

@@ -270,6 +270,42 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         con.close()
 
 
+class RenameRequest(BaseModel):
+    title: str
+
+
+# The UI truncates sidebar titles anyway; anything longer than this is
+# noise (and an unbounded write). Mirrored client-side by the rename input's
+# maxLength — keep the two in sync.
+MAX_TITLE_LEN = 200
+
+
+@router.patch("/conversations/{conv_id}")
+def rename_conversation(conv_id: int, body: RenameRequest,
+                        user: sqlite3.Row = Depends(current_user)):
+    """Rename a conversation the caller owns.
+
+    Metadata-only by contract: deliberately does NOT touch updated_at, so
+    renaming an old chat never jumps it to the top of the recency-ordered
+    sidebar (list_conversations orders by updated_at DESC)."""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "Title can't be empty.")
+    if len(title) > MAX_TITLE_LEN:
+        raise HTTPException(400, f"Title is too long (max {MAX_TITLE_LEN} characters).")
+    con = connect()
+    try:
+        owns = con.execute("SELECT 1 FROM conversations WHERE id=? AND user_id=?",
+                           (conv_id, user["id"])).fetchone()
+        if not owns:
+            raise HTTPException(404, "Not found.")
+        con.execute("UPDATE conversations SET title=? WHERE id=?", (title, conv_id))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "title": title}
+
+
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
     con = connect()

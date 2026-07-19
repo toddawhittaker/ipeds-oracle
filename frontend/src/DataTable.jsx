@@ -133,6 +133,14 @@ const DataTable = forwardRef(function DataTable({
                  aria-label={searchLabel || searchPlaceholder}
                  onChange={(e) => {
                    setQ(e.target.value); setPage(1); onSearchChange?.(e.target.value);
+                 }}
+                 onKeyDown={(e) => {
+                   // Escape clears an active search in place (standard search-
+                   // field affordance); focus stays in the box.
+                   if (e.key === "Escape" && q) {
+                     e.preventDefault();
+                     setQ(""); setPage(1); onSearchChange?.("");
+                   }
                  }} />
           {q && (
             <button type="button" className="search-clear" aria-label="Clear search"

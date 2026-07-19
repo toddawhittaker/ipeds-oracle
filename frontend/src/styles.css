@@ -309,14 +309,24 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    offset on this full-width child gets clipped by the scroll container. */
 .convo:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .convo-row.on .convo { color: var(--text); }
-.convo-del {
+/* Row action buttons (rename + delete): hidden until the row is hovered or
+   the button itself is focused — the reveal-on-hover pattern the delete
+   button already used, generalized. */
+.convo-act {
   flex: none; width: 28px; height: 28px; margin-right: 4px; border: none;
   background: none; color: var(--muted); line-height: 1; border-radius: 6px;
   opacity: 0; display: grid; place-items: center;
 }
-.convo-row:hover .convo-del, .convo-del:focus-visible { opacity: 1; }
-.convo-del:hover { color: var(--danger); background: var(--bg); }
-.thread { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.convo-row:hover .convo-act, .convo-act:focus-visible { opacity: 1; }
+.convo-act:hover { color: var(--text); background: var(--bg); }
+.convo-del:hover { color: var(--danger); }
+/* Inline rename input takes the row over entirely while active. */
+.convo-rename {
+  flex: 1; min-width: 0; margin: 2px; padding: 6px 8px; font-size: 14px;
+  font-family: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--accent); border-radius: 6px; outline: none;
+}
+.thread { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 /* The scroll container is full-width (so the scrollbar sits at the far right,
    clear of the text), while the reading column inside stays centered and capped
    so answers don't stretch edge-to-edge on wide monitors. */
@@ -417,6 +427,47 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 }
 .send:not(:disabled):hover { background: var(--accent-d); }
 .send:disabled { opacity: .4; }
+/* While generating, Send becomes Stop — same footprint (no layout shift),
+   danger color so it's unmistakably an interrupt. */
+.send.stop { background: var(--danger); }
+.send.stop:hover { filter: brightness(1.1); background: var(--danger); }
+
+/* "Jump to latest" pill — floats over the thread just above the composer,
+   only while the viewer is scrolled up. */
+.jump-latest {
+  position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; z-index: 4;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 999px; padding: 7px 14px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(20, 30, 50, .16);
+}
+.jump-latest:hover { border-color: var(--accent); color: var(--accent); }
+.jump-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Stopped-generation note — quiet serif italic, like the margin notes. */
+.stopped-note {
+  margin: 0; font-family: var(--serif); font-style: italic;
+  color: var(--muted); font-size: 14.5px;
+}
+
+/* Conversation-loading skeleton: three ghost bars where the thread will be.
+   Shimmer is opacity-only (cheap, no layout) and disabled under
+   prefers-reduced-motion — a static ghost still reads as "loading". */
+.convo-skeleton { display: flex; flex-direction: column; gap: 18px; padding: 8px 2px; }
+.skel {
+  border-radius: 10px; background: var(--user); height: 44px; opacity: .7;
+}
+.skel-user { width: 46%; align-self: flex-end; }
+.skel-answer { width: 88%; height: 72px; }
+.skel-answer.short { width: 62%; height: 40px; }
+@media (prefers-reduced-motion: no-preference) {
+  .skel { animation: skel-pulse 1.2s ease-in-out infinite; }
+  @keyframes skel-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .85; } }
+}
+
+/* Copy-SQL sits inside the SQL disclosure, above the statements. */
+.sql-copy { display: inline-block; margin: 6px 0 2px; font-size: 12.5px; }
 .theme-toggle { font-size: 16px; line-height: 1; padding: 2px 4px; }
 
 /* Edit/Rerun under a user prompt — quiet, reveal on hover/focus. */

@@ -394,6 +394,62 @@ def test_conversation_crud():
         assert missing_delete.status_code == 404, missing_delete.text
 
 
+def test_conversation_rename():
+    """PATCH /conversations/{id} renames without reordering the sidebar.
+
+    Regressions caught: (a) losing the ownership check (a user renaming
+    someone else's chat); (b) a rename bumping updated_at and silently
+    reshuffling the recency-ordered sidebar; (c) blank/whitespace titles
+    wiping a chat's name."""
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a rename test question")
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+        before = next(x for x in c.get("/api/chat/conversations").json()
+                      if x["id"] == conv_id)
+
+        renamed = c.patch(f"/api/chat/conversations/{conv_id}",
+                          json={"title": "  My renamed chat  "})
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json() == {"ok": True, "title": "My renamed chat"}, renamed.text
+
+        after = next(x for x in c.get("/api/chat/conversations").json()
+                     if x["id"] == conv_id)
+        assert after["title"] == "My renamed chat", after
+        # A rename is metadata-only: updated_at (the sidebar's recency order)
+        # must NOT move, or renaming an old chat would jump it to the top.
+        assert after["updated_at"] == before["updated_at"], (before, after)
+
+        # Blank or whitespace-only titles are rejected, not stored.
+        blank = c.patch(f"/api/chat/conversations/{conv_id}", json={"title": "   "})
+        assert blank.status_code == 400, blank.text
+        # Absurdly long titles are rejected (the UI caps at the same bound).
+        long = c.patch(f"/api/chat/conversations/{conv_id}", json={"title": "x" * 201})
+        assert long.status_code == 400, long.text
+
+        missing = c.patch("/api/chat/conversations/999999", json={"title": "t"})
+        assert missing.status_code == 404, missing.text
+
+
+def test_conversation_rename_not_owned_404():
+    """Another signed-in user renaming my conversation must 404 (never 200,
+    and indistinguishable from not-found so ids can't be probed)."""
+    with TestClient(app) as c:
+        _login(c, "admin@example.edu")
+        r = _post_turn(c, "admin's own conversation")
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+
+        c.post("/api/admin/allowlist", json={"email": "renamer@example.edu"})
+        atok = captured["approved_link"].split("token=")[1]
+        c2 = TestClient(app)
+        assert c2.post("/api/auth/verify", json={"token": atok}).status_code == 200
+        r2 = c2.patch(f"/api/chat/conversations/{conv_id}", json={"title": "mine now"})
+        assert r2.status_code == 404, r2.text
+        # And the title is untouched.
+        mine = c.get("/api/chat/conversations").json()
+        assert next(x for x in mine if x["id"] == conv_id)["title"] != "mine now"
+
+
 # ---------------------------------------------------------------------------
 # CSV download error branches (the success path is covered in test_backend.py)
 # ---------------------------------------------------------------------------
@@ -520,6 +576,10 @@ def run():
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
+    check("conversation rename: trims, keeps sidebar order, rejects blank/overlong",
+          test_conversation_rename)
+    check("conversation rename by a non-owner 404s and changes nothing",
+          test_conversation_rename_not_owned_404)
     check("no-data guard: admin sees Admin->Imports wording and stream_agent never runs",
           test_no_data_guard_admin_wording_and_skips_agent)
     check("no-data guard: non-admin sees wait-for-administrator wording, agent never runs",

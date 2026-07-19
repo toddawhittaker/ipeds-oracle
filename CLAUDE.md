@@ -73,6 +73,21 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users`,
   `/admin/:tab`, `/verify`, catch-all → `/`. FastAPI's SPA catch-all serves
   `index.html` for all of them, so a hard refresh / deep link never 404s.
+  Chat interaction contracts (all Playwright-pinned in
+  `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
+  abandon-and-drain, never a network abort** — it bumps the existing
+  `turnToken` so the view detaches while the request drains and the server
+  still persists the answer (an aborted mid-turn request is the known
+  server-side data-loss path — see the open chat.py pre-`gen()` backlog item;
+  don't "optimize" Stop into an AbortController until that's fixed).
+  Auto-scroll **follows only while the viewer is near the bottom** (scrolled
+  up = never yanked; a "Jump to latest" pill is the way back). Conversation
+  switches show a skeleton, never the empty-state prompt. A printable key
+  typed with nothing editable focused redirects into the composer
+  (`typeahead.js`, vitest-pinned). Conversations can be **renamed inline**
+  (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
+  never touch `updated_at`, or renaming an old chat would reorder the
+  recency-sorted sidebar).
 - **Three SQLite DBs, all separate:** `ipeds.db` (read-only query target — the
   dataset above), `app.db` (state, with a `PRAGMA user_version` migration runner),
   `logs.db` (persistent admin logs).
