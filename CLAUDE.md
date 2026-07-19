@@ -203,8 +203,11 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   a per-table `CompareContext` (selection keyed by entity-label text, so each row
   self-identifies from its own hast node — no row-index plumbing); a "Compare N →" bar
   appears once ≥1 row is ticked (action enables at 2, capped at 4), rendering the
-  snapshot `<Chart>` in a `.compare-panel`. Browser truth in
-  `frontend/e2e/compare.spec.js`.
+  snapshot `<Chart>` in a `.compare-panel`. `Chart.jsx` renders **every** categorical
+  tick (`interval={0}`) and **wraps** long labels onto multi-line centered ticks
+  (`wrapLabel`/`WrapTick`) — Recharts otherwise silently DROPS colliding ticks, so a
+  long-named bar (e.g. "Texas A&M University–College Station") would go unlabeled.
+  Browser truth in `frontend/e2e/compare.spec.js`.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

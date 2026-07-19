@@ -54,6 +54,31 @@ test("select rows from a ranking table and compare them in an instant chart", as
   await expect(panel).toContainText("Michigan");
 });
 
+// Long institution names collide on the x-axis, and Recharts silently DROPS the
+// overlapping ticks — the reported bug where the #1 bar had no label. Every selected
+// entity must stay labeled (wrapped onto multiple lines).
+const LONG_NAMES = "Largest Texas public universities:\n\n"
+  + "| Rank | University | Total Enrollment |\n|---|---|---|\n"
+  + "| 1 | Texas A&M University–College Station | 78,321 |\n"
+  + "| 2 | The University of Texas at Austin | 53,864 |\n"
+  + "| 3 | University of Houston | 47,980 |\n"
+  + "| 4 | University of North Texas | 46,864 |\n";
+
+test("every compared bar keeps its label, even long ones (no dropped x-axis tick)", async ({ page }) => {
+  await signedIn(page);
+  await mockConversation(page, 9, [{ role: "assistant", content: LONG_NAMES }]);
+  await page.goto("/chat/9");
+
+  for (let i = 0; i < 4; i++) await page.getByRole("checkbox").nth(i).check();
+  await page.getByRole("button", { name: /Compare 4/ }).click();
+
+  const panel = page.locator(".compare-panel");
+  await expect(panel.locator("figure.chart")).toBeVisible();
+  // The #1 bar (longest name, the one Recharts used to drop) is labeled.
+  await expect(panel).toContainText("Texas A&M");
+  await expect(panel).toContainText("North Texas");
+});
+
 test("a single selection can't be compared, and Clear resets everything", async ({ page }) => {
   await signedIn(page);
   await mockConversation(page, 9, [

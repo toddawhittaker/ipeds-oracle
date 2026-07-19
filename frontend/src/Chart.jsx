@@ -51,12 +51,52 @@ function titleRenderer(title, fill) {
   };
 }
 
+// Split a long category label into up to `maxLines` word-wrapped lines of ~`max`
+// chars — so full institution names read on the x-axis without angling (which
+// clips the first bar off the container edge) or truncation (which collides on
+// shared prefixes like "The University of …").
+function wrapLabel(text, max = 16, maxLines = 3) {
+  const words = String(text ?? "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    if (cur && (cur + " " + w).length > max) { lines.push(cur); cur = w; }
+    else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > maxLines) {
+    lines[maxLines - 1] += "…";
+    lines.length = maxLines;
+  }
+  return lines.length ? lines : [""];
+}
+
+// A centered, multi-line x-axis tick for long category labels.
+function WrapTick({ x, y, payload, fill }) {
+  const lines = wrapLabel(payload?.value);
+  return (
+    <text x={x} y={y} textAnchor="middle" fill={fill} fontSize={11}>
+      {lines.map((ln, i) => (
+        <tspan key={i} x={x} dy={i === 0 ? 12 : 12}>{ln}</tspan>
+      ))}
+    </text>
+  );
+}
+
 // Build the chart's children once so the on-screen and export charts stay in
 // sync. `forExport` drops interactive-only bits (tooltip/legend).
-function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trendKey }) {
+function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trendKey, longLabels }) {
   const xLabel = spec.xLabel || spec.x;
   const yLabel = spec.yLabel || (keys.length === 1 ? keys[0] : "");
   const tick = { fill: colors.muted, fontSize: 12 };
+  // Categorical axes show ALL ticks (never drop a bar's label); long ones wrap onto
+  // multiple centered lines so they fit. A wrapped axis omits the centered axis title
+  // (it would collide with the taller ticks).
+  const xAxisExtra = longLabels
+    ? { interval: 0, height: 56, tick: <WrapTick fill={colors.muted} /> }
+    : (isBar ? { interval: 0 } : {});
+  const xAxisLabel = longLabels ? undefined
+    : { value: xLabel, position: "insideBottom", offset: -6, fill: colors.muted, fontSize: 12 };
   const seriesEl = keys.map((key, i) => {
     const color = PALETTE[i % PALETTE.length];
     const labels = showLabels
@@ -70,8 +110,7 @@ function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trend
   return [
     <CartesianGrid key="grid" stroke={colors.line} strokeDasharray="3 3" vertical={false} />,
     <XAxis key="x" dataKey={spec.x} stroke={colors.muted} tick={tick}
-           label={{ value: xLabel, position: "insideBottom", offset: -6,
-                    fill: colors.muted, fontSize: 12 }} />,
+           {...xAxisExtra} label={xAxisLabel} />,
     <YAxis key="y" width={70} stroke={colors.muted} tick={tick} tickFormatter={fmtNum}
            label={{ value: yLabel, angle: -90, position: "insideLeft", offset: 6,
                     fill: colors.muted, fontSize: 12, style: { textAnchor: "middle" } }} />,
@@ -125,7 +164,14 @@ export default function Chart({ spec }) {
 
   const isBar = type === "bar";
   const VisChart = isBar ? BarChart : LineChart;
-  const margin = { top: spec.title ? 28 : 10, right: 22, bottom: 24, left: 10 };
+  // Long CATEGORY labels (e.g. full university names in a comparison) collide on a
+  // horizontal axis, and Recharts silently DROPS the ones that would overlap — a real
+  // bug (a bar with no label is unreadable). Force every tick to render and angle the
+  // long ones, giving the axis extra vertical room.
+  const catLabels = spec.data.map((r) => String(r?.[spec.x] ?? ""));
+  const longLabels = isBar && catLabels.some((l) => l.length > 12);
+  const margin = { top: spec.title ? 28 : 10, right: 22, bottom: longLabels ? 12 : 24, left: 10 };
+  const chartH = longLabels ? 372 : 320;
 
   // Trend intelligence (single numeric series only): a fitted trend LINE for a
   // line time-series with enough points, and the %-change over the range as a
@@ -208,16 +254,16 @@ export default function Chart({ spec }) {
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={320}>
+      <ResponsiveContainer width="100%" height={chartH}>
         <VisChart data={chartData} margin={margin}>
-          {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey })}
+          {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey, longLabels })}
         </VisChart>
       </ResponsiveContainer>
 
       {/* Hidden, fixed-size, LIGHT, no-animation chart — the source for the PNG. */}
       <div className="chart-export-src" aria-hidden="true" ref={exportRef}>
-        <VisChart width={EXPORT_W} height={EXPORT_H} data={chartData} margin={margin}>
-          {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true, trendKey })}
+        <VisChart width={EXPORT_W} height={longLabels ? 380 : EXPORT_H} data={chartData} margin={margin}>
+          {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true, trendKey, longLabels })}
         </VisChart>
       </div>
 
