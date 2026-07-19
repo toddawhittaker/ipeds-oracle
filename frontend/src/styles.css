@@ -296,9 +296,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
 .newchat { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; text-align: center; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
-.convo-row { display: flex; align-items: center; border-radius: 8px; }
-.convo-row:hover { background: var(--bg); }
-.convo-row.on { background: var(--user); }
+.convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
+/* Reveal-trigger states share the row background so the actions' fade (below)
+   always blends into the row, whether shown by hover or keyboard focus. */
+.convo-row:hover, .convo-row:focus-within { background: var(--bg); }
+.convo-row.on, .convo-row.on:hover, .convo-row.on:focus-within { background: var(--user); }
 .convo {
   flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; color: var(--muted);
@@ -309,15 +311,26 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    offset on this full-width child gets clipped by the scroll container. */
 .convo:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .convo-row.on .convo { color: var(--text); }
-/* Row action buttons (rename + delete): hidden until the row is hovered or
-   the button itself is focused — the reveal-on-hover pattern the delete
-   button already used, generalized. */
-.convo-act {
-  flex: none; width: 28px; height: 28px; margin-right: 4px; border: none;
-  background: none; color: var(--muted); line-height: 1; border-radius: 6px;
-  opacity: 0; display: grid; place-items: center;
+/* Row action buttons (rename + delete): the title link spans the FULL row width
+   (nothing steals its space), and these float OVER its right end — revealed only
+   on row hover or keyboard focus. A left-fading gradient (matched to the row bg)
+   lets the buttons sit over the truncated title without clashing with its text.
+   pointer-events toggles with visibility so the hidden buttons never intercept a
+   click meant for the title underneath; opacity (not display) keeps them in tab
+   order for keyboard users. */
+.convo-actions {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  display: flex; align-items: center; gap: 2px; padding: 0 4px 0 28px;
+  border-radius: 0 8px 8px 0; opacity: 0; pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--bg) 45%);
 }
-.convo-row:hover .convo-act, .convo-act:focus-visible { opacity: 1; }
+.convo-row.on .convo-actions { background: linear-gradient(to right, transparent, var(--user) 45%); }
+.convo-row:hover .convo-actions, .convo-actions:focus-within { opacity: 1; pointer-events: auto; }
+.convo-act {
+  flex: none; width: 28px; height: 28px; border: none;
+  background: none; color: var(--muted); line-height: 1; border-radius: 6px;
+  display: grid; place-items: center; cursor: pointer;
+}
 .convo-act:hover { color: var(--text); background: var(--bg); }
 .convo-del:hover { color: var(--danger); }
 /* Inline rename input takes the row over entirely while active. */

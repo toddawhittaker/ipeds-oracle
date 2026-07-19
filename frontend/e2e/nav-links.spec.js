@@ -163,10 +163,12 @@ test.describe("sidebar conversation rows -- real links, trash stays a sibling", 
     await mockTwoConvos(page);
     await page.goto("/chat/3");
 
-    // Structural shape: exactly one row-link and one trash-button per row,
-    // both direct children of .convo-row -- not one nested inside the other.
+    // Structural shape: one row-link per row, and the rename+delete controls
+    // live in a .convo-actions overlay that is a SIBLING of the link (a
+    // full-width title with the buttons floated over its right end on hover) --
+    // never nested inside the link, which would be invalid + an a11y trap.
     await expect(page.locator(".convo-row > a.convo")).toHaveCount(2);
-    await expect(page.locator(".convo-row > button.convo-del")).toHaveCount(2);
+    await expect(page.locator(".convo-row > .convo-actions > button.convo-del")).toHaveCount(2);
     // No interactive descendant inside the link at all.
     await expect(page.locator(".convo-row a.convo button")).toHaveCount(0);
     // The delete control is not itself matched by a ".convo a" query (i.e.

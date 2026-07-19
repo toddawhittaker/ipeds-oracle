@@ -771,14 +771,16 @@ export default function Chat({ me }) {
                           aria-current={c.id === convId ? "page" : undefined}>
                       {c.title || "Untitled"}
                     </Link>
-                    <button type="button" className="convo-act"
-                            onClick={() => startRename(c)}
-                            title="Rename chat"
-                            aria-label={`Rename chat: ${c.title || "Untitled"}`}><IconEdit /></button>
-                    <button type="button" className="convo-act convo-del"
-                            onClick={(e) => deleteConvo(e, c.id)}
-                            title="Delete chat"
-                            aria-label={`Delete chat: ${c.title || "Untitled"}`}><IconTrash /></button>
+                    <div className="convo-actions">
+                      <button type="button" className="convo-act"
+                              onClick={() => startRename(c)}
+                              title="Rename chat"
+                              aria-label={`Rename chat: ${c.title || "Untitled"}`}><IconEdit /></button>
+                      <button type="button" className="convo-act convo-del"
+                              onClick={(e) => deleteConvo(e, c.id)}
+                              title="Delete chat"
+                              aria-label={`Delete chat: ${c.title || "Untitled"}`}><IconTrash /></button>
+                    </div>
                   </>
                 )}
               </div>
