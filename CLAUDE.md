@@ -145,8 +145,12 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
 - The **signature "figure"** — a typeset hero statistic (mono caption · big serif
   number · ochre rule · mono source) rendered ABOVE an answer when one clear number
-  answers the question (prompt INSTRUCTIONS **step 6**, modeled on the ```chart
-  fence; conservative — omitted for rankings/lists/trends). The model emits a
+  answers the question. Prompt INSTRUCTIONS **step 6** turns a single-number answer
+  into a short **BRIEF**: (a) the ```figure fence, (b) a 1–2 sentence synopsis, (c) a
+  recent-years breakdown table (constant-bound `year > (SELECT MAX(year)-5 …)`), and
+  (d) a ```chart trend — reusing the existing table + chart rendering, so the reader
+  gets the story behind the number, not just one point. Omitted for
+  rankings/lists/multi-row comparisons/trends with no single hero number. The model emits a
   ```figure `{value,unit?,label,source?}` fence; **`llm.py`'s `_extract_figure`
   parses it out server-side, ALWAYS strips every figure fence from the prose (so raw
   JSON never reaches the user, even on a parse error), and — only for valid JSON with

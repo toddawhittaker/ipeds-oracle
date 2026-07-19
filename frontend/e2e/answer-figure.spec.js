@@ -12,7 +12,14 @@ const FIGURE = {
   value: "7,679", unit: "degrees",
   label: "CS bachelor's · CA publics · 2024", source: "IPEDS Completions",
 };
-const ANSWER = "California publics awarded **7,679** CS degrees.\n\n| Inst | N |\n|---|---|\n| UCSD | 1,204 |";
+// A single-number answer's "brief": hero figure (above) + synopsis + a recent-years
+// breakdown table + a trend chart — all composed in one answer.
+const ANSWER = "California publics awarded **7,679** CS degrees — up from 6,900 in 2023.\n\n"
+  + "| Year | N |\n|---|---|\n| 2023 | 6,900 |\n| 2024 | 7,679 |\n\n"
+  + "```chart\n"
+  + '{"type":"line","x":"year","y":"n","title":"CS bachelors — CA publics",'
+  + '"data":[{"year":2023,"n":6900},{"year":2024,"n":7679}]}\n'
+  + "```";
 
 async function signedIn(page) {
   await mockMe(page, { email: "u@example.edu", is_admin: false, trust_llm_provider: true });
@@ -34,6 +41,9 @@ test("a figure renders above the prose and outside the copy surface", async ({ p
   await expect(fig).toContainText("IPEDS Completions");
   // Above the prose: the figure precedes the .md answer as an earlier sibling.
   await expect(page.locator(".answer-figure ~ .md")).toBeVisible();
+  // The brief composes: hero figure + recent-years table + trend chart together.
+  await expect(page.locator(".md table")).toBeVisible();
+  await expect(page.locator("figure.chart")).toBeVisible();
   // Outside the copy surface: the figure is NOT inside the .md node copy targets.
   await expect(page.locator(".md .answer-figure")).toHaveCount(0);
 });
@@ -59,6 +69,6 @@ test("an answer with no figure renders no hero statistic", async ({ page }) => {
   await page.getByPlaceholder("Ask about IPEDS data…").fill("show me the top 20");
   await page.getByRole("button", { name: "Send" }).click();
 
-  await expect(page.getByRole("cell", { name: "UCSD" })).toBeVisible(); // answer rendered
+  await expect(page.getByRole("cell", { name: "6,900" })).toBeVisible(); // answer rendered
   await expect(page.locator(".answer-figure")).toHaveCount(0);
 });
