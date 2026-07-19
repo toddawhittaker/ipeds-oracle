@@ -87,7 +87,20 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   (`typeahead.js`, vitest-pinned). Conversations can be **renamed inline**
   (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
   never touch `updated_at`, or renaming an old chat would reorder the
-  recency-sorted sidebar).
+  recency-sorted sidebar). An answer's **Thinking / SQL traces are
+  mutually-exclusive disclosure toggles** whose panel opens **full-width below**
+  the actions row (never as an inline `<details>` inside the flex row, which
+  widened its own cell and shoved the copy buttons around); opening one closes
+  the other. The **Thinking trace is persisted** (migration 12,
+  `messages.thinking` — a JSON list of `{kind,text}` items built server-side in
+  `chat.py`'s stream loop via `_trace_item`, mirroring the frontend's live
+  `addThought` 1:1) so it **survives a reload/reopen just like `sql_log`**, not
+  only the live in-session turn. SQL is rendered by `SqlBlock.jsx` — pretty-printed with
+  `sql-formatter` (a one-line query becomes a readable indented block, wrapping
+  instead of scrolling) and syntax-highlighted with `react-syntax-highlighter`
+  (`PrismLight`, SQL grammar only) run with `useInlineStyles={false}` so it
+  emits Prism token **class names** that `styles.css` colors per light/dark
+  theme — no inline styles, so it needs no CSP `style-src` exception of its own.
 - **Three SQLite DBs, all separate:** `ipeds.db` (read-only query target — the
   dataset above), `app.db` (state, with a `PRAGMA user_version` migration runner),
   `logs.db` (persistent admin logs).
@@ -101,7 +114,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   flags IPEDS aggregation foot-guns (CIP-rollup / second-major double counts,
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
   agent self-corrects;
-- a post-answer **critic** that can force one revision round.
+- a post-answer **critic** that can force one revision round. The revision only
+  ships if the model **re-queried AND changed the answer AND its prose carries no
+  reviewer-directed meta** (`_leaks_review_meta` in `llm.py` matches
+  "reviewer"/"the review"); otherwise the clean pre-critique draft is re-emitted,
+  `critic_revised=False`. This closes the observed leak where a *confirm*-by-
+  requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
+  past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

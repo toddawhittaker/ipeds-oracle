@@ -184,6 +184,74 @@ test.describe("inline error retry", () => {
   });
 });
 
+test.describe("thinking / SQL trace toggles", () => {
+  test("Thinking and SQL are mutually-exclusive toggles whose panel opens "
+    + "full-width below the actions row (never reflowing the copy buttons)", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, []);
+    await mockStreamChat(page, {
+      conversationId: 5, sql: ["SELECT stabbr FROM c_a"], answer: "Here you go.",
+    });
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("give me states");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText("Here you go.")).toBeVisible();
+
+    const thinking = page.getByRole("button", { name: "Thinking", exact: true });
+    const sql = page.getByRole("button", { name: "SQL", exact: true });
+    await expect(thinking).toHaveAttribute("aria-expanded", "false");
+    await expect(sql).toHaveAttribute("aria-expanded", "false");
+    // Nothing expanded yet.
+    await expect(page.locator(".trace-panel")).toHaveCount(0);
+
+    // Open SQL: its panel appears full-width — a SIBLING of .msg-actions, never
+    // nested inside it (the old inline <details> widened the flex row).
+    await sql.click();
+    await expect(sql).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(".trace-panel .sqlblock")).toContainText("c_a");
+    await expect(page.locator(".msg-actions .trace-panel")).toHaveCount(0);
+
+    // Open Thinking: SQL closes (mutual exclusivity) — exactly one panel at a time.
+    await page.getByRole("button", { name: "Thinking", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Thinking", exact: true }))
+      .toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("button", { name: "SQL", exact: true }))
+      .toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(".trace-panel")).toHaveCount(1);
+
+    // Toggling the open panel closes it.
+    await page.getByRole("button", { name: "Thinking", exact: true }).click();
+    await expect(page.locator(".trace-panel")).toHaveCount(0);
+  });
+
+  test("REGRESSION: a reopened conversation still shows the Thinking trace "
+    + "(it is persisted server-side, not only live)", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 9, title: "Past chat" }]);
+    // The server returns the persisted trace (JSON) alongside sql_log.
+    await mockConversation(page, 9, [
+      { id: 1, role: "user", content: "an earlier question" },
+      {
+        id: 2, role: "assistant", content: "an earlier answer.",
+        sql_log: ["SELECT 1"],
+        thinking: [
+          { kind: "reason", text: "recalling how this was reasoned" },
+          { kind: "status", text: "Running query…" },
+          { kind: "sql", text: "SELECT 1" },
+        ],
+      },
+    ]);
+    // Deep-link straight into the chat — the reopen/refresh path, no live stream.
+    await page.goto("/chat/9");
+    await expect(page.getByText("an earlier answer.")).toBeVisible();
+
+    const thinking = page.getByRole("button", { name: "Thinking", exact: true });
+    await expect(thinking).toBeVisible();
+    await thinking.click();
+    await expect(page.locator(".trace-panel")).toContainText("recalling how this was reasoned");
+  });
+});
+
 test.describe("sidebar rename", () => {
   async function openWithChats(page) {
     await mockMe(page, USER);

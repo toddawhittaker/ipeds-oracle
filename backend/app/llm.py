@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -28,6 +29,20 @@ from app.tools.sql import QueryResult
 log = logging.getLogger("ipeds.llm")
 
 _FAIL_MARKERS = ("SQL REJECTED", "SQL ERROR", "SQL TIMEOUT", "ERROR")
+
+# A user-facing answer NEVER addresses "the reviewer" or "this review" — that
+# phrasing only appears when the model's critique-round rebuttal leaks into the
+# answer (see backend/tests/test_critic.py + memory critic-revision-leak). Match
+# reviewer-referential meta only, so a genuine correction — which changes the
+# number and never speaks to a reviewer — is never suppressed.
+_REVIEW_LEAK_RE = re.compile(r"\breviewer\b|\b(?:the|this|automated)\s+review\b",
+                             re.IGNORECASE)
+
+
+def _leaks_review_meta(text: str) -> bool:
+    """True if `text` references the critique conversation (reviewer/review) —
+    the tell of a leaked rebuttal that must not reach the user."""
+    return bool(_REVIEW_LEAK_RE.search(text or ""))
 
 
 @dataclass
@@ -155,23 +170,28 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 # If a revision round ran (draft_answer is set), decide what to
                 # emit. A genuine correction both re-queries AND lands on a
                 # different answer; anything else is treated as no correction:
-                #  - re-queried AND the answer actually changed -> keep the new
-                #    answer and mark the turn revised (so chat.py records the
-                #    critic's finding as a lesson).
+                #  - re-queried AND the answer actually changed AND it carries no
+                #    reviewer-directed meta -> keep the new answer and mark the
+                #    turn revised (so chat.py records the critic's finding as a
+                #    lesson).
                 #  - otherwise -> re-emit the clean pre-critique draft and leave
                 #    critic_revised False. This covers a reviewer-directed rebuttal
                 #    (no new run_sql), a re-query that merely confirmed the same
                 #    number (a critic false alarm — no lesson should be stored),
-                #    and an empty revision. So no meta-commentary leaks to the user
-                #    and no spurious lesson is recorded. Trade-off: an interpretive
-                #    fix the model makes WITHOUT re-querying isn't distinguishable
-                #    from a rebuttal, so it falls back to the draft too; the
-                #    hardened revision_instruction steers real corrections to
-                #    re-run run_sql.
+                #    an empty revision, AND a rebuttal that DID re-query to
+                #    confirm but leaked "the reviewer"/"this review" meta into its
+                #    prose (the observed regression: a confirm dressed up as a
+                #    correction — same number, different text — which requeried+
+                #    changed alone can't tell from a real fix). So no
+                #    meta-commentary leaks to the user and no spurious lesson is
+                #    recorded. Trade-off: an interpretive fix the model makes
+                #    WITHOUT re-querying isn't distinguishable from a rebuttal, so
+                #    it falls back to the draft too; the hardened
+                #    revision_instruction steers real corrections to re-run run_sql.
                 if draft_answer:
                     requeried = len(res.sql_log) > sql_count_at_critique
                     changed = bool(answer.strip()) and answer.strip() != draft_answer.strip()
-                    if requeried and changed:
+                    if requeried and changed and not _leaks_review_meta(answer):
                         res.critic_revised = True
                     else:
                         answer = draft_answer

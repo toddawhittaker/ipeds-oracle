@@ -256,6 +256,58 @@ def test_normal_flow_titles_a_new_conversation():
                   for x in convs), convs
 
 
+def test_thinking_trace_is_persisted_and_returned_on_reload():
+    """The assistant's progress trace (status/reasoning/SQL/tool) must be stored
+    and returned by GET /conversations/{id}, so the 'Thinking' disclosure
+    survives a reload — not just the live in-session turn. Regression guard for
+    the reopened-chat case where SQL persisted but Thinking vanished."""
+    async def _traced_agent(question, *, history=None, skills_block=""):
+        yield {"type": "thinking", "text": "reasoning about the question"}
+        yield {"type": "status", "text": "Running query…"}
+        yield {"type": "sql", "sql": "SELECT 1"}
+        yield {"type": "tool", "name": "run_sql", "ok": True}
+        yield {"type": "answer", "text": "the answer"}
+        yield {"type": "done", "result": AgentResult(
+            answer="the answer", model_used="test", sql_log=["SELECT 1"],
+            prompt_tokens=1, completion_tokens=1)}
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        chat_router.stream_agent = _traced_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a traced question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+        # Reload the conversation (what the client does on reopen/refresh).
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        trace = json.loads(assistant["thinking"])
+        # Mirrors the frontend's live addThought() mapping exactly.
+        assert trace == [
+            {"kind": "reason", "text": "reasoning about the question"},
+            {"kind": "status", "text": "Running query…"},
+            {"kind": "sql", "text": "SELECT 1"},
+            {"kind": "tool", "text": "run_sql ✓"},
+        ], trace
+        # The user message carries no trace: NULL, like its NULL sql_log. The
+        # client maps null -> [] on load (Chat.jsx), so no Thinking toggle shows.
+        user_msg = next(m for m in msgs if m["role"] == "user")
+        assert user_msg["thinking"] is None, user_msg["thinking"]
+
+
 def test_retrieved_skills_bump_their_hit_count():
     with TestClient(app) as c:
         _login(c)
@@ -569,6 +621,8 @@ def run():
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
     check("a normal (non-cached) successful turn titles a new conversation",
           test_normal_flow_titles_a_new_conversation)
+    check("the thinking trace is persisted and returned on reload",
+          test_thinking_trace_is_persisted_and_returned_on_reload)
     check("retrieved few-shot skills bump their hit count",
           test_retrieved_skills_bump_their_hit_count)
     check("a critic-driven correction records a candidate lesson",

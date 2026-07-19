@@ -149,7 +149,9 @@ export async function mockConversation(page, id, messages,
   let calls = 0;
   const body = (messages || []).map((m) => ({
     ...m,
+    // The server serializes both sql_log and thinking as JSON strings.
     sql_log: m.sql_log !== undefined ? JSON.stringify(m.sql_log) : undefined,
+    thinking: m.thinking !== undefined ? JSON.stringify(m.thinking) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.continue();

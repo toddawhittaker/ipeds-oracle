@@ -133,6 +133,23 @@ def test_migration_5_adds_import_jobs_progress_column():
     assert row[0] is None, row
 
 
+def test_migration_12_adds_messages_thinking_column():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 11])
+    assert "thinking" not in _cols(con, "messages"), _cols(con, "messages")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "thinking" in _cols(con, "messages"), _cols(con, "messages")
+    # Nullable: pre-migration assistant rows aren't backfilled, and user rows
+    # never carry a trace — the client maps NULL -> [] (no Thinking toggle).
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+               "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, created_at) "
+               "VALUES (1, 'user', 'q', 0)")
+    row = con.execute("SELECT thinking FROM messages WHERE role='user'").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -374,6 +391,8 @@ def run():
           test_migration_4_adds_year_provenance_table)
     check("migration 5 adds import_jobs.progress (nullable)",
           test_migration_5_adds_import_jobs_progress_column)
+    check("migration 12 adds messages.thinking (nullable)",
+          test_migration_12_adds_messages_thinking_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

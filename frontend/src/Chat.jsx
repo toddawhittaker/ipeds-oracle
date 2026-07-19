@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
+import SqlBlock from "./SqlBlock.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
@@ -124,7 +125,7 @@ function ThinkingTrace({ items }) {
   return (
     <div className="thought-list thin-scroll">
       {items.map((t, j) => {
-        if (t.kind === "sql") return <pre key={j} className="thought-sql">{t.text}</pre>;
+        if (t.kind === "sql") return <SqlBlock key={j} code={t.text} className="thought-sql" />;
         if (t.kind === "reason") return <p key={j} className="thought-reason">{t.text}</p>;
         return <div key={j} className="thought-line muted">{t.text}</div>;
       })}
@@ -152,6 +153,12 @@ export default function Chat({ me }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(null); // `${i}:${kind}` most recently copied
+  // Which message's Thinking/SQL trace is expanded, as `${i}:thinking`/`${i}:sql`
+  // (null = none). A single global key makes the two toggles on a message
+  // mutually exclusive — opening one closes the other — and renders the panel
+  // full-width BELOW the actions row instead of inline (where a native <details>
+  // widened its own flex cell and shoved the copy buttons sideways).
+  const [openTrace, setOpenTrace] = useState(null);
   // True from a conversation route change until its messages fetch settles —
   // drives the loading skeleton so switching chats never flashes the
   // "What would you like to know" empty state (initial value covers a direct
@@ -319,7 +326,11 @@ export default function Chat({ me }) {
     api.conversation(routeId)
       .then((msgs) => {
         if (cancelled) return;
-        setMessages(msgs.map((m) => ({ ...m, sql_log: m.sql_log ? JSON.parse(m.sql_log) : [] })));
+        setMessages(msgs.map((m) => ({
+          ...m,
+          sql_log: m.sql_log ? JSON.parse(m.sql_log) : [],
+          thinking: m.thinking ? JSON.parse(m.thinking) : [],
+        })));
         setLoadingConvo(false);
       })
       .catch(() => { if (!cancelled) { setNotice(NOT_AVAILABLE); setLoadingConvo(false); } });
@@ -378,6 +389,13 @@ export default function Chat({ me }) {
       ? await copyHtml(mdRefs.current[i], text)
       : await copyText(text);
     if (ok) { setCopied(`${i}:${kind}`); setTimeout(() => setCopied(null), 1400); }
+  }
+
+  // Toggle a message's Thinking/SQL panel; opening either closes any other
+  // (only one key can be set), so the two are mutually exclusive.
+  function toggleTrace(i, kind) {
+    const key = `${i}:${kind}`;
+    setOpenTrace((cur) => (cur === key ? null : key));
   }
 
   // Pushes a new history entry -- Back from a freshly-opened chat should
@@ -896,22 +914,51 @@ export default function Chat({ me }) {
                   </>
                 )}
                 {m.role === "assistant" && !m.pending && (
-                  <div className="msg-actions">
-                    {/* A failed turn's recovery lives ON the failure, not
-                        hidden up on the user message's Rerun. */}
-                    {m.error && messages[i - 1]?.role === "user" && (
-                      <button className="link ico" onClick={() => rerun(i - 1)} disabled={busy}
-                              title="Ask this question again"><IconRerun />Try again</button>
-                    )}
-                    {m.thinking?.length > 0 && (
-                      <details className="sql">
-                        <summary>Thinking</summary>
+                  <>
+                    <div className="msg-actions">
+                      {/* A failed turn's recovery lives ON the failure, not
+                          hidden up on the user message's Rerun. */}
+                      {m.error && messages[i - 1]?.role === "user" && (
+                        <button className="link ico" onClick={() => rerun(i - 1)} disabled={busy}
+                                title="Ask this question again"><IconRerun />Try again</button>
+                      )}
+                      {/* Thinking/SQL are toggle buttons, not inline <details> —
+                          the expanded content renders full-width BELOW this row
+                          (see the trace-panel below), so opening one never
+                          reflows the copy buttons, and the two are mutually
+                          exclusive. */}
+                      {m.thinking?.length > 0 && (
+                        <button type="button" className="link trace-toggle"
+                                aria-expanded={openTrace === `${i}:thinking`}
+                                aria-controls={`trace-${i}`}
+                                onClick={() => toggleTrace(i, "thinking")}>Thinking</button>
+                      )}
+                      {m.sql_log?.length > 0 && (
+                        <button type="button" className="link trace-toggle"
+                                aria-expanded={openTrace === `${i}:sql`}
+                                aria-controls={`trace-${i}`}
+                                onClick={() => toggleTrace(i, "sql")}>SQL</button>
+                      )}
+                      {m.content && (
+                        <>
+                          <button className="link" onClick={() => doCopy(i, "md", m.content)}
+                                  title="Copy the answer as Markdown">
+                            {copied === `${i}:md` ? "Copied!" : "Copy Markdown"}
+                          </button>
+                          <button className="link" onClick={() => doCopy(i, "html", m.content)}
+                                  title="Copy the answer as rich HTML (paste into email/Word)">
+                            {copied === `${i}:html` ? "Copied!" : "Copy HTML"}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {openTrace === `${i}:thinking` && m.thinking?.length > 0 && (
+                      <div className="trace-panel" id={`trace-${i}`}>
                         <ThinkingTrace items={m.thinking} />
-                      </details>
+                      </div>
                     )}
-                    {m.sql_log?.length > 0 && (
-                      <details className="sql">
-                        <summary>SQL</summary>
+                    {openTrace === `${i}:sql` && m.sql_log?.length > 0 && (
+                      <div className="trace-panel" id={`trace-${i}`}>
                         <button className="link sql-copy"
                                 onClick={async () => {
                                   if (await copyText(m.sql_log.join(";\n\n"))) {
@@ -920,22 +967,10 @@ export default function Chat({ me }) {
                                 }}>
                           {copied === `${i}:sql` ? "Copied!" : "Copy SQL"}
                         </button>
-                        <pre>{m.sql_log.join(";\n\n")}</pre>
-                      </details>
+                        <SqlBlock code={m.sql_log.join(";\n\n")} />
+                      </div>
                     )}
-                    {m.content && (
-                      <>
-                        <button className="link" onClick={() => doCopy(i, "md", m.content)}
-                                title="Copy the answer as Markdown">
-                          {copied === `${i}:md` ? "Copied!" : "Copy Markdown"}
-                        </button>
-                        <button className="link" onClick={() => doCopy(i, "html", m.content)}
-                                title="Copy the answer as rich HTML (paste into email/Word)">
-                          {copied === `${i}:html` ? "Copied!" : "Copy HTML"}
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  </>
                 )}
               </div>
             </div>

@@ -372,10 +372,23 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    the full reading column so the actions bar underneath is full width. */
 .msg.assistant { width: 100%; }
 .msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
-.msg-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
+.msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
-details.sql summary { cursor: pointer; color: var(--muted); }
-details.sql pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+/* Thinking/SQL disclosure toggles: a caret that rotates when their panel is
+   open (aria-expanded), so the button reads as the control for the full-width
+   panel rendered under the row. */
+.trace-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.trace-toggle::before {
+  content: ""; width: 0; height: 0; border-left: 4px solid currentColor;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform .12s ease;
+}
+@media (prefers-reduced-motion: reduce) { .trace-toggle::before { transition: none; } }
+.trace-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+/* The expanded trace: a full-width block beneath the actions row (never inside
+   the flex row), so opening it can't push the copy buttons around. */
+.trace-panel { margin-top: 8px; }
+.trace-panel .sql-copy { margin-top: 0; }
 /* The import report + streamed log wrap instead of scrolling horizontally, so
    they don't sprout their own inner scrollbars nested inside the page scroll.
    The (potentially long) log is a single bounded vertical-scroll box; the short
@@ -393,16 +406,52 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
 .thinking-head { display: flex; align-items: center; gap: 10px; }
 .thoughts { margin-top: 8px; }
-.thoughts summary, details.sql summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.thoughts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .thought-list { max-height: 260px; overflow: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .thought-line { font-size: 13px; }
-.thought-sql {
-  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
-  padding: 8px 10px; margin: 0; font-size: 12.5px; overflow-x: auto; white-space: pre;
-}
 .thought-reason {
   margin: 0; font-size: 13px; color: var(--muted); font-style: italic;
   white-space: pre-wrap; line-height: 1.5;
+}
+
+/* Formatted + highlighted SQL (SqlBlock.jsx). react-syntax-highlighter runs
+   with useInlineStyles=false, so it emits Prism token CLASS NAMES only — we
+   color them here per theme (no inline styles, no CSP style exception). The
+   formatter already indents, so we wrap long lines instead of scrolling. */
+.sqlblock {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; margin: 0; font-size: 12.5px; line-height: 1.45;
+  font-family: var(--mono); color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto;
+}
+.sqlblock code { font-family: inherit; }
+.thought-sql { margin: 0; }
+/* Prism token palette — light theme (over --bg). */
+.sqlblock .token.comment { color: var(--muted); font-style: italic; }
+.sqlblock .token.keyword { color: var(--accent-d); font-weight: 600; }
+.sqlblock .token.string { color: #1c7a4b; }
+.sqlblock .token.number,
+.sqlblock .token.boolean { color: #a15c00; }
+.sqlblock .token.function,
+.sqlblock .token.builtin { color: #8a4b12; }
+.sqlblock .token.operator,
+.sqlblock .token.punctuation { color: var(--muted); }
+.sqlblock .token.null,
+.sqlblock .token.keyword.null { color: var(--danger); }
+/* Dark theme token overrides (brighter, over the dark --bg). */
+:root[data-theme="dark"] .sqlblock .token.keyword { color: var(--accent-d); }
+:root[data-theme="dark"] .sqlblock .token.string { color: #6fd39a; }
+:root[data-theme="dark"] .sqlblock .token.number,
+:root[data-theme="dark"] .sqlblock .token.boolean { color: var(--warn); }
+:root[data-theme="dark"] .sqlblock .token.function,
+:root[data-theme="dark"] .sqlblock .token.builtin { color: var(--ochre); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sqlblock .token.keyword { color: var(--accent-d); }
+  :root:not([data-theme]) .sqlblock .token.string { color: #6fd39a; }
+  :root:not([data-theme]) .sqlblock .token.number,
+  :root:not([data-theme]) .sqlblock .token.boolean { color: var(--warn); }
+  :root:not([data-theme]) .sqlblock .token.function,
+  :root:not([data-theme]) .sqlblock .token.builtin { color: var(--ochre); }
 }
 /* Claude-style floating composer: a rounded box that sits inside the chat area
    with the send button pinned to its bottom-right (fixed size — it never grows
