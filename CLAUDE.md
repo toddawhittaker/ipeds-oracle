@@ -180,8 +180,10 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   - **Richer narrative + rank/share** — prompt step 6(b): direction/magnitude,
     peak/trough years, provisional-year flags, and (when meaningful) the figure's rank
     among peers or share of a national total (the model runs one extra query).
-  - **"You might also ask" drill-down chips** — the model MAY emit a ```followups
-    fence (step 7, a JSON array); `_extract_suggestions` parses+strips it (mirrors
+  - **"You might also ask" drill-down chips** — the model emits a ```followups
+    fence on EVERY answered turn (step 7 is REQUIRED, not optional — only an
+    off-topic/unanswerable turn skips it, so chips appear on every real answer, not
+    just single-number briefs); `_extract_suggestions` parses+strips it (mirrors
     the figure) → `{"type":"suggestions",…}` event → `messages.suggestions` (migration
     15) + `query_cache.suggestions` (16). `Suggestions.jsx` (pure `suggestions.js`,
     vitest) renders chips below the actions row; clicking one `submit()`s it as a
