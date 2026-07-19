@@ -66,6 +66,13 @@ test.describe("stop generating", () => {
 });
 
 test.describe("scroll containment", () => {
+  // The app animates its follow-scroll (scrollIntoView behavior:"smooth")
+  // unless the user prefers reduced motion. Under an animation, a test's
+  // scrollTop writes race the easing frames — emulate reduced motion so
+  // every scroll in here is instantaneous and deterministic (the containment
+  // LOGIC, not the easing, is what's under test).
+  test.use({ contextOptions: { reducedMotion: "reduce" } });
+
   test("scrolling up shows the Jump-to-latest pill; jumping returns to the "
     + "bottom and hides it", async ({ page }) => {
     await mockMe(page, USER);

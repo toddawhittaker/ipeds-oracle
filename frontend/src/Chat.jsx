@@ -404,6 +404,12 @@ export default function Chat({ me }) {
       e.preventDefault();
       setMessages([]); setNotice(""); setEditingIdx(null);
       setBusy(false); setStatus("");
+      // Mirror the render-time reset's scroll state: an empty thread has no
+      // "latest" to jump to (without this, a pill from a scrolled-up prior
+      // thread lingers over the fresh empty state — no scroll event fires to
+      // clear it).
+      nearBottom.current = true;
+      setShowJump(false);
       // The [routeId] focus effect can't fire here (routeId never changes) —
       // land focus in the composer directly, ready for the next question.
       requestAnimationFrame(() => taRef.current?.focus());
