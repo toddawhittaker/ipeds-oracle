@@ -6,6 +6,7 @@ import { estimateIntegrate } from "./estimate.js";
 import { USER_CONFIG } from "./userlist.js";
 import { PENDING_CONFIG, BLOCKED_CONFIG } from "./accesstables.js";
 import DataTable from "./DataTable.jsx";
+import SqlBlock from "./SqlBlock.jsx";
 import { buildImportPlan } from "./csvimport.js";
 import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload, IconCheck, IconClose, IconUnlock } from "./icons.jsx";
 import HelpPopover from "./HelpPopover.jsx";
@@ -2076,7 +2077,7 @@ function Skills() {
             <details className="lesson-example">
               <summary className="muted small">Example query</summary>
               {s.question && <div className="muted small qtext">{s.question}</div>}
-              <pre>{s.canonical_sql}</pre>
+              <SqlBlock code={s.canonical_sql} />
             </details>
           )}
           <div className="msg-actions">

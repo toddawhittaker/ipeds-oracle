@@ -19,12 +19,15 @@ function prettySql(code) {
   }
 }
 
-// A formatted, syntax-highlighted SQL block. `useInlineStyles={false}` makes
+// A syntax-highlighted SQL block. `useInlineStyles={false}` makes
 // react-syntax-highlighter emit Prism token *class names* (no inline style
 // attributes) which styles.css colors per theme (.sqlblock .token.*) — so the
 // highlighting tracks light/dark and needs no CSP style exception of its own.
-export default function SqlBlock({ code, className = "" }) {
-  const pretty = useMemo(() => prettySql(code), [code]);
+// `format` pretty-prints the source (default) — turn it off to highlight text
+// as authored (e.g. a ```sql fence in an answer, where the writer's own layout
+// should be preserved).
+export default function SqlBlock({ code, className = "", format = true }) {
+  const shown = useMemo(() => (format ? prettySql(code) : (code || "")), [code, format]);
   return (
     <SyntaxHighlighter
       language="sql"
@@ -32,7 +35,7 @@ export default function SqlBlock({ code, className = "" }) {
       PreTag="pre"
       className={`sqlblock ${className}`.trim()}
     >
-      {pretty}
+      {shown}
     </SyntaxHighlighter>
   );
 }

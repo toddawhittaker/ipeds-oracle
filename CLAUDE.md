@@ -95,12 +95,19 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `messages.thinking` — a JSON list of `{kind,text}` items built server-side in
   `chat.py`'s stream loop via `_trace_item`, mirroring the frontend's live
   `addThought` 1:1) so it **survives a reload/reopen just like `sql_log`**, not
-  only the live in-session turn. SQL is rendered by `SqlBlock.jsx` — pretty-printed with
+  only the live in-session turn. **All SQL anywhere in the UI** renders through
+  `SqlBlock.jsx` (the chat Thinking trace + SQL dropdown, the Admin → Skills
+  worked example, and any ```sql fence in an answer) — pretty-printed with
   `sql-formatter` (a one-line query becomes a readable indented block, wrapping
-  instead of scrolling) and syntax-highlighted with `react-syntax-highlighter`
-  (`PrismLight`, SQL grammar only) run with `useInlineStyles={false}` so it
-  emits Prism token **class names** that `styles.css` colors per light/dark
-  theme — no inline styles, so it needs no CSP `style-src` exception of its own.
+  instead of scrolling; `format={false}` highlights-only for author-written
+  fences) and syntax-highlighted with `react-syntax-highlighter` (`PrismLight`,
+  SQL grammar only) run with `useInlineStyles={false}` so it emits Prism token
+  **class names** that `styles.css` colors per light/dark theme — no inline
+  styles, so it needs no CSP `style-src` exception of its own. SQL **inside the
+  Thinking trace** is height-capped to a ~9–10 line scroll window (`.thought-sql`
+  needs `flex:none` or the flex-column trace squishes a tall query to one line —
+  the recurring "single line SQL" bug); the standalone **SQL dropdown stays fully
+  expanded** (the user's deliberate "show me the whole query" view).
 - **Three SQLite DBs, all separate:** `ipeds.db` (read-only query target — the
   dataset above), `app.db` (state, with a `PRAGMA user_version` migration runner),
   `logs.db` (persistent admin logs).

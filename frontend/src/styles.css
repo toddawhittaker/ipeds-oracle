@@ -425,7 +425,17 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto;
 }
 .sqlblock code { font-family: inherit; }
-.thought-sql { margin: 0; }
+/* SQL *inside the Thinking trace*: the trace is a flex column, which by default
+   shrinks a tall child to a sliver (the "single line" bug — a 100-line query
+   squished to 16px). Pin it (flex:none so it keeps its content height) and cap
+   a large query to an ~8-10 line scrollable window; a small one shows in full.
+   The dedicated SQL dropdown block (no .thought-sql) stays uncapped — that's the
+   user's deliberate "show me just the SQL" view. */
+.thought-sql { margin: 0; flex: none; max-height: 15em; overflow-y: auto; }
+/* In the finished full-width panel the trace grows with the page (each SQL block
+   is already capped), so drop the compact live max-height + outer scroll that
+   would otherwise nest a second scrollbar around the capped blocks. */
+.trace-panel .thought-list { max-height: none; overflow: visible; }
 /* Prism token palette — light theme (over --bg). */
 .sqlblock .token.comment { color: var(--muted); font-style: italic; }
 .sqlblock .token.keyword { color: var(--accent-d); font-weight: 600; }
@@ -863,7 +873,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .lesson-example { margin-top: 10px; }
 .lesson-example summary { cursor: pointer; }
 .lesson-example .qtext { margin: 6px 0 4px; font-style: italic; }
-.lesson-example pre { margin: 6px 0 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+.lesson-example .sqlblock { margin: 6px 0 0; }
 .lesson-edit { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
 .lesson-field { display: flex; flex-direction: column; gap: 4px; }
 /* Accent border + a fill that differs from the card, matching .edit-box (the

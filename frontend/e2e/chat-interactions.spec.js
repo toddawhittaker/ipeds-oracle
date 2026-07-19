@@ -250,6 +250,31 @@ test.describe("thinking / SQL trace toggles", () => {
     await thinking.click();
     await expect(page.locator(".trace-panel")).toContainText("recalling how this was reasoned");
   });
+
+  test("REGRESSION: a large SQL query in the Thinking trace is not flex-squished "
+    + "to one line — it's a capped, scrollable window", async ({ page }) => {
+    // A many-line query. The Thinking trace is a flex column that, without
+    // flex:none on the SQL block, shrinks a tall child to ~16px (the reported
+    // 'single line' bug). It must instead keep a readable, capped height.
+    const bigSql = "SELECT " + Array.from({ length: 30 }, (_, i) => `col_${i}`).join(", ")
+      + " FROM c_a WHERE year = (SELECT MAX(year) FROM _years) GROUP BY 1 ORDER BY 1";
+    await mockMe(page, USER);
+    await mockConversations(page, []);
+    await mockStreamChat(page, { conversationId: 3, sql: [bigSql], answer: "Done." });
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("big query");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText("Done.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Thinking", exact: true }).click();
+    const sql = page.locator(".trace-panel .thought-sql");
+    const box = await sql.evaluate((el) => ({ clientH: el.clientHeight, scrollH: el.scrollHeight }));
+    // Not squished to a sliver (the bug produced ~16px), and capped below the
+    // full content height with a scroll region (~9-10 line window).
+    expect(box.clientH).toBeGreaterThan(80);
+    expect(box.clientH).toBeLessThan(260);
+    expect(box.scrollH).toBeGreaterThan(box.clientH + 2);
+  });
 });
 
 test.describe("sidebar rename", () => {
