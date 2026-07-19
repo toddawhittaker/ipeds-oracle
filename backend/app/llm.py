@@ -49,21 +49,30 @@ def _leaks_review_meta(text: str) -> bool:
 # answers the question (prompt INSTRUCTIONS step 6, modeled on the chart fence).
 # We parse + strip it server-side so the frontend gets structured data, never raw
 # JSON in the prose — mirrors frontend/src/figure.js normalizeFigure.
-_FIGURE_FENCE_RE = re.compile(r"```figure[ \t]*\r?\n(.*?)```", re.DOTALL)
+# The figure comes as a ```figure fenced block — but some models emit an HTML
+# <figure>{json}</figure> tag instead; accept BOTH forms (and strip both), so the
+# hero statistic is captured either way and raw JSON never reaches the user.
+_FIGURE_BLOCK_RE = re.compile(
+    r"```figure[ \t]*\r?\n(.*?)```"
+    r"|<figure[^>]*>\s*(\{.*?\})\s*</figure>",
+    re.DOTALL,
+)
 _FIGURE_KEYS = ("value", "unit", "label", "source")
 
 
 def _extract_figure(answer: str) -> tuple[str, dict | None]:
-    """Pull a ```figure fence out of `answer`. Returns (answer_without_any_figure
-    _fence, figure_or_None). ALWAYS strips every figure fence (so raw JSON never
-    reaches the user, even on a parse failure); returns a figure dict only when the
-    first fence is valid JSON with a non-empty value AND label."""
-    matches = _FIGURE_FENCE_RE.findall(answer or "")
+    """Pull the figure out of `answer` — a ```figure fence OR an HTML <figure> tag.
+    Returns (answer_without_any_figure_block, figure_or_None). ALWAYS strips every
+    such block (so raw JSON never reaches the user, even on a parse failure);
+    returns a figure dict only when the first is valid JSON with value AND label."""
+    matches = list(_FIGURE_BLOCK_RE.finditer(answer or ""))
     if not matches:
         return answer, None
-    clean = _FIGURE_FENCE_RE.sub("", answer).strip()
+    clean = _FIGURE_BLOCK_RE.sub("", answer).strip()
+    m = matches[0]
+    raw = m.group(1) if m.group(1) is not None else m.group(2)
     try:
-        data = json.loads(matches[0].strip())
+        data = json.loads((raw or "").strip())
     except (json.JSONDecodeError, ValueError):
         return clean, None
     if not isinstance(data, dict):
@@ -77,6 +86,30 @@ def _extract_figure(answer: str) -> tuple[str, dict | None]:
         if s:
             out[k] = s
     return clean, (out if out.get("value") and out.get("label") else None)
+
+
+# The model MAY end with a ```followups fence — a JSON array of 2-3 drill-down
+# questions (prompt INSTRUCTIONS step 7). Parsed + stripped server-side like the
+# figure, surfaced as clickable chips.
+_FOLLOWUPS_FENCE_RE = re.compile(r"```followups[ \t]*\r?\n(.*?)```", re.DOTALL)
+
+
+def _extract_suggestions(answer: str) -> tuple[str, list | None]:
+    """Pull a ```followups fence (a JSON array of drill-down questions) out of the
+    answer. ALWAYS strips every followups fence; returns up to 3 non-empty, trimmed
+    question strings, or None (no fence / bad JSON / not a list of strings)."""
+    matches = _FOLLOWUPS_FENCE_RE.findall(answer or "")
+    if not matches:
+        return answer, None
+    clean = _FOLLOWUPS_FENCE_RE.sub("", answer).strip()
+    try:
+        data = json.loads(matches[0].strip())
+    except (json.JSONDecodeError, ValueError):
+        return clean, None
+    if not isinstance(data, list):
+        return clean, None
+    out = [str(q).strip() for q in data if str(q).strip()][:3]
+    return clean, (out or None)
 
 
 @dataclass
@@ -94,6 +127,7 @@ class AgentResult:
     critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
     critic_description: str = ""    # the critic's finding, description (candidate lesson body)
     figure: dict | None = None      # structured hero statistic from the answer's figure fence
+    suggestions: list | None = None  # drill-down questions from the followups fence
     error: str | None = None
 
     @property
@@ -230,13 +264,17 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         res.critic_revised = True
                     else:
                         answer = draft_answer
-                # Extract the figure from the FINAL answer (after the critic revert
-                # settles it), so the figure always matches the winning prose.
-                res.answer, res.figure = _extract_figure(answer)
+                # Extract the structured blocks from the FINAL answer (after the
+                # critic revert settles it), so they always match the winning prose.
+                answer, res.figure = _extract_figure(answer)
+                answer, res.suggestions = _extract_suggestions(answer)
+                res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
+                if res.suggestions:
+                    yield {"type": "suggestions", "suggestions": res.suggestions}
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
@@ -295,9 +333,13 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         res.model_used = model
         res.last_result = last_sql_result["result"]
         if final.strip():
-            res.answer, res.figure = _extract_figure(final)
+            final, res.figure = _extract_figure(final)
+            final, res.suggestions = _extract_suggestions(final)
+            res.answer = final
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
+            if res.suggestions:
+                yield {"type": "suggestions", "suggestions": res.suggestions}
             yield {"type": "answer", "text": res.answer}
             yield {"type": "done", "result": res}
             return

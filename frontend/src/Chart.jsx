@@ -5,11 +5,12 @@ import {
 } from "recharts";
 import { svgToPngDataUrl } from "./chartimg.js";
 import { IconCopy } from "./icons.jsx";
+import { pctChange, trendValues } from "./trendstats.js";
 
 const PALETTE = ["#3b82c4", "#e0803a", "#38a169", "#a23bc9", "#d64f6b", "#0e9aa7"];
 // Exports are always rendered light so a pasted chart looks right in a document
 // regardless of the app's current theme.
-const LIGHT = { text: "#1a1f26", muted: "#6b7280", line: "#e3e6ea" };
+const LIGHT = { text: "#1a1f26", muted: "#6b7280", line: "#e3e6ea", ochre: "#a66a12" };
 const EXPORT_W = 620, EXPORT_H = 320;
 
 const fmtNum = (v) => (typeof v === "number" ? v.toLocaleString() : v);
@@ -21,6 +22,7 @@ function useThemeColors() {
     return {
       text: g("--text", "#1a1f26"), muted: g("--muted", "#6b7280"),
       line: g("--line", "#e3e6ea"), panel: g("--panel", "#ffffff"),
+      ochre: g("--ochre", "#a66a12"),
     };
   };
   const [colors, setColors] = useState(read);
@@ -51,7 +53,7 @@ function titleRenderer(title, fill) {
 
 // Build the chart's children once so the on-screen and export charts stay in
 // sync. `forExport` drops interactive-only bits (tooltip/legend).
-function chartChildren({ colors, isBar, keys, spec, showLabels, forExport }) {
+function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trendKey }) {
   const xLabel = spec.xLabel || spec.x;
   const yLabel = spec.yLabel || (keys.length === 1 ? keys[0] : "");
   const tick = { fill: colors.muted, fontSize: 12 };
@@ -81,6 +83,12 @@ function chartChildren({ colors, isBar, keys, spec, showLabels, forExport }) {
     !forExport && keys.length > 1 && <Legend key="leg" wrapperStyle={{ fontSize: 12 }} />,
     spec.title && <Customized key="title" component={titleRenderer(spec.title, colors.text)} />,
     ...seriesEl,
+    // The fitted trend line — a computed `__trend` series (dashed ochre, no dots,
+    // no labels), kept OUT of `keys` so it never gets a LabelList or triggers the
+    // legend. Rendered here so it appears in both the on-screen and export charts.
+    trendKey && <Line key="trend" type="linear" dataKey={trendKey} name="trend"
+                      stroke={colors.ochre} strokeWidth={1.5} strokeDasharray="6 4"
+                      dot={false} activeDot={false} isAnimationActive={false} legendType="none" />,
   ].filter(Boolean);
 }
 
@@ -88,6 +96,7 @@ export default function Chart({ spec }) {
   const c = useThemeColors();
   const [type, setType] = useState(spec?.type === "bar" ? "bar" : "line");
   const [showLabels, setShowLabels] = useState(false);
+  const [showTrend, setShowTrend] = useState(true);
   const [png, setPng] = useState(null);
   const [copied, setCopied] = useState(false);
   const exportRef = useRef(null);
@@ -108,7 +117,7 @@ export default function Chart({ spec }) {
     };
     const t = setTimeout(gen, 60);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [type, spec, showLabels]);
+  }, [type, spec, showLabels, showTrend]);
 
   if (!spec || !Array.isArray(spec.data) || spec.data.length === 0 || !spec.x) return null;
   const keys = (Array.isArray(spec.y) ? spec.y : [spec.y]).filter(Boolean);
@@ -117,6 +126,18 @@ export default function Chart({ spec }) {
   const isBar = type === "bar";
   const VisChart = isBar ? BarChart : LineChart;
   const margin = { top: spec.title ? 28 : 10, right: 22, bottom: 24, left: 10 };
+
+  // Trend intelligence (single numeric series only): a fitted trend LINE for a
+  // line time-series with enough points, and the %-change over the range as a
+  // delta badge. Both computed client-side from the already-numeric data.
+  const singleKey = keys.length === 1 ? keys[0] : null;
+  const trend = (!isBar && singleKey && spec.data.length >= 3)
+    ? trendValues(spec.data, singleKey) : null;
+  const delta = singleKey ? pctChange(spec.data, singleKey) : null;
+  const trendKey = showTrend && trend ? "__trend" : null;
+  const chartData = trendKey
+    ? spec.data.map((r, i) => ({ ...r, __trend: trend[i] })) : spec.data;
+  const deltaArrow = delta && { up: "▲", down: "▼", flat: "→" }[delta.dir];
 
   async function copyChart() {
     if (!png) return;
@@ -159,7 +180,19 @@ export default function Chart({ spec }) {
             </button>
           ))}
         </div>
+        {delta && (
+          <span className={"chart-delta " + delta.dir}
+                title={`${Math.abs(delta.pct).toFixed(1)}% change over the range shown`}>
+            {deltaArrow} {Math.abs(delta.pct).toFixed(1)}%
+          </span>
+        )}
         <div className="chart-head-tools">
+          {trend && (
+            <button type="button" className={"pill-toggle" + (showTrend ? " on" : "")}
+                    aria-pressed={showTrend} onClick={() => setShowTrend((v) => !v)}>
+              Trend
+            </button>
+          )}
           <button type="button" className={"pill-toggle" + (showLabels ? " on" : "")}
                   aria-pressed={showLabels} onClick={() => setShowLabels((v) => !v)}>
             Data labels
@@ -172,15 +205,15 @@ export default function Chart({ spec }) {
       </div>
 
       <ResponsiveContainer width="100%" height={320}>
-        <VisChart data={spec.data} margin={margin}>
-          {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false })}
+        <VisChart data={chartData} margin={margin}>
+          {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey })}
         </VisChart>
       </ResponsiveContainer>
 
       {/* Hidden, fixed-size, LIGHT, no-animation chart — the source for the PNG. */}
       <div className="chart-export-src" aria-hidden="true" ref={exportRef}>
-        <VisChart width={EXPORT_W} height={EXPORT_H} data={spec.data} margin={margin}>
-          {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true })}
+        <VisChart width={EXPORT_W} height={EXPORT_H} data={chartData} margin={margin}>
+          {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true, trendKey })}
         </VisChart>
       </div>
 

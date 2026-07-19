@@ -163,6 +163,19 @@ def test_migration_13_14_add_figure_columns():
     assert "figure" in _cols(con, "query_cache"), _cols(con, "query_cache")
 
 
+def test_migration_15_16_add_suggestions_columns():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 14])
+    assert "suggestions" not in _cols(con, "messages"), _cols(con, "messages")
+    assert "suggestions" not in _cols(con, "query_cache"), _cols(con, "query_cache")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    # Drill-down chips are persisted on the message (survives reload) and in the
+    # answer cache (a repeated question shows the same chips).
+    assert "suggestions" in _cols(con, "messages"), _cols(con, "messages")
+    assert "suggestions" in _cols(con, "query_cache"), _cols(con, "query_cache")
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -408,6 +421,8 @@ def run():
           test_migration_12_adds_messages_thinking_column)
     check("migration 13+14 add figure columns (messages + query_cache)",
           test_migration_13_14_add_figure_columns)
+    check("migration 15+16 add suggestions columns (messages + query_cache)",
+          test_migration_15_16_add_suggestions_columns)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

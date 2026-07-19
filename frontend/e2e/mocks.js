@@ -153,6 +153,7 @@ export async function mockConversation(page, id, messages,
     sql_log: m.sql_log !== undefined ? JSON.stringify(m.sql_log) : undefined,
     thinking: m.thinking !== undefined ? JSON.stringify(m.thinking) : undefined,
     figure: m.figure !== undefined ? JSON.stringify(m.figure) : undefined,
+    suggestions: m.suggestions !== undefined ? JSON.stringify(m.suggestions) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -219,6 +220,7 @@ export async function mockStreamChat(page, {
   sql = [],
   answer = "Answer.",
   figure = null,
+  suggestions = null,
   messageId = null,
   userMessageId = null,
   title = null,
@@ -236,6 +238,7 @@ export async function mockStreamChat(page, {
       // before the answer, mirroring the backend (which strips the ```figure
       // fence and yields this event). Omitted when `figure` is null.
       ...(figure ? [{ type: "figure", figure }] : []),
+      ...(suggestions ? [{ type: "suggestions", suggestions }] : []),
       { type: "answer", text: answer },
       { type: "done", message_id: messageId, user_message_id: userMessageId,
         model: "test", tokens: 0, ...(title ? { title } : {}) },

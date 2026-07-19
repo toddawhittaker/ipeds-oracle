@@ -163,6 +163,29 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   renders it as a sibling BEFORE `<Markdown>` in the assistant bubble — above the
   prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
   `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
+  (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
+  some models emit the latter.) The brief applies on **follow-up turns too** (never
+  code-gated; a prompt line makes the model reliably do it). A single-number brief's
+  **table + trend chart render side by side** (`briefdata.js` pairs one-table +
+  one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
+  the standalone fence; drops the redundant "Chart this"; `.brief-figrow` wraps to
+  stacked when narrow).
+- **The analyst layer** on top of the brief:
+  - **Trend line + %-change** — `Chart.jsx` overlays a least-squares fit (a computed
+    `__trend` `<Line>`, dashed ochre, injected into `chartChildren()` so it flows to
+    the PNG export too; kept out of `keys` → no label/legend) and a **delta badge**
+    (`▲/▼ X%` over the range, `--ok`/`--danger`) for a single-series line time-series.
+    All client-side from the numeric chart data (`trendstats.js`, vitest) — accurate,
+    no model dependency; a "Trend" toggle (default on).
+  - **Richer narrative + rank/share** — prompt step 6(b): direction/magnitude,
+    peak/trough years, provisional-year flags, and (when meaningful) the figure's rank
+    among peers or share of a national total (the model runs one extra query).
+  - **"You might also ask" drill-down chips** — the model MAY emit a ```followups
+    fence (step 7, a JSON array); `_extract_suggestions` parses+strips it (mirrors
+    the figure) → `{"type":"suggestions",…}` event → `messages.suggestions` (migration
+    15) + `query_cache.suggestions` (16). `Suggestions.jsx` (pure `suggestions.js`,
+    vitest) renders chips below the actions row; clicking one `submit()`s it as a
+    follow-up turn (which gets its own brief) — an exploration loop.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

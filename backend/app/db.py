@@ -258,6 +258,11 @@ MIGRATIONS: list[tuple[int, str]] = [
     # statistic the fresh answer did — no jarring "figure the first time, none the
     # second". JSON, like the messages.figure column above.
     (14, "ALTER TABLE query_cache ADD COLUMN figure TEXT;"),
+    # Drill-down follow-up questions (a JSON array of strings), persisted like the
+    # figure so the "you might also ask" chips survive a reload AND a cache-hit
+    # repeat — on the message and in the answer cache.
+    (15, "ALTER TABLE messages ADD COLUMN suggestions TEXT;"),
+    (16, "ALTER TABLE query_cache ADD COLUMN suggestions TEXT;"),
 ]
 
 
