@@ -6,12 +6,18 @@ import Markdown from "./Markdown.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 
-// Clickable starter prompts shown on the empty chat screen.
+// Clickable starter prompts ("query slips") shown on the empty chat screen.
+// Each carries a small mono tag naming the kind of record it pulls, which
+// quietly teaches the data model; `q` is the question the button fills in.
 const EXAMPLES = [
-  "Top 20 institutions awarding Associate's degrees in Registered Nursing (CIP 51.3801) over the last 3 years.",
-  "How many Computer Science (CIP 11.0701) bachelor's degrees did California public universities award last year?",
-  "National total of Associate's degrees per year, all programs.",
-  "Which states awarded the most Master's degrees in Education?",
+  { tag: "Completions · trend",
+    q: "Top 20 institutions awarding Associate's degrees in Registered Nursing (CIP 51.3801) over the last 3 years." },
+  { tag: "Completions · filtered",
+    q: "How many Computer Science (CIP 11.0701) bachelor's degrees did California public universities award last year?" },
+  { tag: "Completions · national",
+    q: "National total of Associate's degrees per year, all programs." },
+  { tag: "Completions · ranking",
+    q: "Which states awarded the most Master's degrees in Education?" },
 ];
 
 // Sidebar is user-resizable (drag or arrow keys); width persists in localStorage.
@@ -624,27 +630,27 @@ export default function Chat({ me }) {
           )}
           {messages.length === 0 && me?.has_data && (
             <div className="empty">
+              <span className="field-label">Ask the record</span>
+              <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>
               <p className="muted">
-                Ask a question about IPEDS data — degrees awarded, enrollment,
-                tuition, graduation rates, and more, across 2020-21 → 2024-25.
+                Degrees awarded, enrollment, tuition, graduation rates, staffing
+                and finance — across collection years 2020-21 through 2024-25.
               </p>
               <div className="examples-grid">
                 {EXAMPLES.map((ex) => (
-                  <button key={ex} type="button" className="example-chip"
-                          onClick={() => fillExample(ex)}>
-                    {ex}
+                  <button key={ex.q} type="button" className="example-chip"
+                          onClick={() => fillExample(ex.q)}>
+                    <span className="chip-tag">{ex.tag}</span>
+                    {ex.q}
                   </button>
                 ))}
               </div>
               {!me?.trust_llm_provider && (
-                <div className="privacy-warning" role="note">
-                  <strong>⚠️ Do not enter proprietary or confidential
-                  information.</strong> This tool sends your questions to a
-                  third-party AI service that may use submitted data to improve
-                  its models. Ask only about public IPEDS data —{" "}
-                  <strong>no</strong> student records, internal figures, or
-                  other non-public information.
-                </div>
+                <p className="privacy-warning" role="note">
+                  Public IPEDS data only — no student records, confidential
+                  figures, or other non-public information. Questions are sent
+                  to a third-party model that may use them to improve its service.
+                </p>
               )}
             </div>
           )}

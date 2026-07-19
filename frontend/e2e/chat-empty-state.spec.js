@@ -9,17 +9,15 @@ test("empty chat: privacy warning, example chips fill the composer, sidebar resi
   await mockConversations(page, []);
   await page.goto("/");
 
-  // The warning must call out proprietary/confidential info and the
-  // third-party AI service, without hardcoding the institution's name or "DeepSeek" or
-  // any cost-savings framing.
+  // The warning must call out confidential/non-public info and the third-party
+  // model, without hardcoding the institution's name or "DeepSeek" or any
+  // cost-savings framing. (Redesign: it's now a quiet margin note, not a box —
+  // same substance, calmer treatment.)
   await expect(
-    page.getByText(/Do not enter proprietary or confidential information/i),
+    page.getByText(/no student records, confidential figures, or other non-public information/i),
   ).toBeVisible();
   await expect(
-    page.getByText(/third-party AI service that may use submitted data to improve its models/i),
-  ).toBeVisible();
-  await expect(
-    page.getByText(/no student records, internal figures, or other non-public information/i),
+    page.getByText(/third-party model that may use them to improve its service/i),
   ).toBeVisible();
 
   // Clicking an example prompt drops it into the composer for review.
@@ -52,9 +50,9 @@ test("trusted provider: privacy warning is absent, examples remain", async ({ pa
     page.getByRole("button", { name: /Registered Nursing/i }).first(),
   ).toBeVisible();
 
-  // No part of the warning survives: neither the ⚠️ icon+text nor its container.
+  // No part of the warning survives: neither its text nor its container.
   await expect(
-    page.getByText(/Do not enter proprietary or confidential information/i),
+    page.getByText(/no student records, confidential figures/i),
   ).toHaveCount(0);
   await expect(page.locator(".privacy-warning")).toHaveCount(0);
 });

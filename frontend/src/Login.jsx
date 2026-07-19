@@ -1,13 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
-const EXAMPLES = [
-  "Top 20 institutions awarding Associate's degrees in Registered Nursing over the last 3 years",
-  "How many Computer Science bachelor's degrees did California public universities award last year?",
-  "National total of Associate's degrees per year, all programs",
-  "Which states awarded the most Master's degrees in Education?",
-];
-
 // Shown until the server tells us the institution's domain, and if it never does.
 const FALLBACK_HINT = "you@yourschool.edu";
 
@@ -47,32 +40,53 @@ export default function Login() {
 
   return (
     <div className="center">
-      <div className="card login">
-        <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
-        <p className="muted">
-          Ask natural-language questions about U.S. colleges &amp; universities.
-          Access is by invitation.
-        </p>
-        {msg && (
-          <div className={"notice " + (ok ? "ok" : "error")} role="alert"
-               tabIndex={-1} ref={noticeRef}>{msg}</div>
-        )}
-        {!ok && (
-          <form onSubmit={submit}>
-            <label htmlFor="login-email" className="sr-only">Email</label>
-            <input
-              id="login-email"
-              type="email" required placeholder={hint} autoComplete="email"
-              value={email} onChange={(e) => setEmail(e.target.value)}
-            />
-            <button type="submit" disabled={busy}>
-              {busy ? "Sending…" : "Email me a sign-in link"}
-            </button>
-          </form>
-        )}
-        <div className="examples">
-          <div className="muted small">You&apos;ll be able to ask things like:</div>
-          <ul>{EXAMPLES.map((x) => <li key={x}>{x}</li>)}</ul>
+      <div className="login-door">
+        {/* Left: the value, stated before anything is asked — a real specimen
+            answer, set as a typeset figure. */}
+        <div className="door-left">
+          <span className="field-label">The higher-education census, answerable</span>
+          <h2 className="door-thesis">Ask a question. Get a figure you can cite.</h2>
+          <p className="muted">
+            Degrees, enrollment, tuition, staffing and finance across every U.S.
+            institution IPEDS tracks.
+          </p>
+          <div className="door-figure">
+            <span className="field-label">
+              Computer science · Bachelor&apos;s · California publics · 2024
+            </span>
+            <div className="figure num">7,679</div>
+            <div className="door-figure-src">degrees conferred · IPEDS Completions</div>
+          </div>
+        </div>
+
+        {/* Right: the reader's card. */}
+        <div className="card login door-right">
+          <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
+          <p className="muted">
+            Access is by invitation. We&apos;ll email a one-time sign-in link —
+            no password to remember.
+          </p>
+          {msg && (
+            <div className={"notice " + (ok ? "ok" : "error")} role="alert"
+                 tabIndex={-1} ref={noticeRef}>{msg}</div>
+          )}
+          {!ok && (
+            <form onSubmit={submit}>
+              <label htmlFor="login-email" className="sr-only">Email</label>
+              <input
+                id="login-email"
+                type="email" required placeholder={hint} autoComplete="email"
+                value={email} onChange={(e) => setEmail(e.target.value)}
+              />
+              <button type="submit" disabled={busy}>
+                {busy ? "Sending…" : "Email me a sign-in link"}
+              </button>
+            </form>
+          )}
+          <p className="door-fineprint muted small">
+            Not on the list? Request access with your institution email and an
+            administrator will review it.
+          </p>
         </div>
       </div>
     </div>
