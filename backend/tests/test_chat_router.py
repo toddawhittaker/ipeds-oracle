@@ -39,8 +39,7 @@ from app import mailer  # noqa: E402
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
-mailer.send_access_approved = (
-    lambda to, link: captured.__setitem__("approved_link", link) or True)
+mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
 from app import guard, skills  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
@@ -148,10 +147,8 @@ def test_stream_conversation_not_owned_by_caller_404():
 
         # A second user must not be able to post into admin's conversation.
         c.post("/api/admin/allowlist", json={"email": "other@example.edu"})
-        approved_link = captured["approved_link"]
-        atok = approved_link.split("token=")[1]
         c2 = TestClient(app)
-        assert c2.post("/api/auth/verify", json={"token": atok}).status_code == 200
+        _login(c2, "other@example.edu")  # approval sends no link; they request their own
         r2 = c2.post("/api/chat/stream",
                     json={"question": "hi", "conversation_id": conv_id})
         assert r2.status_code == 404, r2.text
@@ -492,9 +489,8 @@ def test_conversation_rename_not_owned_404():
         conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
 
         c.post("/api/admin/allowlist", json={"email": "renamer@example.edu"})
-        atok = captured["approved_link"].split("token=")[1]
         c2 = TestClient(app)
-        assert c2.post("/api/auth/verify", json={"token": atok}).status_code == 200
+        _login(c2, "renamer@example.edu")
         r2 = c2.patch(f"/api/chat/conversations/{conv_id}", json={"title": "mine now"})
         assert r2.status_code == 404, r2.text
         # And the title is untouched.
@@ -568,9 +564,8 @@ def test_no_data_guard_non_admin_wording_and_skips_agent():
     with TestClient(app) as c:
         _login(c, "admin@example.edu")
         c.post("/api/admin/allowlist", json={"email": "nodata-user@example.edu"})
-        token = captured["approved_link"].split("token=")[1]
         c2 = TestClient(app)
-        assert c2.post("/api/auth/verify", json={"token": token}).status_code == 200
+        _login(c2, "nodata-user@example.edu")
 
         orig_years = chat_router.ipeds_years
         orig_agent = chat_router.stream_agent

@@ -21,7 +21,7 @@ from app import mailer
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
-mailer.send_access_approved = lambda to, link: captured.__setitem__("approved_link", link) or True
+mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
 from app import skills
 from app.config import PRODUCT_NAME
@@ -95,21 +95,21 @@ def run():
         r_add = c.post("/api/admin/allowlist",
                        json={"email": "prof@example.edu", "note": "colleague"})
         assert r_add.status_code == 200
-        assert r_add.json().get("invited") is True, "approving should email an invite"
+        assert r_add.json().get("invited") is True, "approving should email the approval notice"
         al = c.get("/api/admin/allowlist").json()
         assert any(x["email"] == "prof@example.edu" for x in al)
         print(f"  ✓ allowlist add ({len(al)} entries)")
 
-        # approval emails a working, single-use sign-in link
-        approved_link = captured.get("approved_link")
-        assert approved_link and "token=" in approved_link, "no approval sign-in link"
+        # approval emails a NOTICE (no magic link) naming the approved address;
+        # the approved user then signs in by requesting their OWN one-time link.
+        assert captured.get("approved") == "prof@example.edu", "no approval notice sent"
         prof = TestClient(app)
-        assert "/verify?token=" in approved_link, approved_link
-        atok = approved_link.split("token=")[1]
+        prof.post("/api/auth/request", json={"email": "prof@example.edu"})
+        atok = captured["link"].split("token=")[1]
         assert prof.post("/api/auth/verify", json={"token": atok}).status_code == 200
         pme = prof.get("/api/auth/me")
         assert pme.status_code == 200 and pme.json()["email"] == "prof@example.edu"
-        print("  ✓ approval emails a working sign-in link")
+        print("  ✓ approved user can request a working sign-in link")
 
         # re-adding an existing allowlisted email does NOT re-invite
         dup = c.post("/api/admin/allowlist",

@@ -353,17 +353,17 @@ function Allowlist({ me, sub }) {
   // deliberately, so an admin browsing logs can't harvest a live sign-in link.
   // It's on the server's stdout/stderr only.
   const INVITE_FLASH = {
-    emailed: (a) => `Approved — a sign-in link was emailed to ${a}.`,
+    emailed: (a) => `Approved — an approval email was sent to ${a}. They can ` +
+      `request a sign-in link from the sign-in page when ready.`,
     already_allowlisted: (a) =>
-      `${a} was already on the allowlist, so no new invite was sent. They can ` +
+      `${a} was already on the allowlist, so no new email was sent. They can ` +
       `sign in from the sign-in page whenever they like.`,
     failed: (a) =>
-      `${a} added, but the invite email FAILED to send — check the Logs tab ` +
-      `for the error. Their sign-in link wasn't saved anywhere, so ask them to ` +
-      `request one from the sign-in page.`,
+      `${a} approved, but the approval email FAILED to send — check the Logs tab ` +
+      `for the error. They can still request a sign-in link from the sign-in page.`,
     logged_to_console: (a) =>
-      `${a} added. No email was sent (no mail key configured) — the sign-in ` +
-      `link is in the server console, not the Logs tab.`,
+      `${a} approved. No email was sent (no mail key configured) — the approval ` +
+      `notice is in the server console. They can request a sign-in link any time.`,
   };
 
   function inviteFlash(addr, res) {
@@ -476,7 +476,8 @@ function Allowlist({ me, sub }) {
     }));
     const report = [...csvPlan.invalid, ...csvPlan.existingOrDuplicate, ...backendSkips]
       .sort((a, b) => (a.row == null ? 1 : b.row == null ? -1 : a.row - b.row));
-    setCsvResult({ added: res.added, adminsGranted: res.admins_granted, report });
+    setCsvResult({ added: res.added, adminsGranted: res.admins_granted, report,
+                   mailConfigured: res.mail_configured });
     setCsvPlan(null);
     setCsvFileName("");
     if (csvFileRef.current) csvFileRef.current.value = "";
@@ -516,7 +517,8 @@ function Allowlist({ me, sub }) {
     confirm({
       variant: "neutral",
       title: `Approve access for ${addr}?`,
-      body: "This adds them to the allowlist and emails them a sign-in link.",
+      body: "This adds them to the allowlist and emails them an approval notice. "
+        + "They request their own sign-in link from the sign-in page when ready.",
       confirmLabel: "Approve access",
       onConfirm: async () => {
         const res = await api.addAllow(addr, note, false);
@@ -938,6 +940,9 @@ jamie@example.com,External reviewer,`}</pre>
                 {csvResult.added} user{csvResult.added === 1 ? "" : "s"} added
                 {csvResult.adminsGranted
                   ? ` (${csvResult.adminsGranted} with admin)` : ""}.
+                {csvResult.added > 0 && csvResult.mailConfigured
+                  ? " Each was emailed an approval notice; they request a sign-in link when ready."
+                  : ""}
               </p>
               {csvResult.report.length > 0 && (
                 <table className="grid csv-report">

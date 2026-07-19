@@ -51,7 +51,8 @@ test("dragging a file over the CSV drop zone toggles its active state", async ({
 });
 
 test("selecting a CSV parses it into a summary, then Confirm POSTs the ready rows", async ({ page }) => {
-  const { posts } = await openImporter(page, { bulk: { ok: true, added: 2, admins_granted: 1, skipped: [] } });
+  const { posts } = await openImporter(page, {
+    bulk: { ok: true, added: 2, admins_granted: 1, skipped: [], mail_configured: true } });
 
   await page.setInputFiles("#csv-file", { name: "roster.csv", mimeType: "text/csv", buffer: Buffer.from(CSV) });
 
@@ -73,8 +74,11 @@ test("selecting a CSV parses it into a summary, then Confirm POSTs the ready row
     { email: "bob@example.com", note: expect.stringMatching(/^Imported on /), is_admin: false },
   ]);
 
-  // Result + error report (2 invalid + 1 duplicate = 3 skipped rows).
+  // Result + error report (2 invalid + 1 duplicate = 3 skipped rows). With mail
+  // configured, the result tells the admin the imported users were emailed an
+  // approval notice (no magic link — they request a sign-in link themselves).
   await expect(page.locator(".csv-result")).toContainText("2 users added");
+  await expect(page.locator(".csv-result")).toContainText("emailed an approval notice");
   const reportRows = page.locator(".csv-report tbody tr");
   await expect(reportRows).toHaveCount(3);
   await expect(page.locator(".csv-report")).toContainText("missing email");

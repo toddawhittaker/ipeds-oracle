@@ -15,7 +15,7 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 import app.nces as nces
 from app import estimate, importer, skills
-from app.auth import canon_email, mint_login_link, require_admin
+from app.auth import canon_email, require_admin
 from app.config import get_settings
 from app.db import connect
 from app.mailer import send_access_approved
@@ -70,20 +70,19 @@ def _set_admin(con: sqlite3.Connection, email: str, is_admin: bool) -> None:
 
 
 def _approve_allowlist(con: sqlite3.Connection, email: str, note: str | None,
-                       admin_email: str, settings) -> str | None:
+                       admin_email: str) -> bool:
     """Grant `email` access: insert (or refresh the note on) the allowlist
     row and clear a matching denial CANONICALLY. Shared by the single POST
     /allowlist endpoint and the bulk POST /access-requests/bulk
     {action:"approve"} path so the two can never drift. The caller commits.
 
-    DB-ONLY — does NOT send mail. It used to mint AND email the sign-in link
-    itself, while the caller's write transaction was still open: a real
-    network round-trip to the mail provider held under the app.db write lock
-    (security review F1 / code review #1-2), so a slow or hanging provider
-    stalled every other admin write for as long as the send took. The caller
-    must commit + close its connection FIRST, then pass the returned
-    invite_link to _send_and_classify_invite() outside any transaction —
-    restoring the discipline the original (pre-refactor) add_allowlist had.
+    DB-ONLY — no mail, and (since approval no longer mints a magic-link token)
+    NO login_tokens write either. The approval email is now a "you're approved,
+    request a sign-in link" notice with no token, so nothing is tied to this
+    transaction that has to be carried out to the mail provider. The caller still
+    sends that notice AFTER commit + close (a mail-provider round-trip must never
+    run while the app.db write lock is held) — but there's no longer a minted link
+    to hand off, and one fewer write in the approval transaction.
 
     CANONICAL match (round 3 fold-in fix 1), not exact: a denial spans every
     +tag/case variant of `email` (see app.auth.canon_email / is_denied), so
@@ -99,9 +98,10 @@ def _approve_allowlist(con: sqlite3.Connection, email: str, note: str | None,
     side, which is safe because an admin explicitly approving one member of a
     mailbox group is unambiguous intent to clear the whole group's block.
 
-    Returns the invite_link minted for a genuinely NEW member, or None when
-    `email` was already on the allowlist (nothing to send — see
-    _send_and_classify_invite's "already_allowlisted" branch)."""
+    Returns True iff `email` was a genuinely NEW member (so the caller sends the
+    approval notice); False when it was already allowlisted (a re-add only
+    refreshes the note — nothing to send, the _send_and_classify_invite
+    "already_allowlisted" branch)."""
     newly_added = con.execute("SELECT 1 FROM allowlist WHERE email=?",
                               (email,)).fetchone() is None
     con.execute("INSERT INTO allowlist(email, note, added_by, added_at) "
@@ -111,58 +111,53 @@ def _approve_allowlist(con: sqlite3.Connection, email: str, note: str | None,
                 "WHERE status IN ('pending','denied') "
                 "AND COALESCE(canon_email, LOWER(email))=?",
                 (canon_email(email),))
-    # Newly approved/added people get a ready-to-use sign-in link so they can
-    # get in without having to know to request one again.
-    return mint_login_link(con, email, settings.app_public_url) if newly_added else None
+    return newly_added
 
 
-def _send_and_classify_invite(email: str, invite_link: str | None, settings) -> tuple[str, bool]:
-    """Send (or skip) the approval email for `email` and classify what
+def _send_and_classify_invite(email: str, newly_added: bool, settings) -> tuple[str, bool]:
+    """Send (or skip) the approval notice for `email` and classify what
     happened. MUST be called only AFTER the caller's write transaction has
     been committed and its connection closed — see _approve_allowlist's
-    docstring (security review F1 / code review #1-2): a mail-provider
-    round-trip must never run while the app.db write lock is held.
+    docstring: a mail-provider round-trip must never run while the app.db write
+    lock is held.
 
-    Returns (delivery, invited). `delivery` is what actually became of the
-    invite, as ONE value — there are FOUR outcomes, not two, and each asks the
-    admin to do something different. Deriving that from a pair of booleans is
-    what let "was already on the allowlist" masquerade as "the email failed to
-    send" — no link is minted for an existing member, so `invited` reads
-    False there too, for a reason that has nothing to do with mail."""
+    The notice contains NO magic link (approval no longer mints a token) — it
+    tells the person they're approved and to request their own sign-in link.
+
+    Returns (delivery, invited). `delivery` is what became of the notice, as ONE
+    value — there are FOUR outcomes, not two, and each asks the admin to do
+    something different. Deriving that from a pair of booleans is what let "was
+    already on the allowlist" masquerade as "the email failed to send"."""
     invited = False
     mail_configured = bool(settings.resend_api_key)
-    if not invite_link:
+    if not newly_added:
         # Already on the allowlist. Nothing was sent because nothing needed to
         # be; re-adding only updates the note. They can sign in any time.
         delivery = "already_allowlisted"
     else:
         try:
-            invited = send_access_approved(email, invite_link)
+            invited = send_access_approved(email)
         except Exception as e:  # noqa: BLE001 — approval must not fail if email does
             log.warning("approval email to %s failed: %s", email, e)
         if invited:
             delivery = "emailed"
         elif mail_configured:
-            # A configured provider rejected or errored. The link was minted but
-            # printed NOWHERE — mailer.py only logs the body when there's no key
-            # — so the only way in is for them to request their own.
             delivery = "failed"
             # Re-report from a logger the admin can actually READ. send_email()
             # swallows provider errors and returns False, so the except above
             # never fires, and send_email's own log line is on the `ipeds.mail`
-            # logger that logbuffer.py drops WHOLESALE (dev mode logs the magic
-            # link there, and any admin can read the Logs view). Without this,
-            # a failed invite leaves NOTHING in the Logs tab while the UI tells
-            # the admin to go look there. Names the address, never the link.
+            # logger that logbuffer.py drops WHOLESALE. Without this, a failed
+            # notice leaves NOTHING in the Logs tab. The person is already
+            # approved and can request a link from the sign-in page regardless.
             log.warning(
-                "invite email to %s was NOT delivered — mail is configured, so the "
-                "provider rejected or errored (see the server console for the "
-                "provider's own error). Their sign-in link was minted but not "
-                "stored anywhere; they must request one from the sign-in page.",
+                "approval email to %s was NOT delivered — mail is configured, so the "
+                "provider rejected or errored (see the server console for the provider's "
+                "own error). They are approved and can request a sign-in link from the "
+                "sign-in page.",
                 email)
         else:
-            # No key: the mailer logged the whole email, link included, to the
-            # CONSOLE. Recoverable — and pointedly NOT in the Logs tab.
+            # No key: the mailer logged the whole email to the CONSOLE (no link to
+            # leak — the notice carries none). Pointedly NOT in the Logs tab.
             delivery = "logged_to_console"
     return delivery, invited
 
@@ -175,15 +170,14 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
     try:
         if body.is_admin:
             _set_admin(con, email, True)
-        invite_link = _approve_allowlist(con, email, body.note, admin["email"], settings)
+        newly_added = _approve_allowlist(con, email, body.note, admin["email"])
         con.commit()
     finally:
         con.close()
-    # The invite email is sent HERE — after the connection is committed and
-    # closed, never while the write transaction (and the app.db write lock)
-    # is open (security review F1 / code review #1-2; see
-    # _approve_allowlist's docstring).
-    delivery, invited = _send_and_classify_invite(email, invite_link, settings)
+    # The approval notice is sent HERE — after the connection is committed and
+    # closed, never while the write transaction (and the app.db write lock) is
+    # open (see _approve_allowlist's docstring).
+    delivery, invited = _send_and_classify_invite(email, newly_added, settings)
     return {"ok": True, "email": email, "invited": invited,
             "mail_configured": bool(settings.resend_api_key), "delivery": delivery}
 
@@ -216,21 +210,27 @@ def _valid_email(raw: str) -> str | None:
 
 
 @router.post("/allowlist/bulk")
-def add_allowlist_bulk(body: AllowlistBulkAdd, admin: sqlite3.Row = Depends(require_admin)):
-    """Bulk-add users from a CSV import. Deliberately a SIDE-EFFECT-FREE add versus
-    the single-add path: it inserts allowlist rows (and grants admin) but mints NO
-    sign-in link, sends NO email, and does NOT touch access_requests. Bulk sign-in
-    links (15-min TTL) would expire before recipients act and would burst the mail
-    quota; imported users request their own link from the sign-in page when ready.
-    (Single-add clears a matching denial; bulk intentionally doesn't — a denied
-    address surfaces here as any other row and, if not already allowlisted, is
-    added, but no denial state is mutated.) Each row is independent: an invalid
-    email or an in-request duplicate is skipped-and-reported, never fatal."""
+def add_allowlist_bulk(body: AllowlistBulkAdd, tasks: BackgroundTasks,
+                       admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk-add users from a CSV import. Inserts allowlist rows (and grants admin)
+    and — after the write transaction commits and closes — emails each NEWLY-ADDED
+    user a "you're approved, request a sign-in link" notice. Like every approval
+    path, it mints NO sign-in token; the notice carries no link (imported users
+    request their own from the sign-in page when ready), so there's nothing whose
+    delivery the admin must chase. The sends go through BackgroundTasks, off the
+    request path: a roster can be hundreds of rows, and we never block the response
+    on that many provider round-trips. Does NOT touch access_requests. (Single-add
+    clears a matching denial; bulk intentionally doesn't — a denied address
+    surfaces here as any other row and, if not already allowlisted, is added, but
+    no denial state is mutated.) Each row is independent: an invalid email or an
+    in-request duplicate is skipped-and-reported, never fatal."""
+    settings = get_settings()
     con = connect()
     added = 0
     admins_granted = 0
     skipped: list[dict] = []
     seen: set[str] = set()
+    added_emails: list[str] = []
     try:
         now = time.time()
         for item in body.users:
@@ -252,10 +252,16 @@ def add_allowlist_bulk(body: AllowlistBulkAdd, admin: sqlite3.Row = Depends(requ
                             "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, now))
                 admins_granted += 1
             added += 1
+            added_emails.append(email)
         con.commit()
     finally:
         con.close()
-    return {"ok": True, "added": added, "admins_granted": admins_granted, "skipped": skipped}
+    # Approval notices go out AFTER commit + close, scheduled off the request path
+    # (no app.db lock held, response not blocked on N sends).
+    for email in added_emails:
+        tasks.add_task(send_access_approved, email)
+    return {"ok": True, "added": added, "admins_granted": admins_granted,
+            "skipped": skipped, "mail_configured": bool(settings.resend_api_key)}
 
 
 class AllowlistAdminPatch(BaseModel):
@@ -652,14 +658,12 @@ def access_requests_bulk(body: AccessRequestsBulkAction,
     address). reject reuses _deny_group — the same canonical UPDATE
     (denied_at=now, created_at preserved) as the single Reject button.
 
-    The DB transaction commits and its connection closes BEFORE any invite
-    email goes out (security review F1 / code review #1-2): every
-    (email, invite_link) pair for an id that ACTUALLY got approved this call
-    is collected during the loop and only sent afterward, never while the
-    app.db write lock is held. Each item's mutation also runs through
-    _run_item's per-item SAVEPOINT (M1): a genuine per-item failure lands in
-    `failed`, never `skipped` (reserved for expected ineligibility), and its
-    invite (if any) is never queued."""
+    The DB transaction commits and its connection closes BEFORE any approval
+    email goes out: every newly-added address approved this call is collected
+    during the loop and its notice sent afterward, never while the app.db write
+    lock is held. Each item's mutation also runs through _run_item's per-item
+    SAVEPOINT (M1): a genuine per-item failure lands in `failed`, never `skipped`
+    (reserved for expected ineligibility), and its notice is never queued."""
     if len(body.ids) > BULK_MAX_ITEMS:
         raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} ids at a time.")
     settings = get_settings()
@@ -667,9 +671,9 @@ def access_requests_bulk(body: AccessRequestsBulkAction,
     affected = 0
     skipped: list[dict] = []
     failed: list[dict] = []
-    # (email, invite_link) pairs for ids approved THIS call (minted inside the
-    # transaction below) — sent only after commit + close, per the docstring.
-    to_invite: list[tuple[str, str]] = []
+    # Emails newly added THIS call — the approval notice is sent only after
+    # commit + close, per the docstring.
+    to_invite: list[str] = []
     con = connect()
     try:
         # See allowlist_bulk_action's identical comment: one explicit outer
@@ -691,15 +695,15 @@ def access_requests_bulk(body: AccessRequestsBulkAction,
                     skipped.append({"id": rid, "reason": "already allowlisted"})
                     continue
                 note = f"approved via bulk action by {approver}"
-                ok, invite_link = _run_item(
+                ok, newly_added = _run_item(
                     con,
-                    lambda e=email, n=note: _approve_allowlist(con, e, n, approver, settings),
+                    lambda e=email, n=note: _approve_allowlist(con, e, n, approver),
                     rid)
                 if not ok:
                     failed.append({"id": rid, "reason": "could not be updated"})
                     continue
-                if invite_link:
-                    to_invite.append((email, invite_link))
+                if newly_added:
+                    to_invite.append(email)
             else:  # reject
                 ok, _value = _run_item(con, lambda e=email: _deny_group(con, canon_email(e)), rid)
                 if not ok:
@@ -709,8 +713,8 @@ def access_requests_bulk(body: AccessRequestsBulkAction,
         con.commit()
     finally:
         con.close()
-    for email, invite_link in to_invite:
-        _send_and_classify_invite(email, invite_link, settings)
+    for email in to_invite:
+        _send_and_classify_invite(email, True, settings)
     return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}
 
 
