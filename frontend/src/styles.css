@@ -604,20 +604,26 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .chk { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .grid th, .grid td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; font-size: 14px; }
-/* Pending access requests: a restrained attention treatment (accent left rule +
-   faintly tinted header) applied ONLY while there's something to review, so it
-   draws the eye without ever reading as an error. Removed when empty. */
-.requests-section { margin-bottom: 20px; }
-.requests-section.attention { border-left: 3px solid var(--accent); border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 6%, transparent); padding: 2px 14px 12px; }
-.section-head { display: flex; align-items: baseline; gap: 8px; }
-.pending-badge { color: var(--accent); font-weight: 700; }
-.empty-note { color: var(--muted); margin: 6px 0 0; font-size: 14px; }
-
-.blocked-section { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
-/* No font-size here: inherit the default h2 size so this header matches the
-   "Users" (bare h2) and "Pending requests" (.section-head) headers. */
-.blocked-section h2 { margin: 0 0 4px; }
+/* Users section inner tabs (Current users / Pending requests / Blocked users).
+   Real tab semantics (role=tablist/tab) styled to match the outer .subtabs/.on
+   pill treatment so the active-tab look is the app's standard one. */
+.usertabs-intro { margin: 4px 0 14px; font-size: 14px; }
+.usertabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.usertab { display: inline-flex; align-items: center; gap: 8px; background: transparent;
+  border: 1px solid transparent; color: var(--muted); padding: 6px 12px; border-radius: 8px;
+  font: inherit; cursor: pointer; }
+.usertab:hover { color: var(--text); }
+.usertab.on { color: var(--text); background: var(--bg); border-color: var(--line); }
+.usertab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Count badge per tab: ALL records in that category. Neutral by default; the
+   pending tab turns accent ("attention") ONLY while requests await review —
+   never an error tone (a queue is work waiting, not a failure). */
+.usertab-badge { min-width: 1.5em; padding: 1px 7px; border-radius: 999px; font-size: 12px;
+  font-weight: 700; line-height: 1.5; text-align: center; color: var(--text);
+  background: color-mix(in srgb, var(--muted) 20%, transparent); }
+.usertab-badge.attention { background: var(--accent); color: #fff; }
+.usertab-panel { padding-top: 4px; }
+[role="tabpanel"][hidden] { display: none; }
 .denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
 /* SEC #3: the Blocked-users section's own error state — a distinct class from
    the flash `.notice` (see Admin.jsx's render-site comment for why the two must

@@ -37,7 +37,7 @@ test.describe("route announcer", () => {
     await expect(announcer).toBeAttached();
 
     await page.getByRole("link", { name: "Admin", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 
     await expect(announcer).not.toHaveText("");
     await expect(announcer).toContainText(/admin/i);

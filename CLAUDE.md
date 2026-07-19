@@ -70,9 +70,24 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
   `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
 - **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
-  routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users`,
-  `/admin/:tab`, `/verify`, catch-all → `/`. FastAPI's SPA catch-all serves
-  `index.html` for all of them, so a hard refresh / deep link never 404s.
+  routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
+  `/admin/:tab`, `/admin/:tab/:sub`, `/verify`, catch-all → `/`. FastAPI's SPA
+  catch-all serves `index.html` for all of them, so a hard refresh / deep link
+  never 404s. **Admin → Users is a tabbed section** (`Allowlist` in `Admin.jsx`):
+  three path sub-tabs — **Current users** (default) / **Pending requests** /
+  **Blocked users** — at `/admin/users/<sub>`; bare `/admin/users` or an invalid
+  sub redirects to the remembered-or-`current` tab (session memory in
+  `sessionStorage`), and legacy `/admin/pending`·`/admin/blocked`·`/admin/allowlist`
+  aliases redirect into the matching sub-tab (`AdminRoute`). It's a real ARIA
+  tablist (`role=tablist/tab/tabpanel`, roving tabindex, ←/→/Home/End with
+  automatic activation) with a per-tab **count badge** reflecting *all* records in
+  that category (never the filtered view); the Pending badge gets an accent
+  **"attention"** tone only while requests await — never an error tone
+  (`usertabs.js`, vitest-pinned; `pendingBadgeTone`). All three DataTables stay
+  **mounted** with inactive panels `hidden`, so each table's own search/sort/page
+  state *and* its lifted selection **survive a tab switch**, resetting only when
+  the admin leaves the Users section — the spec's persistence contract, with no
+  new state plumbing. Pinned in `frontend/e2e/admin-users-tabs.spec.js`.
   Chat interaction contracts (all Playwright-pinned in
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing

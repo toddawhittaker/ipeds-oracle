@@ -121,21 +121,25 @@ test("clicking a header sorts and toggles direction with aria-sort", async ({ pa
   await expect(emailHeader).toHaveAttribute("aria-sort", "descending");
   await expect(firstCell()).toHaveText("carol@example.edu");
   // The sort change is announced (aria-sort alone is silent on activation).
-  await expect(page.locator(".pager [aria-live]")).toHaveText(/Sorted by email, descending/);
+  // Scope to the Current-users panel: the Pending/Blocked tables are also
+  // mounted (hidden) now, so a bare `.pager [aria-live]` CSS locator (unlike
+  // getByRole, it doesn't skip hidden nodes) would match all three pagers.
+  await expect(page.locator("#userpanel-current .pager [aria-live]")).toHaveText(/Sorted by email, descending/);
 });
 
 test("pagination pages through and disables Prev/Next at the ends", async ({ page }) => {
   await openUsers(page, bulkRows(30));
 
-  // Default 25/page -> page 1 of 2, Prev disabled. (Range text lives in both a
-  // visible span and an sr-only status region, so scope to the visible one.)
-  const range = page.locator(".pager-range");
+  // Default 25/page -> page 1 of 2, Prev disabled. Scope CSS locators to the
+  // Current-users panel: the Pending/Blocked tables are also mounted (hidden),
+  // so a bare `.pager-range`/`tbody tr.filler` would match all three tables.
+  const range = page.locator("#userpanel-current .pager-range");
   const table = page.locator("table.grid.users");
   await expect(range).toHaveText("Showing 1–25 of 30 users");
   await expect(page.getByText("Page 1 of 2")).toBeVisible();
   await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled();
   // A full page needs no spacer.
-  await expect(page.locator("tbody tr.filler")).toHaveCount(0);
+  await expect(page.locator("#userpanel-current tbody tr.filler")).toHaveCount(0);
   const fullHeight = (await table.boundingBox()).height;
 
   await page.getByRole("button", { name: "Next page" }).click();
@@ -146,7 +150,7 @@ test("pagination pages through and disables Prev/Next at the ends", async ({ pag
   // The short last page (5 of 25 rows) is padded to full height with one empty
   // row per missing slot, so the pager below doesn't shift when you page back —
   // the cursor stays over "‹ Prev".
-  await expect(page.locator("tbody tr.filler")).toHaveCount(20);
+  await expect(page.locator("#userpanel-current tbody tr.filler")).toHaveCount(20);
   // The real invariant: the table is the SAME height on the short last page as on
   // a full page (to the pixel), so nothing below it moves. Guards against a future
   // row-height/button-size change re-introducing the drift.
@@ -159,11 +163,13 @@ test("changing page size returns to page 1 and resizes the window", async ({ pag
   await expect(page.getByText("Page 2 of 2")).toBeVisible();
 
   // Bumping the page size snaps back to page 1 with a single, larger page.
+  // Scope to the Current-users panel (Pending/Blocked tables also show
+  // "Page 1 of 1" while empty + mounted-hidden).
   await page.getByRole("combobox", { name: "Users per page" }).selectOption("50");
-  await expect(page.locator(".pager-range")).toHaveText("Showing 1–30 of 30 users");
-  await expect(page.getByText("Page 1 of 1")).toBeVisible();
+  await expect(page.locator("#userpanel-current .pager-range")).toHaveText("Showing 1–30 of 30 users");
+  await expect(page.locator("#userpanel-current").getByText("Page 1 of 1")).toBeVisible();
   // A single page is never padded (that would leave a big empty gap).
-  await expect(page.locator("tbody tr.filler")).toHaveCount(0);
+  await expect(page.locator("#userpanel-current tbody tr.filler")).toHaveCount(0);
 });
 
 test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) => {
