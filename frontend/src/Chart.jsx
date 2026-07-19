@@ -129,11 +129,15 @@ export default function Chart({ spec }) {
 
   // Trend intelligence (single numeric series only): a fitted trend LINE for a
   // line time-series with enough points, and the %-change over the range as a
-  // delta badge. Both computed client-side from the already-numeric data.
+  // delta badge. Both computed client-side from the already-numeric data. Gated to
+  // a TIME-LIKE x-axis — a "% change over the range" / fitted slope is only
+  // meaningful along an ordered time axis, never across categorical entities (a
+  // A-vs-B comparison, e.g. compare mode, must not read as a bogus trend).
+  const timeLikeX = /year|date|month|quarter|day/i.test(String(spec.x || ""));
   const singleKey = keys.length === 1 ? keys[0] : null;
-  const trend = (!isBar && singleKey && spec.data.length >= 3)
+  const trend = (!isBar && singleKey && timeLikeX && spec.data.length >= 3)
     ? trendValues(spec.data, singleKey) : null;
-  const delta = singleKey ? pctChange(spec.data, singleKey) : null;
+  const delta = (singleKey && timeLikeX) ? pctChange(spec.data, singleKey) : null;
   const trendKey = showTrend && trend ? "__trend" : null;
   const chartData = trendKey
     ? spec.data.map((r, i) => ({ ...r, __trend: trend[i] })) : spec.data;

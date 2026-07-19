@@ -176,7 +176,10 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
     the PNG export too; kept out of `keys` → no label/legend) and a **delta badge**
     (`▲/▼ X%` over the range, `--ok`/`--danger`) for a single-series line time-series.
     All client-side from the numeric chart data (`trendstats.js`, vitest) — accurate,
-    no model dependency; a "Trend" toggle (default on).
+    no model dependency; a "Trend" toggle (default on). **Both trend line AND delta
+    are gated to a TIME-LIKE x-axis** (`/year|date|month|quarter|day/i`) — a
+    "% change over the range" / fitted slope is meaningless across categorical
+    entities, so a categorical bar (e.g. compare mode below) shows neither.
   - **Richer narrative + rank/share** — prompt step 6(b): direction/magnitude,
     peak/trough years, provisional-year flags, and (when meaningful) the figure's rank
     among peers or share of a national total (the model runs one extra query).
@@ -188,6 +191,20 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
     15) + `query_cache.suggestions` (16). `Suggestions.jsx` (pure `suggestions.js`,
     vitest) renders chips below the actions row; clicking one `submit()`s it as a
     follow-up turn (which gets its own brief) — an exploration loop.
+- **Compare mode** — pick 2–4 rows from any result table and **instantly** chart just
+  those rows, client-side, from the numbers ALREADY in the table (no new query, no
+  backend, no persistence). Gated to a **comparable (categorical) table** — one where
+  `chartSpecFromTable` infers `type: "bar"` (entity rows: universities/states/…),
+  never a year-over-year trend table. Pure logic in `compare.js` (vitest):
+  `comparableTable(headers, rows)` (reuses `chartSpecFromTable`'s entity-column
+  inference — `spec.x`) and `compareSpec(spec, selectedLabels)` (filters the parent
+  spec's data to the selected entities, forces a bar snapshot). `Markdown.jsx` injects
+  a leading checkbox column into comparable tables via a react-markdown `tr` override +
+  a per-table `CompareContext` (selection keyed by entity-label text, so each row
+  self-identifies from its own hast node — no row-index plumbing); a "Compare N →" bar
+  appears once ≥1 row is ticked (action enables at 2, capped at 4), rendering the
+  snapshot `<Chart>` in a `.compare-panel`. Browser truth in
+  `frontend/e2e/compare.spec.js`.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

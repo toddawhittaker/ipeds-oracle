@@ -38,9 +38,11 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   convos.setList([{ id: CONV_ID, title: "Associate's degrees in Registered Nursing by state" }]);
   await page.getByRole("button", { name: "Send" }).click();
 
-  // Streamed answer renders as markdown, including the GFM table.
+  // Streamed answer renders as markdown, including the GFM table. (This is a
+  // by-state comparison table, so compare mode adds a "Compare CA" checkbox cell —
+  // match the data cell exactly so it doesn't also resolve that checkbox cell.)
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "CA" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "CA", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "100" })).toBeVisible();
 
   // SQL log is behind a toggle button; clicking it reveals a full-width panel
