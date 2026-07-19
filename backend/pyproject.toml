@@ -23,6 +23,10 @@ ignore = [
 # `**/tests/*.py` matches whether ruff is invoked from repo root (paths like
 # backend/tests/x.py, via --config) or from within backend/.
 "**/tests/*.py" = ["E402"]
+# mailer.py is mostly Outlook-safe HTML email templates: a `<!DOCTYPE>` URL, VML
+# button markup, and inline-styled table rows are long by nature, and wrapping
+# mid-attribute/mid-tag hurts readability far more than the 100-col cap helps.
+"**/app/mailer.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

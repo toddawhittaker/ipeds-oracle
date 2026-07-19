@@ -176,7 +176,7 @@ export function bulkConfirmSummary(action, counts) {
     case "approve": {
       const parts = [
         `${numWord(selected, true)} ${nounFor(selected, REQUESTS)} ${isAre(selected)} selected.`,
-        `${numWord(eligible, true)} ${nounFor(eligible, REQUESTS)} will be approved and emailed a sign-in link.`,
+        `${numWord(eligible, true)} ${nounFor(eligible, REQUESTS)} will be approved and emailed an approval notice.`,
       ];
       return parts.join(" ");
     }

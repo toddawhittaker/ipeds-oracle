@@ -158,6 +158,22 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 ### Auth & access control
 - Passwordless **magic link**, manual **allowlist**, email via **Resend**. The
   allowlist is the **sole authority on sign-in**.
+- **Approval mints no token.** Only a user's OWN `POST /api/auth/request` mints +
+  emails a real one-time sign-in link (`auth.py` `mint_login_link` + `send_magic_link`).
+  Admin **approve / manual-add / CSV-import** just add the allowlist row and email a
+  **"you're approved — request your sign-in link"** notice (`send_access_approved`,
+  no link; the button points at the login page). This keeps a `login_tokens` write
+  out of the approval transaction, and — combined with the send happening only after
+  commit+close — is why `_approve_allowlist` no longer carries a minted link out to
+  the mailer. CSV-import sends its notices via `BackgroundTasks` (a roster can be
+  hundreds). The admin toast still classifies delivery
+  (`emailed`/`failed`/`logged_to_console`/`already_allowlisted`). The **admin
+  access-request notification** (`send_access_request`) deep-links straight to
+  `/admin/users/pending` and carries no "Reason" line (nothing ever set one). All
+  three emails share one **Outlook-safe HTML shell** in `mailer.py` (`_email_document`
+  + a VML bulletproof `_button`: doctype/head, 600px `role=presentation` tables,
+  Arial not `system-ui`) in the app's teal palette — `mailer.py` is E501-exempt in
+  `pyproject.toml` because the templates are legitimately long.
 - Optional `EMAIL_DOMAIN` keeps *access requests* to the institution's own domain
   (and feeds the login form's hint via unauthenticated `GET /api/auth/config`) — it
   does **not** gate sign-in.

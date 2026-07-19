@@ -152,7 +152,7 @@ def test_all_three_emails_use_the_product_name_constant():
         req = sent["admin@example.edu"]
         assert PRODUCT_NAME in req["subject"], req["subject"]
 
-        mailer.send_access_approved("approved@example.com", "https://x/verify?token=abc")
+        mailer.send_access_approved("approved@example.com")
         appr = sent["approved@example.com"]
         assert PRODUCT_NAME in appr["subject"], appr["subject"]
         assert PRODUCT_NAME in appr["html"], appr["html"]
@@ -160,6 +160,52 @@ def test_all_three_emails_use_the_product_name_constant():
     finally:
         mailer.get_settings = orig_get_settings
         mailer.send_email = orig_send_email
+
+
+def _capture_one():
+    """Patch get_settings (no app_title) + send_email to capture the single email
+    built by the next send_* call. Returns (restore, sent) — call restore() in a
+    finally."""
+    orig_get, orig_send = mailer.get_settings, mailer.send_email
+    sent = {}
+    mailer.get_settings = _settings_with_no_app_title
+    mailer.send_email = (lambda to, subject, html, text=None:
+                         sent.update(to=to, subject=subject, html=html, text=text) or True)
+
+    def restore():
+        mailer.get_settings, mailer.send_email = orig_get, orig_send
+    return restore, sent
+
+
+def test_approved_email_carries_no_magic_link():
+    """Approval no longer mints a token, so the approved email must carry NO
+    /verify?token= link — only the app's login URL, where the person self-requests
+    a one-time sign-in link. Regression guards against re-adding a link param."""
+    restore, sent = _capture_one()
+    try:
+        mailer.send_access_approved("approved@example.com")
+        assert "/verify?token=" not in sent["html"], "approved email leaked a magic link!"
+        assert "/verify?token=" not in (sent["text"] or ""), "approved TEXT leaked a magic link!"
+        # It must still point people at the login page to get their own link.
+        assert "https://ipeds.example.edu" in sent["html"], sent["html"]
+        assert "https://ipeds.example.edu" in sent["text"], sent["text"]
+    finally:
+        restore()
+
+
+def test_access_request_links_to_pending_tab_and_drops_reason():
+    """The admin notification deep-links straight to the Pending requests tab and no
+    longer renders the never-populated 'Reason: (none given)' line."""
+    restore, sent = _capture_one()
+    try:
+        mailer.send_access_request(["admin@example.edu"], "hopeful@person.com")
+        assert "/admin/users/pending" in sent["html"], sent["html"]
+        assert "/admin/users/pending" in sent["text"], sent["text"]
+        assert "Reason" not in sent["html"], "stale 'Reason:' line is back"
+        assert "none given" not in sent["html"], "stale '(none given)' is back"
+        assert "hopeful@person.com" in sent["html"], "requester should be named"
+    finally:
+        restore()
 
 
 def run():
@@ -175,6 +221,10 @@ def run():
           test_send_access_request_empty_is_falsey_noop)
     check("all three emails use the fixed PRODUCT_NAME constant, never s.app_title",
           test_all_three_emails_use_the_product_name_constant)
+    check("approved email carries NO magic link, points to the login page",
+          test_approved_email_carries_no_magic_link)
+    check("access-request email deep-links the Pending tab, drops the Reason line",
+          test_access_request_links_to_pending_tab_and_drops_reason)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

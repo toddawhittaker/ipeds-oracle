@@ -160,7 +160,7 @@ test.describe("pending access requests table", () => {
     // and today's (locale-formatted) date -- not the old static "approved request"
     // string. Date shape is locale-dependent, so match structurally.
     expect(allow.posts[0].note).toMatch(/^approved on .+ by admin@example\.edu$/);
-    await expect(page.locator(".toast")).toContainText(/emailed to one@example.edu/i);
+    await expect(page.locator(".toast")).toContainText(/approval email was sent to one@example.edu/i);
   });
 
   test("Approve: cancelling fires no allowlist POST", async ({ page }) => {

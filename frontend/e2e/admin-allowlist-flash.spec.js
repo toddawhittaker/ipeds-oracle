@@ -22,7 +22,7 @@ async function openAllowlistAndSubmit(page, email = "newperson@example.edu") {
   await page.getByRole("button", { name: "Add" }).click();
 }
 
-test("delivery=emailed -> 'a sign-in link was emailed to' flash", async ({ page }) => {
+test("delivery=emailed -> 'an approval email was sent to' flash", async ({ page }) => {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAccessRequests(page, []);
@@ -36,7 +36,8 @@ test("delivery=emailed -> 'a sign-in link was emailed to' flash", async ({ page 
   await openAllowlistAndSubmit(page);
 
   await expect(page.locator(".toast-msg")).toHaveText(
-    "Approved — a sign-in link was emailed to newperson@example.edu.");
+    "Approved — an approval email was sent to newperson@example.edu. "
+    + "They can request a sign-in link from the sign-in page when ready.");
 });
 
 test("delivery=failed (send failed WITH a key configured) -> "
@@ -54,9 +55,9 @@ test("delivery=failed (send failed WITH a key configured) -> "
   await openAllowlistAndSubmit(page);
 
   const status = page.locator(".toast-msg");
-  await expect(status).toContainText("newperson@example.edu added, but the invite email FAILED to send");
+  await expect(status).toContainText("newperson@example.edu approved, but the approval email FAILED to send");
   await expect(status).toContainText("check the Logs tab for the error");
-  await expect(status).toContainText("ask them to request one from the sign-in page");
+  await expect(status).toContainText("They can still request a sign-in link from the sign-in page");
 });
 
 test("delivery=logged_to_console (no key configured, dev mode) -> "
@@ -74,8 +75,8 @@ test("delivery=logged_to_console (no key configured, dev mode) -> "
   await openAllowlistAndSubmit(page);
 
   const status = page.locator(".toast-msg");
-  await expect(status).toContainText("newperson@example.edu added. No email was sent");
-  await expect(status).toContainText("the sign-in link is in the server console, not the Logs tab");
+  await expect(status).toContainText("newperson@example.edu approved. No email was sent");
+  await expect(status).toContainText("the approval notice is in the server console");
 });
 
 // The bug fixed by this feature: re-adding someone ALREADY on the allowlist

@@ -45,8 +45,9 @@ from app import mailer  # noqa: E402
 captured = {}
 mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 mailer.send_access_request = lambda *a, **k: True
-mailer.send_access_approved = (
-    lambda to, link: captured.__setitem__("approved_link", link) or True)
+# Approval no longer emails a magic link — the notice takes only the recipient.
+# Capture WHO was notified so tests can assert the approval email went out.
+mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
 from app import auth as auth_mod  # noqa: E402
 from app import skills  # noqa: E402
@@ -671,7 +672,7 @@ def test_allowlist_add_approval_email_failure_is_logged_not_raised():
         _login(c)
         orig_send = admin_router.send_access_approved
 
-        def _boom(email, link):
+        def _boom(email):
             raise RuntimeError("smtp is down")
         admin_router.send_access_approved = _boom
         try:
@@ -694,8 +695,8 @@ def _patch_resend_key(key):
     `from app.config import get_settings`, same convention as
     admin_router.send_access_approved above) to return a copy of the real,
     cached Settings with only resend_api_key overridden -- so every other
-    field (app_public_url, etc.) that add_allowlist/mint_login_link also
-    reads stays real and valid."""
+    field (app_public_url, etc.) that add_allowlist also reads stays real
+    and valid."""
     orig_get_settings = admin_router.get_settings
     real = orig_get_settings()
     fake = real.model_copy(update={"resend_api_key": key})
@@ -745,12 +746,8 @@ def test_allowlist_add_invite_failure_with_mail_configured_survives_logbuffer():
             _login(c)
             restore = _patch_resend_key("re_test_key_survive")
             orig_send = admin_router.send_access_approved
-            captured_link = {}
-
-            def _fails_without_raising(email, link):
-                captured_link["link"] = link
-                return False  # mirrors send_email()'s real swallow-and-False path
-            admin_router.send_access_approved = _fails_without_raising
+            # mirrors send_email()'s real swallow-and-False path (no raise)
+            admin_router.send_access_approved = lambda email: False
             try:
                 r = c.post("/api/admin/allowlist",
                            json={"email": "logbuffer-probe@example.edu"})
@@ -773,23 +770,19 @@ def test_allowlist_add_invite_failure_with_mail_configured_survives_logbuffer():
 
 
 def test_allowlist_add_invite_failure_warning_never_leaks_link_or_token():
-    """Security regression pin: ipeds.mail is excluded from the log store
-    specifically because dev-mode mail logging includes the raw magic-link
-    token, and the Logs view is readable by any admin. A "fix" that solved
-    the visibility bug by putting the link into the (retained) ipeds.admin
-    logger instead would be a genuine regression — assert that never
-    happens, independent of whether the invisibility bug itself is fixed."""
+    """Security regression pin. Approval no longer mints a token, so a failed-send
+    warning has nothing sensitive to leak — guard that invariant DIRECTLY: the
+    retained ipeds.admin warning (and the whole log store) must contain no
+    token=/verify link. If someone ever re-adds a magic-link mint to the approval
+    path AND logs it into the admin-readable store, this fails. (ipeds.mail is
+    excluded from the store precisely because dev-mode mail logging can include a
+    raw token, and the Logs view is readable by any admin.)"""
     with _attached_probe_handler() as handler:
         with TestClient(app) as c:
             _login(c)
             restore = _patch_resend_key("re_test_key_leak_check")
             orig_send = admin_router.send_access_approved
-            captured_link = {}
-
-            def _fails_without_raising(email, link):
-                captured_link["link"] = link
-                return False
-            admin_router.send_access_approved = _fails_without_raising
+            admin_router.send_access_approved = lambda email: False
             try:
                 r = c.post("/api/admin/allowlist",
                            json={"email": "leak-check@example.edu"})
@@ -797,15 +790,12 @@ def test_allowlist_add_invite_failure_warning_never_leaks_link_or_token():
                 admin_router.send_access_approved = orig_send
                 restore()
         assert r.status_code == 200, r.text
-
-        link = captured_link.get("link")
-        assert link, "test setup bug: mock never received the minted link"
-        assert "token=" in link, \
-            f"test setup bug: mint_login_link didn't produce a token= link: {link}"
-
-        blob = str(handler.records(limit=2000))
-        assert link not in blob, blob
+        # A WARNING was retained (the failed-send path fired)...
+        blob = str(handler.records(limit=2000, q="leak-check@example.edu"))
+        assert "not delivered" in blob.lower(), blob
+        # ...and it carries nothing sensitive, because approval mints no token.
         assert "token=" not in blob, blob
+        assert "/verify" not in blob, blob
 
 
 def test_allowlist_add_no_stored_warning_when_send_succeeds():
@@ -814,7 +804,7 @@ def test_allowlist_add_no_stored_warning_when_send_succeeds():
             _login(c)
             restore = _patch_resend_key("re_test_key_success")
             orig_send = admin_router.send_access_approved
-            admin_router.send_access_approved = lambda email, link: True
+            admin_router.send_access_approved = lambda email: True
             try:
                 r = c.post("/api/admin/allowlist",
                            json={"email": "send-ok@example.edu"})
@@ -881,7 +871,7 @@ def test_allowlist_add_response_includes_delivery_key():
     with TestClient(app) as c:
         _login(c)
         orig_send = admin_router.send_access_approved
-        admin_router.send_access_approved = lambda email, link: False
+        admin_router.send_access_approved = lambda email: False
         try:
             r = c.post("/api/admin/allowlist", json={"email": "shape-check@example.edu"})
         finally:
@@ -899,7 +889,7 @@ def test_allowlist_add_delivery_emailed_when_send_succeeds():
         _login(c)
         restore = _patch_resend_key("re_test_key_delivery_emailed")
         orig_send = admin_router.send_access_approved
-        admin_router.send_access_approved = lambda email, link: True
+        admin_router.send_access_approved = lambda email: True
         try:
             r = c.post("/api/admin/allowlist",
                        json={"email": "delivery-emailed@example.edu"})
@@ -918,7 +908,7 @@ def test_allowlist_add_delivery_failed_when_key_configured_and_send_fails():
         _login(c)
         restore = _patch_resend_key("re_test_key_delivery_failed")
         orig_send = admin_router.send_access_approved
-        admin_router.send_access_approved = lambda email, link: False
+        admin_router.send_access_approved = lambda email: False
         try:
             r = c.post("/api/admin/allowlist",
                        json={"email": "delivery-failed@example.edu"})
@@ -940,7 +930,7 @@ def test_allowlist_add_delivery_logged_to_console_when_no_key():
     with TestClient(app) as c:
         _login(c)
         orig_send = admin_router.send_access_approved
-        admin_router.send_access_approved = lambda email, link: False
+        admin_router.send_access_approved = lambda email: False
         try:
             r = c.post("/api/admin/allowlist",
                        json={"email": "delivery-console@example.edu"})
@@ -963,8 +953,8 @@ def test_allowlist_add_delivery_already_allowlisted_on_reaadd_no_send_attempted(
         orig_send = admin_router.send_access_approved
         send_calls = []
 
-        def _track(email, link):
-            send_calls.append((email, link))
+        def _track(email):
+            send_calls.append(email)
             return True
         admin_router.send_access_approved = _track
         try:
@@ -1009,7 +999,7 @@ def test_allowlist_add_delivery_already_allowlisted_never_emits_failure_warning(
             _login(c)
             restore = _patch_resend_key("re_test_key_already_allowlisted_2")
             orig_send = admin_router.send_access_approved
-            admin_router.send_access_approved = lambda email, link: True
+            admin_router.send_access_approved = lambda email: True
             try:
                 first = c.post("/api/admin/allowlist",
                                json={"email": "already-on-2@example.edu"})
@@ -1041,10 +1031,10 @@ def test_promote_makes_user_admin_immediately_on_live_session():
     with TestClient(app) as c:
         _login(c)
         c.post("/api/admin/allowlist", json={"email": "prof@example.edu"})
-        # prof signs in as a normal (non-admin) user
+        # prof signs in as a normal (non-admin) user via the real flow: approval
+        # no longer emails a link, so they request their own (_login does that).
         prof = TestClient(app)
-        ptok = captured["approved_link"].split("token=")[1]
-        assert prof.post("/api/auth/verify", json={"token": ptok}).status_code == 200
+        _login(prof, email="prof@example.edu")
         assert prof.get("/api/auth/me").json()["is_admin"] is False
         assert prof.get("/api/admin/allowlist").status_code == 403  # not admin yet
 
@@ -1212,18 +1202,22 @@ def test_bulk_added_rows_list_in_stable_email_order():
         assert imported == ["alpha@ex.edu", "mid@ex.edu", "zed@ex.edu"], imported
 
 
-def test_bulk_add_sends_no_email_and_mints_no_token():
-    # The defining contract of the bulk path (vs single-add): NO invite email and
-    # NO sign-in token are produced. If this regresses, a CSV import silently
-    # blasts the mail provider and mints a token per row.
+def test_bulk_add_sends_approval_notice_but_mints_no_token():
+    # The CSV bulk path now emails each newly-added user an approval NOTICE (via a
+    # background task), but — like every approval path — mints NO sign-in token. If
+    # the token half regresses, a CSV import silently mints a token per row.
     with TestClient(app) as c:
         _login(c)
-        captured.pop("approved_link", None)
-        c.post("/api/admin/allowlist/bulk", json={"users": [
+        captured.pop("approved", None)
+        r = c.post("/api/admin/allowlist/bulk", json={"users": [
             {"email": "silent@example.edu"},
         ]})
-        assert "approved_link" not in captured, \
-            "bulk add must not send an approval email"
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == 1, r.text
+        # The approval notice went out (the background task runs before the
+        # TestClient response returns) to the newly-added address, carrying no link.
+        assert captured.get("approved") == "silent@example.edu", \
+            "bulk add must email each newly-added user the approval notice"
         con = connect()
         try:
             n = con.execute("SELECT COUNT(*) FROM login_tokens WHERE email=?",
@@ -1905,8 +1899,7 @@ def test_deny_requires_admin_403_for_authenticated_non_admin():
         _seed_access_request(target_email, status="pending")
 
         non_admin = TestClient(app)
-        tok = captured["approved_link"].split("token=")[1]
-        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+        _login(non_admin, email=plain_email)
         assert non_admin.get("/api/auth/me").json()["is_admin"] is False
 
         r = non_admin.post(f"/api/admin/access-requests/{target_email}/deny")
@@ -1964,9 +1957,8 @@ def test_undo_denial_grants_no_access_and_sends_no_email():
         assert allow_n == 0, \
             f"undo must NOT add {email} to the allowlist, found {allow_n} row(s)"
         assert token_n == 0, (
-            f"undo must NOT mint a login token (allowlisting does this, see "
-            f"admin.py:73 mint_login_link) -- this pins that undo did not "
-            f"silently fall back to the allowlist path, found {token_n} row(s)")
+            f"undo must NOT mint a login token -- this pins that undo did not "
+            f"silently fall back to some sign-in-granting path, found {token_n} row(s)")
         assert user_n == 0, \
             f"undo must NOT create a users row, found {user_n} row(s)"
         # The ABSENCE of this call IS the requirement -- do not remove or
@@ -2633,8 +2625,7 @@ def test_bulk_allowlist_action_requires_admin_403_for_non_admin():
         plain = "bulk-notadmin-caller@example.edu"
         assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
         non_admin = TestClient(app)
-        tok = captured["approved_link"].split("token=")[1]
-        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+        _login(non_admin, email=plain)
 
         r = non_admin.post("/api/admin/allowlist/bulk-action",
                            json={"action": "promote", "emails": []})
@@ -2643,21 +2634,23 @@ def test_bulk_allowlist_action_requires_admin_403_for_non_admin():
 
 # --- POST /api/admin/access-requests/bulk -------------------------------------
 
-def test_bulk_access_requests_approve_adds_to_allowlist_and_captures_link():
+def test_bulk_access_requests_approve_adds_to_allowlist_and_sends_notice():
     with TestClient(app) as c:
         _login(c)
         email = "bulk-approve1@example.edu"
         _seed_access_request(email, status="pending")
         rid = _pending_id(c, email)
-        captured.pop("approved_link", None)
+        captured.pop("approved", None)
 
         r = c.post("/api/admin/access-requests/bulk", json={"action": "approve", "ids": [rid]})
         assert r.status_code == 200, r.text
         assert r.json() == {"ok": True, "affected": 1, "skipped": [], "failed": []}, r.json()
 
         assert email in _emails(c)
-        assert "approved_link" in captured and "token=" in captured["approved_link"], \
-            "bulk approve must mint + email a sign-in link, same as the single Approve path"
+        # Bulk approve emails the approval NOTICE (no magic link), same as the
+        # single Approve path — it names the newly-approved address.
+        assert captured.get("approved") == email, \
+            "bulk approve must send the approval notice to the newly-approved address"
 
 
 def test_bulk_access_requests_approve_multiple_and_skips_already_allowlisted():
@@ -2796,8 +2789,7 @@ def test_bulk_access_requests_requires_admin_403_for_non_admin():
         plain = "bulk-notadmin-caller2@example.edu"
         assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
         non_admin = TestClient(app)
-        tok = captured["approved_link"].split("token=")[1]
-        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+        _login(non_admin, email=plain)
 
         r = non_admin.post("/api/admin/access-requests/bulk",
                            json={"action": "approve", "ids": []})
@@ -2913,8 +2905,7 @@ def test_bulk_unblock_requires_admin_403_for_non_admin():
         plain = "bulk-notadmin-caller3@example.edu"
         assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
         non_admin = TestClient(app)
-        tok = captured["approved_link"].split("token=")[1]
-        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+        _login(non_admin, email=plain)
 
         r = non_admin.post("/api/admin/access-requests/denial/bulk",
                            json={"action": "unblock", "ids": []})
@@ -3016,8 +3007,8 @@ def run():
           test_bulk_add_reports_invalid_email_and_keeps_going)
     check("bulk-added rows (tied added_at) list in stable email order",
           test_bulk_added_rows_list_in_stable_email_order)
-    check("bulk add CONTRACT: sends no email and mints no token",
-          test_bulk_add_sends_no_email_and_mints_no_token)
+    check("bulk add CONTRACT: sends the approval notice but mints no token",
+          test_bulk_add_sends_approval_notice_but_mints_no_token)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
     check("usage dashboard response has no 'recent' key",
@@ -3117,8 +3108,8 @@ def run():
           test_bulk_allowlist_action_requires_admin)
     check("bulk allowlist action requires admin (403 for authenticated non-admin)",
           test_bulk_allowlist_action_requires_admin_403_for_non_admin)
-    check("bulk access-requests approve: adds to allowlist + captures the sign-in link",
-          test_bulk_access_requests_approve_adds_to_allowlist_and_captures_link)
+    check("bulk access-requests approve: adds to allowlist + sends the approval notice",
+          test_bulk_access_requests_approve_adds_to_allowlist_and_sends_notice)
     check("bulk access-requests approve: multiple ids, skips already-allowlisted",
           test_bulk_access_requests_approve_multiple_and_skips_already_allowlisted)
     check("bulk access-requests reject: sets denied_at, preserves created_at",

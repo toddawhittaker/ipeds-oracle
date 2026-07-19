@@ -244,11 +244,11 @@ describe("bulkConfirmSummary", () => {
 
   it("approve: never has a skip sentence (partitionEligibility never skips this action)", () => {
     expect(bulkConfirmSummary("approve", { selected: 15, eligible: 15, skipped: 0 })).toBe(
-      "15 requests are selected. 15 requests will be approved and emailed a sign-in link.");
+      "15 requests are selected. 15 requests will be approved and emailed an approval notice.");
   });
   it("approve: singular boundary", () => {
     expect(bulkConfirmSummary("approve", { selected: 1, eligible: 1, skipped: 0 })).toBe(
-      "One request is selected. One request will be approved and emailed a sign-in link.");
+      "One request is selected. One request will be approved and emailed an approval notice.");
   });
 
   it("reject: names the block explicitly (both counts <10, so both spelled out)", () => {
