@@ -250,6 +250,19 @@ MIGRATIONS: list[tuple[int, str]] = [
     # list of {kind,text} items) — persisted alongside sql_log so the "Thinking"
     # disclosure survives a reload/reopen, not just the live in-session turn.
     (12, "ALTER TABLE messages ADD COLUMN thinking TEXT;"),
+    # The answer's signature "figure" — a structured hero statistic
+    # ({value,unit?,label,source?} JSON) parsed server-side from the model's
+    # ```figure fence, persisted so it survives a reload like sql_log/thinking.
+    (13, "ALTER TABLE messages ADD COLUMN figure TEXT;"),
+    # Cache the figure too, so a repeated (cache-hit) question shows the SAME hero
+    # statistic the fresh answer did — no jarring "figure the first time, none the
+    # second". JSON, like the messages.figure column above.
+    (14, "ALTER TABLE query_cache ADD COLUMN figure TEXT;"),
+    # Drill-down follow-up questions (a JSON array of strings), persisted like the
+    # figure so the "you might also ask" chips survive a reload AND a cache-hit
+    # repeat — on the message and in the answer cache.
+    (15, "ALTER TABLE messages ADD COLUMN suggestions TEXT;"),
+    (16, "ALTER TABLE query_cache ADD COLUMN suggestions TEXT;"),
 ]
 
 

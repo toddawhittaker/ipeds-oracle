@@ -103,6 +103,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 }
 .figure .unit { font-size: .3em; color: var(--muted); font-feature-settings: normal; letter-spacing: 0; }
 .fig-rule { height: 3px; width: 110px; background: var(--ochre); border-radius: 2px; margin: 12px 0; }
+/* The signature figure as an answer's hero statistic — the `.figure` device, sized
+   to anchor the answer's "brief" (hero number + synopsis + recent-years table +
+   trend chart). Sits above the prose. */
+.answer-figure { margin: 2px 0 22px; }
+.answer-figure .field-label { display: block; margin-bottom: 10px; }
+.answer-figure .figure { font-size: 54px; }
+.answer-figure .fig-rule { margin: 14px 0 8px; }
+.answer-figure-src { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
 /* layout */
 /* overflow:hidden pins the shell to the viewport so the PAGE never scrolls —
@@ -386,6 +394,26 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   border-left: 4px solid var(--ochre);
   border-radius: 8px;
 }
+/* "You might also ask" — drill-down suggestion chips beneath an answer. Compact
+   pills (vs the larger empty-state query slips), with the ochre/accent hover. */
+.suggestions { margin: 12px 0 2px; }
+.suggestions-label { display: block; margin-bottom: 8px; }
+/* One row of equal-width chips that wrap their own text (neater than a stack of
+   single-line pills); collapses to a stack only when the row gets too narrow. */
+.suggestions-chips { display: flex; gap: 8px; align-items: stretch; }
+.suggestion-chip {
+  flex: 1 1 0; min-width: 0;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 12px; padding: 8px 13px; font-size: 13px; line-height: 1.35;
+  text-align: left; cursor: pointer; transition: border-color .12s, color .12s;
+}
+.suggestion-chip:hover, .suggestion-chip:focus-visible { border-color: var(--accent); color: var(--accent); }
+.suggestion-chip:disabled { opacity: .55; cursor: default; }
+@media (max-width: 560px) {
+  .suggestions-chips { flex-wrap: wrap; }
+  .suggestion-chip { flex-basis: 100%; }
+}
+
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
 .bubble { max-width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
@@ -586,11 +614,22 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* result tables: per-table toolbar (CSV + chart this) */
 .table-block { margin: 8px 0; }
 .table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
+/* The single-number "brief": a compact recent-years table beside its trend chart.
+   Flex-wrap degrades gracefully to stacked when the table is too wide to share. */
+.brief-figrow { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: flex-start; margin: 10px 0; }
+.brief-figrow .table-block { flex: 0 1 auto; margin: 0; }
+.brief-figrow figure.chart { flex: 1 1 340px; min-width: 280px; margin: 0; }
 
 /* charts */
 .chart { margin: 10px 0; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 6px; }
 .chart-head-tools { display: flex; align-items: center; gap: 12px; flex: none; }
+/* %-change over the range, featured in the chart header. Colored TEXT (not a
+   tinted background) so the dark-mode --danger stays AA on any surface. */
+.chart-delta { font-family: var(--mono); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.chart-delta.up { color: var(--ok); }
+.chart-delta.down { color: var(--danger); }
+.chart-delta.flat { color: var(--muted); }
 .chart-types { display: flex; gap: 4px; }
 .chart-types button, .pill-toggle { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
 .chart-types button.on, .pill-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }

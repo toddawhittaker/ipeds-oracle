@@ -23,8 +23,9 @@ its findings on WCAG specifics).
 
 A private FastAPI + React natural-language IPEDS query app. Core surfaces in
 `frontend/`: `Login.jsx` (magic-link request), `Chat.jsx` (conversational Q&A with
-streaming markdown answers, result tables, CSV/chart export, editable/rerun
-turns, conversation history), `Admin.jsx` (tabbed: allowlist, imports, usage, skills),
+streaming markdown answers, the signature hero "figure" statistic above an answer,
+result tables, CSV/chart export, editable/rerun turns, conversation history),
+`Admin.jsx` (tabbed: allowlist, imports, usage, skills),
 `Markdown.jsx`, `styles.css` (light/dark via `prefers-color-scheme`). The users
 are non-technical university colleagues who want answers, not SQL.
 

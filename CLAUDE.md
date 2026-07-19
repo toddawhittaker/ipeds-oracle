@@ -143,6 +143,51 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `critic_revised=False`. This closes the observed leak where a *confirm*-by-
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
+- The **signature "figure"** — a typeset hero statistic (mono caption · big serif
+  number · ochre rule · mono source) rendered ABOVE an answer when one clear number
+  answers the question. Prompt INSTRUCTIONS **step 6** turns a single-number answer
+  into a short **BRIEF**: (a) the ```figure fence, (b) a 1–2 sentence synopsis, (c) a
+  recent-years breakdown table (constant-bound `year > (SELECT MAX(year)-5 …)`), and
+  (d) a ```chart trend — reusing the existing table + chart rendering, so the reader
+  gets the story behind the number, not just one point. Omitted for
+  rankings/lists/multi-row comparisons/trends with no single hero number. The model emits a
+  ```figure `{value,unit?,label,source?}` fence; **`llm.py`'s `_extract_figure`
+  parses it out server-side, ALWAYS strips every figure fence from the prose (so raw
+  JSON never reaches the user, even on a parse error), and — only for valid JSON with
+  value+label — sets `AgentResult.figure` and yields a `{"type":"figure",…}` SSE
+  event**. Parsed AFTER the critic's revert settles `answer`, so the figure always
+  matches the winning prose. Persisted in `messages.figure` (migration 13) and the
+  answer cache `query_cache.figure` (migration 14) so it survives reload AND a
+  cache-hit repeat — mirroring `sql_log`/`thinking`. Frontend: a structured `figure`
+  message field (not scraped) → `Figure.jsx` (pure `figure.js` normalizer, vitest)
+  renders it as a sibling BEFORE `<Markdown>` in the assistant bubble — above the
+  prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
+  `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
+  (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
+  some models emit the latter.) The brief applies on **follow-up turns too** (never
+  code-gated; a prompt line makes the model reliably do it). A single-number brief's
+  **table + trend chart render side by side** (`briefdata.js` pairs one-table +
+  one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
+  the standalone fence; drops the redundant "Chart this"; `.brief-figrow` wraps to
+  stacked when narrow).
+- **The analyst layer** on top of the brief:
+  - **Trend line + %-change** — `Chart.jsx` overlays a least-squares fit (a computed
+    `__trend` `<Line>`, dashed ochre, injected into `chartChildren()` so it flows to
+    the PNG export too; kept out of `keys` → no label/legend) and a **delta badge**
+    (`▲/▼ X%` over the range, `--ok`/`--danger`) for a single-series line time-series.
+    All client-side from the numeric chart data (`trendstats.js`, vitest) — accurate,
+    no model dependency; a "Trend" toggle (default on).
+  - **Richer narrative + rank/share** — prompt step 6(b): direction/magnitude,
+    peak/trough years, provisional-year flags, and (when meaningful) the figure's rank
+    among peers or share of a national total (the model runs one extra query).
+  - **"You might also ask" drill-down chips** — the model emits a ```followups
+    fence on EVERY answered turn (step 7 is REQUIRED, not optional — only an
+    off-topic/unanswerable turn skips it, so chips appear on every real answer, not
+    just single-number briefs); `_extract_suggestions` parses+strips it (mirrors
+    the figure) → `{"type":"suggestions",…}` event → `messages.suggestions` (migration
+    15) + `query_cache.suggestions` (16). `Suggestions.jsx` (pure `suggestions.js`,
+    vitest) renders chips below the actions row; clicking one `submit()`s it as a
+    follow-up turn (which gets its own brief) — an exploration loop.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

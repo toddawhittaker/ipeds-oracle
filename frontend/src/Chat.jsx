@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
+import Figure from "./Figure.jsx";
+import Suggestions from "./Suggestions.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -330,6 +332,8 @@ export default function Chat({ me }) {
           ...m,
           sql_log: m.sql_log ? JSON.parse(m.sql_log) : [],
           thinking: m.thinking ? JSON.parse(m.thinking) : [],
+          figure: m.figure ? JSON.parse(m.figure) : null,
+          suggestions: m.suggestions ? JSON.parse(m.suggestions) : null,
         })));
         setLoadingConvo(false);
       })
@@ -631,6 +635,8 @@ export default function Chat({ me }) {
       patchLast((last) => ({ ...last, thinking: [...(last.thinking || []), item] }));
 
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
+    let figure = null; // the structured hero statistic, when the model emitted one
+    let suggestions = null; // drill-down "you might also ask" questions
     let failed = false; // drives the finalized message's inline "Try again"
     try {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
@@ -694,6 +700,8 @@ export default function Chat({ me }) {
         else if (ev.type === "thinking") { if (isMine()) addThought({ kind: "reason", text: ev.text }); }
         else if (ev.type === "tool") { if (isMine()) addThought({ kind: "tool", text: `${ev.name}${ev.ok ? " ✓" : " ✗"}` }); }
         else if (ev.type === "answer") answer = ev.text;
+        else if (ev.type === "figure") figure = ev.figure; // structured hero stat, rendered above the prose
+        else if (ev.type === "suggestions") suggestions = ev.suggestions; // drill-down chips below the answer
         else if (ev.type === "error") { answer = "⚠️ " + ev.text; failed = true; }
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
@@ -714,7 +722,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, id: msgId ?? c[ai].id, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, id: msgId ?? c[ai].id, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -883,7 +891,14 @@ export default function Chat({ me }) {
                         saved to this chat — reopen it in a moment to check.
                       </p>
                     ) : (
-                      <Markdown>{m.content || ""}</Markdown>
+                      <>
+                        {/* Sibling BEFORE <Markdown> (outside the .md node
+                            mdRefs targets), so the hero figure sits above the
+                            prose and stays out of the copy surface. Renders
+                            null when the message carries no figure. */}
+                        <Figure spec={m.figure} />
+                        <Markdown>{m.content || ""}</Markdown>
+                      </>
                     )}
                   </div>
                 ) : editingIdx === i ? (
@@ -972,6 +987,9 @@ export default function Chat({ me }) {
                         <SqlBlock code={m.sql_log.join(";\n\n")} />
                       </div>
                     )}
+                    {/* Drill-down chips — clicking one asks it as a follow-up turn
+                        (which gets its own brief), an exploration loop. */}
+                    <Suggestions items={m.suggestions} onAsk={(q) => submit(q)} disabled={busy} />
                   </>
                 )}
               </div>
