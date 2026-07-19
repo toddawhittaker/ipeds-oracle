@@ -150,6 +150,19 @@ def test_migration_12_adds_messages_thinking_column():
     assert row[0] is None, row
 
 
+def test_migration_13_14_add_figure_columns():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 12])
+    assert "figure" not in _cols(con, "messages"), _cols(con, "messages")
+    assert "figure" not in _cols(con, "query_cache"), _cols(con, "query_cache")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    # The hero statistic is persisted both on the message (survives reload) and in
+    # the answer cache (a repeated question shows the same figure).
+    assert "figure" in _cols(con, "messages"), _cols(con, "messages")
+    assert "figure" in _cols(con, "query_cache"), _cols(con, "query_cache")
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -393,6 +406,8 @@ def run():
           test_migration_5_adds_import_jobs_progress_column)
     check("migration 12 adds messages.thinking (nullable)",
           test_migration_12_adds_messages_thinking_column)
+    check("migration 13+14 add figure columns (messages + query_cache)",
+          test_migration_13_14_add_figure_columns)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

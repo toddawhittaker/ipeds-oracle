@@ -305,6 +305,73 @@ def test_thinking_trace_is_persisted_and_returned_on_reload():
         assert user_msg["thinking"] is None, user_msg["thinking"]
 
 
+def test_extract_figure_parses_and_strips_the_fence():
+    """The server pulls the ```figure fence out of the answer into structured data
+    and ALWAYS strips it from the prose (so raw JSON never reaches the user)."""
+    from app.llm import _extract_figure
+    ans = ("CA publics awarded **7,679** CS degrees.\n\n"
+           "```figure\n"
+           '{"value":"7,679","unit":"degrees","label":"CS bachelor\'s","source":"IPEDS"}\n'
+           "```\n")
+    clean, fig = _extract_figure(ans)
+    assert "```figure" not in clean, clean
+    assert fig == {"value": "7,679", "unit": "degrees",
+                   "label": "CS bachelor's", "source": "IPEDS"}, fig
+    # No fence -> unchanged, None.
+    assert _extract_figure("plain answer") == ("plain answer", None)
+    # Malformed JSON -> fence stripped anyway (no raw JSON leak), None.
+    clean2, fig2 = _extract_figure("x\n```figure\nnot json\n```\ny")
+    assert "```figure" not in clean2 and fig2 is None, (clean2, fig2)
+    # Missing the required label -> stripped, None (no lopsided half-figure).
+    _, fig3 = _extract_figure('```figure\n{"value":"5"}\n```')
+    assert fig3 is None, fig3
+
+
+def test_figure_is_persisted_and_returned_on_reload():
+    """A structured figure emitted during a turn reaches the client AND is stored +
+    returned by GET /conversations/{id}, so the hero statistic survives a reload
+    like sql_log/thinking."""
+    fig = {"value": "7,679", "unit": "degrees", "label": "CS bachelor's", "source": "IPEDS"}
+
+    async def _figure_agent(question, *, history=None, skills_block=""):
+        yield {"type": "figure", "figure": fig}
+        yield {"type": "answer", "text": "the answer"}
+        yield {"type": "done", "result": AgentResult(
+            answer="the answer", model_used="test", sql_log=["SELECT 1"],
+            figure=fig, prompt_tokens=1, completion_tokens=1)}
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        chat_router.stream_agent = _figure_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a figured question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        # The figure event reaches the client (the frontend accumulates it live).
+        assert any(e["type"] == "figure" and e["figure"] == fig for e in events), events
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        # Reload the conversation (what the client does on reopen/refresh).
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        assert json.loads(assistant["figure"]) == fig, assistant["figure"]
+        # A figureless message stores NULL; the client maps null -> no figure.
+        user_msg = next(m for m in msgs if m["role"] == "user")
+        assert user_msg["figure"] is None, user_msg["figure"]
+
+
 def test_retrieved_skills_bump_their_hit_count():
     with TestClient(app) as c:
         _login(c)
@@ -618,6 +685,10 @@ def run():
           test_normal_flow_titles_a_new_conversation)
     check("the thinking trace is persisted and returned on reload",
           test_thinking_trace_is_persisted_and_returned_on_reload)
+    check("_extract_figure parses + strips the figure fence",
+          test_extract_figure_parses_and_strips_the_fence)
+    check("the figure is persisted and returned on reload",
+          test_figure_is_persisted_and_returned_on_reload)
     check("retrieved few-shot skills bump their hit count",
           test_retrieved_skills_bump_their_hit_count)
     check("a critic-driven correction records a candidate lesson",

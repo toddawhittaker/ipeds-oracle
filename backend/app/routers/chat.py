@@ -142,14 +142,17 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
         if cached:
             answer = cached["answer_md"]
+            figure = cached.get("figure")
             status = "Matched a recent question — reusing its query."
             yield _sse({"type": "status", "text": status})
+            if figure:
+                yield _sse({"type": "figure", "figure": figure})
             yield _sse({"type": "answer", "text": answer})
             user_msg_id, msg_id = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer,
                 sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
                 model="cache", tokens=0, cached=True, ok=True,
-                thinking=[{"kind": "status", "text": status}])
+                thinking=[{"kind": "status", "text": status}], figure=figure)
             done = {"type": "done", "cached": True, "message_id": msg_id,
                     "user_message_id": user_msg_id}
             if is_new and answer:
@@ -170,6 +173,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         # disclosure survives a reload (not just the in-session turn).
         result = None
         answer = ""
+        figure = None
         thinking: list[dict] = []
         async for ev in stream_agent(question, history=history, skills_block=skills_block):
             if ev["type"] == "done":
@@ -177,6 +181,10 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 continue
             if ev["type"] == "answer":
                 answer = ev["text"]
+            elif ev["type"] == "figure":
+                # Structured hero statistic — pass through to the client (below)
+                # and persist alongside the answer, like sql_log/thinking.
+                figure = ev["figure"]
             item = _trace_item(ev)
             if item:
                 thinking.append(item)
@@ -193,11 +201,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             ok=result.error is None, escalated=result.escalated,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
-            cost=result.cost, thinking=thinking)
+            cost=result.cost, thinking=thinking, figure=figure)
 
         # 4) Cache the successful answer for reuse (first-turn, context-free only).
         if not history and result.error is None and answer and result.sql_log:
-            await run_in_threadpool(skills.cache_store, question, result.sql_log[-1], answer)
+            await run_in_threadpool(skills.cache_store, question, result.sql_log[-1],
+                                    answer, result.figure)
 
         # 4b) If the critic caught a real mistake and forced a correction, capture
         # its finding as an unverified lesson (self-learning from actual errors).
@@ -228,7 +237,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
-             cost=0.0, thinking=None):
+             cost=0.0, thinking=None, figure=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload)."""
@@ -241,9 +250,10 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         user_msg_id = ucur.lastrowid
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
-            "thinking, model_used, tokens, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            "thinking, figure, model_used, tokens, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
-             json.dumps(thinking or []), model, tokens, now))
+             json.dumps(thinking or []),
+             json.dumps(figure) if figure else None, model, tokens, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -288,7 +298,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         if not owns:
             raise HTTPException(404, "Not found.")
         rows = con.execute(
-            "SELECT id, role, content, sql_log, thinking, model_used, created_at "
+            "SELECT id, role, content, sql_log, thinking, figure, model_used, created_at "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:

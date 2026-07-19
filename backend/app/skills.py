@@ -18,6 +18,7 @@ exact-match dedup) so the app still runs.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -263,8 +264,8 @@ def record_lesson_from_critic(question: str, canonical_sql: str, headline: str,
 # --- Semantic answer cache -----------------------------------------------------
 
 def cache_lookup(question: str) -> dict | None:
-    """Return a cached {final_sql, answer_md} for a near-identical question at the
-    current data_version, else None. Gated by skills_enabled (like lesson
+    """Return a cached {final_sql, answer_md, figure} for a near-identical question
+    at the current data_version, else None. Gated by skills_enabled (like lesson
     retrieval) so SKILLS_ENABLED=0 gives a clean, self-learning-off A/B baseline —
     otherwise a cache hit would short-circuit the 'off' arm."""
     s = get_settings()
@@ -277,7 +278,7 @@ def cache_lookup(question: str) -> dict | None:
     try:
         dv = data_version(con)
         rows = con.execute(
-            "SELECT question, final_sql, answer_md, embedding FROM query_cache "
+            "SELECT question, final_sql, answer_md, figure, embedding FROM query_cache "
             "WHERE data_version=? AND embedding IS NOT NULL", (dv,)).fetchall()
         if not rows:
             return None
@@ -287,6 +288,7 @@ def cache_lookup(question: str) -> dict | None:
         if sims[i] >= s.cache_similarity_threshold:
             return {"final_sql": rows[i]["final_sql"],
                     "answer_md": rows[i]["answer_md"],
+                    "figure": json.loads(rows[i]["figure"]) if rows[i]["figure"] else None,
                     "matched_question": rows[i]["question"],
                     "similarity": float(sims[i])}
     finally:
@@ -294,7 +296,8 @@ def cache_lookup(question: str) -> dict | None:
     return None
 
 
-def cache_store(question: str, final_sql: str, answer_md: str) -> None:
+def cache_store(question: str, final_sql: str, answer_md: str,
+                figure: dict | None = None) -> None:
     v = embed(question)
     if v is None:
         return
@@ -302,8 +305,9 @@ def cache_store(question: str, final_sql: str, answer_md: str) -> None:
     try:
         con.execute(
             "INSERT INTO query_cache(question, embedding, final_sql, answer_md, "
-            "data_version, created_at) VALUES (?,?,?,?,?,?)",
-            (question, _to_blob(v), final_sql, answer_md, data_version(con), time.time()))
+            "figure, data_version, created_at) VALUES (?,?,?,?,?,?,?)",
+            (question, _to_blob(v), final_sql, answer_md,
+             json.dumps(figure) if figure else None, data_version(con), time.time()))
         con.commit()
     finally:
         con.close()

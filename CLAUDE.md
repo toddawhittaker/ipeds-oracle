@@ -143,6 +143,22 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `critic_revised=False`. This closes the observed leak where a *confirm*-by-
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
+- The **signature "figure"** — a typeset hero statistic (mono caption · big serif
+  number · ochre rule · mono source) rendered ABOVE an answer when one clear number
+  answers the question (prompt INSTRUCTIONS **step 6**, modeled on the ```chart
+  fence; conservative — omitted for rankings/lists/trends). The model emits a
+  ```figure `{value,unit?,label,source?}` fence; **`llm.py`'s `_extract_figure`
+  parses it out server-side, ALWAYS strips every figure fence from the prose (so raw
+  JSON never reaches the user, even on a parse error), and — only for valid JSON with
+  value+label — sets `AgentResult.figure` and yields a `{"type":"figure",…}` SSE
+  event**. Parsed AFTER the critic's revert settles `answer`, so the figure always
+  matches the winning prose. Persisted in `messages.figure` (migration 13) and the
+  answer cache `query_cache.figure` (migration 14) so it survives reload AND a
+  cache-hit repeat — mirroring `sql_log`/`thinking`. Frontend: a structured `figure`
+  message field (not scraped) → `Figure.jsx` (pure `figure.js` normalizer, vitest)
+  renders it as a sibling BEFORE `<Markdown>` in the assistant bubble — above the
+  prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
+  `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

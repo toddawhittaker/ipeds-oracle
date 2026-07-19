@@ -55,6 +55,14 @@ How to work:
    numbers, no thousands separators inside data). Prefer "line" for time series,
    "bar" for category comparisons. Still include the normal results table too;
    the chart is in addition to it. Emit valid JSON only inside the block.
+6. When ONE clear number is the answer — a single count, total, percentage, or the
+   single top value — ALSO emit a fenced ```figure block with a compact JSON object:
+   {"value":"<the number, formatted with thousands separators>","unit":"<short unit
+   word, optional>","label":"<terse caption of what it measures>","source":"<IPEDS
+   survey / year, optional>"}. Emit it ONCE, and ONLY when a single number answers
+   the question — SKIP it entirely for rankings, top-N lists, multi-row comparisons,
+   and trends with no single hero number. It's in addition to the prose + table, and
+   its number MUST match them. Emit valid JSON only inside the block.
 
 Hard rules (from the schema guide — violating these gives wrong answers):
 - "Recent N years" = a CONSTANT bound: `year > (SELECT MAX(year)-N FROM _years)`.

@@ -149,9 +149,10 @@ export async function mockConversation(page, id, messages,
   let calls = 0;
   const body = (messages || []).map((m) => ({
     ...m,
-    // The server serializes both sql_log and thinking as JSON strings.
+    // The server serializes sql_log, thinking, and figure as JSON strings.
     sql_log: m.sql_log !== undefined ? JSON.stringify(m.sql_log) : undefined,
     thinking: m.thinking !== undefined ? JSON.stringify(m.thinking) : undefined,
+    figure: m.figure !== undefined ? JSON.stringify(m.figure) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -217,6 +218,7 @@ export async function mockStreamChat(page, {
   statusText = "Thinking…",
   sql = [],
   answer = "Answer.",
+  figure = null,
   messageId = null,
   userMessageId = null,
   title = null,
@@ -230,6 +232,10 @@ export async function mockStreamChat(page, {
       { type: "conversation", id: conversationId },
       { type: "status", text: statusText },
       ...sql.map((s) => ({ type: "sql", sql: s })),
+      // The structured hero statistic, when the answer has one — emitted just
+      // before the answer, mirroring the backend (which strips the ```figure
+      // fence and yields this event). Omitted when `figure` is null.
+      ...(figure ? [{ type: "figure", figure }] : []),
       { type: "answer", text: answer },
       { type: "done", message_id: messageId, user_message_id: userMessageId,
         model: "test", tokens: 0, ...(title ? { title } : {}) },

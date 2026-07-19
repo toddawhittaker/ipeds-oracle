@@ -103,6 +103,13 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 }
 .figure .unit { font-size: .3em; color: var(--muted); font-feature-settings: normal; letter-spacing: 0; }
 .fig-rule { height: 3px; width: 110px; background: var(--ochre); border-radius: 2px; margin: 12px 0; }
+/* The signature figure as an answer's hero statistic — the `.figure` device sized
+   for the chat column (the login "door" uses 46px). Sits above the prose. */
+.answer-figure { margin: 2px 0 20px; }
+.answer-figure .field-label { display: block; margin-bottom: 8px; }
+.answer-figure .figure { font-size: 40px; }
+.answer-figure .fig-rule { margin: 12px 0 8px; }
+.answer-figure-src { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
 /* layout */
 /* overflow:hidden pins the shell to the viewport so the PAGE never scrolls —

@@ -45,6 +45,40 @@ def _leaks_review_meta(text: str) -> bool:
     return bool(_REVIEW_LEAK_RE.search(text or ""))
 
 
+# The model emits an OPTIONAL ```figure {…}``` fence when a single headline number
+# answers the question (prompt INSTRUCTIONS step 6, modeled on the chart fence).
+# We parse + strip it server-side so the frontend gets structured data, never raw
+# JSON in the prose — mirrors frontend/src/figure.js normalizeFigure.
+_FIGURE_FENCE_RE = re.compile(r"```figure[ \t]*\r?\n(.*?)```", re.DOTALL)
+_FIGURE_KEYS = ("value", "unit", "label", "source")
+
+
+def _extract_figure(answer: str) -> tuple[str, dict | None]:
+    """Pull a ```figure fence out of `answer`. Returns (answer_without_any_figure
+    _fence, figure_or_None). ALWAYS strips every figure fence (so raw JSON never
+    reaches the user, even on a parse failure); returns a figure dict only when the
+    first fence is valid JSON with a non-empty value AND label."""
+    matches = _FIGURE_FENCE_RE.findall(answer or "")
+    if not matches:
+        return answer, None
+    clean = _FIGURE_FENCE_RE.sub("", answer).strip()
+    try:
+        data = json.loads(matches[0].strip())
+    except (json.JSONDecodeError, ValueError):
+        return clean, None
+    if not isinstance(data, dict):
+        return clean, None
+    out = {}
+    for k in _FIGURE_KEYS:
+        v = data.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            out[k] = s
+    return clean, (out if out.get("value") and out.get("label") else None)
+
+
 @dataclass
 class AgentResult:
     answer: str = ""
@@ -59,6 +93,7 @@ class AgentResult:
     critic_revised: bool = False    # the critic flagged the draft and forced a revision
     critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
     critic_description: str = ""    # the critic's finding, description (candidate lesson body)
+    figure: dict | None = None      # structured hero statistic from the answer's figure fence
     error: str | None = None
 
     @property
@@ -195,9 +230,13 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         res.critic_revised = True
                     else:
                         answer = draft_answer
-                res.answer = answer
+                # Extract the figure from the FINAL answer (after the critic revert
+                # settles it), so the figure always matches the winning prose.
+                res.answer, res.figure = _extract_figure(answer)
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
+                if res.figure:
+                    yield {"type": "figure", "figure": res.figure}
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
@@ -256,8 +295,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         res.model_used = model
         res.last_result = last_sql_result["result"]
         if final.strip():
-            res.answer = final
-            yield {"type": "answer", "text": final}
+            res.answer, res.figure = _extract_figure(final)
+            if res.figure:
+                yield {"type": "figure", "figure": res.figure}
+            yield {"type": "answer", "text": res.answer}
             yield {"type": "done", "result": res}
             return
 

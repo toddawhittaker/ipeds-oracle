@@ -16,6 +16,7 @@ to the implementer.
 ## Scope
 
 The frontend lives in `frontend/` (Vite + React): `Chat.jsx` (SSE streaming answers,
+the hero "figure" statistic above an answer — `Figure.jsx`, `role="img"` + aria-label,
 CSV/chart export, conversation sidebar with delete + focus/aria-live management),
 `Login.jsx`, `Admin.jsx` (tabbed: allowlist/imports/usage/skills), `Markdown.jsx`
 (react-markdown + gfm, scrollable result tables), `styles.css` (light/dark via

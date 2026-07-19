@@ -31,6 +31,7 @@ export default defineConfig({
         "src/csvimport.js",
         "src/datatable.js",
         "src/estimate.js",
+        "src/figure.js",
         "src/mdnorm.js",
         "src/selection.js",
         "src/tabledata.js",
