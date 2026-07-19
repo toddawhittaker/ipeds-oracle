@@ -41,9 +41,14 @@ test("a figure renders above the prose and outside the copy surface", async ({ p
   await expect(fig).toContainText("IPEDS Completions");
   // Above the prose: the figure precedes the .md answer as an earlier sibling.
   await expect(page.locator(".answer-figure ~ .md")).toBeVisible();
-  // The brief composes: hero figure + recent-years table + trend chart together.
-  await expect(page.locator(".md table")).toBeVisible();
-  await expect(page.locator("figure.chart")).toBeVisible();
+  // The brief composes: hero figure + recent-years table + trend chart, with the
+  // table and chart PAIRED side by side (.brief-figrow)...
+  await expect(page.locator(".brief-figrow .table-block")).toBeVisible();
+  await expect(page.locator(".brief-figrow figure.chart")).toBeVisible();
+  // ...and the redundant "Chart this" toggle dropped (a chart is already shown),
+  // while Download CSV stays.
+  await expect(page.getByRole("button", { name: "Chart this" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
   // Outside the copy surface: the figure is NOT inside the .md node copy targets.
   await expect(page.locator(".md .answer-figure")).toHaveCount(0);
 });

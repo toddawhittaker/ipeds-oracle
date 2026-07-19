@@ -594,6 +594,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* result tables: per-table toolbar (CSV + chart this) */
 .table-block { margin: 8px 0; }
 .table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
+/* The single-number "brief": a compact recent-years table beside its trend chart.
+   Flex-wrap degrades gracefully to stacked when the table is too wide to share. */
+.brief-figrow { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: flex-start; margin: 10px 0; }
+.brief-figrow .table-block { flex: 0 1 auto; margin: 0; }
+.brief-figrow figure.chart { flex: 1 1 340px; min-width: 280px; margin: 0; }
 
 /* charts */
 .chart { margin: 10px 0; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
