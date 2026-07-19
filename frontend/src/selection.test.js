@@ -10,6 +10,7 @@ import {
   reducedMatchingLabel,
   bulkConfirmSummary,
   bulkResultToast,
+  retainedSelectionAfterBulk,
 } from "./selection.js";
 
 // Pure selection-model logic for the admin bulk-actions feature (bulk
@@ -486,5 +487,63 @@ describe("bulkResultToast", () => {
         "10 users promoted. Three were already administrators and were skipped. "
         + "Two were not on the allowlist and were skipped.");
     });
+  });
+});
+
+// "Keep the whole selection" after a bulk action commits. The regression this
+// guards: a bulk action must NOT clear the checkboxes of rows that are still in
+// the table. promote/demote leave every row in place -> the entire selection is
+// retained; delete/approve/reject/unblock remove the rows they process ->
+// only those ids drop, while skipped/failed rows (still in the table) stay
+// checked.
+describe("retainedSelectionAfterBulk", () => {
+  const R = (skipped = [], failed = []) => ({ ok: true, affected: 0, skipped, failed });
+
+  it("promote/demote (in-place) keep the ENTIRE selection, order preserved", () => {
+    const ids = ["c@x.edu", "a@x.edu", "b@x.edu"];
+    // Even with skips + failures, every id stays -- the rows are all still there.
+    const result = R([{ email: "a@x.edu", reason: "already an administrator" }],
+      [{ email: "b@x.edu", reason: "could not be updated" }]);
+    expect(retainedSelectionAfterBulk("promote", ids, result, "email")).toEqual(ids);
+    expect(retainedSelectionAfterBulk("demote", ids, result, "email")).toEqual(ids);
+  });
+
+  it("delete (removing) drops the fully-processed ids, keeps skipped + failed", () => {
+    // 4 selected: two removed, one skipped (still admin), one failed.
+    const ids = ["gone1@x.edu", "gone2@x.edu", "skip@x.edu", "fail@x.edu"];
+    const result = R([{ email: "skip@x.edu", reason: "is an administrator — demote first" }],
+      [{ email: "fail@x.edu", reason: "could not be updated" }]);
+    expect(retainedSelectionAfterBulk("delete", ids, result, "email"))
+      .toEqual(["skip@x.edu", "fail@x.edu"]);
+  });
+
+  it("delete with nothing skipped/failed clears to empty (every row removed)", () => {
+    const ids = ["a@x.edu", "b@x.edu"];
+    expect(retainedSelectionAfterBulk("delete", ids, R(), "email")).toEqual([]);
+  });
+
+  it("approve/reject/unblock (removing) key skipped/failed by the `id` field", () => {
+    const ids = [1, 2, 3, 4];
+    const result = R([{ id: 2, reason: "already resolved" }],
+      [{ id: 4, reason: "could not be updated" }]);
+    for (const action of ["approve", "reject", "unblock"]) {
+      expect(retainedSelectionAfterBulk(action, ids, result, "id")).toEqual([2, 4]);
+    }
+  });
+
+  it("tolerates a result with no skipped/failed keys at all", () => {
+    // A removing action whose response omits the arrays entirely -> empty kept set.
+    expect(retainedSelectionAfterBulk("approve", [1, 2], { ok: true, affected: 2 }, "id"))
+      .toEqual([]);
+    // An in-place action ignores them regardless.
+    expect(retainedSelectionAfterBulk("promote", ["a@x.edu"], { ok: true }, "email"))
+      .toEqual(["a@x.edu"]);
+  });
+
+  it("returns a fresh array, not the caller's `selectedRowIds` reference", () => {
+    const ids = ["a@x.edu"];
+    const out = retainedSelectionAfterBulk("promote", ids, R(), "email");
+    expect(out).toEqual(ids);
+    expect(out).not.toBe(ids); // spread copy -- caller's array is never mutated
   });
 });

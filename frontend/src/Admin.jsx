@@ -13,12 +13,15 @@ import { useToast } from "./Toast.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useTableSelection } from "./useTableSelection.js";
 import BulkBar from "./BulkBar.jsx";
-import { bulkConfirmSummary, bulkResultToast, partitionEligibility } from "./selection.js";
+import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
 // contract. `n` is the ELIGIBLE count (what will actually happen), not the
 // raw selected count.
+// Counted labels for the CONFIRM dialog's action button (e.g. "Promote 9
+// users") — the count belongs in the dialog, where the exact breakdown is
+// spelled out, never on the toolbar button itself.
 const BULK_ACTION_LABEL = {
   promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"}`,
   demote: (n) => `Demote ${n} ${n === 1 ? "administrator" : "administrators"}`,
@@ -26,6 +29,26 @@ const BULK_ACTION_LABEL = {
   approve: (n) => `Approve ${n} ${n === 1 ? "request" : "requests"}`,
   reject: (n) => `Reject and block ${n} ${n === 1 ? "request" : "requests"}`,
   unblock: (n) => `Allow ${n} ${n === 1 ? "user" : "users"} to request again`,
+};
+
+// Stable-verb labels for the TOOLBAR action buttons — no counts (they'd churn
+// on every selection change); the verb matches the confirm dialog's verb.
+const BULK_TOOLBAR_LABEL = {
+  promote: "Promote", demote: "Demote", delete: "Remove",
+  approve: "Approve", reject: "Reject & block", unblock: "Allow to request again",
+};
+
+// Shown as the tooltip on a toolbar action button that's disabled because none
+// of the current selection is eligible for it (title only appears on hover, so
+// this never has to be screen-reader-reachable — a disabled button is skipped
+// by AT anyway, and the always-visible "N selected" count carries the state).
+const BULK_DISABLED_REASON = {
+  promote: "No selected users are regular users to promote.",
+  demote: "No selected users are administrators to demote.",
+  delete: "Selected administrators must be demoted before removal.",
+  approve: "No selected requests can be approved.",
+  reject: "No selected requests can be rejected.",
+  unblock: "No selected users can be unblocked.",
 };
 
 const BULK_TITLE = {
@@ -600,10 +623,12 @@ function Allowlist({ me }) {
   // Shared bulk-confirm-then-act flow for all six actions below: builds the
   // confirm modal from bulkConfirmSummary/BULK_ACTION_LABEL, calls the bulk
   // API on confirm (throwing keeps the modal open for retry), and on success
-  // toasts the outcome, re-selects any failed ids (empty ⇒ full clear) BEFORE
-  // reloading, then reloads (refreshing every table — approve/reject also
-  // refresh the OTHER affected table this way, with no extra code) and
-  // restores focus to the acting table's search box.
+  // toasts the outcome, then KEEPS THE WHOLE SELECTION (retainedSelectionAfterBulk:
+  // promote/demote leave every selected row checked; the removing actions drop
+  // only the ids the server processed away and keep skipped/failed rows checked)
+  // BEFORE reloading, then reloads (refreshing every table — approve/reject also
+  // refresh the OTHER affected table this way, with no extra code) and restores
+  // focus to the acting table's search box.
   function runBulkConfirm({ sel, action, idField, selectedRows, eligibleRows, skippedRows, apiCall, focusRef }) {
     let result = null;
     confirm({
@@ -622,8 +647,10 @@ function Allowlist({ me }) {
       onSuccess: async () => {
         const { text, kind } = bulkResultToast(action, result);
         announce(text, kind);
-        const failedIds = (result.failed || []).map((f) => f[idField]);
-        sel.selectExplicit(failedIds); // synchronous, BEFORE the reload below
+        // Keep the whole selection (rows still in the table stay checked).
+        // Synchronous, BEFORE the reload below.
+        const selectedIds = selectedRows.map((r) => r[idField]);
+        sel.selectExplicit(retainedSelectionAfterBulk(action, selectedIds, result, idField));
         await reloadThenRestoreFocus(() => focusAfterRowAction(focusRef));
       },
     });
@@ -640,10 +667,11 @@ function Allowlist({ me }) {
       const { eligible, skipped } = partitionEligibility(selectedRows, action);
       return {
         key: action,
-        label: BULK_ACTION_LABEL[action](eligible.length),
+        label: BULK_TOOLBAR_LABEL[action],
         icon: BULK_ICON[action],
         variant: BULK_VARIANT[action],
         disabled: eligible.length === 0,
+        title: BULK_DISABLED_REASON[action],
         onClick: () => runBulkConfirm({
           sel: usersSel, action, idField: "email",
           selectedRows, eligibleRows: eligible, skippedRows: skipped,
@@ -662,10 +690,11 @@ function Allowlist({ me }) {
       const { eligible, skipped } = partitionEligibility(selectedRows, action);
       return {
         key: action,
-        label: BULK_ACTION_LABEL[action](eligible.length),
+        label: BULK_TOOLBAR_LABEL[action],
         icon: BULK_ICON[action],
         variant: BULK_VARIANT[action],
         disabled: eligible.length === 0,
+        title: BULK_DISABLED_REASON[action],
         onClick: () => runBulkConfirm({
           sel: pendingSel, action, idField: "id",
           selectedRows, eligibleRows: eligible, skippedRows: skipped,
@@ -683,10 +712,11 @@ function Allowlist({ me }) {
     const { eligible, skipped } = partitionEligibility(selectedRows, "unblock");
     return [{
       key: "unblock",
-      label: BULK_ACTION_LABEL.unblock(eligible.length),
+      label: BULK_TOOLBAR_LABEL.unblock,
       icon: BULK_ICON.unblock,
       variant: BULK_VARIANT.unblock,
       disabled: eligible.length === 0,
+      title: BULK_DISABLED_REASON.unblock,
       onClick: () => runBulkConfirm({
         sel: blockedSel, action: "unblock", idField: "id",
         selectedRows, eligibleRows: eligible, skippedRows: skipped,
@@ -738,12 +768,14 @@ function Allowlist({ me }) {
             onTogglePage={(pageRows, checked) =>
               pendingSel.togglePage(pageRows.map((r) => r.id), checked)}
             onSearchChange={(q) => onTableSearchChange(pendingSel, q)}
-            renderSelectionBar={({ filteredEligibleRows }) => (
+            renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
               <BulkBar
                 nouns={PENDING_CONFIG.nouns}
                 mode={pendingSel.mode}
                 count={pendingSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
                 totalEligible={filteredEligibleRows.length}
+                pageEligibleCount={pageEligibleRows.length}
+                pageSelectedCount={pendingSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
                 onSelectAllMatching={pendingSel.selectAllMatching}
                 onClear={pendingSel.clear}
                 onFocusFallback={() => pendingTableRef.current?.focusSearch()}
@@ -925,12 +957,14 @@ jamie@example.com,External reviewer,`}</pre>
         onTogglePage={(pageRows, checked) =>
           usersSel.togglePage(pageRows.map((r) => r.email), checked)}
         onSearchChange={(q) => onTableSearchChange(usersSel, q)}
-        renderSelectionBar={({ filteredEligibleRows }) => (
+        renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
           <BulkBar
             nouns={USER_CONFIG.nouns}
             mode={usersSel.mode}
             count={usersSel.count(new Set(filteredEligibleRows.map((r) => r.email)))}
             totalEligible={filteredEligibleRows.length}
+            pageEligibleCount={pageEligibleRows.length}
+            pageSelectedCount={usersSel.count(new Set(pageEligibleRows.map((r) => r.email)))}
             onSelectAllMatching={usersSel.selectAllMatching}
             onClear={usersSel.clear}
             onFocusFallback={() => usersTableRef.current?.focusSearch()}
@@ -1032,12 +1066,14 @@ jamie@example.com,External reviewer,`}</pre>
                 onTogglePage={(pageRows, checked) =>
                   blockedSel.togglePage(pageRows.map((r) => r.id), checked)}
                 onSearchChange={(q) => onTableSearchChange(blockedSel, q)}
-                renderSelectionBar={({ filteredEligibleRows }) => (
+                renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
                   <BulkBar
                     nouns={BLOCKED_CONFIG.nouns}
                     mode={blockedSel.mode}
                     count={blockedSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
                     totalEligible={filteredEligibleRows.length}
+                    pageEligibleCount={pageEligibleRows.length}
+                    pageSelectedCount={blockedSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
                     onSelectAllMatching={blockedSel.selectAllMatching}
                     onClear={blockedSel.clear}
                     onFocusFallback={() => blockedTableRef.current?.focusSearch()}

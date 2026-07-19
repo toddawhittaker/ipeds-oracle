@@ -220,7 +220,11 @@ Allowlist tab's three tables (Users, Pending requests, Blocked users) each hold
 their own `useTableSelection()` hook instance (`selection = { mode:
 "explicit"|"all", selectedIds }` — `"all"` mode's `selectedIds` holds the
 *excluded* ids, for "select all matching" across a search-narrowed set) and
-render `<BulkBar>` (`frontend/src/BulkBar.jsx`) as the action bar. The pure
+render `<BulkBar>` (`frontend/src/BulkBar.jsx`) as a **contextual** action
+toolbar — it renders `null` unless ≥1 row is selected (the standard
+Gmail/Linear pattern, not a persistent bar of disabled buttons), pairs a live
+"N selected" count + Clear with stable-verb action buttons (destructive ones
+split past a divider) and the "select all N matching" escalation banner. The pure
 tri-state/count/eligibility/copy logic lives in `selection.js` (vitest,
 `selection.test.js`) — everything else (checkbox tri-state incl.
 `indeterminate`, the search-clears-selection flow, the confirm → processing →

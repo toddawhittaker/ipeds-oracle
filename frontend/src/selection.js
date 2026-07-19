@@ -298,3 +298,28 @@ export function bulkResultToast(action, result) {
   const kind = failed.length > 0 ? "error" : (affected > 0 ? "ok" : "");
   return { text: parts.join(" "), kind };
 }
+
+// The six bulk actions split by whether they REMOVE the acted row from its own
+// table. delete/approve/reject/unblock make the row disappear (deleted, or moved
+// to another table); promote/demote leave the row in place (only its admin flag
+// changes). retainedSelectionAfterBulk keys off this set.
+const ACTIONS_THAT_REMOVE_ROWS = new Set(["delete", "approve", "reject", "unblock"]);
+
+// Which of the just-acted ids stay selected after a bulk action commits. The
+// product decision is "keep the whole selection": every row still present in the
+// table stays checked. So promote/demote (in-place actions) retain the ENTIRE
+// selection -- succeeded, skipped and failed rows alike -- while the
+// removing actions drop the ids the server actually processed (those rows are
+// gone) but keep the ids it skipped (ineligible) or failed on, which are still
+// in the table. `selectedRowIds` is every effectively-selected id at click time;
+// `result.skipped`/`.failed` carry the same id field (`email` for the users
+// table, `id` for pending/blocked). Returns an explicit id array -- the caller
+// feeds it to selectExplicit(), which also freezes an "all matching" selection
+// to these concrete ids so a row polled in later isn't silently pre-selected.
+export function retainedSelectionAfterBulk(action, selectedRowIds, result, idField) {
+  if (!ACTIONS_THAT_REMOVE_ROWS.has(action)) return [...selectedRowIds];
+  const kept = new Set();
+  for (const s of result.skipped || []) kept.add(s[idField]);
+  for (const f of result.failed || []) kept.add(f[idField]);
+  return selectedRowIds.filter((id) => kept.has(id));
+}
