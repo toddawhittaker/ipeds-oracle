@@ -38,12 +38,21 @@ export const api = {
   removeAllow: (email) => j("DELETE", `/api/admin/allowlist/${encodeURIComponent(email)}`),
   setAdmin: (email, is_admin) =>
     j("PATCH", `/api/admin/allowlist/${encodeURIComponent(email)}`, { is_admin }),
+  // Bulk row-selection actions (Admin -> Users tab). Distinct from bulkAllow
+  // above (the CSV-import path) -- these act on an explicit selection of
+  // already-allowlisted / already-filed rows.
+  bulkAllowlistAction: (action, emails) =>
+    j("POST", "/api/admin/allowlist/bulk-action", { action, emails }),
   accessRequests: () => j("GET", "/api/admin/access-requests"),
   denyAccessRequest: (email) =>
     j("POST", `/api/admin/access-requests/${encodeURIComponent(email)}/deny`),
+  bulkAccessRequests: (action, ids) =>
+    j("POST", "/api/admin/access-requests/bulk", { action, ids }),
   deniedRequests: () => j("GET", "/api/admin/access-requests/denied"),
   clearDenial: (email) =>
     j("DELETE", `/api/admin/access-requests/${encodeURIComponent(email)}/denial`),
+  bulkClearDenials: (ids) =>
+    j("POST", "/api/admin/access-requests/denial/bulk", { action: "unblock", ids }),
   usage: (since, until) => {
     const p = new URLSearchParams();
     if (since) p.set("since", String(Math.floor(since)));

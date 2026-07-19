@@ -42,7 +42,10 @@ test.describe("admin routing", () => {
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
     const usersSub = page.getByRole("link", { name: "Users" });
     await expect(usersSub).toHaveAttribute("aria-current", "page");
-    await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
+    // exact:true -- the Users table's leading selection checkbox (H1 a11y fix)
+    // has accessible name "Select user user@example.edu", which otherwise
+    // substring-collides with this cell under Playwright's default matching.
+    await expect(page.getByRole("cell", { name: "user@example.edu", exact: true })).toBeVisible();
   });
 
   test("/admin/logs deep link renders the Logs panel with logs aria-current", async ({ page }) => {
@@ -111,6 +114,9 @@ test.describe("admin routing", () => {
     // verbatim, and the panel still renders their data correctly.
     await expect(page.getByRole("link", { name: "Users" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
+    // exact:true -- the Users table's leading selection checkbox (H1 a11y fix)
+    // has accessible name "Select user user@example.edu", which otherwise
+    // substring-collides with this cell under Playwright's default matching.
+    await expect(page.getByRole("cell", { name: "user@example.edu", exact: true })).toBeVisible();
   });
 });

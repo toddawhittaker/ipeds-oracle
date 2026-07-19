@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr, Field, ValidationError
@@ -23,6 +24,12 @@ log = logging.getLogger("ipeds.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"],
                    dependencies=[Depends(require_admin)])
+
+# Shared cap for every /*/bulk* endpoint below (see the "BULK OPERATIONS"
+# section) -- a plain module constant, not a setting, since it's an
+# implementation safety limit rather than deployment-tunable config (so
+# ci_env.sh needs no new entry -- see CLAUDE.md's test-env-gotcha rule).
+BULK_MAX_ITEMS = 1000
 
 
 # --- Allowlist ----------------------------------------------------------------
@@ -49,53 +56,81 @@ def list_allowlist():
         con.close()
 
 
-@router.post("/allowlist")
-def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin)):
-    email = str(body.email).strip().lower()
-    con = connect()
-    invite_link = None
-    try:
-        newly_added = con.execute("SELECT 1 FROM allowlist WHERE email=?",
-                                  (email,)).fetchone() is None
-        con.execute("INSERT INTO allowlist(email, note, added_by, added_at) "
-                    "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET note=excluded.note",
-                    (email, body.note, admin["email"], time.time()))
-        if body.is_admin:
-            con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
-                        "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
-        # CANONICAL match (round 3 fold-in fix 1), not exact: a denial spans
-        # every +tag/case variant of `email` (see app.auth.canon_email /
-        # is_denied), so clearing it with an EXACT 'WHERE email=?' converted
-        # only the literal address typed in and left a variant's denied row
-        # behind. Months later, offboarding (DELETE /allowlist/{email}) would
-        # find that surviving row and is_denied() would resurrect the block
-        # — the exact scenario this widened-to-'denied' UPDATE was written to
-        # prevent, reintroduced through the variant it forgot. Textually
-        # identical predicate to app.auth.is_denied's — keep it that way, or
-        # the two drift and a block clears for one variant but not another.
-        # This does NOT canonicalize the allowlist itself (the INSERT above
-        # stays EXACT) — only the denial-clearing side, which is safe because
-        # an admin explicitly approving one member of a mailbox group is
-        # unambiguous intent to clear the whole group's block.
-        con.execute("UPDATE access_requests SET status='approved' "
-                    "WHERE status IN ('pending','denied') "
-                    "AND COALESCE(canon_email, LOWER(email))=?",
-                    (canon_email(email),))
-        # Newly approved/added people get a ready-to-use sign-in link so they can
-        # get in without having to know to request one again.
-        if newly_added:
-            invite_link = mint_login_link(con, email, get_settings().app_public_url)
-        con.commit()
-    finally:
-        con.close()
-    # `delivery` is what actually became of the invite, as ONE value. There are
-    # FOUR outcomes, not two, and each asks the admin to do something different.
-    # Deriving that from a pair of booleans is what let "was already on the
-    # allowlist" masquerade as "the email failed to send" — no link is minted
-    # for an existing member (see newly_added), so `invited` is False there too,
-    # for a reason that has nothing to do with mail.
+def _set_admin(con: sqlite3.Connection, email: str, is_admin: bool) -> None:
+    """Grant or drop admin for an allowlisted `email`. Shared by the single
+    PATCH /allowlist/{email} endpoint, add_allowlist's own is_admin checkbox,
+    and the bulk promote/demote path below so none of the three can drift.
+    The caller commits."""
+    if is_admin:
+        con.execute(
+            "INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
+            "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
+    else:
+        con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
+
+
+def _approve_allowlist(con: sqlite3.Connection, email: str, note: str | None,
+                       admin_email: str, settings) -> str | None:
+    """Grant `email` access: insert (or refresh the note on) the allowlist
+    row and clear a matching denial CANONICALLY. Shared by the single POST
+    /allowlist endpoint and the bulk POST /access-requests/bulk
+    {action:"approve"} path so the two can never drift. The caller commits.
+
+    DB-ONLY — does NOT send mail. It used to mint AND email the sign-in link
+    itself, while the caller's write transaction was still open: a real
+    network round-trip to the mail provider held under the app.db write lock
+    (security review F1 / code review #1-2), so a slow or hanging provider
+    stalled every other admin write for as long as the send took. The caller
+    must commit + close its connection FIRST, then pass the returned
+    invite_link to _send_and_classify_invite() outside any transaction —
+    restoring the discipline the original (pre-refactor) add_allowlist had.
+
+    CANONICAL match (round 3 fold-in fix 1), not exact: a denial spans every
+    +tag/case variant of `email` (see app.auth.canon_email / is_denied), so
+    clearing it with an EXACT 'WHERE email=?' converted only the literal
+    address typed in and left a variant's denied row behind. Months later,
+    offboarding (DELETE /allowlist/{email}) would find that surviving row and
+    is_denied() would resurrect the block — the exact scenario this
+    widened-to-'denied' UPDATE was written to prevent, reintroduced through
+    the variant it forgot. Textually identical predicate to
+    app.auth.is_denied's — keep it that way, or the two drift and a block
+    clears for one variant but not another. This does NOT canonicalize the
+    allowlist itself (the INSERT stays EXACT) — only the denial-clearing
+    side, which is safe because an admin explicitly approving one member of a
+    mailbox group is unambiguous intent to clear the whole group's block.
+
+    Returns the invite_link minted for a genuinely NEW member, or None when
+    `email` was already on the allowlist (nothing to send — see
+    _send_and_classify_invite's "already_allowlisted" branch)."""
+    newly_added = con.execute("SELECT 1 FROM allowlist WHERE email=?",
+                              (email,)).fetchone() is None
+    con.execute("INSERT INTO allowlist(email, note, added_by, added_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET note=excluded.note",
+                (email, note, admin_email, time.time()))
+    con.execute("UPDATE access_requests SET status='approved' "
+                "WHERE status IN ('pending','denied') "
+                "AND COALESCE(canon_email, LOWER(email))=?",
+                (canon_email(email),))
+    # Newly approved/added people get a ready-to-use sign-in link so they can
+    # get in without having to know to request one again.
+    return mint_login_link(con, email, settings.app_public_url) if newly_added else None
+
+
+def _send_and_classify_invite(email: str, invite_link: str | None, settings) -> tuple[str, bool]:
+    """Send (or skip) the approval email for `email` and classify what
+    happened. MUST be called only AFTER the caller's write transaction has
+    been committed and its connection closed — see _approve_allowlist's
+    docstring (security review F1 / code review #1-2): a mail-provider
+    round-trip must never run while the app.db write lock is held.
+
+    Returns (delivery, invited). `delivery` is what actually became of the
+    invite, as ONE value — there are FOUR outcomes, not two, and each asks the
+    admin to do something different. Deriving that from a pair of booleans is
+    what let "was already on the allowlist" masquerade as "the email failed to
+    send" — no link is minted for an existing member, so `invited` reads
+    False there too, for a reason that has nothing to do with mail."""
     invited = False
-    mail_configured = bool(get_settings().resend_api_key)
+    mail_configured = bool(settings.resend_api_key)
     if not invite_link:
         # Already on the allowlist. Nothing was sent because nothing needed to
         # be; re-adding only updates the note. They can sign in any time.
@@ -129,8 +164,28 @@ def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin
             # No key: the mailer logged the whole email, link included, to the
             # CONSOLE. Recoverable — and pointedly NOT in the Logs tab.
             delivery = "logged_to_console"
+    return delivery, invited
+
+
+@router.post("/allowlist")
+def add_allowlist(body: AllowlistAdd, admin: sqlite3.Row = Depends(require_admin)):
+    email = str(body.email).strip().lower()
+    settings = get_settings()
+    con = connect()
+    try:
+        if body.is_admin:
+            _set_admin(con, email, True)
+        invite_link = _approve_allowlist(con, email, body.note, admin["email"], settings)
+        con.commit()
+    finally:
+        con.close()
+    # The invite email is sent HERE — after the connection is committed and
+    # closed, never while the write transaction (and the app.db write lock)
+    # is open (security review F1 / code review #1-2; see
+    # _approve_allowlist's docstring).
+    delivery, invited = _send_and_classify_invite(email, invite_link, settings)
     return {"ok": True, "email": email, "invited": invited,
-            "mail_configured": mail_configured, "delivery": delivery}
+            "mail_configured": bool(settings.resend_api_key), "delivery": delivery}
 
 
 # --- Bulk allowlist (CSV import) ----------------------------------------------
@@ -225,16 +280,24 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
         if con.execute("SELECT 1 FROM allowlist WHERE email=?",
                        (email,)).fetchone() is None:
             raise HTTPException(404, "That email is not on the allowlist.")
-        if body.is_admin:
-            con.execute(
-                "INSERT INTO users(email, is_admin, created_at) VALUES (?,1,?) "
-                "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, time.time()))
-        else:
-            con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
+        _set_admin(con, email, body.is_admin)
         con.commit()
     finally:
         con.close()
     return {"ok": True, "email": email, "is_admin": body.is_admin}
+
+
+def _remove_user(con: sqlite3.Connection, email: str) -> None:
+    """Drop `email` from the allowlist, zero their admin flag, and kill their
+    sessions. Shared by the single DELETE /allowlist/{email} endpoint and the
+    bulk delete path below. Does NOT check the still-admin invariant itself —
+    callers must skip a still-admin user BEFORE calling this (see both call
+    sites). The caller commits."""
+    con.execute("DELETE FROM allowlist WHERE email=?", (email,))
+    con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
+    con.execute(
+        "DELETE FROM sessions WHERE user_id IN "
+        "(SELECT id FROM users WHERE email=?)", (email,))
 
 
 @router.delete("/allowlist/{email}")
@@ -260,15 +323,138 @@ def remove_allowlist(email: str, admin: sqlite3.Row = Depends(require_admin)):
         if row and row["is_admin"]:
             raise HTTPException(
                 400, "Demote this user from admin before removing them.")
-        con.execute("DELETE FROM allowlist WHERE email=?", (email,))
-        con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
-        con.execute(
-            "DELETE FROM sessions WHERE user_id IN "
-            "(SELECT id FROM users WHERE email=?)", (email,))
+        _remove_user(con, email)
         con.commit()
     finally:
         con.close()
     return {"ok": True}
+
+
+# --- Bulk allowlist actions (row-selection bulk actions on the Users table) ---
+# See /home/todd/.claude/plans/bulk-operations-for-greedy-coral.md. Distinct
+# from add_allowlist_bulk (POST /allowlist/bulk) above, which is the CSV-import
+# path — this is promote/demote/delete over an explicit selection of already-
+# allowlisted emails.
+class AllowlistBulkAction(BaseModel):
+    action: Literal["promote", "demote", "delete"]
+    emails: list[str]
+
+
+def _run_item(con: sqlite3.Connection, mutate, label) -> tuple[bool, object]:
+    """Run one bulk-item's DB mutation inside its own SAVEPOINT, so a GENUINE
+    per-item failure (a real exception raised by `mutate`) can be undone
+    without discarding whatever already succeeded earlier in the same batch,
+    or aborting the batch outright. Shared by every POST /*/bulk* endpoint
+    below (code review #4 / M1) — before this, each one hardcoded
+    `failed: []`, so the plan's "keep failed ids selected on partial
+    failure" had nothing real behind it.
+
+    On success: RELEASEs the savepoint (folding the change into the caller's
+    own still-open outer transaction — see each caller's explicit
+    `con.execute("BEGIN")`) and returns (True, mutate()'s return value).
+
+    On a genuine exception: ROLLBACK TO the savepoint (undoing ONLY this
+    item — everything committed by earlier items in the loop is untouched),
+    RELEASEs it too (so it doesn't linger for the next item's SAVEPOINT of
+    the same name), logs it, and returns (False, None). Never re-raises —
+    one bad item must not sink ids that already succeeded or ids still to
+    come; the caller appends {email|id: ..., "reason": "could not be
+    updated"} to `failed` and continues the loop."""
+    con.execute("SAVEPOINT bulk_item")
+    try:
+        value = mutate()
+    except Exception as e:  # noqa: BLE001 — one bad item must not sink the whole batch
+        con.execute("ROLLBACK TO bulk_item")
+        con.execute("RELEASE bulk_item")
+        log.warning("bulk action item %r failed: %s", label, e)
+        return False, None
+    con.execute("RELEASE bulk_item")
+    return True, value
+
+
+@router.post("/allowlist/bulk-action")
+def allowlist_bulk_action(body: AllowlistBulkAction, admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk promote/demote/delete over an explicit list of allowlist emails —
+    one connection, one commit. Eligibility (already-admin / not-admin /
+    still-admin) is RECOMPUTED per email against live DB state, exactly like
+    the single PATCH/DELETE endpoints above (whose _set_admin/_remove_user
+    mutation helpers this reuses), never trusted from whatever the browser's
+    stale list showed.
+
+    demote/delete reject the WHOLE batch with a 400 (nothing changes, no
+    email even looked up) if the caller's own email is included — the same
+    self-lockout guard as the single endpoints, checked BEFORE any write.
+    promote never self-guards: promoting an already-admin self is simply a
+    no-op, reported as a skip, same as any other already-admin row.
+
+    Each item's actual mutation runs through _run_item's per-item SAVEPOINT
+    (M1): a genuine per-item failure lands in `failed` (never in `skipped`,
+    which is reserved for expected ineligibility) so the caller can re-select
+    exactly those ids for a retry.
+
+    A cheap explicit assert that at least one admin remains runs right before
+    the commit, as defense in depth — self-exclusion from demote/delete
+    already guarantees this structurally (the caller is always an admin and
+    is never itself touched), but this catches the invariant breaking for any
+    reason without relying solely on that structural argument."""
+    if len(body.emails) > BULK_MAX_ITEMS:
+        raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} emails at a time.")
+    caller = admin["email"].strip().lower()
+    emails = [e.strip().lower() for e in body.emails]
+    if body.action in ("demote", "delete") and caller in emails:
+        raise HTTPException(
+            400, "You can't include your own account in a bulk demote/remove.")
+
+    affected = 0
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    con = connect()
+    try:
+        # One explicit outer transaction spans every item's own SAVEPOINT
+        # below (see _run_item). Without it, RELEASEing the FIRST item's
+        # savepoint would auto-commit that item outright (nothing else holds
+        # a transaction open yet), and the last-admin-invariant rollback
+        # further down would have nothing left to undo.
+        con.execute("BEGIN")
+        for email in emails:
+            row = con.execute(
+                "SELECT COALESCE(u.is_admin, 0) AS is_admin FROM allowlist a "
+                "LEFT JOIN users u ON u.email=a.email WHERE a.email=?",
+                (email,)).fetchone()
+            if row is None:
+                skipped.append({"email": email, "reason": "not on the allowlist"})
+                continue
+            is_admin = bool(row["is_admin"])
+            if body.action == "promote":
+                if is_admin:
+                    skipped.append({"email": email, "reason": "already an administrator"})
+                    continue
+                ok, _value = _run_item(con, lambda e=email: _set_admin(con, e, True), email)
+            elif body.action == "demote":
+                if not is_admin:
+                    skipped.append({"email": email, "reason": "not an administrator"})
+                    continue
+                ok, _value = _run_item(con, lambda e=email: _set_admin(con, e, False), email)
+            else:  # delete
+                if is_admin:
+                    skipped.append(
+                        {"email": email, "reason": "is an administrator — demote first"})
+                    continue
+                ok, _value = _run_item(con, lambda e=email: _remove_user(con, e), email)
+            if not ok:
+                failed.append({"email": email, "reason": "could not be updated"})
+                continue
+            affected += 1
+
+        admin_count = con.execute(
+            "SELECT COUNT(*) FROM users WHERE is_admin=1").fetchone()[0]
+        if admin_count == 0:
+            con.rollback()
+            raise HTTPException(400, "This would leave no administrators — nothing was changed.")
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}
 
 
 @router.get("/access-requests")
@@ -334,6 +520,21 @@ def access_requests_denied():
         con.close()
 
 
+def _deny_group(con: sqlite3.Connection, canon: str) -> int:
+    """UPDATE every PENDING row sharing `canon`'s canonical address to
+    denied, stamping denied_at now (never rewrites created_at). Shared by the
+    single POST /access-requests/{email}/deny endpoint and the bulk
+    POST /access-requests/bulk {action:"reject"} path so the two can never
+    drift. Returns the rowcount (0 = nothing pending for that canonical
+    address). COALESCE fallback matches app.auth.is_denied's — see that
+    function's docstring for why. The caller commits."""
+    cur = con.execute(
+        "UPDATE access_requests SET status='denied', denied_at=? "
+        "WHERE status='pending' AND COALESCE(canon_email, LOWER(email))=?",
+        (time.time(), canon))
+    return cur.rowcount
+
+
 @router.post("/access-requests/{email}/deny")
 def deny_access_request(email: str):
     """Deny every pending request sharing `email`'s CANONICAL address (see
@@ -355,19 +556,27 @@ def deny_access_request(email: str):
     target = canon_email(email)
     con = connect()
     try:
-        # COALESCE fallback matches app.auth.is_denied's — see that function's
-        # docstring for why (canon_email is populated for every row this app
-        # writes; the fallback only covers a row that predates that).
-        cur = con.execute(
-            "UPDATE access_requests SET status='denied', denied_at=? "
-            "WHERE status='pending' AND COALESCE(canon_email, LOWER(email))=?",
-            (time.time(), target))
+        rowcount = _deny_group(con, target)
         con.commit()
-        if cur.rowcount == 0:
+        if rowcount == 0:
             raise HTTPException(404, "No pending access request for that address.")
     finally:
         con.close()
     return {"ok": True, "email": email}
+
+
+def _clear_denial_group(con: sqlite3.Connection, canon: str) -> int:
+    """DELETE every DENIED row sharing `canon`'s canonical address, returning
+    the whole group to "never requested". Shared by the single DELETE
+    /access-requests/{email}/denial endpoint and the bulk
+    POST /access-requests/denial/bulk {action:"unblock"} path so the two can
+    never drift. Idempotent (clearing an already-cleared group is a 0-rowcount
+    no-op, never an error). `status='denied'` is a guard, never widen it — see
+    clear_access_denial's docstring. The caller commits."""
+    cur = con.execute(
+        "DELETE FROM access_requests WHERE status='denied' "
+        "AND COALESCE(canon_email, LOWER(email))=?", (canon,))
+    return cur.rowcount
 
 
 @router.delete("/access-requests/{email}/denial")
@@ -402,13 +611,157 @@ def clear_access_denial(email: str):
     target = canon_email(email)
     con = connect()
     try:
-        cur = con.execute(
-            "DELETE FROM access_requests WHERE status='denied' "
-            "AND COALESCE(canon_email, LOWER(email))=?", (target,))
+        cleared = _clear_denial_group(con, target)
         con.commit()
     finally:
         con.close()
-    return {"ok": True, "email": email, "cleared": cur.rowcount}
+    return {"ok": True, "email": email, "cleared": cleared}
+
+
+# --- Bulk access-request actions (row-selection bulk actions on the Pending
+# requests / Blocked users tables) --------------------------------------------
+# See /home/todd/.claude/plans/bulk-operations-for-greedy-coral.md. Both
+# endpoints key on the access_requests row id (the Pending/Blocked tables'
+# MIN(id) group representative), never the raw email — an id is stable across
+# a status transition, so it doubles as the cross-table safety check: an id
+# that isn't in the state the caller's endpoint expects (e.g. a denied id
+# posted to the pending-only /access-requests/bulk) is recognized as
+# no-longer-eligible and skipped, never mutated. The SERVER is the sole
+# authority here — the frontend only ever sends a table's own ids, but nothing
+# stops a stale tab, a replayed request, or a bug from sending the wrong ones.
+class AccessRequestsBulkAction(BaseModel):
+    action: Literal["approve", "reject"]
+    ids: list[int]
+
+
+@router.post("/access-requests/bulk")
+def access_requests_bulk(body: AccessRequestsBulkAction,
+                         admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk approve/reject over an explicit list of access_requests row ids —
+    one connection, one commit. Each id is resolved to its row FRESH (ANY
+    status, not just pending), so a row already resolved one way or the
+    other — approved, or denied/blocked — is recognized as no longer pending
+    and skipped ("already resolved"), never silently re-mutated; this is what
+    makes a denied id posted here safe (it can never be approved this way,
+    closing the cross-table hole described above).
+
+    approve reuses _approve_allowlist — the same allowlist insert + canonical
+    denial-clear as the single Approve button (minting a sign-in link for
+    each genuinely NEW member DURING the transaction below), additionally
+    skipping an id whose address is already allowlisted (a stale/re-requested
+    address). reject reuses _deny_group — the same canonical UPDATE
+    (denied_at=now, created_at preserved) as the single Reject button.
+
+    The DB transaction commits and its connection closes BEFORE any invite
+    email goes out (security review F1 / code review #1-2): every
+    (email, invite_link) pair for an id that ACTUALLY got approved this call
+    is collected during the loop and only sent afterward, never while the
+    app.db write lock is held. Each item's mutation also runs through
+    _run_item's per-item SAVEPOINT (M1): a genuine per-item failure lands in
+    `failed`, never `skipped` (reserved for expected ineligibility), and its
+    invite (if any) is never queued."""
+    if len(body.ids) > BULK_MAX_ITEMS:
+        raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} ids at a time.")
+    settings = get_settings()
+    approver = admin["email"]
+    affected = 0
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    # (email, invite_link) pairs for ids approved THIS call (minted inside the
+    # transaction below) — sent only after commit + close, per the docstring.
+    to_invite: list[tuple[str, str]] = []
+    con = connect()
+    try:
+        # See allowlist_bulk_action's identical comment: one explicit outer
+        # transaction must span every item's SAVEPOINT, or RELEASEing the
+        # first one would auto-commit it immediately.
+        con.execute("BEGIN")
+        for rid in body.ids:
+            row = con.execute(
+                "SELECT email, status FROM access_requests WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                skipped.append({"id": rid, "reason": "not found"})
+                continue
+            if row["status"] != "pending":
+                skipped.append({"id": rid, "reason": "already resolved"})
+                continue
+            email = row["email"].strip().lower()
+            if body.action == "approve":
+                if con.execute("SELECT 1 FROM allowlist WHERE email=?", (email,)).fetchone():
+                    skipped.append({"id": rid, "reason": "already allowlisted"})
+                    continue
+                note = f"approved via bulk action by {approver}"
+                ok, invite_link = _run_item(
+                    con,
+                    lambda e=email, n=note: _approve_allowlist(con, e, n, approver, settings),
+                    rid)
+                if not ok:
+                    failed.append({"id": rid, "reason": "could not be updated"})
+                    continue
+                if invite_link:
+                    to_invite.append((email, invite_link))
+            else:  # reject
+                ok, _value = _run_item(con, lambda e=email: _deny_group(con, canon_email(e)), rid)
+                if not ok:
+                    failed.append({"id": rid, "reason": "could not be updated"})
+                    continue
+            affected += 1
+        con.commit()
+    finally:
+        con.close()
+    for email, invite_link in to_invite:
+        _send_and_classify_invite(email, invite_link, settings)
+    return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}
+
+
+class DenialBulkAction(BaseModel):
+    action: Literal["unblock"]
+    ids: list[int]
+
+
+@router.post("/access-requests/denial/bulk")
+def access_requests_denial_bulk(body: DenialBulkAction,
+                                admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk-clear denials over an explicit list of access_requests row ids —
+    one connection, one commit. Each id is resolved to its CANONICAL address,
+    then reuses _clear_denial_group — the same idempotent canonical DELETE as
+    the single DELETE .../denial endpoint: grants NO access, sends NO email.
+    An id that isn't currently blocked (unknown, not denied, or already
+    cleared by an earlier item in the same canonical group) is skipped "not
+    blocked", never a 500 or a mutation to any other row.
+
+    Each item's actual DELETE runs through _run_item's per-item SAVEPOINT
+    (M1): a genuine per-item failure lands in `failed`, never `skipped`."""
+    if len(body.ids) > BULK_MAX_ITEMS:
+        raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} ids at a time.")
+    affected = 0
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    con = connect()
+    try:
+        # See allowlist_bulk_action's identical comment: one explicit outer
+        # transaction must span every item's SAVEPOINT, or RELEASEing the
+        # first one would auto-commit it immediately.
+        con.execute("BEGIN")
+        for rid in body.ids:
+            row = con.execute(
+                "SELECT email, status FROM access_requests WHERE id=?", (rid,)).fetchone()
+            if row is None or row["status"] != "denied":
+                skipped.append({"id": rid, "reason": "not blocked"})
+                continue
+            target = canon_email(row["email"].strip().lower())
+            ok, cleared = _run_item(con, lambda t=target: _clear_denial_group(con, t), rid)
+            if not ok:
+                failed.append({"id": rid, "reason": "could not be updated"})
+                continue
+            if cleared == 0:
+                skipped.append({"id": rid, "reason": "not blocked"})
+                continue
+            affected += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}
 
 
 # --- Data import --------------------------------------------------------------

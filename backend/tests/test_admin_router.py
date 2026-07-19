@@ -2345,6 +2345,582 @@ def test_allowlisting_clears_a_denial_filed_under_a_variant():
             f"new row, before={before} after={after}")
 
 
+# ---------------------------------------------------------------------------
+# BULK OPERATIONS (see /home/todd/.claude/plans/bulk-operations-for-greedy-coral.md)
+# -- three new endpoints, none of which exist yet: POST
+# /api/admin/allowlist/bulk-action, POST /api/admin/access-requests/bulk,
+# POST /api/admin/access-requests/denial/bulk. Every test below is RED until
+# the implementer ships them -- an unregistered route 404s, which fails the
+# status-code assertions below for the right reason. Each endpoint is
+# transactional and recalculates eligibility per record; assertions check
+# BOTH the JSON result shape ({ok, affected, skipped:[{email|id,reason}],
+# failed:[...]}) AND raw DB state, never response-body-only.
+#
+# Skip-reason strings are pinned EXACTLY (verbatim from the architect's
+# interface contract) -- they're part of the contract frontend/src/selection.js's
+# bulkResultToast/bulkConfirmSummary read to build their copy. Do not "improve"
+# the wording without a matching test-engineer-approved test change.
+# ---------------------------------------------------------------------------
+
+def _row_id_for_email(email):
+    """Raw PK lookup, ANY status -- the way the bulk endpoints' own id->email
+    resolution must work (an id is stable across a status transition, e.g.
+    pending -> denied), unlike _pending_id below which only sees pending rows."""
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT id FROM access_requests WHERE email=? ORDER BY id LIMIT 1",
+            (email,)).fetchone()
+        return row["id"] if row else None
+    finally:
+        con.close()
+
+
+def _pending_id(c, email):
+    """id of email's row in the currently-pending list (GET /access-requests)
+    -- the same MIN(id) representative the real admin UI would send in a bulk
+    request built from that table's rows."""
+    row = next((x for x in c.get("/api/admin/access-requests").json()
+                if x["email"] == email), None)
+    assert row is not None, f"expected a pending row for {email}"
+    return row["id"]
+
+
+# --- POST /api/admin/allowlist/bulk-action ------------------------------------
+
+def test_bulk_allowlist_promote_happy_path_and_skip_reasons():
+    with TestClient(app) as c:
+        _login(c)
+        for e in ("bulk-elig1@example.edu", "bulk-elig2@example.edu",
+                  "bulk-alreadyadmin@example.edu"):
+            assert c.post("/api/admin/allowlist", json={"email": e}).status_code == 200
+        c.patch("/api/admin/allowlist/bulk-alreadyadmin@example.edu", json={"is_admin": True})
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "promote",
+            "emails": ["bulk-elig1@example.edu", "bulk-elig2@example.edu",
+                       "bulk-alreadyadmin@example.edu", "bulk-ghost@example.edu"],
+        })
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True, body
+        assert body["affected"] == 2, body
+        assert body["failed"] == [], body  # pins the full uniform result shape
+        reasons = {(s["email"], s["reason"]) for s in body["skipped"]}
+        assert ("bulk-alreadyadmin@example.edu", "already an administrator") in reasons, body
+        assert ("bulk-ghost@example.edu", "not on the allowlist") in reasons, body
+
+        assert _is_admin(c, "bulk-elig1@example.edu") is True
+        assert _is_admin(c, "bulk-elig2@example.edu") is True
+        # a skipped already-admin is left exactly as-is
+        assert _is_admin(c, "bulk-alreadyadmin@example.edu") is True
+        assert "bulk-ghost@example.edu" not in _emails(c), \
+            "an email that's not on the allowlist must never be created by promote"
+
+
+def test_bulk_allowlist_demote_happy_path_and_skip_reasons():
+    with TestClient(app) as c:
+        _login(c)
+        for e in ("bulk-admin1@example.edu", "bulk-admin2@example.edu",
+                  "bulk-nonadmin@example.edu"):
+            assert c.post("/api/admin/allowlist", json={"email": e}).status_code == 200
+        c.patch("/api/admin/allowlist/bulk-admin1@example.edu", json={"is_admin": True})
+        c.patch("/api/admin/allowlist/bulk-admin2@example.edu", json={"is_admin": True})
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "demote",
+            "emails": ["bulk-admin1@example.edu", "bulk-admin2@example.edu",
+                       "bulk-nonadmin@example.edu"],
+        })
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 2, body
+        reasons = {(s["email"], s["reason"]) for s in body["skipped"]}
+        assert ("bulk-nonadmin@example.edu", "not an administrator") in reasons, body
+
+        assert _is_admin(c, "bulk-admin1@example.edu") is False
+        assert _is_admin(c, "bulk-admin2@example.edu") is False
+
+
+def test_bulk_allowlist_demote_rejects_self_included_400_nothing_changes():
+    with TestClient(app) as c:
+        _login(c)  # signed in as admin@example.edu
+        assert c.post("/api/admin/allowlist",
+                      json={"email": "bulk-otheradmin@example.edu"}).status_code == 200
+        c.patch("/api/admin/allowlist/bulk-otheradmin@example.edu", json={"is_admin": True})
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "demote",
+            "emails": ["admin@example.edu", "bulk-otheradmin@example.edu"],
+        })
+        assert r.status_code == 400, r.text
+        # the self-guard rejects the WHOLE batch -- not even the OTHER admin
+        # in the same request is touched.
+        assert _is_admin(c, "admin@example.edu") is True
+        assert _is_admin(c, "bulk-otheradmin@example.edu") is True
+
+
+def test_bulk_allowlist_delete_rejects_self_included_400_nothing_changes():
+    with TestClient(app) as c:
+        _login(c)
+        assert c.post("/api/admin/allowlist",
+                      json={"email": "bulk-removeme@example.edu"}).status_code == 200
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "delete",
+            "emails": ["admin@example.edu", "bulk-removeme@example.edu"],
+        })
+        assert r.status_code == 400, r.text
+        assert "admin@example.edu" in _emails(c)
+        assert _is_admin(c, "admin@example.edu") is True
+        assert "bulk-removeme@example.edu" in _emails(c), \
+            "a self-guard 400 must reject the WHOLE batch -- another user in " \
+            "the same request must not be deleted"
+
+
+def test_bulk_allowlist_delete_happy_path_still_admin_skipped_not_deleted():
+    with TestClient(app) as c:
+        _login(c)
+        for e in ("bulk-normal1@example.edu", "bulk-normal2@example.edu",
+                  "bulk-stilladmin@example.edu"):
+            assert c.post("/api/admin/allowlist", json={"email": e}).status_code == 200
+        c.patch("/api/admin/allowlist/bulk-stilladmin@example.edu", json={"is_admin": True})
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "delete",
+            "emails": ["bulk-normal1@example.edu", "bulk-normal2@example.edu",
+                       "bulk-stilladmin@example.edu"],
+        })
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 2, body
+        reasons = {(s["email"], s["reason"]) for s in body["skipped"]}
+        assert ("bulk-stilladmin@example.edu",
+                "is an administrator — demote first") in reasons, body
+
+        emails = _emails(c)
+        assert "bulk-normal1@example.edu" not in emails
+        assert "bulk-normal2@example.edu" not in emails
+        assert "bulk-stilladmin@example.edu" in emails, \
+            "a still-admin user must be SKIPPED, never deleted, by a bulk delete"
+        assert _is_admin(c, "bulk-stilladmin@example.edu") is True
+
+
+def test_bulk_allowlist_promote_self_is_allowed_and_skipped_already_admin():
+    with TestClient(app) as c:
+        _login(c)  # admin@example.edu is already an admin
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "promote", "emails": ["admin@example.edu"],
+        })
+        # unlike demote/delete, promote never self-guards -- promoting an
+        # already-admin self is simply a no-op, reported as a skip.
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 0, body
+        assert body["skipped"] == [
+            {"email": "admin@example.edu", "reason": "already an administrator"}], body
+        assert _is_admin(c, "admin@example.edu") is True
+
+
+def test_bulk_allowlist_demote_all_other_admins_last_admin_invariant_holds():
+    # Self is always excluded from demote (400s the whole batch if included)
+    # and the caller is always an admin, so at least one admin must remain
+    # after ANY successful bulk demote. This exercises the realistic worst
+    # case -- every OTHER admin demoted in one batch -- confirming the
+    # invariant actually holds, not merely that the self-guard exists.
+    with TestClient(app) as c:
+        _login(c)
+        for e in ("bulk-adminA@example.edu", "bulk-adminB@example.edu"):
+            assert c.post("/api/admin/allowlist", json={"email": e}).status_code == 200
+            assert c.patch(f"/api/admin/allowlist/{e}", json={"is_admin": True}).status_code == 200
+
+        r = c.post("/api/admin/allowlist/bulk-action", json={
+            "action": "demote",
+            "emails": ["bulk-adminA@example.edu", "bulk-adminB@example.edu"],
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["affected"] == 2, r.json()
+
+        con = connect()
+        try:
+            admin_count = con.execute("SELECT COUNT(*) FROM users WHERE is_admin=1").fetchone()[0]
+        finally:
+            con.close()
+        assert admin_count >= 1, \
+            f"the last-admin invariant was violated -- {admin_count} admins remain"
+        assert _is_admin(c, "admin@example.edu") is True
+
+
+def test_bulk_allowlist_promote_per_item_failure_rolls_back_only_that_item_no_500():
+    """M1 (code review #4): a genuine per-item exception must be caught by
+    _run_item's SAVEPOINT wrapper, not crash the request or corrupt the
+    batch. Forced here by monkeypatching the SHARED `_set_admin` helper (used
+    by both the single PATCH endpoint and this bulk path) to perform its real
+    write for one email and then raise for a SECOND, specific email in the
+    same batch -- so the assertions below can tell "rolled back" from "never
+    attempted" apart.
+
+    Regression this guards: before the SAVEPOINT wrapper (M1), every bulk
+    endpoint hardcoded `failed: []` -- a real per-item DB error had nothing to
+    catch it, so it would either 500 the whole request (aborting even the
+    already-succeeded items) or, absent a savepoint, leave a half-applied
+    write for the failing item sitting in the same still-open transaction as
+    the survivors."""
+    with TestClient(app) as c:
+        _login(c)
+        good_email = "bulk-forcefail-good@example.edu"
+        bad_email = "bulk-forcefail-bad@example.edu"
+        for e in (good_email, bad_email):
+            assert c.post("/api/admin/allowlist", json={"email": e}).status_code == 200
+        assert _is_admin(c, good_email) is False
+        assert _is_admin(c, bad_email) is False
+
+        orig_set_admin = admin_router._set_admin
+
+        def _boom(con, email, is_admin):
+            # Actually perform the write for the targeted email BEFORE
+            # raising, so a passing "not persisted" assertion below proves
+            # the SAVEPOINT's ROLLBACK TO actually undid a real write --
+            # not merely that no write was ever attempted.
+            if email == bad_email:
+                orig_set_admin(con, email, is_admin)
+                raise RuntimeError("simulated per-item failure")
+            return orig_set_admin(con, email, is_admin)
+
+        restore = _patch_attr(admin_router, "_set_admin", _boom)
+        try:
+            r = c.post("/api/admin/allowlist/bulk-action", json={
+                "action": "promote", "emails": [good_email, bad_email],
+            })
+        finally:
+            restore()
+
+        # The forced per-item exception must never surface as a 500 -- the
+        # request completes normally, reporting the failure in-band.
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True, body
+        assert body["affected"] == 1, body
+        assert body["skipped"] == [], body
+        assert body["failed"] == [
+            {"email": bad_email, "reason": "could not be updated"}], body
+
+        # The survivor's promotion PERSISTS in the raw DB...
+        assert _is_admin(c, good_email) is True
+        # ...but the forced failure's write was ROLLED BACK, not persisted.
+        assert _is_admin(c, bad_email) is False
+
+
+def test_bulk_allowlist_action_over_cap_400():
+    with TestClient(app) as c:
+        _login(c)
+        # BULK_MAX_ITEMS == 1000 per the architect's contract; 1001 must 400.
+        emails = [f"bulk-cap{i}@example.edu" for i in range(1001)]
+        r = c.post("/api/admin/allowlist/bulk-action",
+                   json={"action": "promote", "emails": emails})
+        assert r.status_code == 400, r.text
+
+
+def test_bulk_allowlist_action_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.post("/api/admin/allowlist/bulk-action", json={"action": "promote", "emails": []})
+        assert r.status_code == 401, r.text
+
+
+def test_bulk_allowlist_action_requires_admin_403_for_non_admin():
+    with TestClient(app) as c:
+        _login(c)
+        plain = "bulk-notadmin-caller@example.edu"
+        assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
+        non_admin = TestClient(app)
+        tok = captured["approved_link"].split("token=")[1]
+        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+
+        r = non_admin.post("/api/admin/allowlist/bulk-action",
+                           json={"action": "promote", "emails": []})
+        assert r.status_code == 403, r.text
+
+
+# --- POST /api/admin/access-requests/bulk -------------------------------------
+
+def test_bulk_access_requests_approve_adds_to_allowlist_and_captures_link():
+    with TestClient(app) as c:
+        _login(c)
+        email = "bulk-approve1@example.edu"
+        _seed_access_request(email, status="pending")
+        rid = _pending_id(c, email)
+        captured.pop("approved_link", None)
+
+        r = c.post("/api/admin/access-requests/bulk", json={"action": "approve", "ids": [rid]})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"ok": True, "affected": 1, "skipped": [], "failed": []}, r.json()
+
+        assert email in _emails(c)
+        assert "approved_link" in captured and "token=" in captured["approved_link"], \
+            "bulk approve must mint + email a sign-in link, same as the single Approve path"
+
+
+def test_bulk_access_requests_approve_multiple_and_skips_already_allowlisted():
+    with TestClient(app) as c:
+        _login(c)
+        e1, e2, e3 = ("bulk-approve2@example.edu", "bulk-approve3@example.edu",
+                      "bulk-alreadylisted@example.edu")
+        _seed_access_request(e1, status="pending")
+        _seed_access_request(e2, status="pending")
+        assert c.post("/api/admin/allowlist", json={"email": e3}).status_code == 200
+        _seed_access_request(e3, status="pending")  # re-requested after already being added
+
+        ids = [_pending_id(c, e) for e in (e1, e2, e3)]
+        r = c.post("/api/admin/access-requests/bulk", json={"action": "approve", "ids": ids})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 2, body
+        assert {(s["id"], s["reason"]) for s in body["skipped"]} == \
+            {(ids[2], "already allowlisted")}, body
+        assert e1 in _emails(c) and e2 in _emails(c)
+
+
+def test_bulk_access_requests_reject_sets_denied_at_preserves_created_at():
+    with TestClient(app) as c:
+        _login(c)
+        email = "bulk-reject1@example.edu"
+        t0 = time.time() - 500
+        _seed_access_request(email, status="pending", created_at=t0)
+        rid = _pending_id(c, email)
+
+        before = time.time()
+        r = c.post("/api/admin/access-requests/bulk", json={"action": "reject", "ids": [rid]})
+        after = time.time()
+        assert r.status_code == 200, r.text
+        assert r.json()["affected"] == 1, r.json()
+
+        con = connect()
+        try:
+            row = con.execute(
+                "SELECT status, created_at, denied_at FROM access_requests WHERE id=?",
+                (rid,)).fetchone()
+        finally:
+            con.close()
+        assert row["status"] == "denied", row
+        assert row["created_at"] == t0, \
+            f"bulk reject must NOT rewrite created_at, got {row['created_at']} != {t0}"
+        assert before <= row["denied_at"] <= after + 1, row
+
+
+def test_bulk_access_requests_reject_skips_already_resolved():
+    with TestClient(app) as c:
+        _login(c)
+        email = "bulk-reject2@example.edu"
+        _seed_access_request(email, status="pending")
+        rid = _pending_id(c, email)
+        assert c.post(f"/api/admin/access-requests/{email}/deny").status_code == 200  # now denied
+
+        r = c.post("/api/admin/access-requests/bulk", json={"action": "reject", "ids": [rid]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 0, body
+        assert body["skipped"] == [{"id": rid, "reason": "already resolved"}], body
+
+
+def test_bulk_access_requests_unknown_id_skipped_gracefully_no_500():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/access-requests/bulk",
+                   json={"action": "approve", "ids": [999999999]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 0, body
+        assert body["skipped"] == [{"id": 999999999, "reason": "not found"}], body
+
+
+def test_cross_table_safety_denied_id_never_mutated_via_pending_bulk_endpoint():
+    """A denied (blocked) row's id fed to the PENDING approve/reject bulk
+    endpoint (POST /api/admin/access-requests/bulk) must be recognized as
+    NO-LONGER-PENDING and skipped -- never silently approved (which would
+    grant access to a blocked address) or otherwise mutated. This is the
+    structural guard behind "record type cannot cross tables": the frontend
+    only ever sends a table's own ids to its own endpoint, but the SERVER is
+    the authority, and an id is just an integer -- nothing stops a stale tab,
+    a replayed request, or a bug from sending the wrong table's ids."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "bulk-crosstable@example.edu"
+        _seed_access_request(email, status="pending")
+        rid = _pending_id(c, email)
+        assert c.post(f"/api/admin/access-requests/{email}/deny").status_code == 200
+
+        con = connect()
+        try:
+            before = dict(con.execute(
+                "SELECT status, denied_at FROM access_requests WHERE id=?", (rid,)).fetchone())
+        finally:
+            con.close()
+
+        for action in ("reject", "approve"):
+            r = c.post("/api/admin/access-requests/bulk", json={"action": action, "ids": [rid]})
+            assert r.status_code == 200, (action, r.text)
+            body = r.json()
+            assert body["affected"] == 0, (action, body)
+            assert body["skipped"] == [{"id": rid, "reason": "already resolved"}], (action, body)
+            assert email not in _emails(c), \
+                f"a denied address must NEVER be added to the allowlist via bulk {action}"
+
+        con = connect()
+        try:
+            after = dict(con.execute(
+                "SELECT status, denied_at FROM access_requests WHERE id=?", (rid,)).fetchone())
+        finally:
+            con.close()
+        assert after == before, \
+            f"the blocked row must be completely untouched by either bulk action, " \
+            f"before={before} after={after}"
+
+
+def test_bulk_access_requests_over_cap_400():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/access-requests/bulk",
+                   json={"action": "approve", "ids": list(range(1, 1002))})
+        assert r.status_code == 400, r.text
+
+
+def test_bulk_access_requests_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.post("/api/admin/access-requests/bulk", json={"action": "approve", "ids": []})
+        assert r.status_code == 401, r.text
+
+
+def test_bulk_access_requests_requires_admin_403_for_non_admin():
+    with TestClient(app) as c:
+        _login(c)
+        plain = "bulk-notadmin-caller2@example.edu"
+        assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
+        non_admin = TestClient(app)
+        tok = captured["approved_link"].split("token=")[1]
+        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+
+        r = non_admin.post("/api/admin/access-requests/bulk",
+                           json={"action": "approve", "ids": []})
+        assert r.status_code == 403, r.text
+
+
+# --- POST /api/admin/access-requests/denial/bulk ------------------------------
+
+def test_bulk_unblock_deletes_denied_rows_grants_no_access_no_email():
+    with TestClient(app) as c:
+        _login(c)
+        email = "bulk-unblock1@example.edu"
+        _seed_access_request(email, status="denied")
+        rid = _row_id_for_email(email)
+
+        spy_calls = []
+        restore = _patch_attr(admin_router, "send_access_approved",
+                              lambda *a, **k: spy_calls.append(a) or True)
+        try:
+            r = c.post("/api/admin/access-requests/denial/bulk",
+                       json={"action": "unblock", "ids": [rid]})
+        finally:
+            restore()
+        assert r.status_code == 200, r.text
+        assert r.json() == {"ok": True, "affected": 1, "skipped": [], "failed": []}, r.json()
+
+        con = connect()
+        try:
+            denied_n = con.execute(
+                "SELECT COUNT(*) FROM access_requests WHERE email=? AND status='denied'",
+                (email,)).fetchone()[0]
+            allow_n = con.execute(
+                "SELECT COUNT(*) FROM allowlist WHERE email=?", (email,)).fetchone()[0]
+            token_n = con.execute(
+                "SELECT COUNT(*) FROM login_tokens WHERE email=?", (email,)).fetchone()[0]
+            user_n = con.execute(
+                "SELECT COUNT(*) FROM users WHERE email=?", (email,)).fetchone()[0]
+        finally:
+            con.close()
+        assert denied_n == 0, "bulk unblock must DELETE the denied row(s)"
+        assert allow_n == 0, "bulk unblock must grant NO access"
+        assert token_n == 0, "bulk unblock must mint NO sign-in token"
+        assert user_n == 0, "bulk unblock must create NO users row"
+        assert spy_calls == [], f"bulk unblock must send NO email, got {spy_calls}"
+
+
+def test_bulk_unblock_multiple_ids_skips_not_blocked_leaves_pending_row_untouched():
+    with TestClient(app) as c:
+        _login(c)
+        email_a = "bulk-unblockA@example.edu"
+        email_b = "bulk-unblockB@example.edu"
+        pending_email = "bulk-unblock-stillpending@example.edu"
+        _seed_access_request(email_a, status="denied")
+        _seed_access_request(email_b, status="denied")
+        _seed_access_request(pending_email, status="pending")
+        id_a, id_b = _row_id_for_email(email_a), _row_id_for_email(email_b)
+        pending_id = _row_id_for_email(pending_email)
+
+        r = c.post("/api/admin/access-requests/denial/bulk",
+                   json={"action": "unblock", "ids": [id_a, id_b, pending_id]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 2, body
+        assert body["skipped"] == [{"id": pending_id, "reason": "not blocked"}], body
+
+        con = connect()
+        try:
+            still_pending = con.execute(
+                "SELECT status FROM access_requests WHERE id=?", (pending_id,)).fetchone()
+        finally:
+            con.close()
+        assert still_pending["status"] == "pending", \
+            "a pending row must never be touched by unblock, even if its id is sent"
+
+        # Idempotent: unblocking the same (already-cleared) ids again is a
+        # clean no-op 200, not an error.
+        r2 = c.post("/api/admin/access-requests/denial/bulk",
+                    json={"action": "unblock", "ids": [id_a, id_b]})
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["affected"] == 0, r2.json()
+        assert {s["reason"] for s in r2.json()["skipped"]} == {"not blocked"}, r2.json()
+
+
+def test_bulk_unblock_unknown_id_skipped_gracefully_no_500():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/access-requests/denial/bulk",
+                   json={"action": "unblock", "ids": [999999999]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["affected"] == 0, body
+        assert body["skipped"] == [{"id": 999999999, "reason": "not blocked"}], body
+
+
+def test_bulk_unblock_over_cap_400():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/access-requests/denial/bulk",
+                   json={"action": "unblock", "ids": list(range(1, 1002))})
+        assert r.status_code == 400, r.text
+
+
+def test_bulk_unblock_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        r = c.post("/api/admin/access-requests/denial/bulk",
+                   json={"action": "unblock", "ids": []})
+        assert r.status_code == 401, r.text
+
+
+def test_bulk_unblock_requires_admin_403_for_non_admin():
+    with TestClient(app) as c:
+        _login(c)
+        plain = "bulk-notadmin-caller3@example.edu"
+        assert c.post("/api/admin/allowlist", json={"email": plain}).status_code == 200
+        non_admin = TestClient(app)
+        tok = captured["approved_link"].split("token=")[1]
+        assert non_admin.post("/api/auth/verify", json={"token": tok}).status_code == 200
+
+        r = non_admin.post("/api/admin/access-requests/denial/bulk",
+                           json={"action": "unblock", "ids": []})
+        assert r.status_code == 403, r.text
+
+
 def run():
     print("admin router contract:")
     check("import rejects a non-.accdb upload", test_import_rejects_non_accdb_extension)
@@ -2516,6 +3092,63 @@ def run():
           test_pending_list_still_groups_by_raw_address_not_canonically)
     check("allowlisting clears a denial filed under a variant (fold-in fix 1)",
           test_allowlisting_clears_a_denial_filed_under_a_variant)
+
+    print("bulk operations:")
+    check("bulk allowlist promote: happy path + skip reasons (already-admin, not-on-allowlist)",
+          test_bulk_allowlist_promote_happy_path_and_skip_reasons)
+    check("bulk allowlist demote: happy path + skip reason (not an administrator)",
+          test_bulk_allowlist_demote_happy_path_and_skip_reasons)
+    check("bulk allowlist demote: self included -> 400, nothing changes",
+          test_bulk_allowlist_demote_rejects_self_included_400_nothing_changes)
+    check("bulk allowlist delete: self included -> 400, nothing changes",
+          test_bulk_allowlist_delete_rejects_self_included_400_nothing_changes)
+    check("bulk allowlist delete: happy path, still-admin skipped (not deleted)",
+          test_bulk_allowlist_delete_happy_path_still_admin_skipped_not_deleted)
+    check("bulk allowlist promote: self is allowed, skipped as already-admin",
+          test_bulk_allowlist_promote_self_is_allowed_and_skipped_already_admin)
+    check("bulk allowlist demote: last-admin invariant holds (all other admins demoted)",
+          test_bulk_allowlist_demote_all_other_admins_last_admin_invariant_holds)
+    check("M1: a forced per-item failure lands in `failed`, rolls back only that "
+          "item's write, and never 500s the batch",
+          test_bulk_allowlist_promote_per_item_failure_rolls_back_only_that_item_no_500)
+    check("bulk allowlist action: over BULK_MAX_ITEMS -> 400",
+          test_bulk_allowlist_action_over_cap_400)
+    check("bulk allowlist action requires admin (401)",
+          test_bulk_allowlist_action_requires_admin)
+    check("bulk allowlist action requires admin (403 for authenticated non-admin)",
+          test_bulk_allowlist_action_requires_admin_403_for_non_admin)
+    check("bulk access-requests approve: adds to allowlist + captures the sign-in link",
+          test_bulk_access_requests_approve_adds_to_allowlist_and_captures_link)
+    check("bulk access-requests approve: multiple ids, skips already-allowlisted",
+          test_bulk_access_requests_approve_multiple_and_skips_already_allowlisted)
+    check("bulk access-requests reject: sets denied_at, preserves created_at",
+          test_bulk_access_requests_reject_sets_denied_at_preserves_created_at)
+    check("bulk access-requests reject: skips an already-resolved (non-pending) id",
+          test_bulk_access_requests_reject_skips_already_resolved)
+    check("bulk access-requests: an unknown id is skipped gracefully, never a 500",
+          test_bulk_access_requests_unknown_id_skipped_gracefully_no_500)
+    check("CROSS-TABLE SAFETY: a denied id posted to the pending bulk endpoint is "
+          "skipped, never mutated (approve AND reject)",
+          test_cross_table_safety_denied_id_never_mutated_via_pending_bulk_endpoint)
+    check("bulk access-requests: over BULK_MAX_ITEMS -> 400",
+          test_bulk_access_requests_over_cap_400)
+    check("bulk access-requests requires admin (401)",
+          test_bulk_access_requests_requires_admin)
+    check("bulk access-requests requires admin (403 for authenticated non-admin)",
+          test_bulk_access_requests_requires_admin_403_for_non_admin)
+    check("bulk unblock: deletes denied rows, grants NO access, sends NO email",
+          test_bulk_unblock_deletes_denied_rows_grants_no_access_no_email)
+    check("bulk unblock: multiple ids, skips 'not blocked', "
+          "leaves a pending row untouched, idempotent",
+          test_bulk_unblock_multiple_ids_skips_not_blocked_leaves_pending_row_untouched)
+    check("bulk unblock: an unknown id is skipped gracefully, never a 500",
+          test_bulk_unblock_unknown_id_skipped_gracefully_no_500)
+    check("bulk unblock: over BULK_MAX_ITEMS -> 400",
+          test_bulk_unblock_over_cap_400)
+    check("bulk unblock requires admin (401)",
+          test_bulk_unblock_requires_admin)
+    check("bulk unblock requires admin (403 for authenticated non-admin)",
+          test_bulk_unblock_requires_admin_403_for_non_admin)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")
