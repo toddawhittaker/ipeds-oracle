@@ -614,6 +614,16 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* result tables: per-table toolbar (CSV + chart this) */
 .table-block { margin: 8px 0; }
 .table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
+
+/* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
+   that appears once rows are ticked, and the instant snapshot chart panel. */
+.cmp-cell { width: 1%; text-align: center; padding: 6px 8px; }
+.cmp-cell input { cursor: pointer; }
+.cmp-row.picked > td:not(.cmp-cell), .cmp-row.picked > td.cmp-cell { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.compare-bar { display: flex; align-items: center; gap: 14px; padding: 6px 2px 0; font-size: 13px; }
+.compare-count { font-family: var(--mono); color: var(--muted); }
+.compare-panel { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.compare-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px; }
 /* The single-number "brief": a compact recent-years table beside its trend chart.
    Flex-wrap degrades gracefully to stacked when the table is too wide to share. */
 .brief-figrow { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: flex-start; margin: 10px 0; }

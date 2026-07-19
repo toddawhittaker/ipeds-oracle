@@ -29,6 +29,15 @@ export function extractTable(node) {
   return { headers, rows };
 }
 
+// The th/td cell elements of a rendered <tr> hast node, each with its tag and
+// trimmed text — used by compare mode's `tr` override to read a row's entity
+// label and to tell a header row (th cells) from a body row (td cells).
+export function rowCells(trNode) {
+  return (trNode?.children || [])
+    .filter((x) => x.tagName === "th" || x.tagName === "td")
+    .map((x) => ({ tag: x.tagName, text: hastText(x).trim() }));
+}
+
 export function parseNum(s) {
   if (s == null) return NaN;
   const t = String(s).replace(/[$,%\s]/g, "");

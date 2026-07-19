@@ -29,6 +29,7 @@ export default defineConfig({
         "src/accesstables.js",
         "src/announce.js",
         "src/briefdata.js",
+        "src/compare.js",
         "src/csvimport.js",
         "src/datatable.js",
         "src/estimate.js",
