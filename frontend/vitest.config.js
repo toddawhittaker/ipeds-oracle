@@ -32,6 +32,7 @@ export default defineConfig({
         "src/datatable.js",
         "src/estimate.js",
         "src/mdnorm.js",
+        "src/selection.js",
         "src/tabledata.js",
         "src/userlist.js",
       ],

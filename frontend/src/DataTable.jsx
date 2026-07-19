@@ -1,5 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { viewRows } from "./datatable.js";
+import { filterRows, viewRows } from "./datatable.js";
+import { pageHeaderState } from "./selection.js";
 import { IconClose } from "./icons.jsx";
 
 // Reusable admin data table: search + sortable headers + pagination + a polite
@@ -33,6 +34,12 @@ const DataTable = forwardRef(function DataTable({
   initialSort, pageSizes = [10, 25, 50, 100], defaultPageSize = 25,
   sizeLabel = "Rows per page", ariaLabel, renderActions, sortLabels = {},
   tableClass = "grid data",
+  // Opt-in bulk row-selection (all optional; when `selectable` is falsy none
+  // of this renders and the component is byte-for-byte the same as before —
+  // see the header comment). selectionId defaults to rowKey.
+  selectable, selectionId, selectionMode, selectedIds,
+  rowSelectable, rowSelectLabel, onToggleRow, onTogglePage,
+  renderSelectionBar, onSearchChange,
 }, ref) {
   const firstSortable = columns.find((c) => c.sortable)?.key;
   const [q, setQ] = useState("");
@@ -49,6 +56,29 @@ const DataTable = forwardRef(function DataTable({
 
   const view = viewRows(rows, { query: q, sortKey, sortDir, page, perPage }, config);
 
+  // Selection is entirely opt-in: guarded behind `selectable` (code review
+  // #5 / L1) so a non-selectable table (e.g. Logs, up to 2000 rows) never
+  // pays for the extra filterRows() pass over every row on every render —
+  // only a DataTable that actually renders selection UI computes any of this.
+  const selId = selectable ? (selectionId || rowKey) : null;
+  const elig = (r) => (rowSelectable ? rowSelectable(r).ok : true);
+  const pageEligibleRows = selectable ? view.slice.filter(elig) : [];
+  const filteredEligibleRows = selectable ? filterRows(rows, q, config.fields).filter(elig) : [];
+  const pageEligibleIds = selectable ? pageEligibleRows.map(selId) : [];
+  // A row's effective checked state: in "all" (all-matching) mode,
+  // `selectedIds` holds the EXCLUDED ids, so checked = NOT excluded; in
+  // "explicit" mode selectedIds holds the selected ids directly. Ineligible
+  // rows (e.g. the signed-in admin's own row) are never checked, regardless
+  // of mode — an "all matching" selection never actually covers them.
+  const isRowChecked = (r) => {
+    if (!elig(r)) return false;
+    const id = selId(r);
+    return selectionMode === "all" ? !selectedIds?.has(id) : !!selectedIds?.has(id);
+  };
+  const checkedOnPage = selectable
+    ? new Set(pageEligibleRows.filter(isRowChecked).map(selId)) : new Set();
+  const headerState = selectable ? pageHeaderState(pageEligibleIds, checkedOnPage) : "none";
+
   useImperativeHandle(ref, () => ({
     focusSearch: () => searchRef.current?.focus?.(),
     // Focus the first enabled action button in a row that persisted through a
@@ -58,7 +88,7 @@ const DataTable = forwardRef(function DataTable({
   }), []);
 
   const hasActions = typeof renderActions === "function";
-  const colCount = columns.length + (hasActions ? 1 : 0);
+  const colCount = columns.length + (hasActions ? 1 : 0) + (selectable ? 1 : 0);
   // Pad short pages up to a full page's height with structurally-identical
   // spacer rows (only when there's more than one page) so the pager below never
   // jumps as you move between pages. Transparent borders keep them invisible.
@@ -101,23 +131,43 @@ const DataTable = forwardRef(function DataTable({
           <input id={searchId} ref={searchRef} type="search" className="logsearch"
                  placeholder={searchPlaceholder} value={q}
                  aria-label={searchLabel || searchPlaceholder}
-                 onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+                 onChange={(e) => {
+                   setQ(e.target.value); setPage(1); onSearchChange?.(e.target.value);
+                 }} />
           {q && (
             <button type="button" className="search-clear" aria-label="Clear search"
-                    onClick={() => { setQ(""); setPage(1); searchRef.current?.focus(); }}>
+                    onClick={() => {
+                      setQ(""); setPage(1); searchRef.current?.focus(); onSearchChange?.("");
+                    }}>
               <IconClose size={14} />
             </button>
           )}
         </div>
       </div>
 
+      {selectable && typeof renderSelectionBar === "function"
+        && renderSelectionBar({ pageEligibleRows, filteredEligibleRows, query: q })}
+
       <table className={tableClass} aria-label={ariaLabel}>
         <colgroup>
+          {selectable && <col className="col-select" />}
           {columns.map((c) => <col key={c.key} className={c.colClass} />)}
           {hasActions && <col className="col-actions" />}
         </colgroup>
         <thead>
           <tr>
+            {selectable && (
+              <th scope="col" className="col-select-head">
+                <input
+                  type="checkbox"
+                  aria-label={`Select all ${config.nouns.many} on this page`}
+                  checked={headerState === "all"}
+                  disabled={pageEligibleRows.length === 0}
+                  ref={(el) => { if (el) el.indeterminate = headerState === "some"; }}
+                  onChange={(e) => onTogglePage?.(pageEligibleRows, e.target.checked)}
+                />
+              </th>
+            )}
             {columns.map((c) => {
               if (!c.sortable) {
                 return <th key={c.key} scope="col" className={c.thClass}>{c.label}</th>;
@@ -148,8 +198,30 @@ const DataTable = forwardRef(function DataTable({
             </tr>
           ) : view.slice.map((r) => {
             const key = rowKey(r);
+            const canSelect = selectable ? (rowSelectable ? rowSelectable(r) : { ok: true }) : null;
             return (
               <tr key={key}>
+                {selectable && (
+                  // A plain <td>, NOT <th scope="row"> (a11y H1, WCAG 1.3.1):
+                  // a selection checkbox is not a row header — promoting it to
+                  // one would falsely claim every other cell in the row is
+                  // "headed by" the checkbox, which no data column actually is.
+                  <td className="col-select-cell">
+                    <input
+                      type="checkbox"
+                      checked={isRowChecked(r)}
+                      disabled={!canSelect.ok}
+                      // `title` mirrors the disabled reason for sighted
+                      // non-AT users on hover (a11y L1) -- aria-label already
+                      // carries it for assistive tech.
+                      title={canSelect.ok ? undefined : canSelect.reason}
+                      aria-label={canSelect.ok
+                        ? (rowSelectLabel ? rowSelectLabel(r) : "Select row")
+                        : canSelect.reason}
+                      onChange={(e) => onToggleRow?.(r, e.target.checked)}
+                    />
+                  </td>
+                )}
                 {columns.map((c) => (
                   <td key={c.key} className={c.cellClass}
                       title={c.cellTitle ? c.cellTitle(r) : undefined}>

@@ -11,6 +11,64 @@ import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload, IconCheck, Icon
 import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
+import { useTableSelection } from "./useTableSelection.js";
+import BulkBar from "./BulkBar.jsx";
+import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
+
+// Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
+// the prose summary/toast strings selection.js builds — see the architect's
+// contract. `n` is the ELIGIBLE count (what will actually happen), not the
+// raw selected count.
+// Counted labels for the CONFIRM dialog's action button (e.g. "Promote 9
+// users") — the count belongs in the dialog, where the exact breakdown is
+// spelled out, never on the toolbar button itself.
+const BULK_ACTION_LABEL = {
+  promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"}`,
+  demote: (n) => `Demote ${n} ${n === 1 ? "administrator" : "administrators"}`,
+  delete: (n) => `Remove ${n} ${n === 1 ? "user" : "users"}`,
+  approve: (n) => `Approve ${n} ${n === 1 ? "request" : "requests"}`,
+  reject: (n) => `Reject and block ${n} ${n === 1 ? "request" : "requests"}`,
+  unblock: (n) => `Allow ${n} ${n === 1 ? "user" : "users"} to request again`,
+};
+
+// Stable-verb labels for the TOOLBAR action buttons — no counts (they'd churn
+// on every selection change); the verb matches the confirm dialog's verb.
+const BULK_TOOLBAR_LABEL = {
+  promote: "Promote", demote: "Demote", delete: "Remove",
+  approve: "Approve", reject: "Reject & block", unblock: "Allow to request again",
+};
+
+// Shown as the tooltip on a toolbar action button that's disabled because none
+// of the current selection is eligible for it (title only appears on hover, so
+// this never has to be screen-reader-reachable — a disabled button is skipped
+// by AT anyway, and the always-visible "N selected" count carries the state).
+const BULK_DISABLED_REASON = {
+  promote: "No selected users are regular users to promote.",
+  demote: "No selected users are administrators to demote.",
+  delete: "Selected administrators must be demoted before removal.",
+  approve: "No selected requests can be approved.",
+  reject: "No selected requests can be rejected.",
+  unblock: "No selected users can be unblocked.",
+};
+
+const BULK_TITLE = {
+  promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"} to admin?`,
+  demote: (n) => `Demote ${n} ${n === 1 ? "administrator" : "administrators"}?`,
+  delete: (n) => `Remove ${n} ${n === 1 ? "user" : "users"} from the allowlist?`,
+  approve: (n) => `Approve ${n} pending ${n === 1 ? "request" : "requests"}?`,
+  reject: (n) => `Reject and block ${n} ${n === 1 ? "request" : "requests"}?`,
+  unblock: (n) => `Allow ${n} ${n === 1 ? "user" : "users"} to request access again?`,
+};
+
+const BULK_VARIANT = {
+  promote: "neutral", demote: "warning", delete: "danger",
+  approve: "neutral", reject: "danger", unblock: "neutral",
+};
+
+const BULK_ICON = {
+  promote: IconShieldPlus, demote: IconShieldMinus, delete: IconTrash,
+  approve: IconCheck, reject: IconClose, unblock: IconUnlock,
+};
 
 function humanBytes(n) {
   if (n == null || !isFinite(n)) return "?";
@@ -135,6 +193,12 @@ function Allowlist({ me }) {
   const toast = useToast();
   const confirm = useConfirm();
   const addEmailRef = useRef(null);
+
+  // Bulk row-selection: one independent hook instance per table (spec: "no
+  // shared state" — selecting on one table never affects another).
+  const usersSel = useTableSelection();
+  const pendingSel = useTableSelection();
+  const blockedSel = useTableSelection();
 
   // Route an action outcome to the app-wide toast (overlays, auto-fades,
   // announced once via the toast host's live region). kind: "" | "ok" | "error".
@@ -526,6 +590,142 @@ function Allowlist({ me }) {
     });
   }
 
+  // --- Bulk row-selection ------------------------------------------------------
+  // The current admin's own row is never selectable for a bulk action — same
+  // invariant as the single-row actions above (renderActions renders none for
+  // self), enforced here too so it's excluded from "select all matching" and
+  // the page tri-state checkbox as well, not just hidden from per-row actions.
+  const userRowSelectable = useCallback(
+    (r) => (me && r.email === me.email
+      ? { ok: false, reason: "You cannot select your own account for bulk actions." }
+      : { ok: true }),
+    [me],
+  );
+  const userRowSelectLabel = (r) => `Select user ${r.email}`;
+  const pendingRowSelectLabel = (r) => `Select access request from ${r.email}`;
+  const blockedRowSelectLabel = (r) => `Select blocked user ${r.canon_email}`;
+
+  // A table's search box changed: clear ITS OWN selection (never a sibling
+  // table's — the three are independent) and toast why, but only if there was
+  // something to clear -- an empty-selection search keystroke early-returns
+  // BEFORE calling sel.clear() (code review #6 / L2), so it neither allocates
+  // a new Set nor re-renders Allowlist on every keystroke when there was
+  // nothing to clear anyway. This does NOT go through reloadThenRestoreFocus
+  // — clearing a selection moves no focus.
+  function onTableSearchChange(sel, q) {
+    void q; // the new query itself needs no further handling here
+    const hadSelection = sel.mode === "all" || sel.selectedIds.size > 0;
+    if (!hadSelection) return;
+    sel.clear();
+    announce("Selection cleared because the search changed.");
+  }
+
+  // Shared bulk-confirm-then-act flow for all six actions below: builds the
+  // confirm modal from bulkConfirmSummary/BULK_ACTION_LABEL, calls the bulk
+  // API on confirm (throwing keeps the modal open for retry), and on success
+  // toasts the outcome, then KEEPS THE WHOLE SELECTION (retainedSelectionAfterBulk:
+  // promote/demote leave every selected row checked; the removing actions drop
+  // only the ids the server processed away and keep skipped/failed rows checked)
+  // BEFORE reloading, then reloads (refreshing every table — approve/reject also
+  // refresh the OTHER affected table this way, with no extra code) and restores
+  // focus to the acting table's search box.
+  function runBulkConfirm({ sel, action, idField, selectedRows, eligibleRows, skippedRows, apiCall, focusRef }) {
+    let result = null;
+    confirm({
+      variant: BULK_VARIANT[action],
+      title: BULK_TITLE[action](eligibleRows.length),
+      body: bulkConfirmSummary(action, {
+        selected: selectedRows.length, eligible: eligibleRows.length, skipped: skippedRows.length,
+      }),
+      confirmLabel: BULK_ACTION_LABEL[action](eligibleRows.length),
+      onConfirm: async () => {
+        const ids = eligibleRows.map((r) => r[idField]);
+        const res = await apiCall(ids);
+        if (!res?.ok) throw new Error(JSON.stringify({ detail: "That didn't work. Please try again." }));
+        result = res;
+      },
+      onSuccess: async () => {
+        const { text, kind } = bulkResultToast(action, result);
+        announce(text, kind);
+        // Keep the whole selection (rows still in the table stay checked).
+        // Synchronous, BEFORE the reload below.
+        const selectedIds = selectedRows.map((r) => r[idField]);
+        sel.selectExplicit(retainedSelectionAfterBulk(action, selectedIds, result, idField));
+        await reloadThenRestoreFocus(() => focusAfterRowAction(focusRef));
+      },
+    });
+  }
+
+  // Build one table's BulkBar action descriptors from the rows the admin
+  // actually has effectively selected right now (`sel.effectiveIds`), against
+  // the table's OWN partitionEligibility rule per action.
+  function userBulkActions(filteredEligibleRows) {
+    const idSet = new Set(filteredEligibleRows.map((r) => r.email));
+    const effIds = usersSel.effectiveIds(idSet);
+    const selectedRows = filteredEligibleRows.filter((r) => effIds.has(r.email));
+    return ["promote", "demote", "delete"].map((action) => {
+      const { eligible, skipped } = partitionEligibility(selectedRows, action);
+      return {
+        key: action,
+        label: BULK_TOOLBAR_LABEL[action],
+        icon: BULK_ICON[action],
+        variant: BULK_VARIANT[action],
+        disabled: eligible.length === 0,
+        title: BULK_DISABLED_REASON[action],
+        onClick: () => runBulkConfirm({
+          sel: usersSel, action, idField: "email",
+          selectedRows, eligibleRows: eligible, skippedRows: skipped,
+          apiCall: (emails) => api.bulkAllowlistAction(action, emails),
+          focusRef: usersTableRef,
+        }),
+      };
+    });
+  }
+
+  function pendingBulkActions(filteredEligibleRows) {
+    const idSet = new Set(filteredEligibleRows.map((r) => r.id));
+    const effIds = pendingSel.effectiveIds(idSet);
+    const selectedRows = filteredEligibleRows.filter((r) => effIds.has(r.id));
+    return ["approve", "reject"].map((action) => {
+      const { eligible, skipped } = partitionEligibility(selectedRows, action);
+      return {
+        key: action,
+        label: BULK_TOOLBAR_LABEL[action],
+        icon: BULK_ICON[action],
+        variant: BULK_VARIANT[action],
+        disabled: eligible.length === 0,
+        title: BULK_DISABLED_REASON[action],
+        onClick: () => runBulkConfirm({
+          sel: pendingSel, action, idField: "id",
+          selectedRows, eligibleRows: eligible, skippedRows: skipped,
+          apiCall: (ids) => api.bulkAccessRequests(action, ids),
+          focusRef: pendingTableRef,
+        }),
+      };
+    });
+  }
+
+  function blockedBulkActions(filteredEligibleRows) {
+    const idSet = new Set(filteredEligibleRows.map((r) => r.id));
+    const effIds = blockedSel.effectiveIds(idSet);
+    const selectedRows = filteredEligibleRows.filter((r) => effIds.has(r.id));
+    const { eligible, skipped } = partitionEligibility(selectedRows, "unblock");
+    return [{
+      key: "unblock",
+      label: BULK_TOOLBAR_LABEL.unblock,
+      icon: BULK_ICON.unblock,
+      variant: BULK_VARIANT.unblock,
+      disabled: eligible.length === 0,
+      title: BULK_DISABLED_REASON.unblock,
+      onClick: () => runBulkConfirm({
+        sel: blockedSel, action: "unblock", idField: "id",
+        selectedRows, eligibleRows: eligible, skippedRows: skipped,
+        apiCall: (ids) => api.bulkClearDenials(ids),
+        focusRef: blockedTableRef,
+      }),
+    }];
+  }
+
   return (
     <div className="panel">
       {/* Action outcomes surface via the app-wide toast (useToast) — overlays,
@@ -559,6 +759,29 @@ function Allowlist({ me }) {
             emptyNoMatch="No pending requests match your search."
             initialSort={{ key: "requested", dir: "desc" }}
             sortLabels={{ email: "email", requested: "requested" }}
+            selectable
+            selectionId={(r) => r.id}
+            selectionMode={pendingSel.mode}
+            selectedIds={pendingSel.selectedIds}
+            rowSelectLabel={pendingRowSelectLabel}
+            onToggleRow={(r, checked) => pendingSel.toggleRow(r.id, checked)}
+            onTogglePage={(pageRows, checked) =>
+              pendingSel.togglePage(pageRows.map((r) => r.id), checked)}
+            onSearchChange={(q) => onTableSearchChange(pendingSel, q)}
+            renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
+              <BulkBar
+                nouns={PENDING_CONFIG.nouns}
+                mode={pendingSel.mode}
+                count={pendingSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
+                totalEligible={filteredEligibleRows.length}
+                pageEligibleCount={pageEligibleRows.length}
+                pageSelectedCount={pendingSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
+                onSelectAllMatching={pendingSel.selectAllMatching}
+                onClear={pendingSel.clear}
+                onFocusFallback={() => pendingTableRef.current?.focusSearch()}
+                actions={pendingBulkActions(filteredEligibleRows)}
+              />
+            )}
             columns={[
               { key: "email", label: "Email", sortable: true, colClass: "col-req-email",
                 cellClass: "cell-trunc", cellTitle: (r) => r.email },
@@ -724,6 +947,30 @@ jamie@example.com,External reviewer,`}</pre>
         emptyNoMatch="No users match your search."
         initialSort={{ key: "email", dir: "asc" }}
         sortLabels={{ email: "email", note: "note", admin: "admin status", last_login: "last login" }}
+        selectable
+        selectionId={(r) => r.email}
+        selectionMode={usersSel.mode}
+        selectedIds={usersSel.selectedIds}
+        rowSelectable={userRowSelectable}
+        rowSelectLabel={userRowSelectLabel}
+        onToggleRow={(r, checked) => usersSel.toggleRow(r.email, checked)}
+        onTogglePage={(pageRows, checked) =>
+          usersSel.togglePage(pageRows.map((r) => r.email), checked)}
+        onSearchChange={(q) => onTableSearchChange(usersSel, q)}
+        renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
+          <BulkBar
+            nouns={USER_CONFIG.nouns}
+            mode={usersSel.mode}
+            count={usersSel.count(new Set(filteredEligibleRows.map((r) => r.email)))}
+            totalEligible={filteredEligibleRows.length}
+            pageEligibleCount={pageEligibleRows.length}
+            pageSelectedCount={usersSel.count(new Set(pageEligibleRows.map((r) => r.email)))}
+            onSelectAllMatching={usersSel.selectAllMatching}
+            onClear={usersSel.clear}
+            onFocusFallback={() => usersTableRef.current?.focusSearch()}
+            actions={userBulkActions(filteredEligibleRows)}
+          />
+        )}
         columns={[
           { key: "email", label: "Email", sortable: true, colClass: "col-email",
             cellClass: "cell-trunc", cellTitle: (r) => r.email },
@@ -810,6 +1057,29 @@ jamie@example.com,External reviewer,`}</pre>
                 emptyNoMatch="No blocked users match your search."
                 initialSort={{ key: "denied", dir: "desc" }}
                 sortLabels={{ email: "email", requested: "requested", denied: "denied" }}
+                selectable
+                selectionId={(r) => r.id}
+                selectionMode={blockedSel.mode}
+                selectedIds={blockedSel.selectedIds}
+                rowSelectLabel={blockedRowSelectLabel}
+                onToggleRow={(r, checked) => blockedSel.toggleRow(r.id, checked)}
+                onTogglePage={(pageRows, checked) =>
+                  blockedSel.togglePage(pageRows.map((r) => r.id), checked)}
+                onSearchChange={(q) => onTableSearchChange(blockedSel, q)}
+                renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
+                  <BulkBar
+                    nouns={BLOCKED_CONFIG.nouns}
+                    mode={blockedSel.mode}
+                    count={blockedSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
+                    totalEligible={filteredEligibleRows.length}
+                    pageEligibleCount={pageEligibleRows.length}
+                    pageSelectedCount={blockedSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
+                    onSelectAllMatching={blockedSel.selectAllMatching}
+                    onClear={blockedSel.clear}
+                    onFocusFallback={() => blockedTableRef.current?.focusSearch()}
+                    actions={blockedBulkActions(filteredEligibleRows)}
+                  />
+                )}
                 columns={[
                   // SEC #1: canon_email (the ACTUALLY-blocked mailbox — what
                   // is_denied() matches and Undo's DELETE keys on) is the PRIMARY

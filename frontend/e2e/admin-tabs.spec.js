@@ -62,7 +62,10 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   // itself is covered separately below.
   await expect(page.getByRole("heading", { name: "Pending requests" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "newperson@example.edu", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "user@example.edu" })).toBeVisible();
+  // exact:true -- the Users table's leading selection checkbox (H1 a11y fix)
+  // has accessible name "Select user user@example.edu", which otherwise
+  // substring-collides with this cell under Playwright's default matching.
+  await expect(page.getByRole("cell", { name: "user@example.edu", exact: true })).toBeVisible();
 
   await page.getByPlaceholder("email", { exact: true }).fill("newuser@example.edu");
   await page.getByPlaceholder("note (optional)").fill("added via e2e");

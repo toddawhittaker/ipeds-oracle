@@ -151,7 +151,8 @@ scripts/coverage_check.sh                                           # the gate (
 
 The **JS side** has its own floor: `frontend/vitest.config.js` gates a per-file ≥ 80%
 line coverage over an explicit allowlist of the pure-logic modules under test
-(`announce.js`, `estimate.js`, `mdnorm.js`, `tabledata.js`) — `npm run test:unit`
+(`accesstables.js`, `announce.js`, `csvimport.js`, `datatable.js`, `estimate.js`,
+`mdnorm.js`, `selection.js`, `tabledata.js`, `userlist.js`) — `npm run test:unit`
 fails if one dips. Add a module to that list when it gets real unit tests.
 Browser-tested components stay out of the floor (Playwright covers them).
 
@@ -208,6 +209,32 @@ paginate → range label — lives in `datatable.js` and is unit-tested in
 The component's browser truth is covered by Playwright (`users-table.spec.js`,
 `deny-access-request.spec.js`, `undo-denial.spec.js`). Add a new admin table as a
 config over `<DataTable>`, not a copy.
+
+**Bulk row-selection is an opt-in `<DataTable>` feature, not a fork.** Passing
+`selectable` (plus `selectionId`, `selectionMode`, `selectedIds`, `rowSelectable`,
+`rowSelectLabel`, `onToggleRow`, `onTogglePage`, `renderSelectionBar`,
+`onSearchChange`) turns on a checkbox column (first column, tri-state page
+header) and a `renderSelectionBar` slot above the table; every existing
+`<DataTable>` usage that omits these props renders byte-for-byte as before. The
+Allowlist tab's three tables (Users, Pending requests, Blocked users) each hold
+their own `useTableSelection()` hook instance (`selection = { mode:
+"explicit"|"all", selectedIds }` — `"all"` mode's `selectedIds` holds the
+*excluded* ids, for "select all matching" across a search-narrowed set) and
+render `<BulkBar>` (`frontend/src/BulkBar.jsx`) as a **contextual** action
+toolbar — it renders `null` unless ≥1 row is selected (the standard
+Gmail/Linear pattern, not a persistent bar of disabled buttons), pairs a live
+"N selected" count + Clear with stable-verb action buttons (destructive ones
+split past a divider) and the "select all N matching" escalation banner. The pure
+tri-state/count/eligibility/copy logic lives in `selection.js` (vitest,
+`selection.test.js`) — everything else (checkbox tri-state incl.
+`indeterminate`, the search-clears-selection flow, the confirm → processing →
+toast → refresh flow) is Playwright-covered (`admin-bulk-actions.spec.js`). The
+three bulk endpoints (`POST /api/admin/allowlist/bulk-action`,
+`POST /api/admin/access-requests/bulk`, `POST /api/admin/access-requests/denial/bulk`)
+reuse the exact same mutation helpers the single-row endpoints call
+(`backend/app/routers/admin.py`'s `_set_admin`/`_remove_user`/`_approve_allowlist`/
+`_deny_group`/`_clear_denial_group`), recompute eligibility per record, and are
+capped at `BULK_MAX_ITEMS`.
 
 ## Lint & format
 

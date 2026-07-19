@@ -153,6 +153,44 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   variant later can't resurrect it), but is the stronger action: it grants full
   access **and** emails a welcome link — not always what undoing a mistaken denial
   calls for.
+- **Bulk row-selection + actions** on all three Allowlist tables (Users,
+  Pending requests, Blocked users): checkbox column + tri-state page-header
+  checkbox + "select all matching" (client-side only — every list is fetched
+  unpaginated, so there's nothing to select on an unloaded page). Three
+  endpoints — `POST /api/admin/allowlist/bulk-action` (promote/demote/delete),
+  `POST /api/admin/access-requests/bulk` (approve/reject),
+  `POST /api/admin/access-requests/denial/bulk` (unblock) — each
+  transactional (one connection, one commit), capped at `BULK_MAX_ITEMS`
+  (1000) records, and **recomputing eligibility per record** server-side
+  (never trusting the browser's stale list); a demote/delete batch that
+  includes the caller's own email 400s the *whole* batch before any write. An
+  id posted to the wrong endpoint (e.g. a denied row's id sent to the
+  pending-only bulk endpoint) is recognized as no-longer-eligible and
+  skipped, never mutated — the cross-table safety net. Every mutation goes
+  through the same helpers the single-row endpoints already called
+  (`_set_admin`, `_remove_user`, `_approve_allowlist`, `_deny_group`,
+  `_clear_denial_group`), so the single- and bulk-paths can never drift.
+  After an action commits the UI **keeps the whole selection** (rows still in
+  the table stay checked — `selection.js`'s `retainedSelectionAfterBulk`):
+  promote/demote leave every acted row in place so nothing unchecks;
+  delete/approve/reject/unblock drop only the ids the server actually processed
+  (those rows are gone) while keeping any it skipped/failed, and freeze an
+  "all matching" selection to concrete ids so a later-polled row isn't
+  silently pre-selected.
+  Frontend: `selection.js` (pure counting/copy logic — tri-state derivation,
+  eligibility partitioning, every confirm/toast string — vitest-covered),
+  `useTableSelection.js` (the per-table selection-state hook; `Allowlist`
+  holds three independent instances so selecting on one table never touches
+  another), `BulkBar.jsx` (the **contextual** action toolbar rendered through
+  `DataTable`'s opt-in `selectable`/`renderSelectionBar` props — following the
+  standard Gmail/Linear pattern it appears **only while ≥1 row is selected**
+  (never a persistent strip of disabled buttons), anchors a live "N selected"
+  count + Clear on the left, shows **stable-verb** action buttons on the right
+  (the count lives in the confirm dialog, not the label) with any **destructive**
+  action split off past a divider in the `--danger` color, and carries the
+  "select all N matching" banner once a full page is selected across more than
+  one page; every existing `DataTable` usage that doesn't pass `selectable`
+  renders unchanged).
 
 ### Admin → Imports (dataset management)
 - A live **NCES year catalog**: `backend/app/nces.py` probes `nces.ed.gov` (**SSRF-hardened**

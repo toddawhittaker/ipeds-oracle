@@ -443,6 +443,141 @@ export async function mockClearDenial(page, { httpStatus = 200, cleared = 1, det
 }
 
 /**
+ * STATEFUL bulk-capable mock for the Allowlist USERS table. Modeled on
+ * users-table.spec.js's local mockUsersApi, but adds the new bulk endpoint:
+ *   GET  /api/admin/allowlist                 -> the live `rows` array
+ *   POST /api/admin/allowlist/bulk-action {action,emails} -> recomputes
+ *     eligibility against those SAME rows (mutating is_admin / removing a
+ *     row), mirroring the real backend's per-record recheck, so a reload
+ *     after the action reflects the mutation the way production would
+ *     (frontend/src/api.js: bulkAllowlistAction(action, emails) ->
+ *     POST .../allowlist/bulk-action). Skip-reason strings match
+ *     backend/app/routers/admin.py's contract exactly.
+ *
+ * `forceFailed` (a Set of emails) makes those specific emails come back in
+ * the response's `failed` array instead of being mutated at all -- for
+ * exercising the partial-failure path (failed rows must stay selected)
+ * deterministically. `delayMs` defers the bulk-action response so a spec can
+ * observe the confirm modal's processing state.
+ *
+ * The returned handle's `addRow` lets a DIFFERENT mock (e.g.
+ * mockAccessRequestsBulk's `onApprove`) push a newly-approved user into this
+ * same live list, so a cross-table refresh (approve -> pending AND users)
+ * can be exercised end to end.
+ */
+export async function mockAllowlistBulk(page, initialRows, { forceFailed = new Set(), delayMs = 0 } = {}) {
+  let rows = initialRows.map((r) => ({ ...r }));
+  const bulkCalls = [];
+  await page.route("**/api/admin/allowlist", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  await page.route("**/api/admin/allowlist/bulk-action", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const body = route.request().postDataJSON();
+    bulkCalls.push(body);
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    const { action, emails } = body;
+    let affected = 0;
+    const skipped = [];
+    const failed = [];
+    for (const email of emails) {
+      if (forceFailed.has(email)) { failed.push({ email, reason: "simulated failure" }); continue; }
+      const row = rows.find((r) => r.email === email);
+      if (!row) { skipped.push({ email, reason: "not on the allowlist" }); continue; }
+      if (action === "promote") {
+        if (row.is_admin) { skipped.push({ email, reason: "already an administrator" }); continue; }
+        row.is_admin = true; affected += 1;
+      } else if (action === "demote") {
+        if (!row.is_admin) { skipped.push({ email, reason: "not an administrator" }); continue; }
+        row.is_admin = false; affected += 1;
+      } else if (action === "delete") {
+        if (row.is_admin) { skipped.push({ email, reason: "is an administrator — demote first" }); continue; }
+        rows = rows.filter((r) => r.email !== email); affected += 1;
+      }
+    }
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, affected, skipped, failed }) });
+  });
+  return { getRows: () => rows, bulkCalls, addRow: (row) => { rows = [...rows, row]; } };
+}
+
+/**
+ * STATEFUL bulk-capable mock for the Pending access requests table:
+ *   GET  /api/admin/access-requests                -> the live `rows` array
+ *   POST /api/admin/access-requests/bulk {action,ids} -> approve/reject
+ *     removes the matching id from the pending set (mirrors the real backend
+ *     moving it out of status='pending'); an unknown id is skipped
+ *     "not found" (frontend/src/api.js: bulkAccessRequests(action, ids) ->
+ *     POST .../access-requests/bulk).
+ *
+ * `onApprove`/`onReject`, if given, are called with the FULL matched row
+ * right before it's removed, so a spec can wire the real cross-table effect
+ * (approve -> push a row into mockAllowlistBulk's list; reject -> push a row
+ * into mockDeniedRequestsBulk's list) without this mock knowing about either.
+ */
+export async function mockAccessRequestsBulk(page, initialRows, { onApprove, onReject } = {}) {
+  let rows = initialRows.map((r) => ({ ...r }));
+  const bulkCalls = [];
+  await page.route("**/api/admin/access-requests", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  await page.route("**/api/admin/access-requests/bulk", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const body = route.request().postDataJSON();
+    bulkCalls.push(body);
+    const { action, ids } = body;
+    let affected = 0;
+    const skipped = [];
+    for (const id of ids) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) { skipped.push({ id, reason: "not found" }); continue; }
+      if (action === "approve") onApprove?.(row);
+      if (action === "reject") onReject?.(row);
+      rows = rows.filter((r) => r.id !== id);
+      affected += 1;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, affected, skipped, failed: [] }) });
+  });
+  return { getRows: () => rows, bulkCalls };
+}
+
+/**
+ * STATEFUL bulk-capable mock for the Blocked users table:
+ *   GET  /api/admin/access-requests/denied                    -> the live `rows`
+ *   POST /api/admin/access-requests/denial/bulk {action:"unblock",ids} ->
+ *     removes the matching group; an unknown/non-denied id skips "not
+ *     blocked" (frontend/src/api.js: bulkClearDenials(ids) ->
+ *     POST .../access-requests/denial/bulk).
+ */
+export async function mockDeniedRequestsBulk(page, initialRows) {
+  let rows = initialRows.map((r) => ({ ...r }));
+  const bulkCalls = [];
+  await page.route("**/api/admin/access-requests/denied", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  await page.route("**/api/admin/access-requests/denial/bulk", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const body = route.request().postDataJSON();
+    bulkCalls.push(body);
+    const { ids } = body;
+    let affected = 0;
+    const skipped = [];
+    for (const id of ids) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) { skipped.push({ id, reason: "not blocked" }); continue; }
+      rows = rows.filter((r) => r.id !== id);
+      affected += 1;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, affected, skipped, failed: [] }) });
+  });
+  return { getRows: () => rows, bulkCalls };
+}
+
+/**
  * GET /api/admin/logs?... -> {records:[{ts,level,name,msg}]}. Drives the
  * Admin -> Logs subtab (frontend/src/api.js: logs(...) -> GET /api/admin/logs?...;
  * Admin.jsx's Logs() reads `d.records`).

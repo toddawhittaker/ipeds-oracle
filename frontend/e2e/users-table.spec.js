@@ -69,7 +69,11 @@ test("search filters live, shows the miss message, and clears", async ({ page })
   const search = page.getByRole("searchbox", { name: "Search email or note" });
   // Matches the NOTE column, case-insensitively.
   await search.fill("provost");
-  await expect(page.getByRole("cell", { name: "bob@example.edu" })).toBeVisible();
+  // exact:true -- the per-row selection checkbox's accessible name ("Select
+  // user bob@example.edu") otherwise substring-collides with this cell under
+  // Playwright's default (non-exact) name matching, making the locator
+  // strict-mode-ambiguous (H1 a11y fix added a leading checkbox <td>/row).
+  await expect(page.getByRole("cell", { name: "bob@example.edu", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "alice@example.edu" })).toHaveCount(0);
 
   // A miss shows the search-specific empty message (not "list is empty").
@@ -78,7 +82,7 @@ test("search filters live, shows the miss message, and clears", async ({ page })
 
   // The in-field clear control restores the full list and refocuses the box.
   await page.getByRole("button", { name: "Clear search" }).click();
-  await expect(page.getByRole("cell", { name: "alice@example.edu" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "alice@example.edu", exact: true })).toBeVisible();
   await expect(search).toBeFocused();
 });
 
@@ -88,7 +92,10 @@ test("a non-admin's Admin cell is blank — never a literal 0", async ({ page })
   await openUsers(page, [
     { email: "plain@example.edu", note: "staff", is_admin: 0, last_login: null },
   ]);
-  const adminCell = page.getByRole("row", { name: /plain@example\.edu/ }).getByRole("cell").nth(2);
+  // .nth(3): [checkbox, email, note, admin, last_login, actions] -- the H1 a11y
+  // fix (per-row checkbox moved from <th scope="row"> to a leading plain <td>)
+  // shifted every subsequent cell's positional index up by one.
+  const adminCell = page.getByRole("row", { name: /plain@example\.edu/ }).getByRole("cell").nth(3);
   await expect(adminCell).toHaveText("");
   // The Actions column carries a visible header, not just an sr-only label.
   await expect(page.getByRole("columnheader", { name: "Actions" })).toBeVisible();
@@ -104,7 +111,9 @@ test("clicking a header sorts and toggles direction with aria-sort", async ({ pa
   // Default is Email ascending.
   const emailHeader = page.getByRole("columnheader", { name: /Email/ });
   await expect(emailHeader).toHaveAttribute("aria-sort", "ascending");
-  const firstCell = () => page.getByRole("row").nth(1).getByRole("cell").first();
+  // .nth(1): the leading checkbox <td> is now index 0 (H1 a11y fix), so Email
+  // -- the first DATA column -- is index 1, not .first().
+  const firstCell = () => page.getByRole("row").nth(1).getByRole("cell").nth(1);
   await expect(firstCell()).toHaveText("alice@example.edu");
 
   // Click Email -> descending; alphabetically-last row floats to the top.
@@ -207,7 +216,9 @@ test("Remove user confirms by email, then deletes the row", async ({ page }) => 
   await dialog.getByRole("button", { name: "Remove user" }).click();
 
   await expect(page.getByRole("cell", { name: "colleague@example.edu" })).toHaveCount(0);
-  await expect(page.getByRole("cell", { name: "other@example.edu" })).toBeVisible();
+  // exact:true -- same strict-mode substring collision with the row's
+  // "Select user other@example.edu" checkbox as above.
+  await expect(page.getByRole("cell", { name: "other@example.edu", exact: true })).toBeVisible();
   expect(api.deletes).toEqual(["colleague@example.edu"]);
   // The trash button unmounted with its row; focus must land on the search box,
   // not drop to <body> (the toast never takes focus).
