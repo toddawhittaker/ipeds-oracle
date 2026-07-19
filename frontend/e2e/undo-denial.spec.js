@@ -12,8 +12,9 @@ import {
 // flow (GET /api/admin/access-requests/denied, DELETE .../{email}/denial).
 //
 // Contract:
-//   * heading "Blocked users", hidden entirely when the denied list is empty
-//     (but a LOAD FAILURE still shows a visible error — SEC #3).
+//   * a "Blocked users" sub-tab (always present); its panel shows the zero-state
+//     "No users are currently blocked." when empty, and a visible error on a
+//     LOAD FAILURE (SEC #3) — never silent absence.
 //   * Email column shows canon_email (the ACTUALLY-blocked mailbox) as the
 //     primary label with the original address(es) as context (SEC #1); Requested
 //     and Denied are SEPARATE, honestly-labeled columns (SEC #4).
@@ -33,8 +34,11 @@ import {
 //   * WCAG 2.5.3 Label in Name: the icon action's tooltip is contained in its
 //     accessible name.
 
+// Blocked users live behind the Users → "Blocked users" sub-tab; `tab` selects
+// which sub-tab to land on ("blocked" for the blocked-table tests, "pending"
+// for the Reject flow). Pass tab:null to stay on the default (Current) tab.
 async function openAllowlistTab(
-  page, { allowlist = [], reqs = [], denied = [], deniedHttpStatus = 200 } = {},
+  page, { allowlist = [], reqs = [], denied = [], deniedHttpStatus = 200, tab = "blocked" } = {},
 ) {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
@@ -43,6 +47,8 @@ async function openAllowlistTab(
   await mockDeniedRequests(page, denied, { httpStatus: deniedHttpStatus });
   await page.goto("/");
   await page.getByRole("link", { name: "Admin" }).click();
+  if (tab === "blocked") await page.getByRole("tab", { name: /Blocked users/ }).click();
+  else if (tab === "pending") await page.getByRole("tab", { name: /Pending requests/ }).click();
 }
 
 const ONE_DENIED_GROUP = [
@@ -89,12 +95,16 @@ test.describe("blocked users table + unblock", () => {
     await expect(row).toContainText("onlytagged+newsletter@example.edu");
   });
 
-  test("the 'Blocked users' heading is absent when nothing is denied, present when a denial exists", async ({ page }) => {
+  test("the Blocked tab shows the zero-state when nothing is denied, and the row when a denial exists", async ({ page }) => {
     await openAllowlistTab(page, { denied: [] });
+    // No "Blocked users" heading now — the sub-tab labels the panel; the empty
+    // category shows a clear zero-state message.
     await expect(page.getByRole("heading", { name: "Blocked users" })).toHaveCount(0);
+    await expect(page.getByText("No users are currently blocked.")).toBeVisible();
 
     await openAllowlistTab(page, { denied: ONE_DENIED_GROUP });
-    await expect(page.getByRole("heading", { name: "Blocked users" })).toBeVisible();
+    await expect(page.getByText("No users are currently blocked.")).toHaveCount(0);
+    await expect(unblockBtn(page)).toBeVisible();
   });
 
   test("SEC #4: Requested and Denied are separate, honestly-labeled columns", async ({ page }) => {
@@ -122,10 +132,10 @@ test.describe("blocked users table + unblock", () => {
     expect(clear.calls[0]).toBe("victim@example.edu");
   });
 
-  test("Unblock: clearing the LAST block moves focus to a stable control, not <body>", async ({ page }) => {
-    // When the only blocked row is cleared, the whole Blocked section (and its
-    // search box) unmounts — focus must fall back to the always-present add-email
-    // input, never drop to <body> (WCAG 2.4.3).
+  test("Unblock: clearing the LAST block keeps focus on a stable control, not <body>", async ({ page }) => {
+    // Clearing the only blocked row leaves the table's zero-state, but the table
+    // (the always-present Blocked tab) stays mounted — focus lands on the blocked
+    // search box, never dropping to <body> (WCAG 2.4.3).
     await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
@@ -139,12 +149,13 @@ test.describe("blocked users table + unblock", () => {
     });
     await page.goto("/");
     await page.getByRole("link", { name: "Admin" }).click();
+    await page.getByRole("tab", { name: /Blocked users/ }).click();
 
     await unblockBtn(page).click();
     await page.getByRole("dialog").getByRole("button", { name: "Allow new request" }).click();
 
-    await expect(page.getByRole("heading", { name: "Blocked users" })).toHaveCount(0);
-    await expect(page.getByLabel("Email", { exact: true })).toBeFocused();
+    await expect(page.getByText("No users are currently blocked.")).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Search blocked users by email" })).toBeFocused();
   });
 
   test("Unblock: cancelling the modal fires no DELETE", async ({ page }) => {
@@ -185,7 +196,7 @@ test.describe("blocked users table + unblock", () => {
       { id: 3, email: "victim+newsletter@example.edu", reason: null, status: "pending",
         created_at: 1_700_000_000 },
     ];
-    await openAllowlistTab(page, { reqs });
+    await openAllowlistTab(page, { reqs, tab: "pending" });
 
     await page.getByRole("button", { name: "Reject request from victim+newsletter@example.edu" }).click();
     const dialog = page.getByRole("alertdialog");

@@ -59,7 +59,7 @@ test.describe("top nav -- real links", () => {
     await expect(adminLink).not.toHaveAttribute("aria-current", "page");
 
     await adminLink.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
     await expect(adminLink).toHaveAttribute("aria-current", "page");
     await expect(chatLink).not.toHaveAttribute("aria-current", "page");
   });
@@ -73,7 +73,7 @@ test.describe("top nav -- real links", () => {
     await expect(adminLink).toBeFocused();
     await page.keyboard.press("Enter");
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
   });
 });
 
@@ -127,7 +127,7 @@ test.describe("Admin subtabs -- real links", () => {
     // Space here must NOT navigate.
     await page.keyboard.press(" ");
     await page.waitForTimeout(150);
-    expect(new URL(page.url()).pathname).toBe("/admin/users");
+    expect(new URL(page.url()).pathname).toBe("/admin/users/current");
 
     await page.keyboard.press("Enter");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");

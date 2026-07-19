@@ -170,7 +170,7 @@ test.describe("mid-stream navigation", () => {
     // background rather than being aborted.
     await page.waitForTimeout(150);
     await page.getByRole("link", { name: "Admin", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 
     // Let the abandoned stream finish landing while Chat is unmounted.
     await page.waitForTimeout(700);

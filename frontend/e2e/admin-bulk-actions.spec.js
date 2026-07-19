@@ -265,6 +265,8 @@ test.describe("cross-table refresh", () => {
     await mockDeniedRequestsBulk(page, []);
     await page.goto("/");
     await page.getByRole("link", { name: "Admin" }).click();
+    // Act on the Pending sub-tab.
+    await page.getByRole("tab", { name: /Pending requests/ }).click();
 
     await page.getByRole("row", { name: /newcomer@example\.edu/ })
       .getByRole("checkbox").check();
@@ -272,11 +274,12 @@ test.describe("cross-table refresh", () => {
     await page.getByRole("dialog").getByRole("button", { name: "Approve 1 request", exact: true }).click();
 
     await expect(page.locator(".toast-msg")).toHaveText("One request approved.");
-    // Pending table empties back to its zero-state...
+    // Pending table (still the active tab) empties back to its zero-state...
     await expect(page.getByText("No access requests are awaiting review.")).toBeVisible();
-    // ...AND the newly-approved address now appears in the Users table, with
-    // NO extra reload action from the admin.
-    await expect(page.getByRole("cell", { name: "newcomer@example.edu", exact: true })).toBeVisible();
     expect(pending.bulkCalls).toEqual([{ action: "approve", ids: [1] }]);
+    // ...AND switching to Current users shows the newly-approved address there,
+    // with NO extra reload action from the admin (the approve refreshed both).
+    await page.getByRole("tab", { name: /Current users/ }).click();
+    await expect(page.getByRole("cell", { name: "newcomer@example.edu", exact: true })).toBeVisible();
   });
 });

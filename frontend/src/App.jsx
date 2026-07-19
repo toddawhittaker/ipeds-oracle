@@ -21,8 +21,12 @@ function currentTheme() {
 // non-admin's /admin/x -> / bounce.
 function routeAnnouncement(pathname) {
   if (pathname === "/admin" || pathname.startsWith("/admin/")) {
-    const tab = pathname.split("/")[2];
-    return tab ? `Admin — ${tab[0].toUpperCase() + tab.slice(1)}` : "Admin";
+    const [, , tab, sub] = pathname.split("/");
+    if (!tab) return "Admin";
+    const cap = (s) => s[0].toUpperCase() + s.slice(1);
+    // Name the Users sub-tab too (Admin — Users — Pending) so switching between
+    // Current/Pending/Blocked isn't a silent navigation to a screen reader.
+    return sub ? `Admin — ${cap(tab)} — ${cap(sub)}` : `Admin — ${cap(tab)}`;
   }
   return "Chat";
 }
@@ -166,9 +170,12 @@ function Shell() {
             no-data CTA (Chat.jsx) tells them to go to Admin -> Imports. An
             admin WITH data keeps landing on Users, unchanged. */}
         <Route path="/admin" element={adminOnly(
-          <Navigate to={user.has_data ? "/admin/users" : "/admin/imports"} replace />,
+          <Navigate to={user.has_data ? "/admin/users/current" : "/admin/imports"} replace />,
         )} />
         <Route path="/admin/:tab" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} />)} />
+        {/* Users splits into path sub-tabs (/admin/users/current|pending|blocked);
+            AdminRoute reads both params. Other tabs ignore :sub. */}
+        <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

@@ -36,6 +36,7 @@ export default defineConfig({
         "src/tabledata.js",
         "src/typeahead.js",
         "src/userlist.js",
+        "src/usertabs.js",
       ],
       all: true,
       thresholds: {

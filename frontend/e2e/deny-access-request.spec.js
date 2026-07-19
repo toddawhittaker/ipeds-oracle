@@ -10,12 +10,18 @@ import {
 
 // The Pending access requests TABLE (a <DataTable> config in Admin.jsx): compact
 // icon Approve/Reject actions, an app-styled confirmation modal per action
-// (neutral Approve, danger Reject — never window.confirm), the attention
-// treatment + count badge while there's something to review, and the zero-state
-// when there isn't. Search/sort/pagination themselves are covered by the shared
-// DataTable specs (users-table.spec.js) + datatable.test.js.
+// (neutral Approve, danger Reject — never window.confirm), the count badge on
+// the Pending sub-tab (accent "attention" tone while there's something to
+// review), and the zero-state when there isn't. Search/sort/pagination
+// themselves are covered by the shared DataTable specs (users-table.spec.js) +
+// datatable.test.js.
+//
+// Pending requests now live behind the Users → "Pending requests" sub-tab; the
+// helper lands there so each test acts on the pending table directly.
 
-async function openAllowlistTab(page, { allowlist = [], reqs = [], denied = [] } = {}) {
+const openPending = (page) => page.getByRole("tab", { name: /Pending requests/ }).click();
+
+async function openAllowlistTab(page, { allowlist = [], reqs = [], denied = [], gotoPending = true } = {}) {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAllowlist(page, allowlist);
@@ -23,6 +29,7 @@ async function openAllowlistTab(page, { allowlist = [], reqs = [], denied = [] }
   await mockDeniedRequests(page, denied);
   await page.goto("/");
   await page.getByRole("link", { name: "Admin" }).click();
+  if (gotoPending) await openPending(page);
 }
 
 const TWO_PENDING = [
@@ -43,19 +50,21 @@ test.describe("pending access requests table", () => {
     await expect(page.getByRole("cell", { name: "one@example.edu", exact: true })).toBeVisible();
   });
 
-  test("the attention badge shows the count; the zero-state replaces it when empty", async ({ page }) => {
+  test("the Pending tab's count badge carries the attention tone; the zero-state shows when empty", async ({ page }) => {
     await openAllowlistTab(page, { reqs: TWO_PENDING });
-    // Visible count badge + an SR-only "awaiting review" phrase, and the accent
-    // attention treatment on the section (not an error look).
-    await expect(page.locator(".pending-badge")).toContainText("2");
-    await expect(page.getByText("2 awaiting review")).toBeAttached();
-    await expect(page.locator(".requests-section.attention")).toBeVisible();
+    // The count lives on the sub-tab; its accent "attention" tone (not an error
+    // look) shows while requests await, and an SR-only line announces the count.
+    const pendingTab = page.getByRole("tab", { name: /Pending requests/ });
+    await expect(pendingTab).toContainText("2");
+    await expect(pendingTab.locator(".usertab-badge.attention")).toBeVisible();
+    await expect(page.getByText("2 access requests awaiting review")).toBeAttached();
 
-    // With nothing pending: no attention styling, a clear empty note, no table.
+    // With nothing pending: the badge drops its attention tone (neutral inactive
+    // styling), and the pending panel shows the clear zero-state message.
     await openAllowlistTab(page, { reqs: [] });
+    const emptyTab = page.getByRole("tab", { name: /Pending requests/ });
+    await expect(emptyTab.locator(".usertab-badge.attention")).toHaveCount(0);
     await expect(page.getByText("No access requests are awaiting review.")).toBeVisible();
-    await expect(page.locator(".requests-section.attention")).toHaveCount(0);
-    await expect(page.getByRole("table", { name: "Pending access requests" })).toHaveCount(0);
   });
 
   test("Reject: confirm -> POST fires the deny for the right address", async ({ page }) => {
@@ -116,17 +125,18 @@ test.describe("pending access requests table", () => {
 
     await page.goto("/");
     await page.getByRole("link", { name: "Admin" }).click();
+    await openPending(page);
     await expect(page.getByRole("cell", { name: "one@example.edu", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Reject request from one@example.edu" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Reject request" }).click();
 
-    // The last pending row is gone -> the zero-state replaces the table, so the
-    // pending search unmounts. Focus must fall back to the always-present
-    // add-email input, never drop to <body> (WCAG 2.4.3).
+    // The last pending row is gone -> the table shows its zero-state but STAYS
+    // mounted (it's the always-present Pending tab now), so focus lands on the
+    // pending search box, never dropping to <body> (WCAG 2.4.3).
     await expect(page.getByText("No access requests are awaiting review.")).toBeVisible();
     await expect(page.getByRole("button", { name: /Reject request from/ })).toHaveCount(0);
-    await expect(page.getByLabel("Email", { exact: true })).toBeFocused();
+    await expect(page.getByRole("searchbox", { name: "Search pending requests by email" })).toBeFocused();
   });
 
   test("Approve: confirm -> POST allowlist for the right address + success toast", async ({ page }) => {
@@ -137,6 +147,7 @@ test.describe("pending access requests table", () => {
     await mockDeniedRequests(page, []);
     await page.goto("/");
     await page.getByRole("link", { name: "Admin" }).click();
+    await openPending(page);
 
     await page.getByRole("button", { name: "Approve request from one@example.edu" }).click();
     const dialog = page.getByRole("dialog");
@@ -160,6 +171,7 @@ test.describe("pending access requests table", () => {
     await mockDeniedRequests(page, []);
     await page.goto("/");
     await page.getByRole("link", { name: "Admin" }).click();
+    await openPending(page);
 
     await page.getByRole("button", { name: "Approve request from one@example.edu" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();

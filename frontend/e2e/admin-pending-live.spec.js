@@ -35,8 +35,9 @@ const NEWCOMER = {
 test.describe("Allowlist live refresh", () => {
   test("a request filed while the panel is open appears on tab return -- no reload", async ({ page }) => {
     const { reqsHandle } = await openAllowlist(page, { reqs: [] });
+    await page.getByRole("tab", { name: /Pending requests/ }).click();
 
-    // Nothing pending yet -> the zero-state note, no table.
+    // Nothing pending yet -> the pending panel's zero-state.
     await expect(page.getByText("No access requests are awaiting review.")).toBeVisible();
 
     // A request arrives from someone else; the admin took no action here.
@@ -55,6 +56,7 @@ test.describe("Allowlist live refresh", () => {
   test("a live refresh does not steal focus from the pending search box", async ({ page }) => {
     // With a pending row present the pending table (and its search box) render.
     await openAllowlist(page, { reqs: [NEWCOMER] });
+    await page.getByRole("tab", { name: /Pending requests/ }).click();
 
     const search = page.getByRole("searchbox", { name: "Search pending requests by email" });
     await search.focus();
@@ -66,27 +68,5 @@ test.describe("Allowlist live refresh", () => {
     await page.evaluate(() => globalThis.document.dispatchEvent(new Event("visibilitychange")));
     await page.waitForTimeout(150);
     await expect(search).toBeFocused();
-  });
-
-  test("all three section headers render at the same size", async ({ page }) => {
-    // Needs a denied row so the Blocked-users section (hidden when empty) shows.
-    await openAllowlist(page, {
-      reqs: [NEWCOMER],
-      denied: [{ id: 1, canon_email: "blocked@example.edu", emails: ["blocked@example.edu"],
-        created_at: 1_700_000_000, denied_at: 1_700_000_100 }],
-    });
-
-    // Structural locators (not accessible name): the "Pending requests" h2 also
-    // contains the count badge, so getByRole name matching is unreliable here.
-    const sizeOf = (loc) => loc.evaluate((el) => globalThis.getComputedStyle(el).fontSize);
-    const [pending, users, blocked] = await Promise.all([
-      sizeOf(page.locator("section.requests-section > h2")),
-      sizeOf(page.locator(".panel > h2")), // the bare "Users" header
-      sizeOf(page.locator(".blocked-section h2")),
-    ]);
-    // Regression: .blocked-section h2 used to pin font-size:15px, making the
-    // Blocked header visibly smaller than the other two (default h2 size).
-    expect(blocked).toBe(users);
-    expect(pending).toBe(users);
   });
 });

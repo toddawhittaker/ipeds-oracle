@@ -60,8 +60,8 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   // navigating anywhere else. Skills is still visited last purely to keep
   // this happy-path spec's flow linear; the Skills-unmount crash regression
   // itself is covered separately below.
-  await expect(page.getByRole("heading", { name: "Pending requests" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "newperson@example.edu", exact: true })).toBeVisible();
+  // Current users is the default sub-tab: its table + add form show now; the
+  // Pending / Blocked tables live behind their own tabs (checked below).
   // exact:true -- the Users table's leading selection checkbox (H1 a11y fix)
   // has accessible name "Select user user@example.edu", which otherwise
   // substring-collides with this cell under Playwright's default matching.
@@ -77,6 +77,11 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
     note: "added via e2e",
     is_admin: false,
   });
+
+  // Switch to the Pending requests sub-tab to see its row (the tab's accessible
+  // name carries the count badge, e.g. "Pending requests 1").
+  await page.getByRole("tab", { name: /Pending requests/ }).click();
+  await expect(page.getByRole("cell", { name: "newperson@example.edu", exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Imports" }).click();
   await expect(page.getByText("IPEDS2526.accdb")).toBeVisible();

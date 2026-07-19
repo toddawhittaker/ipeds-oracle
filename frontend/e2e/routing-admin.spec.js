@@ -11,9 +11,12 @@ import {
 } from "./mocks.js";
 
 // Client-side routing for Admin:
-//   /admin       -> redirect /admin/users
-//   /admin/:tab  -> Admin, tab from the URL. Valid tabs: users, imports,
-//                   usage, skills, logs. Unknown tab -> redirect /admin/users.
+//   /admin              -> redirect /admin/users/current
+//   /admin/:tab         -> Admin, tab from the URL. Valid tabs: users, imports,
+//                          usage, skills, logs. Unknown tab -> /admin/users/current.
+//   /admin/users/:sub   -> Users section, sub-tab from the URL (current/pending/
+//                          blocked). Bare /admin/users or an invalid sub ->
+//                          /admin/users/current (see admin-users-tabs.spec.js).
 //
 // "Allowlist" is renamed to "Users" in the UI label + route + internal tab
 // key ONLY -- the underlying GET/POST /api/admin/allowlist endpoints are
@@ -39,7 +42,7 @@ test.describe("admin routing", () => {
 
     await page.goto("/admin");
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
     const usersSub = page.getByRole("link", { name: "Users" });
     await expect(usersSub).toHaveAttribute("aria-current", "page");
     // exact:true -- the Users table's leading selection checkbox (H1 a11y fix)
@@ -72,7 +75,7 @@ test.describe("admin routing", () => {
     await page.goto("/");
     await page.getByRole("link", { name: "Admin", exact: true }).click();
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
   });
 
   test("/admin/bogus (unknown tab) redirects to /admin/users", async ({ page }) => {
@@ -80,7 +83,7 @@ test.describe("admin routing", () => {
 
     await page.goto("/admin/bogus");
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
     await expect(page.getByRole("link", { name: "Users" })).toHaveAttribute("aria-current", "page");
   });
 
@@ -100,7 +103,7 @@ test.describe("admin routing", () => {
     await expect(page.getByRole("link", { name: "Imports" })).toHaveAttribute("aria-current", "page");
 
     await page.goBack();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
     await expect(page.getByRole("link", { name: "Users" })).toHaveAttribute("aria-current", "page");
   });
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, Navigate, useParams } from "react-router-dom";
+import { NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
 import { estimateIntegrate } from "./estimate.js";
@@ -15,6 +15,7 @@ import { useConfirm } from "./ConfirmModal.jsx";
 import { useTableSelection } from "./useTableSelection.js";
 import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
+import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
@@ -98,29 +99,67 @@ const TERMINAL_JOB_STATUSES = ["failed", "swapped"];
 // drives, which are unchanged by this rename).
 export const ADMIN_TABS = ["users", "imports", "usage", "skills", "logs"];
 
-// Reads the :tab route param and either renders Admin with it or bounces an
-// unknown tab back to /admin/users. Kept separate from Admin itself so Admin
-// stays a plain {tab} prop component, easy to reason about without also
-// threading route matching through it.
+// Former standalone user-management pages redirect INTO the Users sub-tabs, so
+// old bookmarks/links keep working. These segments are deliberately NOT in
+// ADMIN_TABS, and the alias map is checked first, so an alias never collides
+// with a real tab.
+const USERS_TAB_ALIASES = { pending: "pending", blocked: "blocked", allowlist: "current" };
+
+// The active Users sub-tab is remembered per browser session so returning via
+// the bare /admin/users link (the outer subtab nav) reopens the tab you left —
+// the spec's "...or was previously selected during the current administrative
+// session". A :sub present in the URL always wins over this.
+const USERS_SUBTAB_STORAGE_KEY = "admin.usersSubTab";
+function rememberedSubTab() {
+  try { return resolveSubTab(sessionStorage.getItem(USERS_SUBTAB_STORAGE_KEY)); }
+  catch { return DEFAULT_SUBTAB; }
+}
+function rememberSubTab(sub) {
+  try { sessionStorage.setItem(USERS_SUBTAB_STORAGE_KEY, sub); } catch { /* storage disabled */ }
+}
+
+// Reads the :tab (and, for Users, :sub) route params and renders Admin, or
+// redirects: a legacy alias -> its Users sub-tab; an unknown tab -> Users; a
+// bare/invalid Users sub -> the remembered-or-default sub, canonicalized into
+// the URL so every view has a distinct, bookmarkable address; a stray :sub on a
+// non-Users tab -> the bare tab. Kept separate from Admin so Admin stays a
+// plain props component.
 export function AdminRoute({ me, onDataChanged }) {
-  const { tab } = useParams();
-  if (!ADMIN_TABS.includes(tab)) return <Navigate to="/admin/users" replace />;
+  const { tab, sub } = useParams();
+  if (Object.prototype.hasOwnProperty.call(USERS_TAB_ALIASES, tab)) {
+    return <Navigate to={`/admin/users/${USERS_TAB_ALIASES[tab]}`} replace />;
+  }
+  if (!ADMIN_TABS.includes(tab)) return <Navigate to="/admin/users/current" replace />;
+  if (tab === "users") {
+    const resolved = resolveSubTab(sub);
+    // Bare /admin/users (sub == null) restores the remembered sub-tab; an
+    // invalid sub falls back to the default. Either way, redirect so the URL
+    // always names the concrete active tab.
+    if (sub !== resolved) {
+      return <Navigate to={`/admin/users/${sub == null ? rememberedSubTab() : resolved}`} replace />;
+    }
+    return <Admin me={me} tab={tab} sub={resolved} onDataChanged={onDataChanged} />;
+  }
+  if (sub != null) return <Navigate to={`/admin/${tab}`} replace />;
   return <Admin me={me} tab={tab} onDataChanged={onDataChanged} />;
 }
 
-export default function Admin({ me, tab, onDataChanged }) {
+export default function Admin({ me, tab, sub, onDataChanged }) {
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => (
-          <NavLink key={t} to={`/admin/${t}`} end
+          // Users drops `end` so it stays active across its sub-tab paths
+          // (/admin/users/current|pending|blocked, all prefixes of /admin/users);
+          // the other tabs match exactly.
+          <NavLink key={t} to={`/admin/${t}`} end={t !== "users"}
                    className={({ isActive }) => (isActive ? "on" : "")}>
             {t[0].toUpperCase() + t.slice(1)}
           </NavLink>
         ))}
       </nav>
-      {tab === "users" && <Allowlist me={me} />}
+      {tab === "users" && <Allowlist me={me} sub={sub} />}
       {tab === "imports" && <Imports onDataChanged={onDataChanged} />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills />}
@@ -163,7 +202,10 @@ const fmtApprovalDate = (d = new Date()) => d.toLocaleDateString();
 const ALLOWLIST_POLL_MS = 15000;
 const ALLOWLIST_RELOAD_COOLDOWN_MS = 1500;
 
-function Allowlist({ me }) {
+function Allowlist({ me, sub }) {
+  const navigate = useNavigate();
+  // Roving-focus refs for the sub-tab buttons: keyboard nav focuses the target.
+  const tabRefs = useRef({});
   const [rows, setRows] = useState([]);
   const [reqs, setReqs] = useState([]);
   const [denied, setDenied] = useState([]);
@@ -268,6 +310,12 @@ function Allowlist({ me }) {
     return loaded;
   };
   useEffect(() => { load(); }, []);
+
+  // Remember the active sub-tab for this browser session so the outer "Users"
+  // subtab link (which points at the bare /admin/users) reopens where the admin
+  // left off. The URL's :sub always wins when present; this only feeds
+  // AdminRoute's bare-path redirect.
+  useEffect(() => { rememberSubTab(sub); }, [sub]);
 
   // Keep the three lists live so a request filed by someone else -- or a change
   // made in another admin session -- appears without a manual page reload:
@@ -727,87 +775,74 @@ function Allowlist({ me }) {
     }];
   }
 
+  // --- Sub-tab navigation ------------------------------------------------------
+  // A tab click / arrow key routes to /admin/users/<key>; the URL's :sub is the
+  // single source of truth for which panel shows (so Back/Forward + deep links
+  // just work). navigate() pushes, so each tab switch is its own history entry.
+  const goSub = (key) => navigate(`/admin/users/${key}`);
+  // Automatic activation: an arrow/Home/End moves selection immediately and
+  // carries focus to the newly-active tab (its node persists across the
+  // re-render; the rAF lets the new tabIndex settle first).
+  function onTabKeyDown(e) {
+    const action = { ArrowLeft: "left", ArrowRight: "right", Home: "home", End: "end" }[e.key];
+    if (!action) return;
+    e.preventDefault();
+    const nextKey = subTabKeyForArrow(sub, action);
+    goSub(nextKey);
+    requestAnimationFrame(() => tabRefs.current[nextKey]?.focus());
+  }
+  // Per-tab record totals for the count badges — ALL records in each category,
+  // never the DataTable's filtered view. Blocked is null on a load failure so
+  // the badge is suppressed rather than falsely reading "0 blocked".
+  const SUBTAB_COUNT = {
+    current: rows.length,
+    pending: reqs.length,
+    blocked: deniedError ? null : denied.length,
+  };
+
   return (
     <div className="panel">
-      {/* Action outcomes surface via the app-wide toast (useToast) — overlays,
-          auto-fades, announced once — not an in-flow flash box. Pending requests
-          get a restrained attention treatment (accent border + tinted header +
-          count badge) ONLY while there's something to review, so it draws the eye
-          without ever looking like an error. Empty = plain header + a clear
-          "nothing awaiting" note (distinct from a search-miss). */}
-      <section className={"requests-section" + (reqs.length ? " attention" : "")}>
-        <h2 className="section-head">
-          Pending requests
-          {reqs.length > 0 && (
-            <span className="pending-badge">
-              <span aria-hidden="true">· {reqs.length}</span>
-              <span className="sr-only">{reqs.length} awaiting review</span>
-            </span>
-          )}
-        </h2>
-        {reqs.length === 0 ? (
-          <p className="empty-note">No access requests are awaiting review.</p>
-        ) : (
-          <DataTable
-            ref={pendingTableRef}
-            rows={reqs}
-            rowKey={(r) => r.id}
-            config={PENDING_CONFIG}
-            ariaLabel="Pending access requests"
-            searchPlaceholder="Search by email"
-            searchLabel="Search pending requests by email"
-            sizeLabel="Requests per page"
-            emptyNoMatch="No pending requests match your search."
-            initialSort={{ key: "requested", dir: "desc" }}
-            sortLabels={{ email: "email", requested: "requested" }}
-            selectable
-            selectionId={(r) => r.id}
-            selectionMode={pendingSel.mode}
-            selectedIds={pendingSel.selectedIds}
-            rowSelectLabel={pendingRowSelectLabel}
-            onToggleRow={(r, checked) => pendingSel.toggleRow(r.id, checked)}
-            onTogglePage={(pageRows, checked) =>
-              pendingSel.togglePage(pageRows.map((r) => r.id), checked)}
-            onSearchChange={(q) => onTableSearchChange(pendingSel, q)}
-            renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
-              <BulkBar
-                nouns={PENDING_CONFIG.nouns}
-                mode={pendingSel.mode}
-                count={pendingSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
-                totalEligible={filteredEligibleRows.length}
-                pageEligibleCount={pageEligibleRows.length}
-                pageSelectedCount={pendingSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
-                onSelectAllMatching={pendingSel.selectAllMatching}
-                onClear={pendingSel.clear}
-                onFocusFallback={() => pendingTableRef.current?.focusSearch()}
-                actions={pendingBulkActions(filteredEligibleRows)}
-              />
-            )}
-            columns={[
-              { key: "email", label: "Email", sortable: true, colClass: "col-req-email",
-                cellClass: "cell-trunc", cellTitle: (r) => r.email },
-              { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
-                render: (r) => fmtDateTime(r.created_at) },
-            ]}
-            renderActions={(r) => (
-              <>
-                <button type="button" className="icon-btn tip" data-tip="Approve request"
-                        aria-label={`Approve request from ${r.email}`}
-                        onClick={() => approve(r.email)}>
-                  <IconCheck />
-                </button>
-                <button type="button" className="icon-btn danger tip" data-tip="Reject request"
-                        aria-label={`Reject request from ${r.email}`}
-                        onClick={() => reject(r.email)}>
-                  <IconClose />
-                </button>
-              </>
-            )}
-          />
-        )}
-      </section>
-
       <h2>Users</h2>
+      <p className="usertabs-intro muted">
+        Manage who can sign in, review pending access requests, and see who is blocked.
+      </p>
+      {/* The three user tables are TABS, not a stacked page: only the active
+          panel shows; inactive panels are `hidden`, so each DataTable's own
+          search/sort/page state — and each table's lifted selection — survives a
+          tab switch (resetting only when the admin leaves the Users section).
+          Each tab's count reflects ALL records in that category (never the
+          filtered view); Pending gets a restrained accent badge ONLY while
+          requests await review — never an error tone. */}
+      <div className="usertabs" role="tablist" aria-label="User management"
+           onKeyDown={onTabKeyDown}>
+        {USER_SUBTABS.map(({ key, label }) => {
+          const count = SUBTAB_COUNT[key];
+          const active = sub === key;
+          const tone = key === "pending" ? pendingBadgeTone(reqs.length) : "idle";
+          return (
+            <button key={key} type="button" role="tab" id={`usertab-${key}`}
+                    ref={(el) => { tabRefs.current[key] = el; }}
+                    aria-controls={`userpanel-${key}`} aria-selected={active}
+                    tabIndex={active ? 0 : -1}
+                    className={"usertab" + (active ? " on" : "")}
+                    onClick={() => goSub(key)}>
+              <span className="usertab-label">{label}</span>
+              {count != null && <span className={`usertab-badge ${tone}`}>{count}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {/* Announce the pending workload + its changes to a screen reader (the
+          accent badge alone is color/positional). */}
+      <span className="sr-only" aria-live="polite">
+        {reqs.length > 0
+          ? `${reqs.length} access request${reqs.length === 1 ? "" : "s"} awaiting review`
+          : ""}
+      </span>
+
+      {/* ---- Current users ---- */}
+      <div role="tabpanel" id="userpanel-current" aria-labelledby="usertab-current"
+           className="usertab-panel" hidden={sub !== "current"}>
       <form className="row" onSubmit={add}>
         <label htmlFor="allow-email" className="sr-only">Email</label>
         <input id="allow-email" ref={addEmailRef} type="email" placeholder="email" required value={email}
@@ -1020,20 +1055,76 @@ jamie@example.com,External reviewer,`}</pre>
           );
         }}
       />
+      </div>
 
-      {/* Plain subdued section, not the --user tint used above for "needs
-          your action" — a block is the opposite: something already handled
-          that's merely visible/auditable here. Hidden entirely when there's
-          nothing denied AND nothing failed to load — same as the
-          pending-requests block above, except a load failure (SEC #3) must
-          still show something rather than looking identical to "empty". */}
-      {/* Blocked users. Hidden entirely when nothing is denied AND nothing
-          failed to load — EXCEPT a load failure (SEC #3) must still show a
-          visible error rather than looking identical to "nobody is blocked",
-          the one thing this section exists to state with confidence. */}
-      {(denied.length > 0 || deniedError) && (
-        <section className="blocked-section">
-          <h2>Blocked users</h2>
+      {/* ---- Pending requests ---- */}
+      <div role="tabpanel" id="userpanel-pending" aria-labelledby="usertab-pending"
+           className="usertab-panel" hidden={sub !== "pending"}>
+        <DataTable
+          ref={pendingTableRef}
+          rows={reqs}
+          rowKey={(r) => r.id}
+          config={PENDING_CONFIG}
+          ariaLabel="Pending access requests"
+          searchPlaceholder="Search by email"
+          searchLabel="Search pending requests by email"
+          sizeLabel="Requests per page"
+          emptyNoData="No access requests are awaiting review."
+          emptyNoMatch="No pending requests match your search."
+          initialSort={{ key: "requested", dir: "desc" }}
+          sortLabels={{ email: "email", requested: "requested" }}
+          selectable
+          selectionId={(r) => r.id}
+          selectionMode={pendingSel.mode}
+          selectedIds={pendingSel.selectedIds}
+          rowSelectLabel={pendingRowSelectLabel}
+          onToggleRow={(r, checked) => pendingSel.toggleRow(r.id, checked)}
+          onTogglePage={(pageRows, checked) =>
+            pendingSel.togglePage(pageRows.map((r) => r.id), checked)}
+          onSearchChange={(q) => onTableSearchChange(pendingSel, q)}
+          renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => (
+            <BulkBar
+              nouns={PENDING_CONFIG.nouns}
+              mode={pendingSel.mode}
+              count={pendingSel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
+              totalEligible={filteredEligibleRows.length}
+              pageEligibleCount={pageEligibleRows.length}
+              pageSelectedCount={pendingSel.count(new Set(pageEligibleRows.map((r) => r.id)))}
+              onSelectAllMatching={pendingSel.selectAllMatching}
+              onClear={pendingSel.clear}
+              onFocusFallback={() => pendingTableRef.current?.focusSearch()}
+              actions={pendingBulkActions(filteredEligibleRows)}
+            />
+          )}
+          columns={[
+            { key: "email", label: "Email", sortable: true, colClass: "col-req-email",
+              cellClass: "cell-trunc", cellTitle: (r) => r.email },
+            { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
+              render: (r) => fmtDateTime(r.created_at) },
+          ]}
+          renderActions={(r) => (
+            <>
+              <button type="button" className="icon-btn tip" data-tip="Approve request"
+                      aria-label={`Approve request from ${r.email}`}
+                      onClick={() => approve(r.email)}>
+                <IconCheck />
+              </button>
+              <button type="button" className="icon-btn danger tip" data-tip="Reject request"
+                      aria-label={`Reject request from ${r.email}`}
+                      onClick={() => reject(r.email)}>
+                <IconClose />
+              </button>
+            </>
+          )}
+        />
+      </div>
+
+      {/* ---- Blocked users ---- */}
+      {/* Always a tab now (so its count + empty-state show even when nobody is
+          blocked); a load failure (SEC #3) still renders a visible error rather
+          than looking identical to "nobody is blocked". */}
+      <div role="tabpanel" id="userpanel-blocked" aria-labelledby="usertab-blocked"
+           className="usertab-panel" hidden={sub !== "blocked"}>
           {deniedError ? (
             // Its own class (not a bare `.notice`): a persistent in-flow error,
             // distinct from transient toasts, and off `.notice` so it doesn't
@@ -1041,11 +1132,13 @@ jamie@example.com,External reviewer,`}</pre>
             <p className="denied-error" role="alert">{deniedError}</p>
           ) : (
             <>
-              <p className="denied-help">
-                Rejecting a request blocks that address from asking again. Allowing
-                a blocked user only lets them request access again — it grants no
-                access and sends no email.
-              </p>
+              {denied.length > 0 && (
+                <p className="denied-help">
+                  Rejecting a request blocks that address from asking again. Allowing
+                  a blocked user only lets them request access again — it grants no
+                  access and sends no email.
+                </p>
+              )}
               <DataTable
                 ref={blockedTableRef}
                 rows={denied}
@@ -1055,6 +1148,7 @@ jamie@example.com,External reviewer,`}</pre>
                 searchPlaceholder="Search by email"
                 searchLabel="Search blocked users by email"
                 sizeLabel="Blocked users per page"
+                emptyNoData="No users are currently blocked."
                 emptyNoMatch="No blocked users match your search."
                 initialSort={{ key: "denied", dir: "desc" }}
                 sortLabels={{ email: "email", requested: "requested", denied: "denied" }}
@@ -1131,8 +1225,7 @@ jamie@example.com,External reviewer,`}</pre>
               />
             </>
           )}
-        </section>
-      )}
+      </div>
     </div>
   );
 }
