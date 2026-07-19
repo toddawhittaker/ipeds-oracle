@@ -78,6 +78,11 @@ You need a built `ipeds.db` at the repo root for real queries (see
 sent, so sign‑in works locally — copy the `…/verify?token=` link from the
 uvicorn log and open it (it lands on a "Sign in as …?" confirmation page).
 
+For a quick **single‑port build to click around** (the SPA built and served from
+`:8000`, no Vite dev proxy), the repo‑root **`Makefile`** wraps it: `make up`
+(LLM key, no Resend — sign‑in links go to `server.log`), `make full` (also sends
+real email), `make down` to stop. Details in `.claude/skills/interactive-testing`.
+
 Config is env‑driven via `pydantic-settings`; every setting lives in
 [`.env.example`](.env.example). The default model is `deepseek/deepseek-v4-flash`
 escalating to `deepseek/deepseek-v4-pro`; `LLM_MAX_TOOL_ITERS` caps the agent's
