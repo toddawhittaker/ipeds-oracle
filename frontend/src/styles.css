@@ -398,14 +398,21 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    pills (vs the larger empty-state query slips), with the ochre/accent hover. */
 .suggestions { margin: 12px 0 2px; }
 .suggestions-label { display: block; margin-bottom: 8px; }
-.suggestions-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+/* One row of equal-width chips that wrap their own text (neater than a stack of
+   single-line pills); collapses to a stack only when the row gets too narrow. */
+.suggestions-chips { display: flex; gap: 8px; align-items: stretch; }
 .suggestion-chip {
+  flex: 1 1 0; min-width: 0;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
-  border-radius: 999px; padding: 6px 13px; font-size: 13px; line-height: 1.3;
+  border-radius: 12px; padding: 8px 13px; font-size: 13px; line-height: 1.35;
   text-align: left; cursor: pointer; transition: border-color .12s, color .12s;
 }
 .suggestion-chip:hover, .suggestion-chip:focus-visible { border-color: var(--accent); color: var(--accent); }
 .suggestion-chip:disabled { opacity: .55; cursor: default; }
+@media (max-width: 560px) {
+  .suggestions-chips { flex-wrap: wrap; }
+  .suggestion-chip { flex-basis: 100%; }
+}
 
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
