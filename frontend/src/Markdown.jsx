@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Chart from "./Chart.jsx";
+import SqlBlock from "./SqlBlock.jsx";
 import { normalizeMarkdown } from "./mdnorm.js";
 import { chartSpecFromTable, downloadCsv, extractTable } from "./tabledata.js";
 
@@ -41,17 +42,21 @@ function DataTable({ node, ...props }) {
 
 // A ```chart fenced block (compact JSON spec) renders as a Recharts figure; a
 // memoized spec (keyed by the raw text) keeps the Chart from remounting/losing
-// its type on re-render. Bad JSON falls back to the raw code block.
+// its type on re-render. Bad JSON falls back to the raw code block. A ```sql
+// fence is syntax-highlighted (highlight-only — the author's own layout is kept,
+// no reformat) so SQL reads the same everywhere it appears.
 function Pre({ node, ...props }) {
   const child = props.children;
   const cn = child?.props?.className || "";
   const isChart = /\blanguage-chart\b/.test(cn);
-  const raw = isChart ? codeText(child.props.children) : "";
+  const isSql = /\blanguage-sql\b/.test(cn);
+  const raw = (isChart || isSql) ? codeText(child.props.children) : "";
   const spec = useMemo(() => {
     if (!isChart) return null;
     try { return JSON.parse(raw.trim()); } catch { return null; }
   }, [isChart, raw]);
   if (spec) return <Chart spec={spec} />;
+  if (isSql) return <SqlBlock code={raw.replace(/\n$/, "")} format={false} />;
   return <pre {...props} />;
 }
 

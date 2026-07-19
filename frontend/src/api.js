@@ -27,6 +27,7 @@ export const api = {
 
   conversations: () => j("GET", "/api/chat/conversations"),
   conversation: (id) => j("GET", `/api/chat/conversations/${id}`),
+  renameConversation: (id, title) => j("PATCH", `/api/chat/conversations/${id}`, { title }),
   deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
   csvUrl: (msgId) => `/api/chat/messages/${msgId}/download.csv`,
 

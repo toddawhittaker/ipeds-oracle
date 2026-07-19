@@ -246,6 +246,10 @@ MIGRATIONS: list[tuple[int, str]] = [
     # pre-existing denied rows keep NULL (rendered "—"), which is honest: the app
     # genuinely never recorded their denial time.
     (11, "ALTER TABLE access_requests ADD COLUMN denied_at REAL;"),
+    # The assistant's progress trace (status/reasoning/SQL/tool events, as a JSON
+    # list of {kind,text} items) — persisted alongside sql_log so the "Thinking"
+    # disclosure survives a reload/reopen, not just the live in-session turn.
+    (12, "ALTER TABLE messages ADD COLUMN thinking TEXT;"),
 ]
 
 

@@ -48,6 +48,22 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _trace_item(ev: dict) -> dict | None:
+    """Map a stream event to a persisted "Thinking" trace item, mirroring the
+    frontend's live addThought() 1:1 so a reloaded trace renders identically to
+    the in-session one (Chat.jsx ThinkingTrace). Non-trace events -> None."""
+    t = ev.get("type")
+    if t == "status":
+        return {"kind": "status", "text": ev.get("text", "")}
+    if t == "sql":
+        return {"kind": "sql", "text": ev.get("sql", "")}
+    if t == "thinking":
+        return {"kind": "reason", "text": ev.get("text", "")}
+    if t == "tool":
+        return {"kind": "tool", "text": f"{ev.get('name', '')}{' ✓' if ev.get('ok') else ' ✗'}"}
+    return None
+
+
 def _load_history(con: sqlite3.Connection, conv_id: int) -> list[dict]:
     rows = con.execute(
         "SELECT role, content FROM messages WHERE conversation_id=? "
@@ -126,12 +142,14 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
         if cached:
             answer = cached["answer_md"]
-            yield _sse({"type": "status", "text": "Matched a recent question — reusing its query."})
+            status = "Matched a recent question — reusing its query."
+            yield _sse({"type": "status", "text": status})
             yield _sse({"type": "answer", "text": answer})
             user_msg_id, msg_id = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer,
                 sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
-                model="cache", tokens=0, cached=True, ok=True)
+                model="cache", tokens=0, cached=True, ok=True,
+                thinking=[{"kind": "status", "text": status}])
             done = {"type": "done", "cached": True, "message_id": msg_id,
                     "user_message_id": user_msg_id}
             if is_new and answer:
@@ -147,15 +165,21 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
         if skill_ids:
             await run_in_threadpool(skills.bump_hits, skill_ids)
 
-        # 3) Run the agent, streaming progress.
+        # 3) Run the agent, streaming progress. Accumulate the same trace the
+        # frontend builds live, so it can be persisted and the "Thinking"
+        # disclosure survives a reload (not just the in-session turn).
         result = None
         answer = ""
+        thinking: list[dict] = []
         async for ev in stream_agent(question, history=history, skills_block=skills_block):
             if ev["type"] == "done":
                 result = ev["result"]
                 continue
             if ev["type"] == "answer":
                 answer = ev["text"]
+            item = _trace_item(ev)
+            if item:
+                thinking.append(item)
             yield _sse(ev)
 
         if result is None:
@@ -169,7 +193,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             ok=result.error is None, escalated=result.escalated,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
-            cost=result.cost)
+            cost=result.cost, thinking=thinking)
 
         # 4) Cache the successful answer for reuse (first-turn, context-free only).
         if not history and result.error is None and answer and result.sql_log:
@@ -204,7 +228,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
-             cost=0.0):
+             cost=0.0, thinking=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload)."""
@@ -217,8 +241,9 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         user_msg_id = ucur.lastrowid
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
-            "model_used, tokens, created_at) VALUES (?,?,?,?,?,?,?)",
-            (conv_id, "assistant", answer, json.dumps(sql_log), model, tokens, now))
+            "thinking, model_used, tokens, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (conv_id, "assistant", answer, json.dumps(sql_log),
+             json.dumps(thinking or []), model, tokens, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -263,11 +288,47 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         if not owns:
             raise HTTPException(404, "Not found.")
         rows = con.execute(
-            "SELECT id, role, content, sql_log, model_used, created_at "
+            "SELECT id, role, content, sql_log, thinking, model_used, created_at "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()
+
+
+class RenameRequest(BaseModel):
+    title: str
+
+
+# The UI truncates sidebar titles anyway; anything longer than this is
+# noise (and an unbounded write). Mirrored client-side by the rename input's
+# maxLength — keep the two in sync.
+MAX_TITLE_LEN = 200
+
+
+@router.patch("/conversations/{conv_id}")
+def rename_conversation(conv_id: int, body: RenameRequest,
+                        user: sqlite3.Row = Depends(current_user)):
+    """Rename a conversation the caller owns.
+
+    Metadata-only by contract: deliberately does NOT touch updated_at, so
+    renaming an old chat never jumps it to the top of the recency-ordered
+    sidebar (list_conversations orders by updated_at DESC)."""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "Title can't be empty.")
+    if len(title) > MAX_TITLE_LEN:
+        raise HTTPException(400, f"Title is too long (max {MAX_TITLE_LEN} characters).")
+    con = connect()
+    try:
+        owns = con.execute("SELECT 1 FROM conversations WHERE id=? AND user_id=?",
+                           (conv_id, user["id"])).fetchone()
+        if not owns:
+            raise HTTPException(404, "Not found.")
+        con.execute("UPDATE conversations SET title=? WHERE id=?", (title, conv_id))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "title": title}
 
 
 @router.delete("/conversations/{conv_id}")

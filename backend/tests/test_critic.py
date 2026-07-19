@@ -503,6 +503,65 @@ def test_requery_confirming_same_answer_is_not_a_revision():
     assert calls["chat"] == 4, calls
 
 
+def test_requery_rebuttal_with_review_meta_reemits_clean_draft():
+    # THE observed regression (memory critic-revision-leak): after a REVISE
+    # verdict the model DOES re-run SQL (sql_log grows) but only to CONFIRM the
+    # original number, then writes a rebuttal that addresses the reviewer and
+    # lands on different prose — same answer, new text. `requeried and changed`
+    # alone treats that as a genuine correction and ships the leaked
+    # "The reviewer's concern…" meta. The review-meta backstop must catch it:
+    # re-emit the clean draft, critic_revised False, no reviewer wording.
+    calls = {"chat": 0, "critic": 0}
+    draft = "Institutions awarded 144,671 master's degrees in Education in 2023."
+    rebuttal = (
+        "The reviewer's concern is understandable, but the 2-digit rollup row "
+        "(cipcode='13') does exist and correctly represents the sum. I verified "
+        "by also summing the 6-digit detail rows — both give exactly 144,671 "
+        "master's degrees, so the original results are sound.")
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE '
+                                 'cipcode=\'13\' AND awlevel=7"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 2:
+            return {"choices": [{"message": {"content": draft}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 3:  # revision round: model re-queries to double-check
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c2", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE '
+                                 'SUBSTR(cipcode,1,3)=\'13.\' AND length(cipcode)=7 '
+                                 'AND awlevel=7"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        # ...then argues back with different prose but the SAME number
+        return {"choices": [{"message": {"content": rebuttal}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    async def fake_review(question, sql_log, answer):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="Avoid CIP rollup double count.",
+                        description="cipcode='13' may double count across levels")
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = critic.review
+    assert res.answer == draft, res.answer
+    assert res.critic_revised is False, res.critic_revised
+    lowered = res.answer.lower()
+    for leak in ("reviewer", "i verified", "the original results"):
+        assert leak not in lowered, (leak, res.answer)
+
+
 def test_revision_message_reaches_the_model():
     captured = {"msgs": None}
     calls = {"chat": 0}
@@ -602,6 +661,8 @@ def run():
           test_rebuttal_without_new_sql_reemits_clean_draft)
     check("a requery confirming the same answer is not a revision",
           test_requery_confirming_same_answer_is_not_a_revision)
+    check("a requery rebuttal that leaks reviewer meta re-emits the clean draft",
+          test_requery_rebuttal_with_review_meta_reemits_clean_draft)
     check("the revision message reaches the model",
           test_revision_message_reaches_the_model)
     check("a no-SQL (refusal) answer skips the critic",

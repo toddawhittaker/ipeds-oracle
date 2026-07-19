@@ -38,6 +38,9 @@ async function openDeleteModal(page, { delayMs = 0, failTimes = 0 } = {}) {
   await page.goto("/");
   await page.getByRole("link", { name: "+ New chat" }).waitFor();
   const opener = page.getByRole("button", { name: "Delete chat: Chat One" });
+  // Hover-revealed control (pointer-events:none until the row is hovered):
+  // force-hover positions the mouse over the row so the trash turns clickable.
+  await opener.hover({ force: true });
   await opener.click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();

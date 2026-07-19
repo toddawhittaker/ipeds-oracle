@@ -139,16 +139,24 @@ export async function mockConversations(page, initial = []) {
  * received, so a spec can assert a fetch for this id never fired at all (e.g.
  * a route param that must never reach the network, or a live SSE stream that
  * must not trigger a redundant reload right after the URL flips to it).
+ *
+ * `delayMs` defers the response so the fetch is genuinely in flight — the
+ * window in which Chat.jsx renders its loading skeleton
+ * (chat-interactions.spec.js asserts it appears then resolves away).
  */
-export async function mockConversation(page, id, messages, { httpStatus = 200, detail } = {}) {
+export async function mockConversation(page, id, messages,
+                                       { httpStatus = 200, detail, delayMs = 0 } = {}) {
   let calls = 0;
   const body = (messages || []).map((m) => ({
     ...m,
+    // The server serializes both sql_log and thinking as JSON strings.
     sql_log: m.sql_log !== undefined ? JSON.stringify(m.sql_log) : undefined,
+    thinking: m.thinking !== undefined ? JSON.stringify(m.thinking) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     calls += 1;
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     if (httpStatus === 200) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     } else {
@@ -157,6 +165,29 @@ export async function mockConversation(page, id, messages, { httpStatus = 200, d
     }
   });
   return { get calls() { return calls; } };
+}
+
+/**
+ * PATCH /api/chat/conversations/:id -> {ok, title} (or a non-200 for the
+ * revert-on-failure path). Registered for the PATCH verb only, so it can
+ * coexist with mockConversation's GET route on the same id. Returns live
+ * `.calls`: the parsed PATCH bodies received, in order.
+ */
+export async function mockRenameConversation(page, id, { httpStatus = 200 } = {}) {
+  const calls = [];
+  await page.route(`**/api/chat/conversations/${id}`, async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    const body = route.request().postDataJSON();
+    calls.push(body);
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, title: (body.title || "").trim() }) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: "Nope." }) });
+    }
+  });
+  return { calls };
 }
 
 /**

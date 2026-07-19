@@ -34,6 +34,7 @@ export default defineConfig({
         "src/mdnorm.js",
         "src/selection.js",
         "src/tabledata.js",
+        "src/typeahead.js",
         "src/userlist.js",
       ],
       all: true,

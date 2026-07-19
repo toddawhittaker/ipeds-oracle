@@ -223,16 +223,15 @@ test.describe("mid-stream navigation", () => {
     expect(conv7.calls).toBe(0);
 
     // The trace for THIS turn must still be there -- proves the gate doesn't
-    // blanket-suppress the turn that actually owns the current view.
-    // Chat.jsx gives BOTH the "Thinking" trace and the "SQL" log the SAME
-    // `details.sql` class -- scope by the summary text each carries so the
-    // two don't collide under strict mode.
-    const sqlDetails = page.locator("details.sql").filter({ hasText: "SQL" });
-    const thinkingDetails = page.locator("details.sql").filter({ hasText: "Thinking" });
-    await expect(sqlDetails.getByText("SQL", { exact: true })).toBeVisible();
-    await sqlDetails.locator("summary").click();
-    await expect(sqlDetails.getByText("SELECT 1")).toBeVisible();
-    await expect(thinkingDetails.getByText("Thinking", { exact: true })).toBeVisible();
+    // blanket-suppress the turn that actually owns the current view. Chat.jsx
+    // renders the Thinking/SQL traces as toggle buttons whose panels open
+    // full-width below the actions row; open the SQL one and confirm its query.
+    const sqlToggle = page.getByRole("button", { name: "SQL", exact: true });
+    const thinkingToggle = page.getByRole("button", { name: "Thinking", exact: true });
+    await expect(sqlToggle).toBeVisible();
+    await expect(thinkingToggle).toBeVisible();
+    await sqlToggle.click();
+    await expect(page.locator(".trace-panel .sqlblock")).toContainText("SELECT 1");
   });
 
   // REGRESSION guard: `busy` is a single shared piece of Chat state, not

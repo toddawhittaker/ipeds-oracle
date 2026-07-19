@@ -256,6 +256,58 @@ def test_normal_flow_titles_a_new_conversation():
                   for x in convs), convs
 
 
+def test_thinking_trace_is_persisted_and_returned_on_reload():
+    """The assistant's progress trace (status/reasoning/SQL/tool) must be stored
+    and returned by GET /conversations/{id}, so the 'Thinking' disclosure
+    survives a reload — not just the live in-session turn. Regression guard for
+    the reopened-chat case where SQL persisted but Thinking vanished."""
+    async def _traced_agent(question, *, history=None, skills_block=""):
+        yield {"type": "thinking", "text": "reasoning about the question"}
+        yield {"type": "status", "text": "Running query…"}
+        yield {"type": "sql", "sql": "SELECT 1"}
+        yield {"type": "tool", "name": "run_sql", "ok": True}
+        yield {"type": "answer", "text": "the answer"}
+        yield {"type": "done", "result": AgentResult(
+            answer="the answer", model_used="test", sql_log=["SELECT 1"],
+            prompt_tokens=1, completion_tokens=1)}
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        chat_router.stream_agent = _traced_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a traced question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+        # Reload the conversation (what the client does on reopen/refresh).
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        trace = json.loads(assistant["thinking"])
+        # Mirrors the frontend's live addThought() mapping exactly.
+        assert trace == [
+            {"kind": "reason", "text": "reasoning about the question"},
+            {"kind": "status", "text": "Running query…"},
+            {"kind": "sql", "text": "SELECT 1"},
+            {"kind": "tool", "text": "run_sql ✓"},
+        ], trace
+        # The user message carries no trace: NULL, like its NULL sql_log. The
+        # client maps null -> [] on load (Chat.jsx), so no Thinking toggle shows.
+        user_msg = next(m for m in msgs if m["role"] == "user")
+        assert user_msg["thinking"] is None, user_msg["thinking"]
+
+
 def test_retrieved_skills_bump_their_hit_count():
     with TestClient(app) as c:
         _login(c)
@@ -394,6 +446,62 @@ def test_conversation_crud():
         assert missing_delete.status_code == 404, missing_delete.text
 
 
+def test_conversation_rename():
+    """PATCH /conversations/{id} renames without reordering the sidebar.
+
+    Regressions caught: (a) losing the ownership check (a user renaming
+    someone else's chat); (b) a rename bumping updated_at and silently
+    reshuffling the recency-ordered sidebar; (c) blank/whitespace titles
+    wiping a chat's name."""
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a rename test question")
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+        before = next(x for x in c.get("/api/chat/conversations").json()
+                      if x["id"] == conv_id)
+
+        renamed = c.patch(f"/api/chat/conversations/{conv_id}",
+                          json={"title": "  My renamed chat  "})
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json() == {"ok": True, "title": "My renamed chat"}, renamed.text
+
+        after = next(x for x in c.get("/api/chat/conversations").json()
+                     if x["id"] == conv_id)
+        assert after["title"] == "My renamed chat", after
+        # A rename is metadata-only: updated_at (the sidebar's recency order)
+        # must NOT move, or renaming an old chat would jump it to the top.
+        assert after["updated_at"] == before["updated_at"], (before, after)
+
+        # Blank or whitespace-only titles are rejected, not stored.
+        blank = c.patch(f"/api/chat/conversations/{conv_id}", json={"title": "   "})
+        assert blank.status_code == 400, blank.text
+        # Absurdly long titles are rejected (the UI caps at the same bound).
+        long = c.patch(f"/api/chat/conversations/{conv_id}", json={"title": "x" * 201})
+        assert long.status_code == 400, long.text
+
+        missing = c.patch("/api/chat/conversations/999999", json={"title": "t"})
+        assert missing.status_code == 404, missing.text
+
+
+def test_conversation_rename_not_owned_404():
+    """Another signed-in user renaming my conversation must 404 (never 200,
+    and indistinguishable from not-found so ids can't be probed)."""
+    with TestClient(app) as c:
+        _login(c, "admin@example.edu")
+        r = _post_turn(c, "admin's own conversation")
+        conv_id = next(e["id"] for e in _parse_sse(r.text) if e["type"] == "conversation")
+
+        c.post("/api/admin/allowlist", json={"email": "renamer@example.edu"})
+        atok = captured["approved_link"].split("token=")[1]
+        c2 = TestClient(app)
+        assert c2.post("/api/auth/verify", json={"token": atok}).status_code == 200
+        r2 = c2.patch(f"/api/chat/conversations/{conv_id}", json={"title": "mine now"})
+        assert r2.status_code == 404, r2.text
+        # And the title is untouched.
+        mine = c.get("/api/chat/conversations").json()
+        assert next(x for x in mine if x["id"] == conv_id)["title"] != "mine now"
+
+
 # ---------------------------------------------------------------------------
 # CSV download error branches (the success path is covered in test_backend.py)
 # ---------------------------------------------------------------------------
@@ -513,6 +621,8 @@ def run():
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
     check("a normal (non-cached) successful turn titles a new conversation",
           test_normal_flow_titles_a_new_conversation)
+    check("the thinking trace is persisted and returned on reload",
+          test_thinking_trace_is_persisted_and_returned_on_reload)
     check("retrieved few-shot skills bump their hit count",
           test_retrieved_skills_bump_their_hit_count)
     check("a critic-driven correction records a candidate lesson",
@@ -520,6 +630,10 @@ def run():
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
+    check("conversation rename: trims, keeps sidebar order, rejects blank/overlong",
+          test_conversation_rename)
+    check("conversation rename by a non-owner 404s and changes nothing",
+          test_conversation_rename_not_owned_404)
     check("no-data guard: admin sees Admin->Imports wording and stream_agent never runs",
           test_no_data_guard_admin_wording_and_skips_agent)
     check("no-data guard: non-admin sees wait-for-administrator wording, agent never runs",

@@ -296,9 +296,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
 .newchat { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; text-align: center; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
-.convo-row { display: flex; align-items: center; border-radius: 8px; }
-.convo-row:hover { background: var(--bg); }
-.convo-row.on { background: var(--user); }
+.convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
+/* Reveal-trigger states share the row background so the actions' fade (below)
+   always blends into the row, whether shown by hover or keyboard focus. */
+.convo-row:hover, .convo-row:focus-within { background: var(--bg); }
+.convo-row.on, .convo-row.on:hover, .convo-row.on:focus-within { background: var(--user); }
 .convo {
   flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; color: var(--muted);
@@ -309,14 +311,35 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    offset on this full-width child gets clipped by the scroll container. */
 .convo:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .convo-row.on .convo { color: var(--text); }
-.convo-del {
-  flex: none; width: 28px; height: 28px; margin-right: 4px; border: none;
-  background: none; color: var(--muted); line-height: 1; border-radius: 6px;
-  opacity: 0; display: grid; place-items: center;
+/* Row action buttons (rename + delete): the title link spans the FULL row width
+   (nothing steals its space), and these float OVER its right end — revealed only
+   on row hover or keyboard focus. A left-fading gradient (matched to the row bg)
+   lets the buttons sit over the truncated title without clashing with its text.
+   pointer-events toggles with visibility so the hidden buttons never intercept a
+   click meant for the title underneath; opacity (not display) keeps them in tab
+   order for keyboard users. */
+.convo-actions {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  display: flex; align-items: center; gap: 2px; padding: 0 4px 0 28px;
+  border-radius: 0 8px 8px 0; opacity: 0; pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--bg) 45%);
 }
-.convo-row:hover .convo-del, .convo-del:focus-visible { opacity: 1; }
-.convo-del:hover { color: var(--danger); background: var(--bg); }
-.thread { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.convo-row.on .convo-actions { background: linear-gradient(to right, transparent, var(--user) 45%); }
+.convo-row:hover .convo-actions, .convo-actions:focus-within { opacity: 1; pointer-events: auto; }
+.convo-act {
+  flex: none; width: 28px; height: 28px; border: none;
+  background: none; color: var(--muted); line-height: 1; border-radius: 6px;
+  display: grid; place-items: center; cursor: pointer;
+}
+.convo-act:hover { color: var(--text); background: var(--bg); }
+.convo-del:hover { color: var(--danger); }
+/* Inline rename input takes the row over entirely while active. */
+.convo-rename {
+  flex: 1; min-width: 0; margin: 2px; padding: 6px 8px; font-size: 14px;
+  font-family: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--accent); border-radius: 6px; outline: none;
+}
+.thread { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 /* The scroll container is full-width (so the scrollbar sits at the far right,
    clear of the text), while the reading column inside stays centered and capped
    so answers don't stretch edge-to-edge on wide monitors. */
@@ -362,10 +385,23 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    the full reading column so the actions bar underneath is full width. */
 .msg.assistant { width: 100%; }
 .msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
-.msg-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
+.msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
-details.sql summary { cursor: pointer; color: var(--muted); }
-details.sql pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+/* Thinking/SQL disclosure toggles: a caret that rotates when their panel is
+   open (aria-expanded), so the button reads as the control for the full-width
+   panel rendered under the row. */
+.trace-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.trace-toggle::before {
+  content: ""; width: 0; height: 0; border-left: 4px solid currentColor;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform .12s ease;
+}
+@media (prefers-reduced-motion: reduce) { .trace-toggle::before { transition: none; } }
+.trace-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+/* The expanded trace: a full-width block beneath the actions row (never inside
+   the flex row), so opening it can't push the copy buttons around. */
+.trace-panel { margin-top: 8px; }
+.trace-panel .sql-copy { margin-top: 0; }
 /* The import report + streamed log wrap instead of scrolling horizontally, so
    they don't sprout their own inner scrollbars nested inside the page scroll.
    The (potentially long) log is a single bounded vertical-scroll box; the short
@@ -383,16 +419,62 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
 .thinking-head { display: flex; align-items: center; gap: 10px; }
 .thoughts { margin-top: 8px; }
-.thoughts summary, details.sql summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.thoughts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .thought-list { max-height: 260px; overflow: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .thought-line { font-size: 13px; }
-.thought-sql {
-  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
-  padding: 8px 10px; margin: 0; font-size: 12.5px; overflow-x: auto; white-space: pre;
-}
 .thought-reason {
   margin: 0; font-size: 13px; color: var(--muted); font-style: italic;
   white-space: pre-wrap; line-height: 1.5;
+}
+
+/* Formatted + highlighted SQL (SqlBlock.jsx). react-syntax-highlighter runs
+   with useInlineStyles=false, so it emits Prism token CLASS NAMES only — we
+   color them here per theme (no inline styles, no CSP style exception). The
+   formatter already indents, so we wrap long lines instead of scrolling. */
+.sqlblock {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; margin: 0; font-size: 12.5px; line-height: 1.45;
+  font-family: var(--mono); color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto;
+}
+.sqlblock code { font-family: inherit; }
+/* SQL *inside the Thinking trace*: the trace is a flex column, which by default
+   shrinks a tall child to a sliver (the "single line" bug — a 100-line query
+   squished to 16px). Pin it (flex:none so it keeps its content height) and cap
+   a large query to an ~8-10 line scrollable window; a small one shows in full.
+   The dedicated SQL dropdown block (no .thought-sql) stays uncapped — that's the
+   user's deliberate "show me just the SQL" view. */
+.thought-sql { margin: 0; flex: none; max-height: 15em; overflow-y: auto; }
+/* In the finished full-width panel the trace grows with the page (each SQL block
+   is already capped), so drop the compact live max-height + outer scroll that
+   would otherwise nest a second scrollbar around the capped blocks. */
+.trace-panel .thought-list { max-height: none; overflow: visible; }
+/* Prism token palette — light theme (over --bg). */
+.sqlblock .token.comment { color: var(--muted); font-style: italic; }
+.sqlblock .token.keyword { color: var(--accent-d); font-weight: 600; }
+.sqlblock .token.string { color: #1c7a4b; }
+.sqlblock .token.number,
+.sqlblock .token.boolean { color: #a15c00; }
+.sqlblock .token.function,
+.sqlblock .token.builtin { color: #8a4b12; }
+.sqlblock .token.operator,
+.sqlblock .token.punctuation { color: var(--muted); }
+.sqlblock .token.null,
+.sqlblock .token.keyword.null { color: var(--danger); }
+/* Dark theme token overrides (brighter, over the dark --bg). */
+:root[data-theme="dark"] .sqlblock .token.keyword { color: var(--accent-d); }
+:root[data-theme="dark"] .sqlblock .token.string { color: #6fd39a; }
+:root[data-theme="dark"] .sqlblock .token.number,
+:root[data-theme="dark"] .sqlblock .token.boolean { color: var(--warn); }
+:root[data-theme="dark"] .sqlblock .token.function,
+:root[data-theme="dark"] .sqlblock .token.builtin { color: var(--ochre); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sqlblock .token.keyword { color: var(--accent-d); }
+  :root:not([data-theme]) .sqlblock .token.string { color: #6fd39a; }
+  :root:not([data-theme]) .sqlblock .token.number,
+  :root:not([data-theme]) .sqlblock .token.boolean { color: var(--warn); }
+  :root:not([data-theme]) .sqlblock .token.function,
+  :root:not([data-theme]) .sqlblock .token.builtin { color: var(--ochre); }
 }
 /* Claude-style floating composer: a rounded box that sits inside the chat area
    with the send button pinned to its bottom-right (fixed size — it never grows
@@ -417,6 +499,47 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 }
 .send:not(:disabled):hover { background: var(--accent-d); }
 .send:disabled { opacity: .4; }
+/* While generating, Send becomes Stop — same footprint (no layout shift),
+   danger color so it's unmistakably an interrupt. */
+.send.stop { background: var(--danger); }
+.send.stop:hover { filter: brightness(1.1); background: var(--danger); }
+
+/* "Jump to latest" pill — floats over the thread just above the composer,
+   only while the viewer is scrolled up. */
+.jump-latest {
+  position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; z-index: 4;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 999px; padding: 7px 14px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(20, 30, 50, .16);
+}
+.jump-latest:hover { border-color: var(--accent); color: var(--accent); }
+.jump-latest:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Stopped-generation note — quiet serif italic, like the margin notes. */
+.stopped-note {
+  margin: 0; font-family: var(--serif); font-style: italic;
+  color: var(--muted); font-size: 14.5px;
+}
+
+/* Conversation-loading skeleton: three ghost bars where the thread will be.
+   Shimmer is opacity-only (cheap, no layout) and disabled under
+   prefers-reduced-motion — a static ghost still reads as "loading". */
+.convo-skeleton { display: flex; flex-direction: column; gap: 18px; padding: 8px 2px; }
+.skel {
+  border-radius: 10px; background: var(--user); height: 44px; opacity: .7;
+}
+.skel-user { width: 46%; align-self: flex-end; }
+.skel-answer { width: 88%; height: 72px; }
+.skel-answer.short { width: 62%; height: 40px; }
+@media (prefers-reduced-motion: no-preference) {
+  .skel { animation: skel-pulse 1.2s ease-in-out infinite; }
+  @keyframes skel-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .85; } }
+}
+
+/* Copy-SQL sits inside the SQL disclosure, above the statements. */
+.sql-copy { display: inline-block; margin: 6px 0 2px; font-size: 12.5px; }
 .theme-toggle { font-size: 16px; line-height: 1; padding: 2px 4px; }
 
 /* Edit/Rerun under a user prompt — quiet, reveal on hover/focus. */
@@ -763,7 +886,7 @@ details.sql pre { background: var(--bg); border: 1px solid var(--line); border-r
 .lesson-example { margin-top: 10px; }
 .lesson-example summary { cursor: pointer; }
 .lesson-example .qtext { margin: 6px 0 4px; font-style: italic; }
-.lesson-example pre { margin: 6px 0 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12.5px; }
+.lesson-example .sqlblock { margin: 6px 0 0; }
 .lesson-edit { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
 .lesson-field { display: flex; flex-direction: column; gap: 4px; }
 /* Accent border + a fill that differs from the card, matching .edit-box (the

@@ -206,8 +206,12 @@ test.describe("chat routing", () => {
     await expect(page.getByText("Here you go.")).toBeVisible();
 
     // Per-row accessible name (WCAG 4.1.2, see web/e2e/delete-focus.spec.js):
-    // every trash button used to be identically named "Delete chat".
-    await page.getByRole("button", { name: "Delete chat: CA nursing associate's degrees" }).click();
+    // every trash button used to be identically named "Delete chat". The trash
+    // is hover-revealed (pointer-events:none until the row is hovered), so
+    // force-hover it first to make the click land.
+    const trash = page.getByRole("button", { name: "Delete chat: CA nursing associate's degrees" });
+    await trash.hover({ force: true });
+    await trash.click();
     // Confirm via the app-styled modal (scoped so "Delete chat" doesn't collide
     // with the row trash buttons).
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
@@ -233,6 +237,7 @@ test.describe("chat routing", () => {
     await expect(page.getByText("Here you go.")).toBeVisible();
 
     const otherRow = page.locator(".convo-row", { has: page.getByRole("link", { name: "Other chat" }) });
+    await otherRow.hover(); // reveal the hover-only trash button before clicking it
     await otherRow.getByRole("button", { name: "Delete chat: Other chat" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
 

@@ -43,13 +43,13 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await expect(page.getByRole("cell", { name: "CA" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "100" })).toBeVisible();
 
-  // SQL log is present behind its own <details>/<summary> (scope to it — the
-  // same SQL also appears in the "Thoughts" trace).
-  const sqlSummary = page.getByText("SQL", { exact: true });
-  await expect(sqlSummary).toBeVisible();
-  await sqlSummary.click();
-  const sqlDetails = page.locator("details").filter({ has: page.getByText("SQL", { exact: true }) });
-  await expect(sqlDetails.locator("pre")).toContainText(SQL);
+  // SQL log is behind a toggle button; clicking it reveals a full-width panel
+  // with the formatted, syntax-highlighted query (the formatter re-spaces the
+  // source, so assert on a stable literal that survives reformatting).
+  const sqlToggle = page.getByRole("button", { name: "SQL", exact: true });
+  await expect(sqlToggle).toBeVisible();
+  await sqlToggle.click();
+  await expect(page.locator(".trace-panel .sqlblock")).toContainText("51.3801");
 
   // Each rendered table has its own client-side CSV download button.
   await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();

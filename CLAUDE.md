@@ -73,6 +73,41 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users`,
   `/admin/:tab`, `/verify`, catch-all → `/`. FastAPI's SPA catch-all serves
   `index.html` for all of them, so a hard refresh / deep link never 404s.
+  Chat interaction contracts (all Playwright-pinned in
+  `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
+  abandon-and-drain, never a network abort** — it bumps the existing
+  `turnToken` so the view detaches while the request drains and the server
+  still persists the answer (an aborted mid-turn request is the known
+  server-side data-loss path — see the open chat.py pre-`gen()` backlog item;
+  don't "optimize" Stop into an AbortController until that's fixed).
+  Auto-scroll **follows only while the viewer is near the bottom** (scrolled
+  up = never yanked; a "Jump to latest" pill is the way back). Conversation
+  switches show a skeleton, never the empty-state prompt. A printable key
+  typed with nothing editable focused redirects into the composer
+  (`typeahead.js`, vitest-pinned). Conversations can be **renamed inline**
+  (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
+  never touch `updated_at`, or renaming an old chat would reorder the
+  recency-sorted sidebar). An answer's **Thinking / SQL traces are
+  mutually-exclusive disclosure toggles** whose panel opens **full-width below**
+  the actions row (never as an inline `<details>` inside the flex row, which
+  widened its own cell and shoved the copy buttons around); opening one closes
+  the other. The **Thinking trace is persisted** (migration 12,
+  `messages.thinking` — a JSON list of `{kind,text}` items built server-side in
+  `chat.py`'s stream loop via `_trace_item`, mirroring the frontend's live
+  `addThought` 1:1) so it **survives a reload/reopen just like `sql_log`**, not
+  only the live in-session turn. **All SQL anywhere in the UI** renders through
+  `SqlBlock.jsx` (the chat Thinking trace + SQL dropdown, the Admin → Skills
+  worked example, and any ```sql fence in an answer) — pretty-printed with
+  `sql-formatter` (a one-line query becomes a readable indented block, wrapping
+  instead of scrolling; `format={false}` highlights-only for author-written
+  fences) and syntax-highlighted with `react-syntax-highlighter` (`PrismLight`,
+  SQL grammar only) run with `useInlineStyles={false}` so it emits Prism token
+  **class names** that `styles.css` colors per light/dark theme — no inline
+  styles, so it needs no CSP `style-src` exception of its own. SQL **inside the
+  Thinking trace** is height-capped to a ~9–10 line scroll window (`.thought-sql`
+  needs `flex:none` or the flex-column trace squishes a tall query to one line —
+  the recurring "single line SQL" bug); the standalone **SQL dropdown stays fully
+  expanded** (the user's deliberate "show me the whole query" view).
 - **Three SQLite DBs, all separate:** `ipeds.db` (read-only query target — the
   dataset above), `app.db` (state, with a `PRAGMA user_version` migration runner),
   `logs.db` (persistent admin logs).
@@ -86,7 +121,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   flags IPEDS aggregation foot-guns (CIP-rollup / second-major double counts,
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
   agent self-corrects;
-- a post-answer **critic** that can force one revision round.
+- a post-answer **critic** that can force one revision round. The revision only
+  ships if the model **re-queried AND changed the answer AND its prose carries no
+  reviewer-directed meta** (`_leaks_review_meta` in `llm.py` matches
+  "reviewer"/"the review"); otherwise the clean pre-critique draft is re-emitted,
+  `critic_revised=False`. This closes the observed leak where a *confirm*-by-
+  requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
+  past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
 
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized

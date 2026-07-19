@@ -76,6 +76,7 @@ export default function Login() {
               <input
                 id="login-email"
                 type="email" required placeholder={hint} autoComplete="email"
+                autoFocus
                 value={email} onChange={(e) => setEmail(e.target.value)}
               />
               <button type="submit" disabled={busy}>

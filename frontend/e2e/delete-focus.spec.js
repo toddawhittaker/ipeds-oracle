@@ -29,11 +29,22 @@ import {
 // Each .convo button carries id={`convo-${c.id}`} and each trash button a per-row
 // aria-label `Delete chat: ${c.title || "Untitled"}` (WCAG 4.1.2).
 
+// The row's rename/delete buttons are hover-revealed (their .convo-actions
+// overlay is pointer-events:none until the row is hovered, so a full-width title
+// stays fully clickable). A real click therefore needs the row hovered first;
+// hover({force:true}) positions the mouse over the row — activating :hover so the
+// button turns interactive — without tripping the hidden button's own
+// actionability check. Returns the (now-clickable) button locator.
+async function revealRowButton(loc) {
+  await loc.hover({ force: true });
+  return loc;
+}
+
 // Open the delete modal for a given row and click through its confirm button.
 // Scoped to the dialog so the "Delete chat" name doesn't collide with the row
 // trash buttons (whose labels also contain "Delete chat").
 async function confirmDelete(page, rowLabel) {
-  await page.getByRole("button", { name: rowLabel }).click();
+  await (await revealRowButton(page.getByRole("button", { name: rowLabel }))).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
@@ -58,7 +69,7 @@ test.describe("delete-conversation focus management", () => {
 
     // The modal names the specific chat before confirming (specific title, not a
     // vague "Are you sure?").
-    await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    await (await revealRowButton(page.getByRole("button", { name: "Delete chat: Chat Two" }))).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText('Delete "Chat Two"?');
     await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
@@ -181,7 +192,7 @@ test.describe("delete-conversation focus management", () => {
     convos.setList([{ id: 6, title: "" }]);
     // Both rows are identically named "Delete chat: Untitled" at this point --
     // .first() targets the earlier (id 5) row in DOM order.
-    await page.getByRole("button", { name: "Delete chat: Untitled" }).first().click();
+    await (await revealRowButton(page.getByRole("button", { name: "Delete chat: Untitled" }).first())).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete chat", exact: true }).click();
     await expect.poll(() => del.calls).toEqual(["5"]);
     await expect(page.locator(".toast")).toHaveCount(1);
@@ -209,7 +220,7 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByText("A1")).toBeVisible();
 
     const trashBtn = page.getByRole("button", { name: "Delete chat: Chat Two" });
-    await trashBtn.click();
+    await (await revealRowButton(trashBtn)).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -242,7 +253,7 @@ test.describe("delete-conversation focus management", () => {
     await expect(page.getByText("A1")).toBeVisible();
 
     const trashBtn = page.getByRole("button", { name: "Delete chat: Chat Two" });
-    await trashBtn.click();
+    await (await revealRowButton(trashBtn)).click();
     await expect(page.getByRole("alertdialog")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -267,7 +278,7 @@ test.describe("delete-conversation focus management", () => {
     await page.goto("/chat/1");
     await expect(page.getByText("A1")).toBeVisible();
 
-    await page.getByRole("button", { name: "Delete chat: Chat Two" }).click();
+    await (await revealRowButton(page.getByRole("button", { name: "Delete chat: Chat Two" }))).click();
     const dialog = page.getByRole("alertdialog");
     await dialog.getByRole("button", { name: "Delete chat", exact: true }).click();
 
