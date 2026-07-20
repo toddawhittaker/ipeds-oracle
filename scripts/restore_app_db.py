@@ -7,7 +7,7 @@ bad restore is itself reversible, then swaps the backup into place. Requires
 --yes to actually write.
 
     python scripts/restore_app_db.py backups/app-20260714-030000.db --yes
-    APP_DB_PATH=/srv/ipeds/srv-data/app.db python scripts/restore_app_db.py <backup> --yes
+    APP_DB_PATH=/path/to/srv-data/app.db python scripts/restore_app_db.py <backup> --yes
 """
 from __future__ import annotations
 

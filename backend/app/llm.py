@@ -203,7 +203,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             tool_calls = msg.get("tool_calls") or []
             # OpenRouter-specific: no other provider returns `reasoning`, so the
-            # thinking events just never fire there. See DEPLOY.md's model routing.
+            # thinking events just never fire on other providers.
             reasoning = msg.get("reasoning")
             if reasoning:
                 yield {"type": "thinking", "text": reasoning}

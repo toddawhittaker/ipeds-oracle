@@ -5,7 +5,7 @@ about U.S. colleges/universities (IPEDS = the U.S. Dept. of Education's census o
 postsecondary institutions) for an institution's approved colleagues. A
 DeepSeek-backed agent turns each question into SQL against the read-only IPEDS
 dataset (`ipeds.db`) and streams back an answer. The app is the work;
-`CONTRIBUTING.md` (dev handbook) and `docs/DEPLOY.md` (deploy) are the deeper guides.
+`CONTRIBUTING.md` (dev handbook) and the README's **Self-hosting** section are the deeper guides.
 
 ## Layout
 - `ipeds.db` — **the** dataset: SQLite, every IPEDS survey table stacked across
@@ -20,7 +20,7 @@ dataset (`ipeds.db`) and streams back an answer. The app is the work;
 - `scripts/build_ipeds_db.py` — repeatable loader that builds `ipeds.db` from the
   `data/*.accdb` files (`--dry-run` prints the table→family mapping).
 - `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
-  team). `docs/` — `SCHEMA.md` (data model + query guide) and `DEPLOY.md` (VPS/Docker deploy).
+  team). `docs/` — `SCHEMA.md` (data model + query guide). Self-hosting lives in the README.
 - `brand/` — the **IPEDS Oracle** identity: `icon.svg` (the Column mark — vector
   master) + the ImageMagick recipe that regenerates the favicons from it. The
   header/login **wordmark is inline SVG** (`frontend/src/Wordmark.jsx`, drawn from
@@ -345,10 +345,11 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   deny"; see `auth.request_login`'s docstring.
 - **Per-IP rate-limit is spoof-resistant:** `POST /api/auth/request` is capped
   per-email and per-IP (`ratelimit.py`), but `X-Forwarded-For` is client-settable.
-  `client_ip` trusts it only `TRUSTED_PROXY_COUNT` hops **from the right** (Caddy
-  appends the real peer); `0` (dev/CI default) ignores XFF and uses the socket peer.
-  Set it to **`1`** in production behind the single Caddy hop (pinned in
-  `compose.yaml`); combine with `EMAIL_DOMAIN` to close the access-request-spam surface.
+  `client_ip` trusts it only `TRUSTED_PROXY_COUNT` hops **from the right** (a
+  trusted reverse proxy/tunnel appends the real peer); `0` (dev/CI default) ignores
+  XFF and uses the socket peer. Set it to **`1`** in production behind a single
+  proxy/tunnel hop (via `.env`); combine with `EMAIL_DOMAIN` to close the
+  access-request-spam surface.
 - **CSRF defense in depth:** the session cookie is `HttpOnly`+`Secure`+`SameSite=Lax`;
   on top of that a pure-ASGI `CSRFMiddleware` (`csrf.py`) refuses any state-changing
   request whose `Origin` matches neither the request `Host` nor `APP_PUBLIC_URL`.
@@ -444,7 +445,7 @@ written, but echoing it back would be an attributable privacy leak (the
 caller-controlled `since`/`until` narrows the window; `top_users` names the user).
 A sentinel test in `backend/tests/test_admin_router.py` pins this.
 
-**Full details live in `CONTRIBUTING.md` and `docs/DEPLOY.md` — read them, don't guess.**
+**Full details live in `CONTRIBUTING.md` and the README's Self-hosting section — read them, don't guess.**
 
 ## How we work (operating rules — follow these)
 
@@ -523,8 +524,11 @@ sessions at once*.
 
 **Release/deploy (CI/CD).** CI's **image** job builds + smoke-tests the Docker
 image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*`
-git tag** publishes `:vX.Y.Z` + `:latest`. Production is **pull-on-the-box** —
-the VPS runs `scripts/deploy.sh <tag>` (no inbound SSH). Details in `docs/DEPLOY.md`.
+git tag** publishes `:vX.Y.Z` + `:latest`. Self-hosters run the published image
+(`docker compose pull && docker compose up -d`, pin via `IPEDS_TAG`) — TLS is the
+operator's own reverse proxy/tunnel or an optional self-signed cert
+(`scripts/gen-selfsigned-cert.sh` + `SSL_CERTFILE`/`SSL_KEYFILE`, served by
+`scripts/docker-entrypoint.sh`). Details in the README's **Self-hosting** section.
 
 **Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys,
 `EMAIL_DOMAIN=…`) bleeds into tests — run auth suites with `COOKIE_SECURE=false`,
@@ -539,7 +543,7 @@ catch, since `run_ci_local.sh` exported it before calling that script.)
 
 **Keep the docs — and the agent team — synced.** When a change alters
 architecture, workflow, config, or commands, update `CLAUDE.md` (and
-`CONTRIBUTING.md`/`docs/DEPLOY.md`) in the *same* PR. **A major architecture or
+`CONTRIBUTING.md` / the README's **Self-hosting** section) in the *same* PR. **A major architecture or
 infrastructure change — a new test tier, a new gate, a removed/renamed feature, a
 changed workflow rule — must also trigger a sweep of `.claude/agents/`.** The
 specialist definitions reference the tiers, features, and rules and go stale

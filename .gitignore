@@ -26,6 +26,11 @@ output/
 .env
 .env.*
 !.env.example
+# Self-signed TLS material (scripts/gen-selfsigned-cert.sh) — a private key must
+# NEVER be committed.
+certs/
+*.pem
+*.key
 
 # --- Node / frontend ---
 # No trailing slash: that form matches only directories, so a *symlink* named

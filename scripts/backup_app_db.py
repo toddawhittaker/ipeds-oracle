@@ -3,16 +3,17 @@
 
 Uses SQLite's online backup API — safe while the app is running and WAL-aware —
 to write a timestamped copy under a backup dir, prunes to the most recent N, and
-optionally pushes the new backup off-site to R2. `ipeds.db` is intentionally NOT
-backed up here: it is rebuildable from `data/` via scripts/build_ipeds_db.py.
+optionally pushes the new backup off-site. `ipeds.db` is intentionally NOT backed
+up here: it is rebuildable from `data/` via scripts/build_ipeds_db.py.
 
     python scripts/backup_app_db.py                       # -> backups/app-<ts>.db
     python scripts/backup_app_db.py --keep 30 --out-dir /srv/backups
-    APP_DB_PATH=/srv/ipeds/srv-data/app.db python scripts/backup_app_db.py
+    APP_DB_PATH=/path/to/srv-data/app.db python scripts/backup_app_db.py
 
-Off-site to R2 (optional): if the R2_REMOTE env var is set (an rclone
+Off-site (optional): if the BACKUP_REMOTE env var is set (an rclone
 "remote:path"), the new backup is uploaded with `rclone copy`. Configure the
-remote once with `rclone config` (S3 provider = Cloudflare R2). See DEPLOY.md.
+remote once with `rclone config` — any S3-compatible object store works. See the
+README (Self-hosting).
 """
 from __future__ import annotations
 
@@ -56,8 +57,8 @@ def _prune(out_dir: Path, keep: int) -> None:
         old.unlink()
 
 
-def _maybe_upload_r2(path: Path) -> bool:
-    remote = os.environ.get("R2_REMOTE")
+def _maybe_upload_remote(path: Path) -> bool:
+    remote = os.environ.get("BACKUP_REMOTE")
     if not remote:
         return False
     subprocess.run(["rclone", "copy", str(path), remote], check=True)
@@ -79,8 +80,8 @@ def main(argv: list[str] | None = None) -> int:
 
     dest = make_backup(db, args.out_dir, args.keep)
     print(f"backup: {dest}")
-    if _maybe_upload_r2(dest):
-        print(f"uploaded to R2: {os.environ['R2_REMOTE']}")
+    if _maybe_upload_remote(dest):
+        print(f"uploaded off-site: {os.environ['BACKUP_REMOTE']}")
     return 0
 
 

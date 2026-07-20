@@ -11,7 +11,7 @@ name: NL→SQL eval (manual)
 # the LLM_API_KEY repo secret. To actually execute (not skip), run it on a
 # runner that has ipeds.db present in the workspace root — e.g. pass a
 # self-hosted runner label in the `runner` input, or add a step that fetches the
-# db from R2. With no key or no db it exits green with an explanation.
+# db from your object storage. With no key or no db it exits green with an explanation.
 
 on:
   workflow_dispatch:

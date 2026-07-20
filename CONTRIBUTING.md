@@ -1,8 +1,8 @@
 # Contributing
 
-Developer guide for the IPEDS Oracle app. For the user-facing overview see
-[README.md](README.md); for production deployment see [DEPLOY.md](docs/DEPLOY.md); for
-the data model and query conventions see [SCHEMA.md](docs/SCHEMA.md).
+Developer guide for the IPEDS Oracle app. For the user-facing overview and
+self-hosting see [README.md](README.md); for the data model and query conventions
+see [SCHEMA.md](docs/SCHEMA.md).
 
 ## Stack
 
@@ -49,7 +49,7 @@ frontend/             React + Vite front end
                       (useToast) for transient result toasts; ConfirmModal.jsx
                       (useConfirm) — the SINGLE confirmation mechanism
   e2e/                Playwright specs (network-mocked)
-docs/               SCHEMA.md (data model + query guide), DEPLOY.md
+docs/               SCHEMA.md (data model + query guide)
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
 data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
 .github/workflows/  CI (lint · unit · backend · e2e · image) + manual NL→SQL eval
@@ -261,9 +261,9 @@ image, boots it, and curls `/api/health` as a smoke test). A separate
 The **image** job gates on the test jobs, so a broken build or a boot
 failure never reaches the registry. It publishes to GHCR only on pushes, not on
 PRs: a push to `main` moves `:edge` + `:sha-<short>`, and a `v*` release tag
-publishes `:vX.Y.Z` + `:latest`. The VPS pulls those — see DEPLOY.md. (The four
-test/lint jobs are still the *merge* gate; publishing is a downstream effect of
-landing on `main`.)
+publishes `:vX.Y.Z` + `:latest`. Self-hosters pull those — see the README's
+**Self-hosting** section. (The four test/lint jobs are still the *merge* gate;
+publishing is a downstream effect of landing on `main`.)
 
 Workflow:
 
@@ -293,7 +293,7 @@ reference the tiers, features, and rules and go stale silently otherwise.
 
 `ipeds.db` is built from the Access files in `data/` and is **rebuildable** (so
 it's gitignored). `app.db` holds the irreplaceable state and is backed up
-separately (see [DEPLOY.md](docs/DEPLOY.md)).
+separately (`scripts/backup_app_db.py` — see the README's **Self-hosting** section).
 
 ```bash
 python3 scripts/build_ipeds_db.py             # build ipeds.db from data/*.accdb

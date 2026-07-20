@@ -126,7 +126,7 @@ def test_client_ip_ignores_xff_without_trusted_proxy():
 
 
 def test_client_ip_uses_rightmost_hop_behind_one_proxy():
-    # Behind one trusted proxy (Caddy appends the real peer as the RIGHT-most
+    # Behind one trusted proxy (which appends the real peer as the RIGHT-most
     # hop), a spoofed left-most entry is ignored: both requests map to the same
     # real-IP bucket, so the per-IP limiter can't be split by header spoofing.
     from app.config import get_settings

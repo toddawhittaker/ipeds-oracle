@@ -1,7 +1,7 @@
 # Local interactive-testing runner for the IPEDS app.
 #
 # A repo-root developer convenience (tracked). It is NOT the deployment path
-# (production runs via Docker — see docs/DEPLOY.md) and NOT the test gate
+# (self-hosting runs via Docker — see the README) and NOT the test gate
 # (scripts/run_ci_local.sh). It just builds the SPA and runs uvicorn detached on
 # 0.0.0.0:8000 for hands-on testing. See .claude/skills/interactive-testing.
 #
