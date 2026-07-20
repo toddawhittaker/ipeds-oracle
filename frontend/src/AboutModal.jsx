@@ -5,7 +5,7 @@ import Wordmark from "./Wordmark.jsx";
 
 const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
-const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-ai";
+const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
 
 // An informational "About" dialog. Deliberately NOT built on useConfirm (that's
 // action-shaped — a confirm/cancel button row and an onConfirm callback); this is
