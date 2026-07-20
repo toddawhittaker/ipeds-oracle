@@ -31,10 +31,16 @@ test("empty chat: privacy warning, example chips fill the composer, sidebar resi
   // The sidebar is a keyboard-resizable separator: ArrowRight widens it.
   const sep = page.getByRole("separator", { name: "Resize sidebar" });
   const before = Number(await sep.getAttribute("aria-valuenow"));
-  await sep.focus();
-  await page.keyboard.press("ArrowRight");
-  const after = Number(await sep.getAttribute("aria-valuenow"));
-  expect(after).toBeGreaterThan(before);
+  // aria-valuenow is bound to the `sidebarWidth` React state, updated async by the
+  // keydown handler's persistWidth. Retry focus+press+read until the width actually
+  // grows: a bare read-after-press races the state commit, and under gate load the
+  // focus/keypress can itself be dropped — re-pressing (each ArrowRight nudges +16,
+  // clamped at SIDEBAR_MAX) covers both without over-widening past a harmless step.
+  await expect(async () => {
+    await sep.focus();
+    await page.keyboard.press("ArrowRight");
+    expect(Number(await sep.getAttribute("aria-valuenow"))).toBeGreaterThan(before);
+  }).toPass({ timeout: 15000 });
 });
 
 // TRUST_LLM_PROVIDER=true (resolved to me.trust_llm_provider) suppresses the
