@@ -61,6 +61,10 @@ export const api = {
     const qs = p.toString();
     return j("GET", "/api/admin/usage" + (qs ? `?${qs}` : ""));
   },
+  // Attention badges: how much work is waiting in each admin area, plus an
+  // acknowledge for the Logs badge (advances this admin's "logs seen" marker).
+  attention: () => j("GET", "/api/admin/attention"),
+  markLogsSeen: () => j("POST", "/api/admin/logs/seen"),
   skills: () => j("GET", "/api/admin/skills"),
   deleteSkill: (id) => j("DELETE", `/api/admin/skills/${id}`),
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),

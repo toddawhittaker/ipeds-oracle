@@ -263,6 +263,15 @@ MIGRATIONS: list[tuple[int, str]] = [
     # repeat — on the message and in the answer cache.
     (15, "ALTER TABLE messages ADD COLUMN suggestions TEXT;"),
     (16, "ALTER TABLE query_cache ADD COLUMN suggestions TEXT;"),
+    # Per-admin "logs seen" marker for the Admin → Logs attention badge. The badge
+    # counts log problems (WARNING/ERROR/CRITICAL) newer than an admin's seen_ts, so
+    # it clears when they open the Logs tab and re-appears only for later problems.
+    # Keyed by email so one admin acknowledging the logs doesn't clear the badge for
+    # another; no row ⇒ seen_ts treated as 0 ("never looked"). Lives in app.db even
+    # though the logs themselves are in the separate logs.db — this is app state, not
+    # a log record.
+    (17, "CREATE TABLE IF NOT EXISTS admin_log_seen("
+         "email TEXT PRIMARY KEY, seen_ts REAL NOT NULL);"),
 ]
 
 

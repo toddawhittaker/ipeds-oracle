@@ -1186,3 +1186,47 @@ def server_logs(limit: int = 200, level: str | None = None,
     limit = max(1, min(limit, 2000))
     return {"records": handler.records(limit=limit, level=level, q=q,
                                        since=since, until=until)}
+
+
+# --- Attention counts ---------------------------------------------------------
+# Powers the admin "attention" badges (top-bar total + per-section counts): how
+# much work is waiting in each area. Keys match the frontend ADMIN_TABS names so
+# the client can map counts[tab] straight onto a nav badge. Only the areas with an
+# actionable backlog appear — users (pending access), skills (unverified lessons),
+# logs (problems since this admin last looked). imports/usage have no backlog.
+@router.get("/attention")
+def attention_counts(admin: sqlite3.Row = Depends(require_admin)):
+    from app.logbuffer import get_handler
+    con = connect()
+    try:
+        # Grouped like the pending list (one badge unit per distinct address).
+        users = con.execute(
+            "SELECT COUNT(DISTINCT email) FROM access_requests "
+            "WHERE status='pending'").fetchone()[0]
+        skills_pending = con.execute(
+            "SELECT COUNT(*) FROM skills WHERE verified=0").fetchone()[0]
+        row = con.execute("SELECT seen_ts FROM admin_log_seen WHERE email=?",
+                          (admin["email"],)).fetchone()
+        seen_ts = float(row[0]) if row else 0.0
+    finally:
+        con.close()
+    handler = get_handler()
+    logs = handler.count_problems(seen_ts) if handler is not None else 0
+    return {"users": int(users), "skills": int(skills_pending), "logs": int(logs)}
+
+
+@router.post("/logs/seen")
+def mark_logs_seen(admin: sqlite3.Row = Depends(require_admin)):
+    """Acknowledge the current log problems for THIS admin: advance their
+    seen_ts to now, so the Logs attention badge clears and only counts problems
+    logged afterward. Per-admin so it never clears the badge for someone else."""
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO admin_log_seen(email, seen_ts) VALUES(?, ?) "
+            "ON CONFLICT(email) DO UPDATE SET seen_ts=excluded.seen_ts",
+            (admin["email"], time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return {"logs": 0}

@@ -206,6 +206,23 @@ class SqliteLogHandler(logging.Handler):
         # Selected newest-first for the LIMIT; hand back chronological order.
         return [dict(r) for r in reversed(rows)]
 
+    # Levels that count as a "problem" for the admin Logs attention badge — a
+    # failure or a warning worth an admin's eye, never routine INFO. (DEBUG is
+    # never persisted; the handler is installed at INFO.)
+    PROBLEM_LEVELS = ("WARNING", "ERROR", "CRITICAL")
+
+    def count_problems(self, since: float = 0.0) -> int:
+        """Count persisted problem-level records strictly newer than `since`
+        (epoch seconds). Drives the Admin → Logs attention badge, which clears
+        when an admin views the tab (their seen_ts advances past these rows)."""
+        placeholders = ", ".join("?" for _ in self.PROBLEM_LEVELS)
+        sql = (f"SELECT COUNT(*) FROM logs WHERE level IN ({placeholders}) "
+               "AND ts > ?")
+        with self._lock:
+            row = self._con.execute(
+                sql, (*self.PROBLEM_LEVELS, float(since))).fetchone()
+        return int(row[0]) if row else 0
+
 
 def install(db_path: str | Path | None = None,
             retention_days: int | None = None,
