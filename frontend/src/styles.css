@@ -399,11 +399,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 }
 /* The empty chat state reads left-aligned like a reading-room prompt card:
    a survey-field eyebrow, a serif question, then the "query slips". */
-.empty { max-width: 680px; margin: 48px auto; text-align: left; }
+.empty { max-width: 940px; margin: 40px auto; text-align: left; }
 .empty .field-label { display: block; margin-bottom: 10px; }
-.empty-prompt { font-size: clamp(24px, 3.4vw, 30px); line-height: 1.12; margin: 0 0 8px; max-width: 20ch; }
+.empty-prompt { font-size: clamp(24px, 3.4vw, 30px); line-height: 1.12; margin: 0 0 8px; max-width: 22ch; }
 .examples-grid { display: grid; gap: 12px; margin: 24px 0 10px; text-align: left; }
+/* Two columns once there's room; three on a wide pane so the six query slips sit
+   in 2 rows and the empty state stays a single non-scrolling screen. */
 @media (min-width: 560px) { .examples-grid { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 900px) { .examples-grid { grid-template-columns: 1fr 1fr 1fr; } }
 /* A query slip: an ochre index-tab appears on hover, and a mono tag names the
    kind of record the question pulls. */
 .example-chip {
