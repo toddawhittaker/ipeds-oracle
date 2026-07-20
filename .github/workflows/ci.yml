@@ -173,7 +173,7 @@ jobs:
 
       - name: Coverage gate (backend/app/ >= 80%)
         run: |
-          pip install coverage==7.15.1
+          pip install coverage==7.15.2
           scripts/coverage_check.sh
 
   unit:

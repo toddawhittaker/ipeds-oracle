@@ -135,9 +135,9 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via -r requirements.txt
-fastapi==0.139.0 \
-    --hash=sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145 \
-    --hash=sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189
+fastapi==0.139.2 \
+    --hash=sha256:333145a6891e9b5b3cfceb69baf817e8240cde4d4588ae5a10bf56ffacb6255e \
+    --hash=sha256:b9ad015a835173d59865e2f5d8296fbc2b317bf56a2ba1a5bfbdd03de2fd4b1c
     # via -r requirements.txt
 fastembed==0.8.0 \
     --hash=sha256:40bee672657574a1009e35ec50030a55f2b426842cb011845379817641bbbbd0 \
