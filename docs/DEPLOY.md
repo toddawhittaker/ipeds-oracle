@@ -1,4 +1,4 @@
-# IPEDS Query — web app deployment
+# IPEDS Oracle — web app deployment
 
 A private, invitation-only web app that lets approved colleagues ask IPEDS
 questions in natural language. FastAPI backend + React chat UI, an embedded

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import Wordmark from "./Wordmark.jsx";
 
 // Shown until the server tells us the institution's domain, and if it never does.
 const FALLBACK_HINT = "you@yourschool.edu";
@@ -61,7 +62,7 @@ export default function Login() {
 
         {/* Right: the reader's card. */}
         <div className="card login door-right">
-          <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
+          <h1><Wordmark /></h1>
           <p className="muted">
             Access is by invitation. We&apos;ll email a one-time sign-in link —
             no password to remember.

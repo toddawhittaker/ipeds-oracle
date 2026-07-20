@@ -1,4 +1,4 @@
-# IPEDS Query
+# IPEDS Oracle
 
 Ask questions about U.S. colleges and universities in plain English and get
 back conversational answers with tables and charts — no SQL, no spreadsheets.

@@ -124,18 +124,24 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   border-bottom: 1px solid var(--line); background: var(--panel);
 }
 .brand { display: flex; align-items: center; }
-/* Wordmark logo (transparent PNG, no built-in padding). Swaps to a light-text
-   variant on dark backgrounds where the navy lettering would otherwise vanish.
-   Sized by height; width follows the source aspect ratio. */
+/* "IPEDS Oracle" wordmark — an inline SVG + type lockup (see Wordmark.jsx) drawn
+   from the theme tokens, so light/dark is automatic (no PNG pair to swap). Scale
+   is set by the container's font-size: the serif "Oracle" is 1em, everything else
+   sizes off it. */
 .wordmark {
-  display: block; aspect-ratio: 924 / 200;
-  background: url(./assets/wordmark.png) left center / contain no-repeat;
+  display: inline-flex; align-items: center; gap: .46em; line-height: 1;
+  font-size: 20px; white-space: nowrap; user-select: none;
 }
-:root[data-theme="dark"] .wordmark { background-image: url(./assets/wordmark-dark.png); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .wordmark { background-image: url(./assets/wordmark-dark.png); }
+.wm-icon { height: 1.5em; width: 1.5em; flex: none; display: block; }
+.wm-icon .wm-shaft rect { fill: var(--accent); }
+.wm-icon .wm-cap { fill: var(--ochre); }
+.wm-ipeds {
+  font-family: var(--mono); font-weight: 600; font-size: .62em;
+  letter-spacing: .13em; color: var(--muted); text-transform: uppercase;
 }
-.brand .wordmark { height: 26px; }
+.wm-div { width: 2px; height: 1em; background: var(--ochre); border-radius: 2px; margin: 0 .06em; flex: none; }
+.wm-oracle { font-family: var(--serif); font-weight: 600; font-size: 1em; color: var(--accent); letter-spacing: -.01em; }
+.brand .wordmark { font-size: 20px; }
 .tabs { display: flex; gap: 6px; }
 .tabs a, .subtabs a {
   background: transparent; border: 1px solid transparent; color: var(--muted);
@@ -180,7 +186,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .login { max-width: 440px; width: 100%; }
 .door-right { justify-self: stretch; }
 .login h1 { margin: 0 0 10px; }
-.login .wordmark { height: 40px; }
+.login .wordmark { font-size: 30px; }
 .door-fineprint { margin: 14px 0 0; }
 .login form { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 4px; }
 .login input, .composer textarea, .row input, .row select {

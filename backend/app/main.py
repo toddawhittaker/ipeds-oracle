@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
             log.info("re-embedded %d skill(s) onto the headline+description embedding source", n)
     except Exception as e:  # noqa: BLE001
         log.warning("skill re-embed skipped: %s", e)
-    log.info("IPEDS Query API ready (db=%s)", get_settings().ipeds_db_path)
+    log.info("IPEDS Oracle API ready (db=%s)", get_settings().ipeds_db_path)
     yield
 
 

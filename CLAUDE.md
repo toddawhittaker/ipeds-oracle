@@ -21,8 +21,13 @@ dataset (`ipeds.db`) and streams back an answer. The app is the work;
   `data/*.accdb` files (`--dry-run` prints the table→family mapping).
 - `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
   team). `docs/` — `SCHEMA.md` (data model + query guide) and `DEPLOY.md` (VPS/Docker deploy).
-- `brand/` — logo source masters (icon + wordmark) and the ImageMagick commands
-  that regenerate the web favicons + `frontend/src/assets/wordmark*.png` from them.
+- `brand/` — the **IPEDS Oracle** identity: `icon.svg` (the Column mark — vector
+  master) + the ImageMagick recipe that regenerates the favicons from it. The
+  header/login **wordmark is inline SVG** (`frontend/src/Wordmark.jsx`, drawn from
+  the theme tokens so light/dark comes from one source — mono "IPEDS" · ochre rule ·
+  serif "Oracle" · Column), NOT a PNG pair. Product name = `PRODUCT_NAME` in
+  `config.py` (feeds the API title + every email); the wordmark's accessible name is
+  "IPEDS Oracle".
 
 ## The dataset (`ipeds.db`)
 

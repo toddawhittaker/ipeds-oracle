@@ -195,7 +195,7 @@ test.describe("axe smoke scan", () => {
     await mockMe(page, null);
     await mockAuthConfig(page, "");
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "IPEDS Query" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "IPEDS Oracle" })).toBeVisible();
 
     const results = await new AxeBuilder({ page }).analyze();
     const critical = results.violations.filter((v) => v.impact === "critical");

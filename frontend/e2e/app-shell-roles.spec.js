@@ -37,7 +37,7 @@ test.describe("app shell / roles", () => {
     // directly (it does not re-call /api/auth/me), so Login renders immediately.
     await page.getByRole("button", { name: "Sign out" }).click();
 
-    await expect(page.getByRole("heading", { name: "IPEDS Query" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "IPEDS Oracle" })).toBeVisible();
     expect(logout.calls.length).toBe(1);
   });
 });
