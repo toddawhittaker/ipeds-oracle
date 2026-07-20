@@ -144,9 +144,18 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing
   `turnToken` so the view detaches while the request drains and the server
-  still persists the answer (an aborted mid-turn request is the known
-  server-side data-loss path — see the open chat.py pre-`gen()` backlog item;
-  don't "optimize" Stop into an AbortController until that's fixed).
+  still persists the answer. (Historically an aborted mid-turn request was
+  ALSO a server-side data-loss path, but that's now closed: an interrupted
+  turn is a no-op — `chat.py` creates a new conversation INSIDE the stream
+  generator and reverses the empty row in `finally` via `_delete_if_empty`,
+  and folds an edit/rerun's `DELETE FROM messages` into `_persist`'s
+  transaction via `delete_from_id` so it commits atomically with the
+  replacement. So a real AbortController Stop would no longer corrupt state;
+  abandon-and-drain is now a deliberate choice — it still PERSISTS the answer,
+  which a network abort would discard — not a workaround. Pinned by
+  `test_interrupted_new_turn_leaves_no_phantom_conversation` +
+  `test_interrupted_edit_turn_keeps_the_old_exchange_intact` in
+  `backend/tests/test_chat_router.py`.)
   Auto-scroll **follows only while the viewer is near the bottom** (scrolled
   up = never yanked; a "Jump to latest" pill is the way back). Conversation
   switches show a skeleton, never the empty-state prompt. A printable key

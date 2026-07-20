@@ -91,6 +91,38 @@ def _make_agent(answer_text, *, sql_log=None, error=None, model="test-model"):
     return _agent
 
 
+def _make_agent_no_result():
+    """A stream_agent that emits some progress but NEVER a terminal `done`
+    result, so chat.py's `result is None` branch fires and `_persist` never
+    runs. This is the deterministic server-side proxy for a mid-turn client
+    disconnect (closed tab / dropped network / Stop-generating abandon): the
+    turn produces nothing to persist."""
+    async def _agent(question, *, history=None, skills_block=""):
+        yield {"type": "status", "text": "working…"}
+    return _agent
+
+
+def _post_turn_no_result(c, question, *, conversation_id=None, edit_message_id=None):
+    """Post a turn whose agent never yields a result (interrupted-turn proxy)."""
+    orig_agent = chat_router.stream_agent
+    orig_cache_lookup = skills.cache_lookup
+    orig_skills_block = skills.retrieve_skills_block
+    chat_router.stream_agent = _make_agent_no_result()
+    skills.cache_lookup = lambda q: None
+    skills.retrieve_skills_block = lambda q: ("", [])
+    try:
+        body = {"question": question}
+        if conversation_id is not None:
+            body["conversation_id"] = conversation_id
+        if edit_message_id is not None:
+            body["edit_message_id"] = edit_message_id
+        return c.post("/api/chat/stream", json=body)
+    finally:
+        chat_router.stream_agent = orig_agent
+        skills.cache_lookup = orig_cache_lookup
+        skills.retrieve_skills_block = orig_skills_block
+
+
 def _post_turn(c, question, *, conversation_id=None, edit_message_id=None,
               answer_text="42", sql_log=None, error=None):
     orig_agent = chat_router.stream_agent
@@ -175,6 +207,56 @@ def test_edit_message_id_replaces_old_exchange():
         assert len(after) == 2, after  # old pair replaced, not appended
         assert after[0]["content"] == "edited question", after
         assert after[1]["content"] == "edited answer", after
+
+
+def test_interrupted_new_turn_leaves_no_phantom_conversation():
+    """Regression (data-loss bug a): a brand-new conversation whose very first
+    turn never persists (client disconnect / no agent result) must leave NO
+    conversation behind. Before the fix, the `conversations` row was INSERTed +
+    committed BEFORE gen(), so an interrupted first turn stranded a titled,
+    0-message phantom in the sidebar."""
+    with TestClient(app) as c:
+        _login(c)
+        before = c.get("/api/chat/conversations").json()
+
+        r = _post_turn_no_result(c, "a doomed first question")
+        assert r.status_code == 200, r.text
+
+        after = c.get("/api/chat/conversations").json()
+        # No new conversation may survive an interrupted first turn.
+        assert len(after) == len(before), after
+        # And specifically no 0-message phantom for any conversation.
+        for conv in after:
+            msgs = c.get(f"/api/chat/conversations/{conv['id']}").json()
+            assert len(msgs) > 0, (conv, msgs)
+
+
+def test_interrupted_edit_turn_keeps_the_old_exchange_intact():
+    """Regression (data-loss bug b, the urgent one): an edit/rerun turn that
+    never persists (client disconnect / no agent result) must NOT destroy the
+    exchange it was replacing. Before the fix, `DELETE FROM messages WHERE
+    id>=?` was committed BEFORE gen(), so an interrupted edit wiped the old
+    user+assistant pair with nothing written back."""
+    with TestClient(app) as c:
+        _login(c)
+        r1 = _post_turn(c, "original question", answer_text="original answer")
+        events1 = _parse_sse(r1.text)
+        conv_id = next(e["id"] for e in events1 if e["type"] == "conversation")
+        first_user_msg_id = next(e for e in events1
+                                 if e["type"] == "done")["user_message_id"]
+        assert len(c.get(f"/api/chat/conversations/{conv_id}").json()) == 2
+
+        # Edit the first message, but the turn is interrupted before persistence.
+        r2 = _post_turn_no_result(c, "edited but doomed question",
+                                  conversation_id=conv_id,
+                                  edit_message_id=first_user_msg_id)
+        assert r2.status_code == 200, r2.text
+
+        after = c.get(f"/api/chat/conversations/{conv_id}").json()
+        # The ORIGINAL exchange must be intact — not deleted, not replaced.
+        assert len(after) == 2, after
+        assert after[0]["content"] == "original question", after
+        assert after[1]["content"] == "original answer", after
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +824,10 @@ def run():
           test_stream_conversation_not_owned_by_caller_404)
     check("edit_message_id replaces the old exchange in place",
           test_edit_message_id_replaces_old_exchange)
+    check("an interrupted first turn leaves no phantom conversation",
+          test_interrupted_new_turn_leaves_no_phantom_conversation)
+    check("an interrupted edit turn keeps the old exchange intact",
+          test_interrupted_edit_turn_keeps_the_old_exchange_intact)
     check("a semantic cache hit serves the cached answer + titles the chat",
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
     check("a normal (non-cached) successful turn titles a new conversation",

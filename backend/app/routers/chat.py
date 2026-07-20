@@ -1,6 +1,8 @@
 """Chat API: streaming NL→answer, conversation history, CSV export."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import csv
 import io
 import json
@@ -64,10 +66,21 @@ def _trace_item(ev: dict) -> dict | None:
     return None
 
 
-def _load_history(con: sqlite3.Connection, conv_id: int) -> list[dict]:
-    rows = con.execute(
-        "SELECT role, content FROM messages WHERE conversation_id=? "
-        "ORDER BY id DESC LIMIT ?", (conv_id, HISTORY_TURNS)).fetchall()
+def _load_history(con: sqlite3.Connection, conv_id: int,
+                  before_id: int | None = None) -> list[dict]:
+    """Recent turns fed back to the model. For an edit/rerun, `before_id` is the
+    message being replaced: history is loaded as it will look AFTER that message
+    (and everything after it) is dropped, WITHOUT deleting anything here — the
+    actual delete is folded into _persist's transaction so an interrupted edit
+    can never destroy the old exchange on its own."""
+    if before_id is not None:
+        rows = con.execute(
+            "SELECT role, content FROM messages WHERE conversation_id=? AND id<? "
+            "ORDER BY id DESC LIMIT ?", (conv_id, before_id, HISTORY_TURNS)).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT role, content FROM messages WHERE conversation_id=? "
+            "ORDER BY id DESC LIMIT ?", (conv_id, HISTORY_TURNS)).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
@@ -100,159 +113,223 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                                (conv_id, user["id"])).fetchone()
             if not owns:
                 raise HTTPException(404, "Conversation not found.")
-            # Editing/rerunning: delete the target message and everything after
-            # it so the incoming turn replaces the old exchange.
-            if req.edit_message_id:
-                con.execute(
-                    "DELETE FROM messages WHERE conversation_id=? AND id>=?",
-                    (conv_id, req.edit_message_id))
-                con.commit()
+            # Editing/rerunning: load history as it will look once the edited
+            # message and everything after it are dropped — but DON'T delete yet.
+            # The DELETE is folded into _persist's transaction (delete_from_id
+            # below) so an interrupted edit turn never destroys the old exchange.
+            history = _load_history(con, conv_id, before_id=req.edit_message_id)
         else:
-            cur = con.execute(
-                "INSERT INTO conversations(user_id, title, created_at, updated_at) "
-                "VALUES (?,?,?,?)", (user["id"], question[:80], time.time(), time.time()))
-            conv_id = cur.lastrowid
-            con.commit()
-        history = _load_history(con, conv_id)
+            # A brand-new conversation is created INSIDE gen() (see below), not
+            # here, so a client that disconnects before the turn persists never
+            # strands a titled, 0-message phantom in the sidebar.
+            history = []
     finally:
         con.close()
 
+    # For an edit/rerun, the replaced messages are deleted atomically with the
+    # replacement, inside _persist's transaction — never on their own.
+    edit_from = req.edit_message_id
+
     async def gen():
-        yield _sse({"type": "conversation", "id": conv_id})
+        nonlocal conv_id
+        # Create the new conversation only now that the turn is actually running
+        # (bug (a) fix): the row + its first message either both land (turn
+        # persisted) or the row is reversed by _delete_if_empty in `finally`.
+        if is_new:
+            conv_id = await run_in_threadpool(
+                _create_conversation, user["id"], question)
+        try:
+            yield _sse({"type": "conversation", "id": conv_id})
 
-        # 0) Topical guardrail: refuse anything that isn't a good-faith IPEDS
-        # question (off-topic requests, prompt-injection) BEFORE any cache or
-        # model/tool work, so an adversarial message never drives the agent.
-        verdict = await guard.classify(question, history)
-        if not verdict.allowed:
-            answer = guard.REFUSAL
-            yield _sse({"type": "answer", "text": answer})
-            user_msg_id, msg_id = await run_in_threadpool(
-                _persist, user["id"], conv_id, question, answer,
-                sql_log=[], model="guard", tokens=verdict.tokens,
-                cached=False, ok=True)
-            yield _sse({"type": "done", "refused": True, "message_id": msg_id,
-                        "user_message_id": user_msg_id})
-            return
+            # 0) Topical guardrail: refuse anything that isn't a good-faith IPEDS
+            # question (off-topic requests, prompt-injection) BEFORE any cache or
+            # model/tool work, so an adversarial message never drives the agent.
+            verdict = await guard.classify(question, history)
+            if not verdict.allowed:
+                answer = guard.REFUSAL
+                yield _sse({"type": "answer", "text": answer})
+                user_msg_id, msg_id = await run_in_threadpool(
+                    _persist, user["id"], conv_id, question, answer,
+                    sql_log=[], model="guard", tokens=verdict.tokens,
+                    cached=False, ok=True, delete_from_id=edit_from)
+                yield _sse({"type": "done", "refused": True, "message_id": msg_id,
+                            "user_message_id": user_msg_id})
+                return
 
-        # 1) Semantic cache: reuse SQL for a near-identical past question.
-        # Only a valid shortcut for a fresh, first-turn question — a follow-up
-        # inside an existing conversation depends on prior context, so it must
-        # never be served a cached answer from a different conversation.
-        cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
-        if cached:
-            answer = cached["answer_md"]
-            figure = cached.get("figure")
-            suggestions = cached.get("suggestions")
-            status = "Matched a recent question — reusing its query."
-            yield _sse({"type": "status", "text": status})
-            if figure:
-                yield _sse({"type": "figure", "figure": figure})
-            if suggestions:
-                yield _sse({"type": "suggestions", "suggestions": suggestions})
-            yield _sse({"type": "answer", "text": answer})
+            # 1) Semantic cache: reuse SQL for a near-identical past question.
+            # Only a valid shortcut for a fresh, first-turn question — a follow-up
+            # inside an existing conversation depends on prior context, so it must
+            # never be served a cached answer from a different conversation.
+            cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
+            if cached:
+                answer = cached["answer_md"]
+                figure = cached.get("figure")
+                suggestions = cached.get("suggestions")
+                status = "Matched a recent question — reusing its query."
+                yield _sse({"type": "status", "text": status})
+                if figure:
+                    yield _sse({"type": "figure", "figure": figure})
+                if suggestions:
+                    yield _sse({"type": "suggestions", "suggestions": suggestions})
+                yield _sse({"type": "answer", "text": answer})
+                user_msg_id, msg_id = await run_in_threadpool(
+                    _persist, user["id"], conv_id, question, answer,
+                    sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
+                    model="cache", tokens=0, cached=True, ok=True,
+                    thinking=[{"kind": "status", "text": status}], figure=figure,
+                    suggestions=suggestions, delete_from_id=edit_from)
+                done = {"type": "done", "cached": True, "message_id": msg_id,
+                        "user_message_id": user_msg_id}
+                if is_new and answer:
+                    title = await generate_title(question, answer)
+                    if title:
+                        await run_in_threadpool(_update_title, conv_id, title)
+                        done["title"] = title
+                yield _sse(done)
+                return
+
+            # 2) Retrieve learned skills as few-shot context.
+            skills_block, skill_ids = await run_in_threadpool(
+                skills.retrieve_skills_block, question)
+            if skill_ids:
+                await run_in_threadpool(skills.bump_hits, skill_ids)
+
+            # 3) Run the agent, streaming progress. Accumulate the same trace the
+            # frontend builds live, so it can be persisted and the "Thinking"
+            # disclosure survives a reload (not just the in-session turn).
+            result = None
+            answer = ""
+            figure = None
+            suggestions = None
+            thinking: list[dict] = []
+            async for ev in stream_agent(question, history=history, skills_block=skills_block):
+                if ev["type"] == "done":
+                    result = ev["result"]
+                    continue
+                if ev["type"] == "answer":
+                    answer = ev["text"]
+                elif ev["type"] == "figure":
+                    # Structured hero statistic — pass through to the client (below)
+                    # and persist alongside the answer, like sql_log/thinking.
+                    figure = ev["figure"]
+                elif ev["type"] == "suggestions":
+                    # Drill-down follow-up questions — same pass-through + persist.
+                    suggestions = ev["suggestions"]
+                item = _trace_item(ev)
+                if item:
+                    thinking.append(item)
+                yield _sse(ev)
+
+            if result is None:
+                # The turn produced nothing to persist (transport error, or the
+                # client disconnected mid-stream). Leave the DB untouched — the
+                # edit DELETE never fired (it lives in _persist), and a new
+                # conversation is reversed by _delete_if_empty in `finally`.
+                yield _sse({"type": "done"})
+                return
+
             user_msg_id, msg_id = await run_in_threadpool(
-                _persist, user["id"], conv_id, question, answer,
-                sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
-                model="cache", tokens=0, cached=True, ok=True,
-                thinking=[{"kind": "status", "text": status}], figure=figure,
-                suggestions=suggestions)
-            done = {"type": "done", "cached": True, "message_id": msg_id,
-                    "user_message_id": user_msg_id}
-            if is_new and answer:
+                _persist, user["id"], conv_id, question, answer or (result.error or ""),
+                sql_log=result.sql_log, model=result.model_used,
+                tokens=result.total_tokens, cached=False,
+                ok=result.error is None, escalated=result.escalated,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                cost=result.cost, thinking=thinking, figure=figure,
+                suggestions=suggestions, delete_from_id=edit_from)
+
+            # 4) Cache the successful answer for reuse (first-turn, context-free only).
+            if not history and result.error is None and answer and result.sql_log:
+                await run_in_threadpool(skills.cache_store, question, result.sql_log[-1],
+                                        answer, result.figure, result.suggestions)
+
+            # 4b) If the critic caught a real mistake and forced a correction, capture
+            # its finding as an unverified lesson (self-learning from actual errors).
+            # First-turn only (like the cache above): a follow-up's bare question
+            # ("and for Ohio?") is a context-less, useless retrieval key.
+            if (not history and result.critic_revised
+                    and (result.critic_headline or result.critic_description)
+                    and result.error is None and result.sql_log):
+                await run_in_threadpool(
+                    skills.record_lesson_from_critic, question,
+                    result.sql_log[-1], result.critic_headline, result.critic_description)
+
+            done = {"type": "done", "escalated": result.escalated,
+                    "model": result.model_used, "tokens": result.total_tokens,
+                    "message_id": msg_id, "user_message_id": user_msg_id}
+            # 5) Let the model name a brand-new conversation (better than the raw query).
+            if is_new and result.error is None and answer:
                 title = await generate_title(question, answer)
                 if title:
                     await run_in_threadpool(_update_title, conv_id, title)
                     done["title"] = title
             yield _sse(done)
-            return
-
-        # 2) Retrieve learned skills as few-shot context.
-        skills_block, skill_ids = await run_in_threadpool(skills.retrieve_skills_block, question)
-        if skill_ids:
-            await run_in_threadpool(skills.bump_hits, skill_ids)
-
-        # 3) Run the agent, streaming progress. Accumulate the same trace the
-        # frontend builds live, so it can be persisted and the "Thinking"
-        # disclosure survives a reload (not just the in-session turn).
-        result = None
-        answer = ""
-        figure = None
-        suggestions = None
-        thinking: list[dict] = []
-        async for ev in stream_agent(question, history=history, skills_block=skills_block):
-            if ev["type"] == "done":
-                result = ev["result"]
-                continue
-            if ev["type"] == "answer":
-                answer = ev["text"]
-            elif ev["type"] == "figure":
-                # Structured hero statistic — pass through to the client (below)
-                # and persist alongside the answer, like sql_log/thinking.
-                figure = ev["figure"]
-            elif ev["type"] == "suggestions":
-                # Drill-down follow-up questions — same pass-through + persist.
-                suggestions = ev["suggestions"]
-            item = _trace_item(ev)
-            if item:
-                thinking.append(item)
-            yield _sse(ev)
-
-        if result is None:
-            yield _sse({"type": "done"})
-            return
-
-        user_msg_id, msg_id = await run_in_threadpool(
-            _persist, user["id"], conv_id, question, answer or (result.error or ""),
-            sql_log=result.sql_log, model=result.model_used,
-            tokens=result.total_tokens, cached=False,
-            ok=result.error is None, escalated=result.escalated,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            cost=result.cost, thinking=thinking, figure=figure,
-            suggestions=suggestions)
-
-        # 4) Cache the successful answer for reuse (first-turn, context-free only).
-        if not history and result.error is None and answer and result.sql_log:
-            await run_in_threadpool(skills.cache_store, question, result.sql_log[-1],
-                                    answer, result.figure, result.suggestions)
-
-        # 4b) If the critic caught a real mistake and forced a correction, capture
-        # its finding as an unverified lesson (self-learning from actual errors).
-        # First-turn only (like the cache above): a follow-up's bare question
-        # ("and for Ohio?") is a context-less, useless retrieval key.
-        if (not history and result.critic_revised
-                and (result.critic_headline or result.critic_description)
-                and result.error is None and result.sql_log):
-            await run_in_threadpool(
-                skills.record_lesson_from_critic, question,
-                result.sql_log[-1], result.critic_headline, result.critic_description)
-
-        done = {"type": "done", "escalated": result.escalated,
-                "model": result.model_used, "tokens": result.total_tokens,
-                "message_id": msg_id, "user_message_id": user_msg_id}
-        # 5) Let the model name a brand-new conversation (better than the raw query).
-        if is_new and result.error is None and answer:
-            title = await generate_title(question, answer)
-            if title:
-                await run_in_threadpool(_update_title, conv_id, title)
-                done["title"] = title
-        yield _sse(done)
+        finally:
+            # Compensating cleanup (bug (a)): a brand-new conversation that never
+            # received a message — interrupted turn, or the result-None return
+            # above — must not linger as a phantom. _delete_if_empty is a no-op
+            # once any turn persisted, so it can't clobber real history. Shielded
+            # so it still completes if the turn was cancelled (client disconnect).
+            if is_new:
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(run_in_threadpool(_delete_if_empty, conv_id))
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
 
 
-def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
-             cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
-             cost=0.0, thinking=None, figure=None, suggestions=None):
-    """Persist the user + assistant messages and usage row. Returns the new
-    assistant message id (so the stream can hand it to the client without a
-    full conversation reload)."""
+def _create_conversation(user_id: int, question: str) -> int:
+    """Insert a fresh conversation row and return its id. Called at the TOP of
+    the stream generator (not before it), so a client that disconnects before
+    the turn runs never creates a row, and _delete_if_empty reverses it if the
+    turn then persists nothing (bug (a): no phantom, 0-message conversations)."""
     con = connect()
     try:
         now = time.time()
+        cur = con.execute(
+            "INSERT INTO conversations(user_id, title, created_at, updated_at) "
+            "VALUES (?,?,?,?)", (user_id, question[:80], now, now))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def _delete_if_empty(conv_id: int) -> None:
+    """Remove a conversation only if it has no messages — the compensating
+    cleanup for an interrupted first turn. The NOT EXISTS gate makes it a no-op
+    for any conversation that persisted a turn, so it can never clobber real
+    history regardless of when/whether _persist committed."""
+    con = connect()
+    try:
+        con.execute(
+            "DELETE FROM conversations WHERE id=? AND NOT EXISTS "
+            "(SELECT 1 FROM messages WHERE conversation_id=?)", (conv_id, conv_id))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
+             cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
+             cost=0.0, thinking=None, figure=None, suggestions=None,
+             delete_from_id=None):
+    """Persist the user + assistant messages and usage row. Returns the new
+    assistant message id (so the stream can hand it to the client without a
+    full conversation reload).
+
+    For an edit/rerun, `delete_from_id` is the message being replaced: the old
+    message and everything after it are DELETEd as the first statement of this
+    same transaction, so the destructive delete and its replacement commit
+    atomically — an interrupted edit turn never runs _persist, so the old
+    exchange is left intact (bug (b))."""
+    con = connect()
+    try:
+        now = time.time()
+        if delete_from_id is not None:
+            con.execute("DELETE FROM messages WHERE conversation_id=? AND id>=?",
+                        (conv_id, delete_from_id))
         ucur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, created_at) "
             "VALUES (?,?,?,?)", (conv_id, "user", question, now))
