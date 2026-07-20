@@ -2189,17 +2189,17 @@ function Skills({ onAttentionChanged }) {
               <label className="lesson-field">
                 <span className="muted small">Headline</span>
                 <input ref={headlineRef} type="text" maxLength={300} value={draft.headline}
-                       onChange={(e) => setDraft({ ...draft, headline: e.target.value })} />
+                       onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, headline: v })); }} />
               </label>
               <label className="lesson-field">
                 <span className="muted small">Description</span>
                 <textarea rows={4} maxLength={4000} value={draft.lesson}
-                          onChange={(e) => setDraft({ ...draft, lesson: e.target.value })} />
+                          onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, lesson: v })); }} />
               </label>
               <label className="lesson-field">
                 <span className="muted small">Example query</span>
                 <textarea rows={6} maxLength={8000} className="mono" value={draft.canonical_sql}
-                          onChange={(e) => setDraft({ ...draft, canonical_sql: e.target.value })} />
+                          onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, canonical_sql: v })); }} />
               </label>
               <div className="msg-actions">
                 {/* aria-disabled rather than disabled: a disabled button is
