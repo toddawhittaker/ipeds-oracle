@@ -36,6 +36,9 @@
 #   * TRUSTED_PROXY_COUNT=0 — a prod 1 makes client_ip trust X-Forwarded-For, so
 #     a dev .env would change per-IP rate-limit resolution in the tests vs CI
 #     (which has no .env → 0). Explicit 0 pins the key-free/no-proxy behavior.
+#   * MAIL_BACKEND + SMTP_HOST blank — with RESEND_API_KEY also blank, the mailer
+#     resolves to the console (log-only) backend; a dev .env pointing SMTP_HOST at
+#     a real relay would otherwise make the suite attempt a live SMTP send.
 
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
@@ -43,3 +46,5 @@ export RESEND_API_KEY=""
 export EMAIL_DOMAIN=""
 export TRUST_LLM_PROVIDER=""
 export TRUSTED_PROXY_COUNT=0
+export MAIL_BACKEND=""
+export SMTP_HOST=""

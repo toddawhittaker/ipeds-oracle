@@ -1,5 +1,10 @@
-"""Transactional email via Resend. If no API key is configured (dev), the email
-is logged to the console instead of sent, so local flows still work end-to-end.
+"""Transactional email. `send_email` dispatches to a backend chosen by
+`mail_backend` (auto | resend | smtp | console): Resend (a hosted email API — the
+easiest path for a pilot), SMTP (an institution's own Google Workspace / Microsoft
+365 / relay, via stdlib `smtplib`), or console (log-only, for dev — so local flows
+still work end-to-end without any provider). A backend failure never propagates —
+a login or approval must not 500 because email is down — it is logged and
+`send_email` returns False.
 
 All three emails share one Outlook-safe HTML shell (`_email_document`) and a
 bulletproof MSO button (`_button`): a real `<!DOCTYPE>` + `<head>`, a 600px
@@ -30,31 +35,86 @@ _SERIF = "Georgia,'Times New Roman',serif"
 _SANS = "Arial,Helvetica,sans-serif"
 
 
+def _resolve_backend(s) -> str:
+    """Pick the transport. An explicit `mail_backend` wins; `auto` prefers Resend
+    (if a key is set), then SMTP (if a host is set), else console (log-only)."""
+    backend = (s.mail_backend or "auto").strip().lower()
+    if backend == "auto":
+        if s.resend_api_key:
+            return "resend"
+        if s.smtp_host:
+            return "smtp"
+        return "console"
+    if backend not in ("resend", "smtp", "console"):
+        log.warning("Unknown MAIL_BACKEND=%r — falling back to console (log-only).", backend)
+        return "console"
+    return backend
+
+
 def send_email(to: str, subject: str, html: str, text: str | None = None) -> bool:
     s = get_settings()
-    if not s.resend_api_key:
-        log.warning("[DEV] No RESEND_API_KEY — email NOT sent.\n"
+    backend = _resolve_backend(s)
+    if backend == "console":
+        log.warning("[DEV] MAIL_BACKEND=console (no provider configured) — email NOT sent.\n"
                     "  to=%s\n  subject=%s\n  %s", to, subject, text or html)
         return False
     try:
-        import resend
-        resend.api_key = s.resend_api_key
-        resend.Emails.send({
-            "from": s.mail_from,
-            "to": [to],
-            "subject": subject,
-            "html": html,
-            **({"text": text} if text else {}),
-        })
+        if backend == "resend":
+            _send_resend(s, to, subject, html, text)
+        else:  # smtp
+            _send_smtp(s, to, subject, html, text)
     except Exception:
         # A mail-provider failure (unverified sending domain, outage, bad/revoked
-        # key) must never break the calling flow — a login or an admin approval
-        # should not 500 because email is down. Log it (the admin Logs view
-        # surfaces this) and report failure so callers can react if they choose.
-        log.exception("Failed to send email to %s (subject=%r)", to, subject)
+        # key, SMTP auth/TLS error) must never break the calling flow — a login or
+        # an admin approval should not 500 because email is down. Log it (the admin
+        # Logs view surfaces this) and report failure so callers can react.
+        log.exception("Failed to send email to %s (subject=%r) via %s", to, subject, backend)
         return False
-    log.info("sent email to %s: %s", to, subject)
+    log.info("sent email to %s via %s: %s", to, backend, subject)
     return True
+
+
+def _send_resend(s, to: str, subject: str, html: str, text: str | None) -> None:
+    import resend
+    resend.api_key = s.resend_api_key
+    resend.Emails.send({
+        "from": s.mail_from,
+        "to": [to],
+        "subject": subject,
+        "html": html,
+        **({"text": text} if text else {}),
+    })
+
+
+def _send_smtp(s, to: str, subject: str, html: str, text: str | None) -> None:
+    """Send via the institution's own SMTP (Google/Microsoft/relay) using stdlib.
+    A multipart/alternative message (plain text + the HTML the reader sees); TLS via
+    STARTTLS (587) or implicit SSL (465); auth only when a username is set — some
+    relays authenticate by IP and take no login."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = s.mail_from
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(text or "This message requires an HTML-capable email client.")
+    msg.add_alternative(html, subtype="html")
+
+    if s.smtp_ssl:
+        with smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout,
+                              context=ssl.create_default_context()) as srv:
+            if s.smtp_username:
+                srv.login(s.smtp_username, s.smtp_password)
+            srv.send_message(msg)
+        return
+    with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout) as srv:
+        if s.smtp_starttls:
+            srv.starttls(context=ssl.create_default_context())
+        if s.smtp_username:
+            srv.login(s.smtp_username, s.smtp_password)
+        srv.send_message(msg)
 
 
 def _button(href: str, label: str) -> str:
