@@ -190,3 +190,10 @@ commented list. The essentials:
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `IPEDS_TAG` | which published image to run (`:latest` or a pinned `vX.Y.Z`) |
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+The **IPEDS data** itself is a public U.S. Department of Education product and is
+not covered by this license; see [nces.ed.gov/ipeds](https://nces.ed.gov/ipeds/).
