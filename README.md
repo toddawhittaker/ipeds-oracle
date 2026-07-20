@@ -1,5 +1,8 @@
 # IPEDS Oracle
 
+[![CI](https://github.com/toddawhittaker/ipeds-oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/toddawhittaker/ipeds-oracle/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Ask questions about U.S. colleges and universities in plain English and get
 back conversational answers with tables and charts — no SQL, no spreadsheets.
 
@@ -7,6 +10,12 @@ It's a private, invitation-only web app for exploring **IPEDS** (the U.S.
 Department of Education's annual census of colleges) across recent collection
 years: degrees awarded, enrollment, tuition and financial aid, graduation and
 outcome rates, admissions, and institutional details.
+
+![IPEDS Oracle answering a question with a hero figure, a table, and a chart](docs/images/answer-anatomy.png)
+
+*One question, answered: a hero figure, a short summary, the table and chart
+behind it, and suggested follow-ups. See the [User guide](docs/USER_GUIDE.md) for
+a full tour, or the [Admin guide](docs/ADMIN_GUIDE.md) for the admin console.*
 
 > **Just want to use it?** Read the rest of this page.
 > **Self-hosting it?** See [Self-hosting](#self-hosting) below.

@@ -45,7 +45,7 @@ are non-technical university colleagues who want answers, not SQL.
    Chat and Admin. Light AND dark themes both look deliberate.
 5. **Admin ergonomics** — the import flow is high-stakes (it can swap the live
    DB). Design clear progress, streamed logs, pass/fail states, and confirmation
-   so Todd is never unsure whether a swap happened.
+   so the admin is never unsure whether a swap happened.
 6. **Trust & clarity for data answers** — make it easy to see the number, the
    scope (year, filters), and how to verify (the underlying SQL, a CSV) without
    burying the answer.
