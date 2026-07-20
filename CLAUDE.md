@@ -88,6 +88,30 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   state *and* its lifted selection **survive a tab switch**, resetting only when
   the admin leaves the Users section — the spec's persistence contract, with no
   new state plumbing. Pinned in `frontend/e2e/admin-users-tabs.spec.js`.
+  **Admin "attention" indicators** surface where work is waiting: a total badge
+  on the top-bar **Admin** button (live on every page, Chat included) and a
+  per-area count on the Admin section nav — only the three areas with an
+  actionable backlog: **Users** (pending access requests), **Skills** (unverified
+  lessons), **Logs** (problems since this admin last viewed Logs);
+  imports/usage never badge. One lightweight `GET /api/admin/attention` →
+  `{users,skills,logs}` (keys = `ADMIN_TABS` names, so a section's count is just
+  `counts[tab]`) is **fetched from the Shell** (`App.jsx`), not per-tab, so the
+  top-bar total works before you ever open Admin; it polls every 30s AND
+  **re-fetches on tab focus/visibility** (a backgrounded tab throttles
+  `setInterval`, so without this a change made while you're away wouldn't surface
+  until a much-delayed tick — the "polling doesn't update, only a refresh does"
+  bug). Badge text goes through the capped `formatBadge` (`attention.js`, vitest:
+  `""` at 0, the number to 99, then `"99+"`), reusing the same accent
+  `.usertab-badge`/`tab-badge` pill as the Pending sub-tab (a queue is work
+  waiting, never a red failure — even log problems). The **Logs badge is
+  acknowledgeable**: `POST /api/admin/logs/seen` advances a **per-admin**
+  `admin_log_seen.seen_ts` (migration 17) so the badge clears when you open Logs
+  (marked on mount AND unmount) and re-counts only later problems; the count is
+  `logbuffer.count_problems(since)` (WARNING/ERROR/CRITICAL, `ts > seen_ts`) over
+  the separate `logs.db`, via `get_handler()`. Approve/reject/verify and the
+  Users-tab reload also ping `refreshAttention()` so a badge drops the instant you
+  act, not on the next poll. Pinned in `frontend/e2e/admin-attention.spec.js` +
+  `backend/tests/test_admin_router.py`.
   Chat interaction contracts (all Playwright-pinned in
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing

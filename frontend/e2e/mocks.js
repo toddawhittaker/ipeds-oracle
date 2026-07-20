@@ -353,6 +353,39 @@ export async function mockAccessRequests(page, rows) {
   return { setList: (l) => { list = l; } };
 }
 
+/**
+ * GET /api/admin/attention -> {users, skills, logs}. Drives the top-bar Admin
+ * badge (App.jsx, polled from the Shell) and the per-section nav counts
+ * (Admin.jsx). Returns a handle whose `set(counts)` changes what LATER polls
+ * return without re-registering the route — so a spec can assert a badge clears
+ * after an acknowledge (e.g. viewing Logs). `.calls` counts GETs received.
+ */
+export async function mockAttention(page, initial = { users: 0, skills: 0, logs: 0 }) {
+  let counts = { ...initial };
+  let calls = 0;
+  await page.route("**/api/admin/attention", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    calls += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(counts) });
+  });
+  return { set: (c) => { counts = { ...c }; }, get calls() { return calls; } };
+}
+
+/**
+ * POST /api/admin/logs/seen -> {logs:0}. The Logs tab's acknowledge; captures a
+ * call count so a spec can assert viewing the tab fired the mark (frontend/src/api.js:
+ * markLogsSeen() -> POST /api/admin/logs/seen).
+ */
+export async function mockMarkLogsSeen(page) {
+  let calls = 0;
+  await page.route("**/api/admin/logs/seen", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    calls += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logs: 0 }) });
+  });
+  return { get calls() { return calls; } };
+}
+
 /** GET /api/admin/usage?since&until -> {totals, series, top_users, bucket}. */
 export async function mockUsage(page, data) {
   await page.route("**/api/admin/usage*", async (route) => {

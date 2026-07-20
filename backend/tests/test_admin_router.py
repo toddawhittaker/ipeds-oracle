@@ -1553,6 +1553,84 @@ def test_server_logs_with_no_handler_returns_empty():
 
 
 # ---------------------------------------------------------------------------
+# GET /api/admin/attention + POST /api/admin/logs/seen -- the admin "attention"
+# count badges: how much work is waiting in each area (pending users, unverified
+# skills, log problems since this admin last viewed the Logs tab).
+# ---------------------------------------------------------------------------
+
+def test_attention_requires_admin():
+    with TestClient(app) as c:  # never logged in
+        assert c.get("/api/admin/attention").status_code == 401
+        assert c.post("/api/admin/logs/seen").status_code == 401
+
+
+def _seed_unverified_skill():
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO skills(question, canonical_sql, verified, created_at) "
+            "VALUES (?,?,0,?)", ("attn probe?", "SELECT 1", time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_attention_counts_pending_users_and_unverified_skills():
+    """The users/skills counts reflect the live backlog. Asserted as a DELTA off
+    the baseline so a seeded/unrelated row (the suite shares one app.db) can't
+    make the absolute number brittle -- the regression is that a new pending
+    request and a new unverified lesson each bump their own count by exactly 1."""
+    with TestClient(app) as c:
+        _login(c)
+        base = c.get("/api/admin/attention").json()
+        _seed_access_request("attn-pending@example.edu", status="pending")
+        _seed_unverified_skill()
+        after = c.get("/api/admin/attention").json()
+        assert after["users"] == base["users"] + 1, (base, after)
+        assert after["skills"] == base["skills"] + 1, (base, after)
+
+
+def test_attention_logs_count_clears_after_marking_seen():
+    """The Logs badge is acknowledgeable: it counts WARNING/ERROR/CRITICAL newer
+    than this admin's seen_ts (INFO never counts), drops to 0 once they view the
+    tab (POST /logs/seen advances the marker), and re-appears only for problems
+    logged afterward."""
+    import app.logbuffer as logbuffer_mod
+    from app.logbuffer import SqliteLogHandler
+    tmp_log_db = Path(tempfile.mkdtemp()) / "attn-logs.db"
+    handler = SqliteLogHandler(str(tmp_log_db), retention_days=30)
+
+    def _insert(level, ts):
+        handler._con.execute(
+            "INSERT INTO logs(ts, level, name, msg) VALUES (?,?,?,?)",
+            (ts, level, "ipeds.test", "probe"))
+        handler._con.commit()
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_get_handler = logbuffer_mod.get_handler
+        logbuffer_mod.get_handler = lambda: handler
+        try:
+            now = time.time()
+            # Two OLD problems (before any acknowledge) + one INFO (never a problem).
+            _insert("ERROR", now - 100)
+            _insert("WARNING", now - 100)
+            _insert("INFO", now - 100)
+            assert c.get("/api/admin/attention").json()["logs"] == 2
+
+            # Acknowledge: advances this admin's seen_ts past those rows -> 0.
+            assert c.post("/api/admin/logs/seen").status_code == 200
+            assert c.get("/api/admin/attention").json()["logs"] == 0
+
+            # A NEW problem logged after the acknowledge re-counts.
+            _insert("ERROR", time.time() + 100)
+            assert c.get("/api/admin/attention").json()["logs"] == 1
+        finally:
+            logbuffer_mod.get_handler = orig_get_handler
+            handler.close()
+
+
+# ---------------------------------------------------------------------------
 # POST /api/admin/access-requests/{email}/deny -- not implemented yet (no such
 # route registered), so every test below is expected to fail red until the
 # implementer ships it. A request to an unregistered route 404s automatically
@@ -3033,6 +3111,11 @@ def run():
     check("server logs endpoint returns records", test_server_logs_returns_records)
     check("server logs endpoint handles no handler installed",
           test_server_logs_with_no_handler_returns_empty)
+    check("attention counts require admin", test_attention_requires_admin)
+    check("attention counts pending users + unverified skills (delta)",
+          test_attention_counts_pending_users_and_unverified_skills)
+    check("attention logs count clears after marking seen, re-counts new problems",
+          test_attention_logs_count_clears_after_marking_seen)
     check("deny access request marks denied and clears the pending list",
           test_deny_access_request_marks_denied_and_clears_pending)
     check("deny keys on the address, not a single row id",

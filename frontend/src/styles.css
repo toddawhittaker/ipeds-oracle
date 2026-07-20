@@ -142,6 +142,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   padding: 6px 12px; border-radius: 8px; text-decoration: none;
 }
 .tabs a.on, .subtabs a.on { color: var(--text); background: var(--bg); border-color: var(--line); }
+/* Attention count badge on a nav link (top-bar Admin + Admin section tabs): how
+   much work is waiting. Same pill language as the Users sub-tab badge
+   (.usertab-badge) — neutral base, accent "attention" tone — sized to sit inline
+   after the link label. */
+.tabs a, .subtabs a { display: inline-flex; align-items: center; gap: 6px; }
+.tab-badge { min-width: 1.4em; padding: 0 6px; border-radius: 999px; font-size: 11px;
+  font-weight: 700; line-height: 1.5; text-align: center; color: var(--text);
+  background: color-mix(in srgb, var(--muted) 20%, transparent); }
+.tab-badge.attention { background: var(--accent); color: #fff; }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }

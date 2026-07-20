@@ -7,6 +7,12 @@ import { AdminRoute } from "./Admin.jsx";
 import Verify from "./Verify.jsx";
 import { ToastProvider } from "./Toast.jsx";
 import { ConfirmProvider } from "./ConfirmModal.jsx";
+import { attentionTotal, formatBadge } from "./attention.js";
+
+// How often the Shell re-polls the admin attention counts. Long enough to be
+// cheap, short enough that a badge feels live; mutations that clear a backlog
+// (approve a request, verify a skill, view the logs) also refresh on demand.
+const ATTENTION_POLL_MS = 30000;
 
 function currentTheme() {
   const forced = document.documentElement.getAttribute("data-theme");
@@ -44,6 +50,7 @@ export default function App() {
 function Shell() {
   const [user, setUser] = useState(undefined); // undefined=loading, null=logged out
   const [theme, setTheme] = useState(currentTheme);
+  const [attention, setAttention] = useState({ users: 0, skills: 0, logs: 0 });
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const landedAt = useRef(pathname);
@@ -103,6 +110,42 @@ function Shell() {
   // pre-router predecessor) was written to prevent.
   const refreshMe = () => api.me().then(setUser).catch(() => {});
 
+  // Admin attention counts, lifted to the Shell so the top-bar Admin badge is
+  // live on EVERY page (Chat included) — the per-section badges in Admin.jsx read
+  // the same object. refreshAttention is handed down for on-demand refresh after
+  // an admin clears a backlog item (approve/verify/view-logs), so a badge drops
+  // immediately instead of waiting out the poll. A non-admin never fetches.
+  const isAdmin = !!user?.is_admin;
+  const refreshAttention = () => {
+    if (!isAdmin) return;
+    api.attention().then(setAttention).catch(() => {});
+  };
+  useEffect(() => {
+    // Only admins fetch/poll. A non-admin never renders the Admin link, so any
+    // leftover counts are never shown — no need to reset state here (which would
+    // also be a discouraged setState-in-effect).
+    if (!isAdmin) return undefined;
+    refreshAttention();
+    const t = setInterval(refreshAttention, ATTENTION_POLL_MS);
+    // A background tab throttles setInterval (browsers slow it to ~once a minute
+    // or stop it), so a change made while the admin is away in another window
+    // wouldn't surface until a much-delayed tick — the "polling doesn't update,
+    // only a refresh does" report. Re-fetch the instant the tab regains
+    // focus/visibility so returning to it always shows current counts. This
+    // mirrors the Allowlist tab's own visibility/focus refresh.
+    const onVisible = () => { if (document.visibilityState === "visible") refreshAttention(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refreshAttention);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", refreshAttention);
+    };
+    // Keyed on admin-ness only: refreshAttention re-reads `api` (stable) and
+    // setAttention (stable); nothing else in it changes between renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -137,9 +180,18 @@ function Shell() {
         <div className="brand"><span className="wordmark" role="img" aria-label="IPEDS Query" /></div>
         <nav className="tabs" aria-label="Primary">
           <Link to="/" className={onAdmin ? "" : "on"} aria-current={onAdmin ? undefined : "page"}>Chat</Link>
-          {user.is_admin && (
-            <Link to="/admin" className={onAdmin ? "on" : ""} aria-current={onAdmin ? "page" : undefined}>Admin</Link>
-          )}
+          {user.is_admin && (() => {
+            const total = attentionTotal(attention);
+            const label = formatBadge(total);
+            return (
+              <Link to="/admin" className={onAdmin ? "on" : ""}
+                    aria-current={onAdmin ? "page" : undefined}
+                    aria-label={total > 0 ? `Admin, ${total} ${total === 1 ? "item needs" : "items need"} attention` : undefined}>
+                Admin
+                {label && <span className="tab-badge attention" aria-hidden="true">{label}</span>}
+              </Link>
+            );
+          })()}
         </nav>
         <div className="userbox">
           <button className="link theme-toggle" onClick={toggleTheme}
@@ -172,10 +224,10 @@ function Shell() {
         <Route path="/admin" element={adminOnly(
           <Navigate to={user.has_data ? "/admin/users/current" : "/admin/imports"} replace />,
         )} />
-        <Route path="/admin/:tab" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} />)} />
+        <Route path="/admin/:tab" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} />)} />
         {/* Users splits into path sub-tabs (/admin/users/current|pending|blocked);
             AdminRoute reads both params. Other tabs ignore :sub. */}
-        <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} />)} />
+        <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

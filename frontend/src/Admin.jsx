@@ -16,6 +16,7 @@ import { useTableSelection } from "./useTableSelection.js";
 import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
+import { formatBadge } from "./attention.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
@@ -124,7 +125,7 @@ function rememberSubTab(sub) {
 // the URL so every view has a distinct, bookmarkable address; a stray :sub on a
 // non-Users tab -> the bare tab. Kept separate from Admin so Admin stays a
 // plain props component.
-export function AdminRoute({ me, onDataChanged }) {
+export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged }) {
   const { tab, sub } = useParams();
   if (Object.prototype.hasOwnProperty.call(USERS_TAB_ALIASES, tab)) {
     return <Navigate to={`/admin/users/${USERS_TAB_ALIASES[tab]}`} replace />;
@@ -138,32 +139,47 @@ export function AdminRoute({ me, onDataChanged }) {
     if (sub !== resolved) {
       return <Navigate to={`/admin/users/${sub == null ? rememberedSubTab() : resolved}`} replace />;
     }
-    return <Admin me={me} tab={tab} sub={resolved} onDataChanged={onDataChanged} />;
+    return <Admin me={me} tab={tab} sub={resolved} onDataChanged={onDataChanged}
+                  attention={attention} onAttentionChanged={onAttentionChanged} />;
   }
   if (sub != null) return <Navigate to={`/admin/${tab}`} replace />;
-  return <Admin me={me} tab={tab} onDataChanged={onDataChanged} />;
+  return <Admin me={me} tab={tab} onDataChanged={onDataChanged}
+                attention={attention} onAttentionChanged={onAttentionChanged} />;
 }
 
-export default function Admin({ me, tab, sub, onDataChanged }) {
+export default function Admin({ me, tab, sub, onDataChanged, attention, onAttentionChanged }) {
+  // Attention counts default to empty so the nav renders unbadged if the Shell
+  // hasn't fetched yet (or a test mounts Admin directly). refresh is a no-op
+  // fallback for the same reason.
+  const counts = attention || {};
+  const refreshAttention = onAttentionChanged || (() => {});
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
       <nav className="subtabs" aria-label="Admin sections">
-        {ADMIN_TABS.map((t) => (
-          // Users drops `end` so it stays active across its sub-tab paths
-          // (/admin/users/current|pending|blocked, all prefixes of /admin/users);
-          // the other tabs match exactly.
-          <NavLink key={t} to={`/admin/${t}`} end={t !== "users"}
-                   className={({ isActive }) => (isActive ? "on" : "")}>
-            {t[0].toUpperCase() + t.slice(1)}
-          </NavLink>
-        ))}
+        {ADMIN_TABS.map((t) => {
+          // Only areas with an actionable backlog carry a count (users/skills/
+          // logs); imports/usage are absent from `counts` → no badge.
+          const badge = formatBadge(counts[t]);
+          const n = counts[t] || 0;
+          return (
+            // Users drops `end` so it stays active across its sub-tab paths
+            // (/admin/users/current|pending|blocked, all prefixes of /admin/users);
+            // the other tabs match exactly.
+            <NavLink key={t} to={`/admin/${t}`} end={t !== "users"}
+                     aria-label={n > 0 ? `${t[0].toUpperCase() + t.slice(1)}, ${n} awaiting attention` : undefined}
+                     className={({ isActive }) => (isActive ? "on" : "")}>
+              {t[0].toUpperCase() + t.slice(1)}
+              {badge && <span className="tab-badge attention" aria-hidden="true">{badge}</span>}
+            </NavLink>
+          );
+        })}
       </nav>
-      {tab === "users" && <Allowlist me={me} sub={sub} />}
+      {tab === "users" && <Allowlist me={me} sub={sub} onAttentionChanged={refreshAttention} />}
       {tab === "imports" && <Imports onDataChanged={onDataChanged} />}
       {tab === "usage" && <Usage />}
-      {tab === "skills" && <Skills />}
-      {tab === "logs" && <Logs />}
+      {tab === "skills" && <Skills onAttentionChanged={refreshAttention} />}
+      {tab === "logs" && <Logs onAttentionChanged={refreshAttention} />}
     </main>
   );
 }
@@ -202,7 +218,8 @@ const fmtApprovalDate = (d = new Date()) => d.toLocaleDateString();
 const ALLOWLIST_POLL_MS = 15000;
 const ALLOWLIST_RELOAD_COOLDOWN_MS = 1500;
 
-function Allowlist({ me, sub }) {
+function Allowlist({ me, sub, onAttentionChanged }) {
+  const refreshAttention = onAttentionChanged || (() => {});
   const navigate = useNavigate();
   // Roving-focus refs for the sub-tab buttons: keyboard nav focuses the target.
   const tabRefs = useRef({});
@@ -307,6 +324,10 @@ function Allowlist({ me, sub }) {
     // callers await) so this bookkeeping never adds its own unhandled rejection.
     const stamp = () => { lastLoadAt.current = Date.now(); };
     loaded.then(stamp, stamp);
+    // Keep the Users attention badge in step with this tab's own data — every
+    // approve/reject/deny/clear reloads here, so the badge drops immediately
+    // instead of waiting out the Shell's 30s poll.
+    refreshAttention();
     return loaded;
   };
   useEffect(() => { load(); }, []);
@@ -1990,9 +2011,10 @@ function ruleName(s) {
   return s.headline || s.lesson || s.notes || s.question || "untitled lesson";
 }
 
-function Skills() {
+function Skills({ onAttentionChanged }) {
   const toast = useToast();
   const confirm = useConfirm();
+  const refreshAttention = onAttentionChanged || (() => {});
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);   // at most one card at a time
   const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
@@ -2017,6 +2039,7 @@ function Skills() {
     api.patchSkill(s.id, { verified }).then(() => {
       announce(verified ? "Lesson verified." : "Lesson moved back to unverified.", "ok");
       load();
+      refreshAttention();  // verified count changed → update the Skills badge now
     });
 
   function startEdit(s) {
@@ -2074,7 +2097,7 @@ function Skills() {
       // the card that's about to unmount (it previously dropped to <body>).
       api.deleteSkill(s.id)
         .then(() => { announce("Lesson rejected.", "ok"); return load(); })
-        .then(focusHeading)
+        .then(() => { focusHeading(); refreshAttention(); })
         .catch(() => announce("Couldn't delete that lesson.", "error"));
       return;
     }
@@ -2087,7 +2110,7 @@ function Skills() {
       onConfirm: () => api.deleteSkill(s.id),
       successToast: "Lesson rejected.",
       errorToast: "Couldn't delete that lesson.",
-      onSuccess: async () => { await load(); focusHeading(); },
+      onSuccess: async () => { await load(); focusHeading(); refreshAttention(); },
     });
   };
 
@@ -2204,13 +2227,25 @@ function Skills() {
   );
 }
 
-function Logs() {
+function Logs({ onAttentionChanged }) {
   const [records, setRecords] = useState([]);
   const [level, setLevel] = useState("");
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [auto, setAuto] = useState(true);
+
+  // Acknowledge the log problems: viewing the tab advances this admin's "logs
+  // seen" marker, so the attention badge clears. Mark on mount (then refresh the
+  // badge immediately) AND on unmount, so problems that arrive while the admin
+  // is watching are also marked read when they leave. Fire-and-forget — a failed
+  // mark just leaves the badge up, which is safe.
+  const refreshAttention = onAttentionChanged || (() => {});
+  useEffect(() => {
+    api.markLogsSeen().then(refreshAttention).catch(() => {});
+    return () => { api.markLogsSeen().catch(() => {}); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = useCallback(() => {
     const since = from ? Math.floor(new Date(`${from}T00:00:00`).getTime() / 1000) : null;
