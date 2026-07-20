@@ -691,7 +691,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .usertab-badge.attention { background: var(--accent); color: #fff; }
 .usertab-panel { padding-top: 4px; }
 [role="tabpanel"][hidden] { display: none; }
-.denied-help { font-size: 13px; margin: 0 0 10px; max-width: 62ch; }
+/* Descriptive help above the Blocked-users table — matches the app's standard
+   muted help text (`.muted small`): full container width, muted color. It used
+   to cap at 62ch, which left it spanning only ~half the panel, out of step with
+   every other admin description. */
+.denied-help { font-size: 13px; margin: 0 0 10px; color: var(--muted); }
 /* SEC #3: the Blocked-users section's own error state — a distinct class from
    the flash `.notice` (see Admin.jsx's render-site comment for why the two must
    not share one). Same visual language as `.notice` with a danger-toned border
