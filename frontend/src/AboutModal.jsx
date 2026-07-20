@@ -1,6 +1,8 @@
 import React, { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { IconInfo } from "./icons.jsx";
+import { IconInfo, IconGitHub } from "./icons.jsx";
+
+const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
 const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-ai";
 
@@ -80,21 +82,23 @@ export default function AboutModal({ onClose }) {
         <div className="modal-body" id={bodyId}>
           <p>
             <strong>IPEDS Oracle</strong> answers natural-language questions about U.S.
-            colleges and universities from the IPEDS dataset — the U.S. Department of
-            Education&rsquo;s annual census of postsecondary institutions.
+            colleges and universities from the{" "}
+            <a href={IPEDS_URL} target="_blank" rel="noreferrer">IPEDS dataset</a> — the
+            U.S. Department of Education&rsquo;s <strong>Integrated Postsecondary
+            Education Data System</strong>, its annual census of postsecondary
+            institutions.
           </p>
           <p>
             Ask a question in plain English and an AI agent turns it into SQL against
             the read-only IPEDS database, then streams back an answer with the figures,
             tables, and charts behind it.
           </p>
-          <p className="small muted">
-            Source code:{" "}
-            <a href={GITHUB_URL} target="_blank" rel="noreferrer">{GITHUB_URL}</a>{" "}
-            (private repository).
-          </p>
         </div>
-        <div className="modal-actions">
+        <div className="modal-actions about-actions">
+          <a className="about-gh" href={GITHUB_URL} target="_blank" rel="noreferrer"
+             aria-label="View the source code on GitHub">
+            <IconGitHub size={22} />
+          </a>
           <button type="button" className="modal-confirm" ref={closeRef} onClick={onClose}>
             Close
           </button>
