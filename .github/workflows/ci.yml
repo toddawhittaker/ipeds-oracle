@@ -310,8 +310,11 @@ jobs:
           echo "::error::container did not become healthy"; docker logs smoke; \
             docker rm -f smoke; exit 1
 
-      # Tag scheme: main push -> :edge + :sha-<short>; a v* tag (release) ->
-      # :vX.Y.Z + :X.Y + :latest. PRs build+smoke only (no push).
+      # We publish ONLY release images: a v* tag -> :X.Y.Z + :X.Y + :latest
+      # (metadata-action strips the leading `v`). Every PR and every main push
+      # still builds + smoke-tests the image above (so a broken Dockerfile can't
+      # merge) but pushes nothing — no more :edge / :sha-<short> accumulating in
+      # GHCR. Bump the tag scheme here if a rolling channel is ever wanted again.
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v6
@@ -319,22 +322,20 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=edge,branch=main
-            type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image (main + tags only)
-        if: github.event_name != 'pull_request'
+      - name: Push image (release tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/build-push-action@v7
         with:
           context: .

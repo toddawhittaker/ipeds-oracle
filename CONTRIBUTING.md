@@ -262,12 +262,15 @@ DB), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
 image, boots it, and curls `/api/health` as a smoke test). A separate
 `nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an API key + the real DB).
 
-The **image** job gates on the test jobs, so a broken build or a boot
-failure never reaches the registry. It publishes to GHCR only on pushes, not on
-PRs: a push to `main` moves `:edge` + `:sha-<short>`, and a `v*` release tag
-publishes `:vX.Y.Z` + `:latest`. Self-hosters pull those — see the README's
-**Self-hosting** section. (The four test/lint jobs are still the *merge* gate;
-publishing is a downstream effect of landing on `main`.)
+Every PR and every `main` push **builds and smoke-tests** the image (so a broken
+build or a boot failure can't merge), but publishing to GHCR happens **only on a
+`v*` release tag**, which pushes `:X.Y.Z` + `:X.Y` + `:latest` (the leading `v` is
+stripped). No rolling `:edge`/`:sha-<short>` images are published — release tags
+are the only artifacts, so self-hosters pin a version or track `:latest` (see the
+README's **Self-hosting** section). Cut a release with an annotated `git tag vX.Y.Z`
++ `git push --no-verify <remote> vX.Y.Z` (the tag sits on an already-merged, already
+green commit, so the pre-push hook's full local gate is redundant), then
+`gh release create`.
 
 Workflow:
 
