@@ -4,17 +4,17 @@ import { initials } from "./initials.js";
 describe("initials — avatar monogram from an email", () => {
   it.each([
     // dotted first.last -> two initials, uppercased
-    ["todd.whittaker@franklin.edu", "TW"],
+    ["sam.rivera@example.edu", "SR"],
     ["Jane.Doe@example.com", "JD"],
     // other name separators
     ["jane_doe@example.com", "JD"],
     ["jane-doe@example.com", "JD"],
     // single-token local part -> first letter only
-    ["todd@thewhittakers.org", "T"],
+    ["sam@example.org", "S"],
     ["a@b.co", "A"],
     // +tag is a routing tag, not a surname: stripped before splitting
-    ["todd+ipeds@franklin.edu", "T"],
-    ["todd.whittaker+test@franklin.edu", "TW"],
+    ["sam+news@example.edu", "S"],
+    ["sam.rivera+test@example.edu", "SR"],
     // three tokens -> still just the first two
     ["mary.jane.watson@x.edu", "MJ"],
     // a numeric leading chunk is skipped when a name token follows

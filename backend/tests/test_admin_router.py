@@ -1239,7 +1239,7 @@ def test_usage_since_after_until_is_swapped():
 # ---------------------------------------------------------------------------
 # GET /api/admin/usage -- privacy contract.
 #
-# usage_log.question KEEPS being written (Todd's explicit decision, no schema
+# usage_log.question KEEPS being written (a deliberate decision, no schema
 # change) -- the fix is narrower: the admin-facing dashboard must stop
 # echoing verbatim question text back out. The old "recent" key returned the
 # last 20 raw question strings across ALL users, unfiltered by the request's

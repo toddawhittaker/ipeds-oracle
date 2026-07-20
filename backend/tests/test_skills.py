@@ -396,7 +396,7 @@ def test_seed_lesson_rewrites_are_frozen_literals():
 
     # SEED_LESSON_UPGRADES' match key (the frozen v1 description) must be the
     # SAME text migration 6 rewrites terse rows INTO, so a db already upgraded
-    # by migration 6 (Todd's live db) is exactly what upgrade_seed_lessons() matches.
+    # by migration 6 (a live/production db) is exactly what upgrade_seed_lessons() matches.
     v1_match_keys = [v1 for v1, _v2 in SEED_LESSON_UPGRADES]
     assert v1_match_keys == frozen_v1_descriptions, v1_match_keys
 
