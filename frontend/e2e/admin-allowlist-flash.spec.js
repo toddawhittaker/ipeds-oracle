@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./mocks.js";
 
 // frontend/src/Admin.jsx's Allowlist component (`inviteFlash(addr, res)`) shows one
 // of FIVE distinct messages after an add-allowlist POST, driven by the
@@ -17,7 +17,7 @@ import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./
 
 async function openAllowlistAndSubmit(page, email = "newperson@example.edu") {
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByPlaceholder("email", { exact: true }).fill(email);
   await page.getByRole("button", { name: "Add" }).click();
 }
@@ -161,7 +161,7 @@ test("manual add: empty note defaults to an 'added on <date> by <admin>' audit "
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
 
   // Empty note -> defaulted audit trail derived from the acting admin + date.
   await page.getByPlaceholder("email", { exact: true }).fill("newperson@example.edu");

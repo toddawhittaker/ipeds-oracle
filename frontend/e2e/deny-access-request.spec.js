@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -28,7 +29,7 @@ async function openAllowlistTab(page, { allowlist = [], reqs = [], denied = [], 
   await mockAccessRequests(page, reqs);
   await mockDeniedRequests(page, denied);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   if (gotoPending) await openPending(page);
 }
 
@@ -124,7 +125,7 @@ test.describe("pending access requests table", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
     await openPending(page);
     await expect(page.getByRole("cell", { name: "one@example.edu", exact: true })).toBeVisible();
 
@@ -146,7 +147,7 @@ test.describe("pending access requests table", () => {
     await mockAccessRequests(page, TWO_PENDING);
     await mockDeniedRequests(page, []);
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
     await openPending(page);
 
     await page.getByRole("button", { name: "Approve request from one@example.edu" }).click();
@@ -170,7 +171,7 @@ test.describe("pending access requests table", () => {
     await mockAccessRequests(page, TWO_PENDING);
     await mockDeniedRequests(page, []);
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
     await openPending(page);
 
     await page.getByRole("button", { name: "Approve request from one@example.edu" }).click();

@@ -94,14 +94,15 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   the admin leaves the Users section — the spec's persistence contract, with no
   new state plumbing. Pinned in `frontend/e2e/admin-users-tabs.spec.js`.
   **Admin "attention" indicators** surface where work is waiting: a total badge
-  on the top-bar **Admin** button (live on every page, Chat included) and a
+  on the top-bar **user-badge avatar** (live on every page, Chat included — see
+  the shell paragraph below) and a
   per-area count on the Admin section nav — only the three areas with an
   actionable backlog: **Users** (pending access requests), **Skills** (unverified
   lessons), **Logs** (problems since this admin last viewed Logs);
   imports/usage never badge. One lightweight `GET /api/admin/attention` →
   `{users,skills,logs}` (keys = `ADMIN_TABS` names, so a section's count is just
   `counts[tab]`) is **fetched from the Shell** (`App.jsx`), not per-tab, so the
-  top-bar total works before you ever open Admin; it polls every 30s AND
+  avatar total works before you ever open Admin; it polls every 30s AND
   **re-fetches on tab focus/visibility** (a backgrounded tab throttles
   `setInterval`, so without this a change made while you're away wouldn't surface
   until a much-delayed tick — the "polling doesn't update, only a refresh does"
@@ -117,6 +118,26 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   Users-tab reload also ping `refreshAttention()` so a badge drops the instant you
   act, not on the next poll. Pinned in `frontend/e2e/admin-attention.spec.js` +
   `backend/tests/test_admin_router.py`.
+  **The top bar holds exactly two things**: the **wordmark** (a `<Link to="/">`,
+  the way home) on the left and a **user-badge menu** (`UserMenu.jsx`) on the
+  right — nothing else. The badge is a round **avatar** showing initials derived
+  from the signed-in email (`initials.js`, pure/vitest: `first.last@…`→`"TW"`, a
+  `+tag` is stripped, else the first letter). It's a real **menu button**
+  (`aria-haspopup="menu"`, `role=menu`/`menuitem`, ↑/↓/Home/End roving,
+  Escape-closes-and-restores-focus, click-outside) whose items are **Admin** (only
+  when `is_admin` — `navigate("/admin")`, carrying the attention count badge),
+  **About**, the **light/dark toggle** (inline `IconSun`/`IconMoon` from
+  `icons.jsx`, replacing the old ☀️/🌙 emoji; flips `data-theme` on `<html>` +
+  `localStorage`, and is the one item that keeps the menu **open** on activation),
+  and **Sign out**. The signed-in email is surfaced as the menu's header (it left
+  the bar). Since Admin no longer has its own top-bar link, **admin attention rides
+  the avatar** (the capped `formatBadge` count as a corner pill + in the button's
+  aria-label) AND the Admin menu item. **About** (`AboutModal.jsx`) is an
+  informational dialog — deliberately NOT `useConfirm` (that's confirm/cancel
+  shaped); it reuses the `.modal-*` CSS + the `ConfirmModal` a11y pattern
+  (focus-in, Escape/overlay/Close, return-focus-to-opener, background `inert`) and
+  links to the (private) GitHub repo. Pinned in `frontend/e2e/user-menu.spec.js` +
+  `initials.test.js`.
   Chat interaction contracts (all Playwright-pinned in
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing

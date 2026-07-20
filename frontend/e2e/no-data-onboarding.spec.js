@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockImportCatalog,
@@ -49,10 +50,10 @@ test("admin + has_data:false lands on Admin/Imports with the no-dataset CTA", as
 
   // No manual navigation click -- an admin with no data must land directly on
   // the Admin view, Imports subtab, without having to find their own way there.
-  await expect(page.getByRole("link", { name: "Admin" })).toHaveAttribute(
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");
+  await expect(page.getByRole("link", { name: "Imports" })).toHaveAttribute(
     "aria-current", "page",
   );
-  await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");
   await expect(
     page.getByText(/No dataset loaded yet.*pick one or more years/i),
   ).toBeVisible();
@@ -81,9 +82,6 @@ test("admin + has_data:false deep-linking /chat/3 STAYS on /chat/3 (no-data redi
   // landing on bare /, not every route a no-data admin might deep-link to.
   expect(new URL(page.url()).pathname).toBe("/chat/3");
   await expect(page.getByText("Old answer.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Admin" })).not.toHaveAttribute(
-    "aria-current", "page",
-  );
 });
 
 test("non-admin + has_data:false sees the Chat no-data notice, no example chips", async ({ page }) => {
@@ -113,7 +111,7 @@ test("admin + has_data:false clicking to Chat sees the admin-flavored no-data no
   await page.goto("/");
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");
 
-  await page.getByRole("link", { name: "Chat", exact: true }).click();
+  await page.getByRole("link", { name: "IPEDS Oracle, go to chat" }).click();
 
   await expect(
     page.getByRole("heading", { name: /No IPEDS data loaded yet/i }),
@@ -145,10 +143,10 @@ test("no-data admin who clicks Chat then Admin lands back on /admin/imports, not
   await page.goto("/");
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");
 
-  await page.getByRole("link", { name: "Chat", exact: true }).click();
+  await page.getByRole("link", { name: "IPEDS Oracle, go to chat" }).click();
   expect(new URL(page.url()).pathname).toBe("/");
 
-  await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await gotoAdmin(page);
 
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/imports");
 });
@@ -204,7 +202,7 @@ test("an integrate reaching 'swapped' re-fetches /me and clears the Chat no-data
 
   // has_data is now true (from the second /me response) -- Chat's no-data
   // notice must be gone, replaced by the normal examples empty-state.
-  await page.getByRole("link", { name: "Chat", exact: true }).click();
+  await page.getByRole("link", { name: "IPEDS Oracle, go to chat" }).click();
   await expect(
     page.getByRole("heading", { name: /No IPEDS data loaded yet/i }),
   ).toHaveCount(0);

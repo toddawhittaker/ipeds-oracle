@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockImportJobs,
@@ -32,7 +33,7 @@ async function openImportsTab(page) {
   await mockConversations(page, []);
   await mockImportJobs(page, []);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Imports" }).click();
 }
 

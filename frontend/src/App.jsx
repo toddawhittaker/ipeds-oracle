@@ -8,7 +8,9 @@ import Verify from "./Verify.jsx";
 import { ToastProvider } from "./Toast.jsx";
 import { ConfirmProvider } from "./ConfirmModal.jsx";
 import Wordmark from "./Wordmark.jsx";
-import { attentionTotal, formatBadge } from "./attention.js";
+import UserMenu from "./UserMenu.jsx";
+import AboutModal from "./AboutModal.jsx";
+import { attentionTotal } from "./attention.js";
 
 // How often the Shell re-polls the admin attention counts. Long enough to be
 // cheap, short enough that a badge feels live; mutations that clear a backlog
@@ -52,6 +54,7 @@ function Shell() {
   const [user, setUser] = useState(undefined); // undefined=loading, null=logged out
   const [theme, setTheme] = useState(currentTheme);
   const [attention, setAttention] = useState({ users: 0, skills: 0, logs: 0 });
+  const [aboutOpen, setAboutOpen] = useState(false);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const landedAt = useRef(pathname);
@@ -157,7 +160,6 @@ function Shell() {
   if (user === undefined) return <div className="center muted">Loading…</div>;
   if (!user) return <Login onDone={() => api.me().then(setUser).catch(() => {})} />;
 
-  const onAdmin = pathname === "/admin" || pathname.startsWith("/admin/");
   // UX-only guard: an unauthorized viewer bounces straight back to "/" and
   // never renders (or fetches data for) an admin panel. The real security
   // boundary is server-side -- app/routers/admin.py's require_admin -- this
@@ -178,34 +180,18 @@ function Shell() {
         {routeAnnounce}
       </div>
       <header className="topbar">
-        <div className="brand"><Wordmark /></div>
-        <nav className="tabs" aria-label="Primary">
-          <Link to="/" className={onAdmin ? "" : "on"} aria-current={onAdmin ? undefined : "page"}>Chat</Link>
-          {user.is_admin && (() => {
-            const total = attentionTotal(attention);
-            const label = formatBadge(total);
-            return (
-              <Link to="/admin" className={onAdmin ? "on" : ""}
-                    aria-current={onAdmin ? "page" : undefined}
-                    aria-label={total > 0 ? `Admin, ${total} ${total === 1 ? "item needs" : "items need"} attention` : undefined}>
-                Admin
-                {label && <span className="tab-badge attention" aria-hidden="true">{label}</span>}
-              </Link>
-            );
-          })()}
-        </nav>
-        <div className="userbox">
-          <button className="link theme-toggle" onClick={toggleTheme}
-                  title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                  aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
-          <span className="muted">{user.email}</span>
-          <button className="link" onClick={async () => { await api.logout(); setUser(null); }}>
-            Sign out
-          </button>
-        </div>
+        <Link to="/" className="brand" aria-label="IPEDS Oracle, go to chat"><Wordmark /></Link>
+        <UserMenu
+          email={user.email}
+          isAdmin={user.is_admin}
+          attentionTotal={attentionTotal(attention)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onAbout={() => setAboutOpen(true)}
+          onSignOut={async () => { await api.logout(); setUser(null); }}
+        />
       </header>
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
       <Routes>
         {/* key="chat" is a defensive pin, not what actually keeps Chat
             mounted across a "/" <-> "/chat/:id" URL change: react-router's

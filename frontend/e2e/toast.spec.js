@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
 
 // Browser truth for the app-wide toast (Toast.jsx). The Allowlist action copy is
 // pinned elsewhere (admin-allowlist-flash.spec.js); here we cover the toast
@@ -27,7 +27,7 @@ async function openUsers(page, rows, { patchStatus = 200 } = {}) {
       body: JSON.stringify({ detail: "nope" }) });
   });
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
 }
 

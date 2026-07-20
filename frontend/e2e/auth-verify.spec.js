@@ -36,9 +36,8 @@ test.describe("auth / verify (magic-link confirm)", () => {
     await expect.poll(() => verify.calls.length).toBe(1);
     expect(verify.calls[0]).toEqual({ token: "tok-abc-123" });
 
-    // …and we land in the signed-in app shell.
-    await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
-    await expect(page.getByText("prof@example.edu")).toBeVisible();
+    // …and we land in the signed-in app shell (the account-menu avatar is present).
+    await expect(page.getByRole("button", { name: /Account menu/ })).toBeVisible();
   });
 
   test("shows an error for an invalid or expired link", async ({ page }) => {

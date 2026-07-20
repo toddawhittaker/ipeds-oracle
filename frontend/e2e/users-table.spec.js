@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
 
 // Browser truth for the admin Users table. The pure filter/sort/paginate math is
 // unit-tested in frontend/src/userlist.test.js (vitest); here we cover what only a
@@ -47,7 +47,7 @@ async function openUsers(page, rows, me = { email: "admin@example.edu", is_admin
   await mockDeniedRequests(page, []);
   const api = await mockUsersApi(page, rows);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   return api;
 }

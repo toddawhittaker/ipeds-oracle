@@ -1,0 +1,106 @@
+import React, { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
+import { IconInfo } from "./icons.jsx";
+
+const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-ai";
+
+// An informational "About" dialog. Deliberately NOT built on useConfirm (that's
+// action-shaped — a confirm/cancel button row and an onConfirm callback); this is
+// a single-Close dialog whose body is prose + a link. It reuses the .modal-* CSS
+// and mirrors ConfirmModal's a11y contract: role="dialog" + aria-modal, focus moves
+// in on open and returns to the opener on close, Escape / overlay-click / Close all
+// dismiss, and the background is inert while it's open. Pinned in
+// frontend/e2e/user-menu.spec.js.
+export default function AboutModal({ onClose }) {
+  const dialogRef = useRef(null);
+  const closeRef = useRef(null);
+  const openerRef = useRef(null);
+  const ids = useId();
+  const titleId = `about-title-${ids}`;
+  const bodyId = `about-body-${ids}`;
+
+  useEffect(() => {
+    openerRef.current = document.activeElement;
+    const appEl = document.querySelector(".app");
+    appEl?.setAttribute("inert", "");
+    appEl?.setAttribute("aria-hidden", "true");
+    closeRef.current?.focus();
+    return () => {
+      appEl?.removeAttribute("inert");
+      appEl?.removeAttribute("aria-hidden");
+      const opener = openerRef.current;
+      if (opener && document.contains(opener)) {
+        requestAnimationFrame(() => opener.focus?.());
+      }
+    };
+  }, []);
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    // Minimal focus trap: only two stops (the link and Close), so keep Tab inside.
+    if (e.key !== "Tab") return;
+    const items = [...dialogRef.current.querySelectorAll("a[href], button")];
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onOverlayDown(e) {
+    if (e.target === e.currentTarget) onClose();
+  }
+
+  return createPortal(
+    <div className="modal-overlay" onMouseDown={onOverlayDown}>
+      <div
+        className="modal neutral"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={bodyId}
+        ref={dialogRef}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+      >
+        <div className="modal-head">
+          <span className="modal-icon neutral"><IconInfo size={20} /></span>
+          <h2 className="modal-title" id={titleId}>About IPEDS Oracle</h2>
+        </div>
+        <div className="modal-body" id={bodyId}>
+          <p>
+            <strong>IPEDS Oracle</strong> answers natural-language questions about U.S.
+            colleges and universities from the IPEDS dataset — the U.S. Department of
+            Education&rsquo;s annual census of postsecondary institutions.
+          </p>
+          <p>
+            Ask a question in plain English and an AI agent turns it into SQL against
+            the read-only IPEDS database, then streams back an answer with the figures,
+            tables, and charts behind it.
+          </p>
+          <p className="small muted">
+            Source code:{" "}
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer">{GITHUB_URL}</a>{" "}
+            (private repository).
+          </p>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="modal-confirm" ref={closeRef} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}

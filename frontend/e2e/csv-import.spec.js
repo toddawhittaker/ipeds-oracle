@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockAccessRequests, mockDeniedRequests } from "./mocks.js";
 
 // Browser truth for the Users-tab CSV bulk import. The parse/normalize/dedupe/
 // validate math is unit-tested in frontend/src/csvimport.test.js (vitest); here we
@@ -26,7 +26,7 @@ async function openImporter(page, { rows = [], bulk } = {}) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(bulkResponse) });
   });
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   await page.getByText("Import from CSV").click(); // expand the <details>
   return { posts };

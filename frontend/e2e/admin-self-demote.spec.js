@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockAllowlist, mockAccessRequests } from "./mocks.js";
 
 // The signed-in admin can promote/demote others, but their OWN row shows a
 // non-interactive "✓ Admin (you)" status and an EMPTY Actions cell — you can
@@ -14,7 +14,7 @@ test("admin cannot demote or remove themselves from the allowlist UI", async ({ 
   await mockAccessRequests(page, []);
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
 
   // Own row: a plain status label, and no self-directed action buttons at all.
   await expect(page.getByText("✓ Admin (you)")).toBeVisible();

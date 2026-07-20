@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockImportJobs, mockImportCatalog } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockImportJobs, mockImportCatalog } from "./mocks.js";
 
 // Browser truth for the manual-upload drag-and-drop. The backend guard +
 // multi-file rebuild logic is unit-tested in backend/tests/test_importer.py;
@@ -16,7 +16,7 @@ async function openManualUpload(page) {
   await mockImportJobs(page, []);
   await mockImportCatalog(page, CATALOG);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Imports" }).click();
   await page.getByText("Manual upload", { exact: false }).click(); // expand the <details>
 }

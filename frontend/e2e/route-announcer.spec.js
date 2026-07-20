@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -36,7 +37,7 @@ test.describe("route announcer", () => {
     const announcer = page.getByTestId("route-announcer");
     await expect(announcer).toBeAttached();
 
-    await page.getByRole("link", { name: "Admin", exact: true }).click();
+    await gotoAdmin(page);
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 
     await expect(announcer).not.toHaveText("");
