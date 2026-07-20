@@ -1,6 +1,24 @@
 import { test, expect } from "@playwright/test";
 import { gotoAdmin, mockMe, mockConversations, mockSkills } from "./mocks.js";
 
+// Fill a React CONTROLLED input and confirm the value actually committed before
+// moving on. A one-shot `fill()` on a controlled `<input>/<textarea>` is racy
+// under load: the programmatic value-set can lose to React's re-render (the
+// value snaps back / a later field's edit interleaves), so the field ends up
+// stale or garbled and the subsequent Save reads a wrong `draft`. Retrying the
+// whole fill+assert via toPass() re-issues the fill until the controlled value
+// sticks — the idiomatic fix for this Playwright↔React class. Serializing each
+// field's commit this way also stops one field's fill bleeding into another.
+async function fillStable(locator, value) {
+  await expect(async () => {
+    await locator.fill(value);
+    // Short inner poll so a retry re-issues the fill quickly; the generous outer
+    // budget absorbs a slow re-render on a contended/underpowered CI runner
+    // (still well under the 30s per-test timeout). Passes in ~1 try when idle.
+    await expect(locator).toHaveValue(value, { timeout: 1000 });
+  }).toPass({ timeout: 15000 });
+}
+
 // The redesigned Skills → "Learned lessons" admin view: a short generalized
 // HEADLINE leads, a longer generalized DESCRIPTION is tucked into its own
 // collapsible "Details" (not dumped as a wall of text), the SQL worked
@@ -257,9 +275,11 @@ test("Save PATCHes exactly {headline, lesson, notes, canonical_sql} trimmed, rel
   await editBtn.click();
 
   // Untrimmed edits — Save must send the trimmed value, not the raw one.
-  await page.getByLabel("Headline", { exact: true }).fill("  Add majornum=1 for every completions total.  ");
-  await page.getByLabel("Description").fill(`  ${EDITABLE_LESSON.lesson}  `);
-  await page.getByLabel("Example query").fill(`  ${EDITABLE_LESSON.canonical_sql}  `);
+  // fillStable commits each field before the next so nothing bleeds across fields
+  // and Save can't outrun React's re-render under load (the flake).
+  await fillStable(page.getByLabel("Headline", { exact: true }), "  Add majornum=1 for every completions total.  ");
+  await fillStable(page.getByLabel("Description"), `  ${EDITABLE_LESSON.lesson}  `);
+  await fillStable(page.getByLabel("Example query"), `  ${EDITABLE_LESSON.canonical_sql}  `);
 
   await page.getByRole("button", { name: "Save" }).click();
 
@@ -470,7 +490,7 @@ test("editing the Description writes the identical trimmed text to both lesson a
   await expect(page.getByLabel("Description")).toHaveValue(STALE_NOTES_LESSON.lesson);
 
   const newText = "Always compare year against a constant MAX(year)-N bound.";
-  await page.getByLabel("Description").fill(newText);
+  await fillStable(page.getByLabel("Description"), newText);
   await page.getByRole("button", { name: "Save" }).click();
 
   await expect.poll(() => patchBody).not.toBeNull();
@@ -495,8 +515,10 @@ test("clearing the Description clears notes too — a stale notes fallback canno
   await page.getByRole("button", { name: "Edit lesson: Use a constant year bound." }).click();
 
   // Headline is still non-empty, so Save stays enabled even with an empty
-  // Description (draftIsEmpty only trips when BOTH are blank).
-  await page.getByLabel("Description").fill("");
+  // Description (draftIsEmpty only trips when BOTH are blank) — so the "enabled"
+  // check does NOT gate on the Description committing. fillStable waits for the
+  // clear to actually commit before Save (else the click reads a stale draft).
+  await fillStable(page.getByLabel("Description"), "");
   await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
   await page.getByRole("button", { name: "Save" }).click();
 
