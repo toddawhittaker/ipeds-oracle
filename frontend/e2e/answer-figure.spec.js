@@ -46,15 +46,45 @@ test("a figure renders above the prose and outside the copy surface", async ({ p
   // table and chart PAIRED side by side (.brief-figrow)...
   await expect(page.locator(".brief-figrow .table-block")).toBeVisible();
   await expect(page.locator(".brief-figrow figure.chart")).toBeVisible();
+  // A few-column table shares the row (side by side), NOT stacked.
+  await expect(page.locator(".brief-figrow.stacked")).toHaveCount(0);
   // ...and the redundant "Chart this" toggle dropped (a chart is already shown),
   // while Download CSV stays.
   await expect(page.getByRole("button", { name: "Chart this" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
-  // Trend intelligence: a %-change delta badge + a "Trend" toggle (on by default).
+  // Trend intelligence: a %-change delta badge + the chart-type <select> defaulting
+  // to "Line + trend" (trend on by default; it's a line subtype in the dropdown).
   await expect(page.locator(".chart-delta")).toContainText("%");
-  await expect(page.getByRole("button", { name: "Trend" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("combobox", { name: "Chart type" })).toHaveValue("line-trend");
   // Outside the copy surface: the figure is NOT inside the .md node copy targets.
   await expect(page.locator(".md .answer-figure")).toHaveCount(0);
+});
+
+// A many-column brief can't share a row without squeezing the chart, so the pair
+// STACKS — chart below the full-width table (Markdown.jsx: headers.length > 4).
+const WIDE_ANSWER = "Degrees by level and year.\n\n"
+  + "| Year | Bachelor's | Master's | Doctoral | Total |\n"
+  + "|---|---|---|---|---|\n"
+  + "| 2022 | 6,100 | 2,000 | 300 | 8,400 |\n"
+  + "| 2023 | 6,900 | 2,100 | 320 | 9,320 |\n"
+  + "| 2024 | 7,679 | 2,200 | 340 | 10,219 |\n\n"
+  + "```chart\n"
+  + '{"type":"line","x":"year","y":"total","title":"Total degrees",'
+  + '"data":[{"year":2022,"total":8400},{"year":2023,"total":9320},{"year":2024,"total":10219}]}\n'
+  + "```";
+
+test("a many-column brief stacks the chart below the table", async ({ page }) => {
+  await signedIn(page);
+  await mockStreamChat(page, {
+    conversationId: 12, answer: WIDE_ANSWER, figure: FIGURE, messageId: 1, userMessageId: 2 });
+  await page.goto("/");
+  await page.getByPlaceholder("Ask about IPEDS data…").fill("degrees by level?");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  // Still one paired brief (table + chart), but flagged .stacked (5 columns > 4).
+  await expect(page.locator(".brief-figrow.stacked")).toBeVisible();
+  await expect(page.locator(".brief-figrow.stacked .table-block")).toBeVisible();
+  await expect(page.locator(".brief-figrow.stacked figure.chart")).toBeVisible();
 });
 
 test("a figure survives a reload (persisted like sql_log)", async ({ page }) => {

@@ -232,19 +232,31 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
   (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
   some models emit the latter.) The brief applies on **follow-up turns too** (never
-  code-gated; a prompt line makes the model reliably do it). A single-number brief's
+  code-gated; a prompt line makes the model reliably do it). A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
-  the standalone fence; drops the redundant "Chart this"; `.brief-figrow` wraps to
-  stacked when narrow).
+  the standalone fence; drops the redundant "Chart this"). The table takes its
+  **shrink-to-fit** width (`.md th` may wrap multi-word headers — data cells stay
+  nowrap — so a long header no longer forces an over-wide table) and the chart fills
+  the rest; `.brief-figrow` **wraps to stacked on a narrow viewport**, AND a
+  **many-column table (`headers.length > 4`) is forced `.stacked`** — chart BELOW the
+  full-width table, since it can't share a row without squeezing the chart. Pinned in
+  `frontend/e2e/answer-figure.spec.js`. The **chart toolbar is compact** so it fits a
+  narrow side-by-side chart without overflowing: a single **`<select>`** collapses
+  Line / Bar / **Line + trend** (trend is a line subtype, offered only when a trend
+  exists), and **Data labels** + **Copy image** are **icon-only** buttons (tooltip on
+  hover; `IconCopy`→`IconCheck` on copy). A long chart **title wraps to 2 lines**
+  (`wrapLabel`) so a narrow chart doesn't clip it, while the wide PNG export keeps one
+  line. `.chart-head` wraps rather than overflowing.
 - **The analyst layer** on top of the brief:
   - **Trend line + %-change** — `Chart.jsx` overlays a least-squares fit (a computed
     `__trend` `<Line>`, dashed ochre, injected into `chartChildren()` so it flows to
     the PNG export too; kept out of `keys` → no label/legend) and a **delta badge**
     (`▲/▼ X%` over the range, `--ok`/`--danger`) for a single-series line time-series.
     All client-side from the numeric chart data (`trendstats.js`, vitest) — accurate,
-    no model dependency; a "Trend" toggle (default on). **Both trend line AND delta
-    are gated to a TIME-LIKE x-axis** (`/year|date|month|quarter|day/i`) — a
+    no model dependency; the trend line is default-on via the chart-type control.
+    **Both trend line AND delta are gated to a TIME-LIKE x-axis**
+    (`/year|date|month|quarter|day/i`) — a
     "% change over the range" / fitted slope is meaningless across categorical
     entities, so a categorical bar (e.g. compare mode below) shows neither.
   - **Richer narrative + rank/share** — prompt step 6(b): direction/magnitude,

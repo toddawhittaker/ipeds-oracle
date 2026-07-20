@@ -57,23 +57,21 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
 
   // The table has a numeric column, so "Chart this" is offered; toggling it
-  // reveals the chart with a line/bar type switcher.
+  // reveals the chart with a compact line/bar type <select>.
   const chartBtn = page.getByRole("button", { name: "Chart this" });
   await expect(chartBtn).toBeVisible();
   await chartBtn.click();
-  await expect(page.getByRole("button", { name: "Bar", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Line", exact: true })).toBeVisible();
+  const chartType = page.getByRole("combobox", { name: "Chart type" });
+  await expect(chartType).toBeVisible();
 
   // The chart is rasterized to a PNG (hidden <img>) for clean HTML copy/paste.
   await expect(page.locator("img.chart-export-img"))
     .toHaveAttribute("src", /^data:image\/png/, { timeout: 5000 });
 
   // Switching the type must survive a re-render (e.g. a copy) — regression for
-  // the chart remounting and snapping back to line.
-  await page.getByRole("button", { name: "Bar", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Bar", exact: true }))
-    .toHaveAttribute("aria-pressed", "true");
+  // the chart remounting and snapping back to its default.
+  await chartType.selectOption("bar");
+  await expect(chartType).toHaveValue("bar");
   await page.getByRole("button", { name: "Copy Markdown" }).click();
-  await expect(page.getByRole("button", { name: "Bar", exact: true }))
-    .toHaveAttribute("aria-pressed", "true");
+  await expect(chartType).toHaveValue("bar");
 });
