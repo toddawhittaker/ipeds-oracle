@@ -17,13 +17,17 @@ import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 // quietly teaches the data model; `q` is the question the button fills in.
 const EXAMPLES = [
   { tag: "Completions · trend",
-    q: "Top 20 institutions awarding Associate's degrees in Registered Nursing (CIP 51.3801) over the last 3 years." },
-  { tag: "Completions · filtered",
-    q: "How many Computer Science (CIP 11.0701) bachelor's degrees did California public universities award last year?" },
-  { tag: "Completions · national",
-    q: "National total of Associate's degrees per year, all programs." },
+    q: "How have Computer Science bachelor's degrees changed nationwide over the last five years?" },
   { tag: "Completions · ranking",
-    q: "Which states awarded the most Master's degrees in Education?" },
+    q: "Which undergraduate major produces the most graduates each year?" },
+  { tag: "Completions · share",
+    q: "What share of bachelor's degrees go to women nationwide?" },
+  { tag: "Enrollment · trend",
+    q: "Is community college undergraduate enrollment rising or falling?" },
+  { tag: "Grad rates · national",
+    q: "What's the national six-year college graduation rate?" },
+  { tag: "Completions · national",
+    q: "How many Registered Nursing degrees did U.S. colleges award last year?" },
 ];
 
 // Sidebar is user-resizable (drag or arrow keys); width persists in localStorage.
@@ -840,7 +844,7 @@ export default function Chat({ me }) {
               <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>
               <p className="muted">
                 Degrees awarded, enrollment, tuition, graduation rates, staffing
-                and finance — across collection years 2020-21 through 2024-25.
+                and finance — across collection years 2019-20 through 2024-25.
               </p>
               <div className="examples-grid">
                 {EXAMPLES.map((ex) => (
