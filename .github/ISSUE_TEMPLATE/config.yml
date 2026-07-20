@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/toddawhittaker/ipeds-oracle/security/advisories/new
+    about: Report security issues privately — please do not open a public issue. See SECURITY.md.
+  - name: Question or discussion
+    url: https://github.com/toddawhittaker/ipeds-oracle/discussions
+    about: Ask a question or discuss an idea (if Discussions is enabled).
