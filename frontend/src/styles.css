@@ -760,6 +760,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .brief-figrow figure.chart { flex: 1 1 300px; min-width: min(260px, 100%); margin: 0; }
 .brief-figrow.stacked { flex-direction: column; flex-wrap: nowrap; }
 .brief-figrow.stacked .table-block, .brief-figrow.stacked figure.chart { flex: none; width: 100%; min-width: 0; }
+/* Side-by-side brief: cap the table at ~44% of the row so a wide table SHRINKS to
+   fit — wrapping its headers (data cells keep nowrap) — and hands the rest to the
+   chart, instead of the table taking its full width and squeezing the chart. The
+   cap only bites a wide table; a naturally-narrow one is unaffected. overflow-x
+   visible lets it wrap rather than scroll; the row still wraps to stacked when the
+   viewport is too narrow to share. */
+.brief-figrow:not(.stacked) .table-wrap { overflow-x: visible; }
+.brief-figrow:not(.stacked) .table-block { max-width: min(360px, 100%); }
 
 /* charts */
 .chart { margin: 10px 0; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -783,6 +791,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .chart-ico-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
 .chart-ico-toggle:hover:not(.on), .chart-ico-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .chart-ico-btn:disabled { opacity: .5; cursor: default; }
+/* Maximize dialog: a wide modal holding one large chart (the chart draws its own
+   title, so the header is just a right-aligned close button). */
+.modal.chart-modal { width: min(1100px, 94vw); max-width: none; padding: 12px 16px 16px; }
+.chart-modal-head { display: flex; justify-content: flex-end; }
+.chart-modal-body figure.chart { margin: 0; border: none; background: transparent; padding: 0; }
 .chart-export-img { display: none; }
 /* Off-screen but laid out, so its SVG has real dimensions to rasterize. */
 .chart-export-src { position: absolute; left: -99999px; top: 0; width: 600px; height: 300px; opacity: 0; pointer-events: none; }

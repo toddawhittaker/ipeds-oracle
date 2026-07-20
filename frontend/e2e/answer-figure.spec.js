@@ -140,3 +140,46 @@ test("drill-down chips survive a reload (persisted like the figure)", async ({ p
   await page.goto("/chat/9");
   await expect(page.getByRole("button", { name: "Compare to Texas?" })).toBeVisible();
 });
+
+// The chart-type dropdown lists all applicable options at once — picking "Bar"
+// must NOT hide "Line + trend" (the old bug forced a detour back through "Line").
+test("chart-type dropdown keeps Line + trend available even while Bar is selected", async ({ page }) => {
+  await signedIn(page);
+  await mockStreamChat(page, {
+    conversationId: 20, answer: ANSWER, figure: FIGURE, messageId: 1, userMessageId: 2 });
+  await page.goto("/");
+  await page.getByPlaceholder("Ask about IPEDS data…").fill("cs?");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const sel = page.getByRole("combobox", { name: "Chart type" });
+  await expect(sel.locator("option")).toHaveText(["Line", "Line + trend", "Bar"]);
+  await sel.selectOption("bar");
+  // Still all three — so you can jump straight from Bar to a trended line.
+  await expect(sel.locator("option")).toHaveText(["Line", "Line + trend", "Bar"]);
+  await sel.selectOption("line-trend");
+  await expect(sel).toHaveValue("line-trend");
+});
+
+// Maximize opens the chart in a modal (browser truth: focus trap + return).
+test("maximize opens the chart in a modal; Escape closes and restores focus", async ({ page }) => {
+  await signedIn(page);
+  await mockStreamChat(page, {
+    conversationId: 21, answer: ANSWER, figure: FIGURE, messageId: 1, userMessageId: 2 });
+  await page.goto("/");
+  await page.getByPlaceholder("Ask about IPEDS data…").fill("cs?");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const maxBtn = page.getByRole("button", { name: "Maximize chart" });
+  await expect(maxBtn).toBeVisible();
+  await maxBtn.click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  // The modal's chart keeps its own type control but offers NO nested maximize.
+  await expect(dialog.getByRole("combobox", { name: "Chart type" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Maximize chart" })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(maxBtn).toBeFocused(); // focus returns to the opener
+});
