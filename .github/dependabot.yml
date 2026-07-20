@@ -1,0 +1,35 @@
+# Keep dependencies patched. Grouped so a week's minor/patch bumps arrive as one
+# PR per ecosystem rather than a flood. See docs: https://docs.github.com/code-security/dependabot
+version: 2
+updates:
+  # Backend Python deps. The runtime is pinned+hashed in backend/requirements.lock
+  # (pip-tools); if a bump needs regenerating the lock, do it in the same PR.
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Frontend npm deps.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions used by the workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
