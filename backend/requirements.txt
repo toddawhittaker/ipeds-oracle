@@ -2,7 +2,7 @@
 # The pinned + hashed lockfile that actually gets installed is requirements.lock;
 # regenerate it after editing this file with:
 #   pip-compile --generate-hashes --output-file requirements.lock requirements.txt
-fastapi>=0.115
+fastapi>=0.139.2
 uvicorn[standard]>=0.30
 pydantic>=2.7
 pydantic-settings>=2.3
