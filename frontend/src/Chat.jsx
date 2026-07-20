@@ -214,6 +214,13 @@ export default function Chat({ me }) {
   // [routeId] turnToken effect below doesn't mistake it for the user
   // navigating away and abandon the very turn that's still rendering.
   const selfNavId = useRef(null);
+  // Render-readable twin of selfNavId — a ref can't be read during render
+  // (react-hooks/refs). Both are set together in the `conversation` handler for a
+  // brand-new turn's / -> /chat/:id self-nav; this state gates the render-time
+  // reset below (and clears itself there once the flip settles), while the ref is
+  // consumed by the [routeId] effect. Two markers because render and effect have
+  // different lint-mandated shapes (state vs ref), not two sources of truth.
+  const [selfNav, setSelfNav] = useState(null);
 
   // The URL changed out from under us -- sidebar click, "+ New chat",
   // delete-the-open-chat, or browser Back/Forward -- so reset local thread
@@ -221,13 +228,21 @@ export default function Chat({ me }) {
   // react-hooks/set-state-in-effect is an ERROR in this repo's eslint config,
   // and an effect here would also mean an extra render with stale messages
   // visible before the reset lands.
-  if (openId !== routeId) {
+  // react-router 7 defaults v7_startTransition ON, so the `conversation` handler's
+  // navigate() for a brand-new turn defers the routeId flip as a transition: there
+  // is an intermediate render where openId (set synchronously) is already the new
+  // id but routeId is still the old one. Without a guard the reset below wipes the
+  // just-streamed answer, and loadedFor (already set) blocks any refetch — gone
+  // permanently, stuck on the skeleton (a11y.spec:79/:144 + the routing-chat/
+  // midstream cascade). The handler records the target id in `selfNav` right before
+  // navigate(), so skip the reset while THIS route flux is that self-nav.
+  const isSelfNav = selfNav !== null
+    && (selfNav === routeId || selfNav === openId);
+  if (openId !== routeId && !isSelfNav) {
     // Also free the composer in the view navigated TO -- `busy`/`status` are
     // single shared state, not per-turn, so leaving them set would strand
     // the user here until the abandoned turn's stream resolves elsewhere.
-    // This deliberately does NOT fire on the happy-path self-nav (the
-    // `conversation` handler pre-syncs setOpenId so openId === routeId by
-    // the time this render runs).
+    // This deliberately does NOT fire on the happy-path self-nav (guarded above).
     setOpenId(routeId); setMessages([]); setNotice(""); setEditingIdx(null);
     setBusy(false); setStatus("");
     // Entering a conversation route -> skeleton until its fetch settles
@@ -237,6 +252,14 @@ export default function Chat({ me }) {
     // itself is reset in the [routeId] effect below — a ref can't legally be
     // written during render).
     setShowJump(false);
+  } else if (selfNav !== null && openId === routeId && selfNav === routeId) {
+    // The self-nav flip has settled (openId === routeId === target). Clear the
+    // marker so a LATER genuine navigation-away isn't mistaken for this one.
+    // Set-state DURING render (React re-renders and bails once selfNav is null) --
+    // NOT an effect (react-hooks/set-state-in-effect is an error here, and it would
+    // leave the stale marker masking the next nav for a frame). The ref twin is
+    // cleared independently by the [routeId] effect when it consumes the turn.
+    setSelfNav(null);
   }
   const badFormat = routeId !== null && !NUMERIC_ID.test(routeId);
   const showNotice = notice || (badFormat ? NOT_AVAILABLE : "");
@@ -374,10 +397,10 @@ export default function Chat({ me }) {
   useEffect(() => {
     // If this route change is the current turn's own self-nav (the
     // `conversation` handler's / -> /chat/:id flip for a brand-new
-    // conversation), consume the marker and don't abandon it -- this relies
-    // on navigate() being a synchronous (non-transition) history update,
-    // same load-bearing precondition as the main.jsx v7_startTransition
-    // warning referenced in submit() below.
+    // conversation), consume the ref marker and don't abandon the turn. This
+    // fires whenever routeId reaches the target — no reliance on navigate()
+    // being synchronous (under react-router 7's v7_startTransition it isn't;
+    // the render-time reset is guarded separately via the `selfNav` state twin).
     if (selfNavId.current !== null && String(routeId) === selfNavId.current) {
       selfNavId.current = null;
       return;
@@ -665,25 +688,21 @@ export default function Chat({ me }) {
           // conversation the client already has fully in memory; setOpenId
           // stops the render-time reset from wiping it.
           setNotice("");
-          // LOAD-BEARING PRECONDITION, WARNING FOR FUTURE MAINTAINERS: this
-          // batching guarantee holds only because navigate() here is a plain
-          // synchronous history update, NOT a React transition. If
-          // <BrowserRouter future={{ v7_startTransition: true }}> is ever
-          // added (main.jsx) -- the documented v6->v7 migration step, and
-          // the v7 DEFAULT -- navigate() below starts deferring its location
-          // update as a transition: React would commit openId/routeId
-          // BEFORE the transition resolves, the render-time reset above
-          // would wipe the just-streamed answer, and loadedFor.current
-          // already being set to this id would stop the loader effect from
-          // ever refetching it -- the answer would be gone permanently. See
-          // the matching warning at main.jsx.
+          // LOAD-BEARING PRECONDITION: under react-router 7, v7_startTransition is
+          // the DEFAULT, so this navigate() defers the routeId flip as a transition
+          // and commits openId FIRST — the render-time reset above would then see
+          // openId/routeId diverge and wipe the just-streamed answer (loadedFor is
+          // already set, so the wipe is permanent — no refetch). The `selfNav`
+          // marker set here is what lets that reset skip this self-nav until the
+          // flip settles. Do NOT assume navigate() is synchronous (it isn't in v7),
+          // and do NOT drop the marker. Regression pinned by routing-chat + a11y.
           loadedFor.current = String(ev.id);
           setOpenId(String(ev.id));
           // Only a brand-new conversation (convId === null) actually flips
           // routeId here -- an existing-conversation turn's routeId is
           // already correct, so marking self-nav for it would linger
           // unconsumed and mask a LATER genuine navigation-away.
-          if (convId === null) selfNavId.current = String(ev.id);
+          if (convId === null) { selfNavId.current = String(ev.id); setSelfNav(String(ev.id)); }
           navigate(`/chat/${ev.id}`, { replace: true });
         }
         else if (ev.type === "status") {
