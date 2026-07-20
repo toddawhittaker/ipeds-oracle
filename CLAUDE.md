@@ -136,8 +136,10 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   informational dialog — deliberately NOT `useConfirm` (that's confirm/cancel
   shaped); it reuses the `.modal-*` CSS + the `ConfirmModal` a11y pattern
   (focus-in, Escape/overlay/Close, return-focus-to-opener, background `inert`) and
-  links to the (private) GitHub repo. Pinned in `frontend/e2e/user-menu.spec.js` +
-  `initials.test.js`.
+  links to the GitHub repo. It also links the **end-user + admin guides**
+  (`docs/USER_GUIDE.md`/`docs/ADMIN_GUIDE.md`, hosted on GitHub with screenshots) —
+  the **Admin guide link is gated to `isAdmin`** (passed from `App.jsx`). Pinned in
+  `frontend/e2e/user-menu.spec.js` + `initials.test.js`.
   Chat interaction contracts (all Playwright-pinned in
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing

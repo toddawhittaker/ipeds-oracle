@@ -138,11 +138,30 @@ test("About opens an informational modal with the GitHub link; Close dismisses a
   // "IPEDS dataset" links out to the NCES IPEDS home.
   await expect(dialog.getByRole("link", { name: "IPEDS dataset" }))
     .toHaveAttribute("href", "https://nces.ed.gov/ipeds/");
+  // The user guide is linked for everyone; the admin guide is NOT shown to a non-admin.
+  await expect(dialog.getByRole("link", { name: "Using IPEDS Oracle" }))
+    .toHaveAttribute("href", /\/docs\/USER_GUIDE\.md$/);
+  await expect(dialog.getByRole("link", { name: "Admin guide" })).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // Focus returns to the opener (the avatar).
   await expect(avatar(page)).toBeFocused();
+});
+
+test("About shows the Admin guide link only to an admin", async ({ page }) => {
+  await signedIn(page, { admin: true });
+  await page.goto("/");
+
+  await avatar(page).click();
+  await page.getByRole("menuitem", { name: "About IPEDS Oracle" }).click();
+
+  const dialog = page.getByRole("dialog");
+  // Both guides are linked for an admin.
+  await expect(dialog.getByRole("link", { name: "Using IPEDS Oracle" }))
+    .toHaveAttribute("href", /\/docs\/USER_GUIDE\.md$/);
+  await expect(dialog.getByRole("link", { name: "Admin guide" }))
+    .toHaveAttribute("href", /\/docs\/ADMIN_GUIDE\.md$/);
 });
 
 test("Sign out calls logout and returns to the Login screen", async ({ page }) => {

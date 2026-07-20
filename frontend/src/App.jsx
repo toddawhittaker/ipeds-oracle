@@ -191,7 +191,7 @@ function Shell() {
           onSignOut={async () => { await api.logout(); setUser(null); }}
         />
       </header>
-      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
+      {aboutOpen && <AboutModal isAdmin={user.is_admin} onClose={() => setAboutOpen(false)} />}
       <Routes>
         {/* key="chat" is a defensive pin, not what actually keeps Chat
             mounted across a "/" <-> "/chat/:id" URL change: react-router's
