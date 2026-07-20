@@ -128,7 +128,18 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   up = never yanked; a "Jump to latest" pill is the way back). Conversation
   switches show a skeleton, never the empty-state prompt. A printable key
   typed with nothing editable focused redirects into the composer
-  (`typeahead.js`, vitest-pinned). Conversations can be **renamed inline**
+  (`typeahead.js`, vitest-pinned). The **composer is Markdown-highlighting** but
+  stays a real `<textarea>`: `MarkdownTextarea.jsx` layers a transparent textarea
+  over a colored `<pre>` mirror (`mdhighlight.js`, a pure/vitest cosmetic lexer
+  whose segments **concatenate back to the source exactly** — the composer's value
+  is always the raw Markdown string, so undo/redo, plain paste, IME, and the
+  character-level edits like `---`→`--` on Backspace all come free). Highlighting is
+  **color-only** (dimmed markers, tinted structure) — never weight/size, which would
+  shift glyph widths and drift the caret off the overlay. It does NOT render blocks
+  (no HR/heading-size/hanging-indent while typing) by design. User bubbles already
+  render the stored plain Markdown through the safe `Markdown.jsx` (unchanged).
+  Pinned in `frontend/e2e/composer-markdown.spec.js` + `mdhighlight.test.js`.
+  Conversations can be **renamed inline**
   (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
   never touch `updated_at`, or renaming an old chat would reorder the
   recency-sorted sidebar). An answer's **Thinking / SQL traces are

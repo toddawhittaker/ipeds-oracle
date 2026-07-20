@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
+import MarkdownTextarea from "./MarkdownTextarea.jsx";
 import Figure from "./Figure.jsx";
 import Suggestions from "./Suggestions.jsx";
 import SqlBlock from "./SqlBlock.jsx";
@@ -303,13 +304,6 @@ export default function Chat({ me }) {
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
   }
-  // Auto-grow the composer to fit multi-line input (Shift-Enter adds a line).
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
-  }, [input]);
 
   // Fetch a deep-linked/sidebar-selected conversation's messages. Every
   // setState here happens inside the async .then/.catch callback, never sync
@@ -903,7 +897,7 @@ export default function Chat({ me }) {
                   </div>
                 ) : editingIdx === i ? (
                   <div className="edit-box">
-                    <textarea className="thin-scroll" value={editText} autoFocus
+                    <MarkdownTextarea value={editText} autoFocus aria-label="Edit prompt"
                       onChange={(e) => setEditText(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(i); }
@@ -1013,9 +1007,9 @@ export default function Chat({ me }) {
         <form className="composer" onSubmit={send}>
           <div className="composer-box">
             <label htmlFor="composer-input" className="sr-only">Ask about IPEDS data</label>
-            <textarea
-              id="composer-input" ref={taRef} className="thin-scroll"
-              rows={1} value={input} placeholder="Ask about IPEDS data…  (Shift-Enter for a new line)"
+            <MarkdownTextarea
+              id="composer-input" ref={taRef}
+              value={input} placeholder="Ask about IPEDS data…  (Shift-Enter for a new line)"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) send(e); }}
             />
