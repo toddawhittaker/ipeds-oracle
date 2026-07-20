@@ -4,7 +4,8 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { svgToPngDataUrl } from "./chartimg.js";
-import { IconCopy, IconCheck, IconTag } from "./icons.jsx";
+import { IconCopy, IconCheck, IconTag, IconMaximize } from "./icons.jsx";
+import ChartModal from "./ChartModal.jsx";
 import { pctChange, trendValues } from "./trendstats.js";
 
 const PALETTE = ["#3b82c4", "#e0803a", "#38a169", "#a23bc9", "#d64f6b", "#0e9aa7"];
@@ -139,13 +140,17 @@ function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trend
   ].filter(Boolean);
 }
 
-export default function Chart({ spec }) {
+// `inModal` renders a bigger chart (in the maximize dialog) and hides its own
+// maximize control; initial* carry the opener chart's current type/trend/labels
+// into the modal so it opens showing what you were looking at.
+export default function Chart({ spec, inModal = false, initialType, initialTrend, initialLabels }) {
   const c = useThemeColors();
-  const [type, setType] = useState(spec?.type === "bar" ? "bar" : "line");
-  const [showLabels, setShowLabels] = useState(false);
-  const [showTrend, setShowTrend] = useState(true);
+  const [type, setType] = useState(initialType ?? (spec?.type === "bar" ? "bar" : "line"));
+  const [showLabels, setShowLabels] = useState(initialLabels ?? false);
+  const [showTrend, setShowTrend] = useState(initialTrend ?? true);
   const [png, setPng] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [maxed, setMaxed] = useState(false);
   const exportRef = useRef(null);
 
   useEffect(() => {
@@ -180,7 +185,7 @@ export default function Chart({ spec }) {
   const longLabels = isBar && catLabels.some((l) => l.length > 12);
   // Reserve vertical room for a title that may wrap to two lines on a narrow chart.
   const margin = { top: spec.title ? 40 : 10, right: 22, bottom: longLabels ? 12 : 24, left: 10 };
-  const chartH = longLabels ? 372 : 320;
+  const chartH = inModal ? (longLabels ? 560 : 460) : (longLabels ? 372 : 320);
 
   // Trend intelligence (single numeric series only): a fitted trend LINE for a
   // line time-series with enough points, and the %-change over the range as a
@@ -190,8 +195,12 @@ export default function Chart({ spec }) {
   // A-vs-B comparison, e.g. compare mode, must not read as a bogus trend).
   const timeLikeX = /year|date|month|quarter|day/i.test(String(spec.x || ""));
   const singleKey = keys.length === 1 ? keys[0] : null;
-  const trend = (!isBar && singleKey && timeLikeX && spec.data.length >= 3)
-    ? trendValues(spec.data, singleKey) : null;
+  // Trend ELIGIBILITY depends on the data (a single numeric time-series with enough
+  // points) — NOT on the current type — so "Line + trend" stays in the dropdown even
+  // while "Bar" is selected (pick it to jump straight to a trended line). The fitted
+  // trend LINE is only drawn on a line chart (a trend line over bars is meaningless).
+  const trendEligible = !!singleKey && timeLikeX && spec.data.length >= 3;
+  const trend = (trendEligible && !isBar) ? trendValues(spec.data, singleKey) : null;
   const delta = (singleKey && timeLikeX) ? pctChange(spec.data, singleKey) : null;
   const trendKey = showTrend && trend ? "__trend" : null;
   const chartData = trendKey
@@ -229,10 +238,10 @@ export default function Chart({ spec }) {
     + (spec.x ? ` by ${spec.x}` : "");
 
   // One compact <select> collapses the old Line/Bar buttons AND the Trend toggle:
-  // "Line + trend" is just a line subtype (offered only when a trend is available —
-  // a single numeric time-series). Keeps the toolbar narrow enough to sit beside a
-  // table without its controls overflowing the chart.
-  const typeValue = isBar ? "bar" : (showTrend && trend ? "line-trend" : "line");
+  // "Line + trend" is a line subtype, offered whenever the data is trend-eligible
+  // (independent of the current type). Keeps the toolbar narrow enough to sit beside
+  // a table without its controls overflowing the chart.
+  const typeValue = isBar ? "bar" : (showTrend && trendEligible ? "line-trend" : "line");
   function onTypeChange(v) {
     if (v === "bar") { setType("bar"); return; }
     setType("line");
@@ -240,12 +249,13 @@ export default function Chart({ spec }) {
   }
 
   return (
+    <>
     <figure className="chart" role="img" aria-label={alt}>
       <div className="chart-head">
         <select className="chart-type" value={typeValue} aria-label="Chart type"
                 onChange={(e) => onTypeChange(e.target.value)}>
           <option value="line">Line</option>
-          {trend && <option value="line-trend">Line + trend</option>}
+          {trendEligible && <option value="line-trend">Line + trend</option>}
           <option value="bar">Bar</option>
         </select>
         {delta && (
@@ -266,6 +276,12 @@ export default function Chart({ spec }) {
                   aria-label={copied ? "Chart image copied" : "Copy chart as an image"}>
             {copied ? <IconCheck /> : <IconCopy />}
           </button>
+          {!inModal && (
+            <button type="button" className="chart-ico-btn" onClick={() => setMaxed(true)}
+                    title="Maximize chart" aria-label="Maximize chart">
+              <IconMaximize />
+            </button>
+          )}
         </div>
       </div>
 
@@ -285,5 +301,10 @@ export default function Chart({ spec }) {
       {png && <img className="chart-export-img" alt={spec.title || "chart"}
                    src={png.url} data-w={png.w} data-h={png.h} aria-hidden="true" />}
     </figure>
+    {maxed && (
+      <ChartModal spec={spec} initialType={type} initialTrend={showTrend}
+                  initialLabels={showLabels} onClose={() => setMaxed(false)} />
+    )}
+    </>
   );
 }

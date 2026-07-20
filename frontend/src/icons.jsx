@@ -57,6 +57,16 @@ export const IconTag = (p) => (
   </Svg>
 );
 
+// Maximize a chart into a modal (arrows to the four corners).
+export const IconMaximize = (p) => (
+  <Svg {...p}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+    <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  </Svg>
+);
+
 export const IconRerun = (p) => (
   <Svg {...p}>
     <path d="M21 12a9 9 0 1 1-2.64-6.36" />

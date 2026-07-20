@@ -235,17 +235,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   code-gated; a prompt line makes the model reliably do it). A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
-  the standalone fence; drops the redundant "Chart this"). The table takes its
-  **shrink-to-fit** width (`.md th` may wrap multi-word headers — data cells stay
-  nowrap — so a long header no longer forces an over-wide table) and the chart fills
-  the rest; `.brief-figrow` **wraps to stacked on a narrow viewport**, AND a
+  the standalone fence; drops the redundant "Chart this"). To hand the chart room,
+  the side-by-side table is **capped** (`.brief-figrow:not(.stacked) .table-block {
+  max-width: min(360px,100%) }`, `overflow-x: visible`) so a wide table **shrinks and
+  WRAPS its multi-word headers** (`.md th` wrapping; data cells stay nowrap) instead
+  of taking full width — a `flex`/max-width-on-cell alone won't force this when the
+  row has room. `.brief-figrow` **wraps to stacked on a narrow viewport**, AND a
   **many-column table (`headers.length > 4`) is forced `.stacked`** — chart BELOW the
   full-width table, since it can't share a row without squeezing the chart. Pinned in
   `frontend/e2e/answer-figure.spec.js`. The **chart toolbar is compact** so it fits a
   narrow side-by-side chart without overflowing: a single **`<select>`** collapses
-  Line / Bar / **Line + trend** (trend is a line subtype, offered only when a trend
-  exists), and **Data labels** + **Copy image** are **icon-only** buttons (tooltip on
-  hover; `IconCopy`→`IconCheck` on copy). A long chart **title wraps to 2 lines**
+  Line / Bar / **Line + trend** (trend is a line subtype, offered whenever the data is
+  **trend-eligible** — a single numeric time-series with ≥3 points — **independent of
+  the current type**, so "Line + trend" stays selectable while "Bar" is active; the
+  fitted line only draws on a line chart). **Data labels** + **Copy image** +
+  **Maximize** are **icon-only** buttons (tooltip on hover; `IconCopy`→`IconCheck` on
+  copy). **Maximize** (`IconMaximize`) opens `ChartModal.jsx` — the same chart at
+  large size in a dialog (reuses the `ConfirmModal` a11y pattern: focus-in/trap,
+  Escape/overlay/Close, background `inert`, focus returns to the opener); the inner
+  `<Chart inModal>` hides its own maximize control and carries the opener's current
+  type/trend/labels via `initial*` props (Chart ↔ ChartModal is an intentional cyclic
+  import, resolved at render time). A long chart **title wraps to 2 lines**
   (`wrapLabel`) so a narrow chart doesn't clip it, while the wide PNG export keeps one
   line. `.chart-head` wraps rather than overflowing.
 - **The analyst layer** on top of the brief:
