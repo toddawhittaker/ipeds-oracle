@@ -200,6 +200,16 @@ commented list. The essentials:
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `IPEDS_TAG` | which published image to run (`:latest` or a pinned `vX.Y.Z`) |
 
+## How this was built
+
+This project is developed with AI coding assistants — openly: the engineering
+handbook ([`CLAUDE.md`](CLAUDE.md)) and the specialist agent definitions
+([`.claude/`](.claude)) are part of the repo. The tools accelerate the writing;
+the same tests, per-module coverage floors, review passes, and merge gate that any
+serious codebase relies on decide what actually ships. For the full argument — and
+why *"vibe coding"* is the wrong lens — see
+**[AI-Assisted Software Engineering](docs/AI_ASSISTED_ENGINEERING.md)**.
+
 ## License
 
 Released under the [MIT License](LICENSE).
