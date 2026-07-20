@@ -11,7 +11,7 @@ test.describe("auth / login", () => {
 
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "IPEDS Query" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "IPEDS Oracle" })).toBeVisible();
     await expect(
       page.getByText("Access is by invitation.", { exact: false })
     ).toBeVisible();

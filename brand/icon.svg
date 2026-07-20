@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64" role="img" aria-label="IPEDS Oracle mark">
+  <!-- The "Oracle" mark: a classical fluted column. Teal fountain-pen ink shaft
+       between an ochre capital and base — the Reading Room palette. Colors are
+       baked (not theme tokens) so the standalone favicon reads on light and dark
+       browser tab bars; the app header uses an inline SVG driven by the tokens. -->
+  <rect x="14" y="11" width="36" height="5.4" rx="1.6" fill="#a66a12"/>
+  <g fill="#166b62">
+    <rect x="19.5" y="19" width="4.6" height="26" rx="1.6"/>
+    <rect x="25.7" y="19" width="4.6" height="26" rx="1.6"/>
+    <rect x="31.9" y="19" width="4.6" height="26" rx="1.6"/>
+    <rect x="38.1" y="19" width="4.6" height="26" rx="1.6"/>
+  </g>
+  <rect x="14" y="47.6" width="36" height="5.4" rx="1.6" fill="#a66a12"/>
+</svg>

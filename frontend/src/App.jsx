@@ -7,6 +7,7 @@ import { AdminRoute } from "./Admin.jsx";
 import Verify from "./Verify.jsx";
 import { ToastProvider } from "./Toast.jsx";
 import { ConfirmProvider } from "./ConfirmModal.jsx";
+import Wordmark from "./Wordmark.jsx";
 import { attentionTotal, formatBadge } from "./attention.js";
 
 // How often the Shell re-polls the admin attention counts. Long enough to be
@@ -177,7 +178,7 @@ function Shell() {
         {routeAnnounce}
       </div>
       <header className="topbar">
-        <div className="brand"><span className="wordmark" role="img" aria-label="IPEDS Query" /></div>
+        <div className="brand"><Wordmark /></div>
         <nav className="tabs" aria-label="Primary">
           <Link to="/" className={onAdmin ? "" : "on"} aria-current={onAdmin ? undefined : "page"}>Chat</Link>
           {user.is_admin && (() => {

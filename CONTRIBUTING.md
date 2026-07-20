@@ -1,6 +1,6 @@
 # Contributing
 
-Developer guide for the IPEDS Query app. For the user-facing overview see
+Developer guide for the IPEDS Oracle app. For the user-facing overview see
 [README.md](README.md); for production deployment see [DEPLOY.md](docs/DEPLOY.md); for
 the data model and query conventions see [SCHEMA.md](docs/SCHEMA.md).
 

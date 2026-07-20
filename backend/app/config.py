@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # (transactional emails, the FastAPI app title) instead of a per-install
 # setting. config.py is the only app/ module that imports nothing from app,
 # so importing this constant elsewhere never risks a cycle.
-PRODUCT_NAME = "IPEDS Query"
+PRODUCT_NAME = "IPEDS Oracle"
 
 # Values (case-insensitive, whitespace-trimmed) that turn an opt-in string
 # setting ON. Everything else — "false"/"f"/"no"/"n"/"0", blank, and any
@@ -148,7 +148,7 @@ class Settings(BaseSettings):
 
     # --- Email (Resend) ----------------------------------------------------
     resend_api_key: str = Field(default="")
-    mail_from: str = Field(default="IPEDS Query <noreply@example.com>")
+    mail_from: str = Field(default="IPEDS Oracle <noreply@example.com>")
     # Where "request access" notifications are sent (defaults to first admin).
     access_request_to: str = Field(default="")
 

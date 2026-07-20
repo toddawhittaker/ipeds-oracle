@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
+import Wordmark from "./Wordmark.jsx";
 
 // Sign-in confirmation page (route: /verify?token=…). The magic-link email
 // points here. We do NOT consume the token on load — a deliberate click POSTs
@@ -53,7 +54,7 @@ export default function Verify() {
   return (
     <div className="center">
       <div className="card login">
-        <h1><span className="wordmark" role="img" aria-label="IPEDS Query" /></h1>
+        <h1><Wordmark /></h1>
         {state === "loading" && (
           <p className="muted">Checking your sign-in link…</p>
         )}
@@ -68,7 +69,7 @@ export default function Verify() {
         {(state === "ready" || state === "signing") && (
           <>
             <p>
-              Sign in to IPEDS Query as <strong>{email}</strong>?
+              Sign in to IPEDS Oracle as <strong>{email}</strong>?
             </p>
             <button onClick={signIn} disabled={state === "signing"}>
               {state === "signing" ? "Signing in…" : "Sign in"}
