@@ -35,6 +35,7 @@ export default defineConfig({
         "src/datatable.js",
         "src/estimate.js",
         "src/figure.js",
+        "src/mdhighlight.js",
         "src/mdnorm.js",
         "src/selection.js",
         "src/suggestions.js",
