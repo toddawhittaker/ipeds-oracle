@@ -533,8 +533,11 @@ symlinked `.venv` and clobbered `main`). See `CONTRIBUTING.md` → *Running two
 sessions at once*.
 
 **Release/deploy (CI/CD).** CI's **image** job builds + smoke-tests the Docker
-image and publishes to GHCR: a `main` push moves `:edge`/`:sha-<short>`; a **`v*`
-git tag** publishes `:vX.Y.Z` + `:latest`. Self-hosters run the published image
+image on every PR/`main` push (so a broken Dockerfile can't merge), but publishes
+to GHCR **only on a `v*` git tag** — `:X.Y.Z` + `:X.Y` + `:latest` (metadata-action
+strips the leading `v`, so the Docker tag is `0.1.0`, not `v0.1.0`). No rolling
+`:edge`/`:sha` images are published (deliberate — release tags are the only
+artifacts kept). Self-hosters run the published image
 (`docker compose pull && docker compose up -d`, pin via `IPEDS_TAG`) — TLS is the
 operator's own reverse proxy/tunnel or an optional self-signed cert
 (`scripts/gen-selfsigned-cert.sh` + `SSL_CERTFILE`/`SSL_KEYFILE`, served by
