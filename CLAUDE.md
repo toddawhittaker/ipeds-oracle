@@ -506,18 +506,19 @@ deliberately not in the floor — Playwright covers them.
 CI (ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/` **vitest** unit tests; the
 `backend/tests/` backend suites against a fixture DB; Playwright e2e). A
 `.githooks/pre-push` hook runs it automatically (bypass: `git push --no-verify`;
-skip e2e: `SKIP_E2E=1`). This is the *only* merge gate — GitHub branch protection
-isn't available on this repo's plan, so a red CI check can otherwise land on
-`main`.
+skip e2e: `SKIP_E2E=1`). It's a **fast pre-check** so failures surface before CI —
+but since the repo went public the **authoritative gate is GitHub CI**: `main` is
+**branch-protected** (a PR is required; all of lint · unit · backend · e2e · image
+must be green AND up to date before merge; force pushes and direct pushes are
+blocked). Admin override is left enabled only as a safety valve for a flaky check.
 
-**Ship via branch → PR → merge on green.** Never commit straight to `main`.
-Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), keep PRs focused (one item),
-open a PR, then **watch CI without blocking**: run `gh pr checks <n> --watch` as a
-background task (`run_in_background`) and keep working — the harness re-invokes you
-when it settles. Merge only when lint · unit · backend · e2e · image are all
-green. (The pre-push hook already ran the local gate, so the CI watch mainly
-re-confirms and covers the CI-only **image** job.) End commit messages with the
-`Co-Authored-By:` trailer.
+**Ship via branch → PR → merge on green.** You can't commit straight to `main`
+(branch protection blocks it). Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`),
+keep PRs focused (one item), open a PR, then **watch CI without blocking**: run
+`gh pr checks <n> --watch` as a background task (`run_in_background`) and keep
+working — the harness re-invokes you when it settles. Merge only when lint · unit ·
+backend · e2e · image are all green. End commit messages with the `Co-Authored-By:`
+trailer.
 
 **Two sessions → use a worktree.** If a second dev/agent session runs in this
 repo, they share one working tree — a `git checkout` in one moves the other's
