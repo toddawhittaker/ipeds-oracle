@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlistBulk,
@@ -43,7 +44,7 @@ async function openUsersBulk(page, { rows = userRows(), forceFailed, delayMs } =
   await mockAccessRequestsBulk(page, []);
   await mockDeniedRequestsBulk(page, []);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   return users;
 }
@@ -264,7 +265,7 @@ test.describe("cross-table refresh", () => {
     });
     await mockDeniedRequestsBulk(page, []);
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
     // Act on the Pending sub-tab.
     await page.getByRole("tab", { name: /Pending requests/ }).click();
 

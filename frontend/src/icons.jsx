@@ -72,6 +72,13 @@ export const IconShieldMinus = (p) => (
   </Svg>
 );
 
+// Plain shield for the Admin menu item (no +/- — that's the promote/demote pair).
+export const IconShield = (p) => (
+  <Svg {...p}>
+    <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
+  </Svg>
+);
+
 // Upload glyph (tray + up-arrow) for the CSV drop target.
 export const IconUpload = (p) => (
   <Svg {...p}>
@@ -85,6 +92,44 @@ export const IconWarning = (p) => (
   <Svg {...p}>
     <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
     <path d="M12 9v4M12 17h.01" />
+  </Svg>
+);
+
+// Sun / moon for the light-dark theme toggle (replaces the old ☀️/🌙 emoji).
+export const IconSun = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+  </Svg>
+);
+
+export const IconMoon = (p) => (
+  <Svg {...p}>
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+  </Svg>
+);
+
+// GitHub mark (filled). Uses its own <svg> — the shared Svg helper is stroke-only.
+export const IconGitHub = ({ size = 18, ...rest }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor"
+       aria-hidden="true" focusable="false" {...rest}>
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+  </svg>
+);
+
+// Info "i" in a circle for the About dialog trigger.
+export const IconInfo = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 8h.01" />
+  </Svg>
+);
+
+// Leave / sign out (door + arrow).
+export const IconSignOut = (p) => (
+  <Svg {...p}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <path d="M16 17l5-5-5-5M21 12H9" />
   </Svg>
 );
 

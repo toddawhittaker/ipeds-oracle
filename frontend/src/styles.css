@@ -123,7 +123,9 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   display: flex; align-items: center; gap: 20px; padding: 10px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.brand { display: flex; align-items: center; }
+/* The wordmark is a link home. Reset anchor styling; keep a visible focus ring. */
+.brand { display: inline-flex; align-items: center; text-decoration: none; color: inherit; border-radius: 6px; }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 /* "IPEDS Oracle" wordmark — an inline SVG + type lockup (see Wordmark.jsx) drawn
    from the theme tokens, so light/dark is automatic (no PNG pair to swap). Scale
    is set by the container's font-size: the serif "Oracle" is 1em, everything else
@@ -142,22 +144,19 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .wm-div { width: 2px; height: 1em; background: var(--ochre); border-radius: 2px; margin: 0 .06em; flex: none; }
 .wm-oracle { font-family: var(--serif); font-weight: 600; font-size: 1em; color: var(--accent); letter-spacing: -.01em; }
 .brand .wordmark { font-size: 20px; }
-.tabs { display: flex; gap: 6px; }
-.tabs a, .subtabs a {
+.subtabs a {
   background: transparent; border: 1px solid transparent; color: var(--muted);
   padding: 6px 12px; border-radius: 8px; text-decoration: none;
 }
-.tabs a.on, .subtabs a.on { color: var(--text); background: var(--bg); border-color: var(--line); }
-/* Attention count badge on a nav link (top-bar Admin + Admin section tabs): how
-   much work is waiting. Same pill language as the Users sub-tab badge
-   (.usertab-badge) — neutral base, accent "attention" tone — sized to sit inline
-   after the link label. */
-.tabs a, .subtabs a { display: inline-flex; align-items: center; gap: 6px; }
+.subtabs a.on { color: var(--text); background: var(--bg); border-color: var(--line); }
+/* Attention count badge on a nav link (Admin section tabs) and the account menu's
+   Admin item: how much work is waiting. Same pill language as the Users sub-tab
+   badge (.usertab-badge) — neutral base, accent "attention" tone. */
+.subtabs a { display: inline-flex; align-items: center; gap: 6px; }
 .tab-badge { min-width: 1.4em; padding: 0 6px; border-radius: 999px; font-size: 11px;
   font-weight: 700; line-height: 1.5; text-align: center; color: var(--text);
   background: color-mix(in srgb, var(--muted) 20%, transparent); }
 .tab-badge.attention { background: var(--accent); color: #fff; }
-.userbox { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .link { background: none; border: none; color: var(--accent); padding: 0; }
 .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 /* Primary action in an approval queue — approving should read louder than the
@@ -272,6 +271,33 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .modal-details { margin-top: 8px; color: var(--muted); font-size: 13px; word-break: break-word; }
 .modal-error { margin-top: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+/* Links inside a dialog follow the theme (--accent), not the UA default blue/
+   purple — which is illegible on the dark panel and reads as "already visited". */
+.modal-body a, .modal-body a:visited { color: var(--accent); text-decoration: underline; }
+.modal-body a:hover { color: var(--accent-d); }
+/* About: GitHub source link anchored to the left of the same row as Close. */
+/* The wordmark type lockup ("IPEDS | Oracle") inline in the About title, after
+   the plain-serif "About". Sized to sit with the h2; the head icon carries the
+   mark, so the wordmark here is text-only (showIcon={false}). */
+/* Align "About" with the wordmark on a shared text BASELINE (not box centers —
+   that's what made them look off). */
+.about-title { display: flex; align-items: baseline; gap: .32em; }
+.about-title .wordmark { font-size: 17px; align-items: baseline; }
+/* In the wordmark elsewhere "IPEDS" is a small mono tag (.62em); in this title it
+   should read at the SAME size as "About"/"Oracle" — bump it to 1em (tightening
+   its tracking a touch so the larger mono caps don't sprawl). */
+.about-title .wm-ipeds { font-size: 1em; letter-spacing: .06em; }
+/* The ochre divider is a baseline-less bar; center it on the caps rather than
+   letting baseline alignment drop it. */
+.about-title .wm-div { align-self: center; }
+.about-actions { justify-content: space-between; align-items: center; }
+/* Sized to match the Close button's footprint (icon + padding ≈ its height). */
+.about-gh {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--muted); border-radius: 8px; padding: 4px;
+}
+.about-gh:hover { color: var(--text); background: var(--panel-2); }
+.about-gh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .modal-cancel {
   background: var(--bg); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; font-size: 14px;
@@ -623,7 +649,47 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 
 /* Copy-SQL sits inside the SQL disclosure, above the statements. */
 .sql-copy { display: inline-block; margin: 6px 0 2px; font-size: 12.5px; }
-.theme-toggle { font-size: 16px; line-height: 1; padding: 2px 4px; }
+/* ── Top-bar account control (UserMenu.jsx) ───────────────────────────────
+   A round avatar (initials) that opens a menu; the only right-hand item in the
+   top bar. Colors reuse existing tokens, so no per-theme triplication. */
+.user-menu { position: relative; margin-left: auto; }
+.avatar {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--accent-d); background: var(--accent); color: var(--on-fg);
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; line-height: 1;
+}
+.avatar:hover { background: var(--accent-d); }
+.avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Attention count riding the avatar corner (admins). Reuses the .tab-badge accent
+   language; positioned as a small pill overlapping the top-right. */
+.avatar-badge {
+  position: absolute; top: -5px; right: -6px; min-width: 1.4em; padding: 0 5px;
+  border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1.6;
+  text-align: center; background: var(--accent); color: #fff;
+  border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent-d);
+}
+.user-menu-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
+  min-width: 232px; padding: 6px; text-align: left;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .22);
+}
+.user-menu-email {
+  padding: 6px 10px 8px; margin-bottom: 4px; font-size: 12px; color: var(--muted);
+  border-bottom: 1px solid var(--line); word-break: break-all;
+}
+.user-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: none; border-radius: 7px; background: transparent;
+  color: var(--text); font-size: 14px; text-align: left;
+}
+.user-menu-item:hover, .user-menu-item:focus-visible { background: var(--panel-2); }
+.user-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.user-menu-item svg { flex: none; color: var(--muted); }
+.user-menu-label { flex: 1; }
+.user-menu-item .tab-badge { flex: none; }
 
 /* Edit/Rerun under a user prompt — quiet, reveal on hover/focus. */
 .user-actions {

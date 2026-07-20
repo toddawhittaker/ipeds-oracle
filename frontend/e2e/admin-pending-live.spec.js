@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -24,7 +25,7 @@ async function openAllowlist(page, { reqs = [], denied = [], allowlist = [] } = 
   const reqsHandle = await mockAccessRequests(page, reqs);
   await mockDeniedRequests(page, denied);
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   return { reqsHandle };
 }
 

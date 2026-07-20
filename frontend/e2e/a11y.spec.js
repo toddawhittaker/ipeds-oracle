@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
+  gotoAdmin,
   mockMe,
   mockRequestLink,
   mockAuthConfig,
@@ -112,30 +113,21 @@ test.describe("labeled inputs", () => {
     await mockAccessRequests(page, []);
 
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
 
     await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
   });
 });
 
 test.describe("tabs selected state", () => {
-  test("active primary nav link and active Admin subtab link expose aria-current", async ({ page }) => {
+  test("active Admin subtab link exposes aria-current", async ({ page }) => {
     await mockMe(page, { email: "admin@example.edu", is_admin: true });
     await mockConversations(page, []);
     await mockAllowlist(page, []);
     await mockAccessRequests(page, []);
     await mockImportJobs(page, []);
 
-    await page.goto("/");
-
-    const chatTab = page.getByRole("link", { name: "Chat", exact: true });
-    const adminTab = page.getByRole("link", { name: "Admin" });
-    await expect(chatTab).toHaveAttribute("aria-current", "page");
-    await expect(adminTab).not.toHaveAttribute("aria-current", "page");
-
-    await adminTab.click();
-    await expect(adminTab).toHaveAttribute("aria-current", "page");
-    await expect(chatTab).not.toHaveAttribute("aria-current", "page");
+    await page.goto("/admin/users/current");
 
     const usersSub = page.getByRole("link", { name: "Users" });
     const importsSub = page.getByRole("link", { name: "Imports" });
@@ -167,7 +159,7 @@ test.describe("Admin landmark + login alert", () => {
     await mockAccessRequests(page, []);
 
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
 
     await expect(page.getByRole("main")).toBeVisible();
   });

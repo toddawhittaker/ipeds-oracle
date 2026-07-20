@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -69,11 +70,11 @@ test.describe("admin routing", () => {
   // Code-review LOW (see no-data-onboarding.spec.js for the has_data:false
   // counterpart): confirms the /admin index route's has_data-conditional
   // target doesn't change this well-established, has-data behavior.
-  test("an admin WITH data clicking 'Admin' lands on /admin/users (unchanged)", async ({ page }) => {
+  test("an admin WITH data going to 'Admin' via the menu lands on /admin/users (unchanged)", async ({ page }) => {
     await mockAdminBasics(page);
 
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin", exact: true }).click();
+    await gotoAdmin(page);
 
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
   });

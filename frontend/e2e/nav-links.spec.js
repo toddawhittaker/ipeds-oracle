@@ -45,38 +45,11 @@ async function mockAdminUsersTab(page, { isAdmin = true } = {}) {
   await mockDeniedRequests(page, []);
 }
 
-test.describe("top nav -- real links", () => {
-  test("Chat and Admin are <a> with the right hrefs; the active one carries aria-current", async ({ page }) => {
-    await mockAdminUsersTab(page);
-    await page.goto("/");
-
-    const chatLink = page.getByRole("link", { name: "Chat", exact: true });
-    const adminLink = page.getByRole("link", { name: "Admin" });
-    await expect(chatLink).toHaveAttribute("href", "/");
-    await expect(adminLink).toHaveAttribute("href", "/admin");
-
-    await expect(chatLink).toHaveAttribute("aria-current", "page");
-    await expect(adminLink).not.toHaveAttribute("aria-current", "page");
-
-    await adminLink.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
-    await expect(adminLink).toHaveAttribute("aria-current", "page");
-    await expect(chatLink).not.toHaveAttribute("aria-current", "page");
-  });
-
-  test("keyboard: focusing the Admin link and pressing Enter activates it", async ({ page }) => {
-    await mockAdminUsersTab(page);
-    await page.goto("/");
-
-    const adminLink = page.getByRole("link", { name: "Admin" });
-    await adminLink.focus();
-    await expect(adminLink).toBeFocused();
-    await page.keyboard.press("Enter");
-
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
-  });
-});
-
+// NOTE: the top-bar Chat/Admin nav links were removed in the top-bar redesign —
+// the wordmark is now the link home and Admin lives under the account-menu avatar
+// (see user-menu.spec.js). The old "top nav -- real links" describe block that
+// lived here is gone; the sidebar + Admin-subtab link contracts below are
+// unaffected and stay.
 test.describe("Admin subtabs -- real links", () => {
   test("each of the 5 subtabs is an <a href=\"/admin/<tab>\">, and only the active one carries aria-current", async ({ page }) => {
     await mockAdminUsersTab(page);

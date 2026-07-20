@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -54,7 +55,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   ]);
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
 
   // Allowlist is the default subtab — do the form submission here, before
   // navigating anywhere else. Skills is still visited last purely to keep
@@ -131,7 +132,7 @@ test("regression: navigating away from the Skills tab and back does not crash th
   ]);
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
   await expect(page.getByText("example rule")).toBeVisible();
 
@@ -145,7 +146,7 @@ test("regression: navigating away from the Skills tab and back does not crash th
   await usersSub.click();
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   // The rest of the shell must still be intact too, not just the Admin panel.
-  await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "IPEDS Oracle, go to chat" })).toBeVisible();
 
   // And back to Skills again, to be thorough about remounting.
   await page.getByRole("link", { name: "Skills" }).click();

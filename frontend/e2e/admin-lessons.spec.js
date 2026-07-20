@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockSkills } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockSkills } from "./mocks.js";
 
 // The redesigned Skills → "Learned lessons" admin view: a short generalized
 // HEADLINE leads, a longer generalized DESCRIPTION is tucked into its own
@@ -32,7 +32,7 @@ test("lessons view leads with the headline, collapses description and SQL separa
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   // The headline is front-and-center; the source and unverified state are shown.
@@ -78,7 +78,7 @@ test("rejecting a verified lesson opens a confirmation modal before deleting", a
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   // Cancelling the confirm modal must NOT fire a DELETE.
@@ -126,7 +126,7 @@ test("pills never wrap onto a second line, even when a long headline squeezes th
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   const shortCard = page.locator(".skill").filter({ hasText: "Short headline." });
@@ -183,7 +183,7 @@ test("edit button opens a labelled, prefilled edit form and moves focus to Headl
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   // The edit affordance sits alongside the existing Verify/Reject actions —
@@ -246,7 +246,7 @@ test("Save PATCHes exactly {headline, lesson, notes, canonical_sql} trimmed, rel
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
   expect(getCount).toBe(1);
 
@@ -295,7 +295,7 @@ test("Cancel discards changes without PATCHing and restores focus to the edit bu
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   const editBtn = page.getByRole("button", { name: "Edit lesson: Add majornum=1 for every completions total." });
@@ -334,7 +334,7 @@ test("only one lesson card is editable at a time", async ({ page }) => {
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   await page.getByRole("button", { name: "Edit lesson: Add majornum=1 for every completions total." }).click();
@@ -359,7 +359,7 @@ test("Save is disabled once headline and description are both empty after trimmi
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
   await page.getByRole("button", { name: "Edit lesson: Add majornum=1 for every completions total." }).click();
 
@@ -394,7 +394,7 @@ test("a rule-less lesson (no headline, no description) can be given a headline v
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   // This is the motivating case: no headline text renders, but ruleName()
@@ -457,7 +457,7 @@ test("editing the Description writes the identical trimmed text to both lesson a
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
   await page.getByRole("button", { name: "Edit lesson: Use a constant year bound." }).click();
 
@@ -487,7 +487,7 @@ test("clearing the Description clears notes too — a stale notes fallback canno
   });
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
   await page.getByRole("button", { name: "Edit lesson: Use a constant year bound." }).click();
 
@@ -519,7 +519,7 @@ test("unverified pill renders as the warn pill, not the danger pill", async ({ p
     route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }));
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
 
   // span.tag.warn resolving to the "unverified" pill IS the assertion: had it

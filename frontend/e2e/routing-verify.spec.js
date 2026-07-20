@@ -34,6 +34,6 @@ test.describe("/verify under the router", () => {
 
     await expect.poll(() => verify.calls.length).toBe(1);
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
-    await expect(page.getByRole("link", { name: "Chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Account menu/ })).toBeVisible();
   });
 });

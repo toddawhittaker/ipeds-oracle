@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  gotoAdmin,
   mockMe,
   mockConversations,
   mockAllowlist,
@@ -46,7 +47,7 @@ async function openAllowlistTab(
   await mockAccessRequests(page, reqs);
   await mockDeniedRequests(page, denied, { httpStatus: deniedHttpStatus });
   await page.goto("/");
-  await page.getByRole("link", { name: "Admin" }).click();
+  await gotoAdmin(page);
   if (tab === "blocked") await page.getByRole("tab", { name: /Blocked users/ }).click();
   else if (tab === "pending") await page.getByRole("tab", { name: /Pending requests/ }).click();
 }
@@ -148,7 +149,7 @@ test.describe("blocked users table + unblock", () => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     });
     await page.goto("/");
-    await page.getByRole("link", { name: "Admin" }).click();
+    await gotoAdmin(page);
     await page.getByRole("tab", { name: /Blocked users/ }).click();
 
     await unblockBtn(page).click();

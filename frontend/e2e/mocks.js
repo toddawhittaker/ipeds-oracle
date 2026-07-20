@@ -41,6 +41,19 @@ export async function mockMe(page, user) {
 }
 
 /**
+ * Navigate to the Admin area through the user-badge menu. Since the top-bar
+ * redesign the Admin link is a menu item under the avatar (no standalone top-bar
+ * Admin link), so specs open the account menu then click Admin. Assumes an admin
+ * (mockMe with is_admin: true), where the item is present.
+ */
+export async function gotoAdmin(page) {
+  const { expect } = await import("@playwright/test");
+  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("menuitem", { name: "Admin" }).click();
+  await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/admin\b/);
+}
+
+/**
  * GET /api/auth/config -> {email_domain}. Unauthenticated; Login.jsx polls
  * this on mount to build its "you@<domain>" placeholder hint (falling back to
  * the generic FALLBACK_HINT when email_domain is empty or the call fails).
