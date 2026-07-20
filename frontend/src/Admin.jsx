@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
@@ -264,35 +264,57 @@ function Allowlist({ me, sub, onAttentionChanged }) {
   // announced once via the toast host's live region). kind: "" | "ok" | "error".
   const announce = (text, kind = "") => toast(text, kind);
 
-  // Run a focus move AFTER React has committed the reload's re-render. A single
-  // requestAnimationFrame can fire BEFORE the commit under load, focusing a
-  // stale/just-removed node and dropping focus to <body> (the
-  // focus-restore-vs-reload race); waiting for the frame past the commit (double
-  // rAF) lands it reliably. Every reload-then-focus site below goes through this.
-  const focusNextCommit = (fn) => requestAnimationFrame(() => requestAnimationFrame(fn));
+  // Where a mutation's focus should land once its reload has COMMITTED. Set after
+  // `await load()`, consumed by the layout effect below. Descriptor shapes:
+  //   { kind: "tableSearch", tableRef }   -> that table's search box (add-email fallback)
+  //   { kind: "rowAction",   tableRef, key } -> that row's action button (search fallback)
+  //   { kind: "el",          elRef }      -> a specific element (e.g. CSV result)
+  // Each carries a fresh `nonce` so repeating the SAME target (reject two rows in
+  // a row) still re-fires the effect (new object identity).
+  const [pendingFocus, setPendingFocus] = useState(null);
+  const focusNonce = useRef(0);
 
-  // Focus the acting table's search box after a reload commits. If that table
-  // just UNMOUNTED because its last row was actioned (pending → zero-state,
-  // blocked → the whole section is removed), its ref is null; fall back to the
-  // always-present add-email input so focus never drops to <body> (WCAG 2.4.3).
-  const focusAfterRowAction = (tableRef) => focusNextCommit(() => {
-    if (tableRef.current) tableRef.current.focusSearch();
-    else addEmailRef.current?.focus?.();
-  });
+  // Restore focus AFTER React has committed the reload's re-render — driven by
+  // COMMITTED STATE, not a requestAnimationFrame frame count. A layout effect
+  // keyed on `pendingFocus` is guaranteed to run after the DOM commit that
+  // reflects the reloaded data, so the target is re-derived from LIVE refs against
+  // the real post-reload DOM (a row that unmounted is genuinely gone here, not
+  // "maybe still there for another frame"). This is the durable fix for the
+  // focus-restore-vs-reload race — rAF-counting was fundamentally a guess.
+  useLayoutEffect(() => {
+    if (!pendingFocus) return;
+    const f = pendingFocus;
+    if (f.kind === "tableSearch") {
+      if (f.tableRef.current) f.tableRef.current.focusSearch();
+      else addEmailRef.current?.focus?.();
+    } else if (f.kind === "rowAction") {
+      // toggleAdmin's row PERSISTS (the shield just swaps Promote<->Demote), so
+      // the button is always present post-commit — no fallback needed, matching
+      // the prior behavior. focus() returns undefined, so its result can't signal
+      // success anyway; the layout-effect timing is what makes this reliable now.
+      f.tableRef.current?.focusRowAction(f.key);
+    } else if (f.kind === "el") {
+      f.elRef.current?.focus?.();
+    }
+    // Release the poll/visibility guard now that focus has landed (a ref write, so
+    // it's allowed in an effect — unlike setState). The request isn't cleared: each
+    // reloadThenRestoreFocus sets a fresh object (new nonce), so the effect re-fires
+    // per request without a set-state-in-effect (an error under this repo's lint).
+    restoringFocus.current = false;
+  }, [pendingFocus]);
 
-  // Reload the lists, then run a mutation's focus restoration, with the live
-  // refresh (poll + visibility/focus) suppressed for the whole sequence so a
-  // background load() can't re-render on top of the focus move and drop focus to
-  // <body>. `restore` schedules the focus via focusNextCommit, so release the
-  // guard on the same double-rAF horizon (after the focus has landed).
-  const reloadThenRestoreFocus = async (restore) => {
+  // Reload the lists, then restore a mutation's focus once the reload commits,
+  // with the live refresh (poll + visibility/focus) suppressed for the whole
+  // sequence so a background load() can't re-render on top of the focus move and
+  // drop focus to <body>. `focusReq` is a descriptor (see pendingFocus); it's set
+  // AFTER load()'s setState so the layout effect fires post-commit. try/catch so a
+  // FAILED reload still restores focus and releases the guard.
+  const reloadThenRestoreFocus = async (focusReq) => {
     restoringFocus.current = true;
     try {
       await load();
-      restore();
-    } finally {
-      focusNextCommit(() => { restoringFocus.current = false; });
-    }
+    } catch { /* still restore focus + release the guard below */ }
+    setPendingFocus({ ...focusReq, nonce: focusNonce.current++ });
   };
 
   const load = () => {
@@ -510,8 +532,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
       res.added ? "ok" : "");
     // The "Add N users" button just unmounted; move focus to the result instead
     // of letting it fall to <body> (WCAG 2.4.3), sequenced AFTER load() commits.
-    await reloadThenRestoreFocus(() =>
-      focusNextCommit(() => csvResultRef.current?.focus()));
+    await reloadThenRestoreFocus({ kind: "el", elRef: csvResultRef });
   }
 
   function onCsvDragEnter(e) { e.preventDefault(); csvDragDepth.current += 1; setCsvDragging(true); }
@@ -552,7 +573,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         // logged to console) — see INVITE_FLASH. The Approve button unmounted
         // with its pending row; hand focus to the pending table's search box.
         announce(inviteFlash(addr, outcome), inviteKind(outcome));
-        await reloadThenRestoreFocus(() => focusAfterRowAction(pendingTableRef));
+        await reloadThenRestoreFocus({ kind: "tableSearch", tableRef: pendingTableRef });
       },
     });
   }
@@ -577,7 +598,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         // The reject button just unmounted with its pending row; hand focus to
         // the pending table's search box so it doesn't drop to <body>. Sequence
         // after the reload commits (focus-restore-vs-reload race).
-        await reloadThenRestoreFocus(() => focusAfterRowAction(pendingTableRef));
+        await reloadThenRestoreFocus({ kind: "tableSearch", tableRef: pendingTableRef });
       },
     });
   }
@@ -601,7 +622,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
       onSuccess: async () => {
         // The unblock button unmounted with its blocked row; hand focus to the
         // blocked table's search box after the reload commits.
-        await reloadThenRestoreFocus(() => focusAfterRowAction(blockedTableRef));
+        await reloadThenRestoreFocus({ kind: "tableSearch", tableRef: blockedTableRef });
       },
     });
   }
@@ -625,8 +646,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
     // of <body> where the briefly-disabled button dropped it. Sequenced after
     // load() per the focus-restore-vs-reload race rule. (Toasts never take focus,
     // so there's no notice to race here anymore.)
-    await reloadThenRestoreFocus(() =>
-      focusNextCommit(() => usersTableRef.current?.focusRowAction(r.email)));
+    await reloadThenRestoreFocus({ kind: "rowAction", tableRef: usersTableRef, key: r.email });
   }
 
   // Destructive: a danger confirmation modal (naming the email), then the
@@ -656,8 +676,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         // search box (stable, in-context) after the reload commits so it doesn't
         // drop to <body>. The viewRows() page-clamp keeps the admin on a valid
         // page (or the previous one if this emptied the last page).
-        await reloadThenRestoreFocus(() =>
-          focusNextCommit(() => usersTableRef.current?.focusSearch()));
+        await reloadThenRestoreFocus({ kind: "tableSearch", tableRef: usersTableRef });
       },
     });
   }
@@ -723,7 +742,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         // Synchronous, BEFORE the reload below.
         const selectedIds = selectedRows.map((r) => r[idField]);
         sel.selectExplicit(retainedSelectionAfterBulk(action, selectedIds, result, idField));
-        await reloadThenRestoreFocus(() => focusAfterRowAction(focusRef));
+        await reloadThenRestoreFocus({ kind: "tableSearch", tableRef: focusRef });
       },
     });
   }
@@ -2027,6 +2046,18 @@ function Skills({ onAttentionChanged }) {
   const headingRef = useRef(null);  // focus target after a card is deleted
   const load = () => api.skills().then(setRows);
   useEffect(() => { load(); }, []);
+
+  // Which "edit" button to focus once a save's reload has COMMITTED, as a fresh
+  // `{ id }` object each time so the layout effect re-fires per save (even re-saving
+  // the same id) without a set-state-in-effect (an error under this repo's lint).
+  // The effect runs after the DOM commit, so the freshly-mounted button is focused
+  // deterministically — never a bare rAF racing load()'s setRows (which remounts the
+  // button under the just-focused node and drops focus to <body>).
+  const [pendingEditFocus, setPendingEditFocus] = useState(null);
+  useLayoutEffect(() => {
+    if (!pendingEditFocus) return;
+    editBtnRefs.current[pendingEditFocus.id]?.focus?.();
+  }, [pendingEditFocus]);
   const pending = rows.filter((r) => !r.verified).length;
 
   // Action outcomes go to the app-wide toast (visible + announced once) — the
@@ -2079,12 +2110,13 @@ function Skills({ onAttentionChanged }) {
     }).then(async () => {
       announce("Lesson updated.");
       setEditingId(null);
-      // Restore focus only AFTER the list reload has re-rendered. Doing it in
-      // closeEdit's rAF while load() runs concurrently races the reload's
-      // setRows, which remounts the edit button under the just-focused node and
-      // drops focus to <body> — a timing-dependent flake under gate load.
+      // Restore focus only AFTER the list reload has committed. Requesting it via
+      // pendingEditFocus (consumed by the layout effect post-commit) is
+      // deterministic — a bare rAF here races the reload's setRows, which remounts
+      // the edit button under the just-focused node and drops focus to <body>
+      // (the focus-restore-vs-reload race; a single rAF isn't enough under load).
       await load();
-      requestAnimationFrame(() => editBtnRefs.current[s.id]?.focus?.());
+      setPendingEditFocus({ id: s.id });
     }).catch(() => announce("Couldn't save that lesson — nothing was changed.", "error"));
   }
   const focusHeading = () => requestAnimationFrame(() => headingRef.current?.focus?.());
