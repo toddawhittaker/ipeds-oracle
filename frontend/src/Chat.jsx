@@ -897,7 +897,7 @@ export default function Chat({ me }) {
                   </div>
                 ) : editingIdx === i ? (
                   <div className="edit-box">
-                    <textarea className="thin-scroll" value={editText} autoFocus
+                    <MarkdownTextarea value={editText} autoFocus aria-label="Edit prompt"
                       onChange={(e) => setEditText(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(i); }

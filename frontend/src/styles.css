@@ -637,11 +637,16 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .msg.user.editing { width: 100%; }
 .msg.user.editing .bubble { width: 100%; max-width: 100%; }
 .edit-box { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-.edit-box textarea {
-  width: 100%; min-height: 140px; max-height: 60vh; resize: vertical;
-  border: 1px solid var(--accent); border-radius: 10px; background: var(--bg);
-  color: var(--text); padding: 10px 12px; line-height: 1.5; font-size: 15px; outline: none;
+/* The prompt editor reuses the Markdown-highlighting MarkdownTextarea (same
+   transparent-textarea-over-<pre> overlay as the composer). The accent border +
+   fill live on the container; the pre and textarea share the box's padding so the
+   caret stays aligned; it auto-grows from 140px up to 60vh (the CSS cap the
+   component reads). */
+.edit-box .md-editor {
+  width: 100%; border: 1px solid var(--accent); border-radius: 10px; background: var(--bg);
 }
+.edit-box .md-editor-hl, .edit-box .md-editor-ta { padding: 10px 12px; }
+.edit-box .md-editor-ta { min-height: 140px; max-height: 60vh; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .send-sm { background: var(--accent); color: var(--on-fg); border: none; border-radius: 8px; padding: 5px 14px; }
 .send-sm:not(:disabled):hover { background: var(--accent-d); }

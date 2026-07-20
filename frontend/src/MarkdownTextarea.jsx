@@ -11,11 +11,11 @@ import { highlight } from "./mdhighlight.js";
 //
 // The forwarded `ref` points at the underlying <textarea>, so the composer's
 // focus management, typeahead redirect, and the e2e selectors (getByPlaceholder /
-// .fill() / toHaveValue) keep working unchanged.
-const MAX_H = 200;
-
+// .fill() / toHaveValue) keep working unchanged. Reused by the chat composer AND
+// the inline prompt-edit box, which size differently — so the auto-grow cap is
+// read from the element's CSS `max-height` rather than hardcoded here.
 const MarkdownTextarea = forwardRef(function MarkdownTextarea(
-  { value, onChange, onKeyDown, placeholder, id, className = "" }, ref) {
+  { value, onChange, onKeyDown, placeholder, id, className = "", autoFocus, "aria-label": ariaLabel }, ref) {
   const taRef = useRef(null);
   const preRef = useRef(null);
 
@@ -25,13 +25,16 @@ const MarkdownTextarea = forwardRef(function MarkdownTextarea(
     else if (ref) ref.current = node;
   }, [ref]);
 
-  // Auto-grow to fit content up to MAX_H, then the textarea scrolls and the
-  // overlay follows (syncScroll). Replaces the old Chat.jsx auto-grow effect.
+  // Auto-grow to fit content up to the CSS max-height, then the textarea scrolls
+  // and the overlay follows (syncScroll). Replaces the old Chat.jsx auto-grow
+  // effect; the cap is CSS-driven so each caller (composer 200px, edit box 60vh)
+  // controls it through styles.css.
   useEffect(() => {
     const el = taRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, MAX_H) + "px";
+    const cap = parseFloat(getComputedStyle(el).maxHeight);
+    el.style.height = (Number.isFinite(cap) ? Math.min(el.scrollHeight, cap) : el.scrollHeight) + "px";
   }, [value]);
 
   const syncScroll = () => {
@@ -56,6 +59,8 @@ const MarkdownTextarea = forwardRef(function MarkdownTextarea(
         ref={setRefs}
         id={id}
         rows={1}
+        autoFocus={autoFocus}
+        aria-label={ariaLabel}
         className={"md-editor-ta thin-scroll " + className}
         value={value}
         placeholder={placeholder}

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockMe, mockConversations, mockStreamChat } from "./mocks.js";
+import { mockMe, mockConversations, mockConversation, mockStreamChat } from "./mocks.js";
 
 // The Markdown-highlighting composer stays a REAL <textarea> whose value is the
 // plain Markdown source, layered over a colored <pre> mirror. Browser truth: the
@@ -62,6 +62,25 @@ test("Enter sends the plain Markdown; Shift+Enter inserts a newline without send
   await expect.poll(() => stream.calls.length).toBe(1);
   expect(stream.calls[0].question).toBe("line one\nline two");
   await expect(ta).toHaveValue("");
+});
+
+test("the inline prompt-edit box highlights Markdown too, keeping the plain source", async ({ page }) => {
+  await signedIn(page);
+  const md = "# Results\n\n- one\n\n**bold** and `code`";
+  await mockConversation(page, 5, [
+    { role: "user", content: md },
+    { role: "assistant", content: "an answer" },
+  ]);
+  await page.goto("/chat/5");
+
+  // Open the edit box on the user prompt (the button's accessible name is "Edit").
+  await page.getByRole("button", { name: "Edit", exact: true }).first().click();
+  const editHl = page.locator(".edit-box .md-editor-hl");
+  const editTa = page.locator(".edit-box .md-editor-ta");
+  // Same overlay + tokenizer as the composer: highlighted, source preserved.
+  await expect(editHl.locator(".md-hl-strong")).toHaveText("bold");
+  await expect(editHl.locator(".md-hl-code")).toHaveText("code");
+  await expect(editTa).toHaveValue(md);
 });
 
 test("Send is disabled for empty or whitespace-only input", async ({ page }) => {
