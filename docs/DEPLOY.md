@@ -54,7 +54,7 @@ Browser ─► Caddy (auto-HTTPS) ─► FastAPI (backend/app/) ─► OpenRoute
 The app runs from a **pre-built image**, not a build-on-the-box. CI
 (`.github/workflows/ci.yml`, the **image** job) builds the Docker image, boots
 it, and smoke-tests `/api/health` on every PR — so a broken build can't land —
-and publishes to **GHCR** (`ghcr.io/toddawhittaker/ipeds-ai`) on pushes:
+and publishes to **GHCR** (`ghcr.io/toddawhittaker/ipeds-oracle`) on pushes:
 
 - push to `main` → `:edge` + `:sha-<short>` (the tip, for staging/testing)
 - a **`v*` git tag** (a release) → `:vX.Y.Z` + `:X.Y` + `:latest`

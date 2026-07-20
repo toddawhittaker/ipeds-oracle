@@ -2,7 +2,7 @@
 # Pull-on-the-box deploy for the IPEDS web app.
 #
 # The release flow is: cut a `vX.Y.Z` git tag -> CI builds, smoke-tests, and
-# publishes ghcr.io/toddawhittaker/ipeds-ai:vX.Y.Z (and moves :latest) -> run
+# publishes ghcr.io/toddawhittaker/ipeds-oracle:vX.Y.Z (and moves :latest) -> run
 # this on the VPS to roll the running stack onto the new image. No inbound SSH
 # from GitHub and no keys leave the box.
 #

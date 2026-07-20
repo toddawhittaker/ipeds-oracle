@@ -247,7 +247,7 @@ jobs:
     needs: [lint, backend, e2e]
     permissions:
       contents: read
-      packages: write   # push to ghcr.io/<owner>/ipeds-ai
+      packages: write   # push to ghcr.io/<owner>/ipeds-oracle
     env:
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
@@ -263,7 +263,7 @@ jobs:
         with:
           context: .
           load: true
-          tags: ipeds-ai:smoke
+          tags: ipeds-oracle:smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -273,7 +273,7 @@ jobs:
           # without an LLM key, so /api/health must answer on a bare boot.
           docker run -d --name smoke -p 8000:8000 \
             -e COOKIE_SECURE=false -e LLM_API_KEY= -e RESEND_API_KEY= \
-            ipeds-ai:smoke
+            ipeds-oracle:smoke
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/api/health | grep -q '"ok":true'; then
               echo "health OK"; docker rm -f smoke; exit 0

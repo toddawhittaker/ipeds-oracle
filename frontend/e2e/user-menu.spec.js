@@ -134,7 +134,7 @@ test("About opens an informational modal with the GitHub link; Close dismisses a
   await expect(dialog.getByRole("heading", { name: "About IPEDS Oracle" })).toBeVisible();
   // The source link is a GitHub icon (labeled), sitting in the actions row.
   await expect(dialog.getByRole("link", { name: "View the source code on GitHub" }))
-    .toHaveAttribute("href", "https://github.com/toddawhittaker/ipeds-ai");
+    .toHaveAttribute("href", "https://github.com/toddawhittaker/ipeds-oracle");
   // "IPEDS dataset" links out to the NCES IPEDS home.
   await expect(dialog.getByRole("link", { name: "IPEDS dataset" }))
     .toHaveAttribute("href", "https://nces.ed.gov/ipeds/");

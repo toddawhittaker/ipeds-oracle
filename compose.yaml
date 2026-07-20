@@ -15,7 +15,7 @@ services:
     # pull` picks the release you want via IPEDS_TAG (defaults to :latest, which
     # CI moves only on a v* release tag). `build:` stays for local dev, so
     # `docker compose up --build` still builds from source without a registry.
-    image: ghcr.io/toddawhittaker/ipeds-ai:${IPEDS_TAG:-latest}
+    image: ghcr.io/toddawhittaker/ipeds-oracle:${IPEDS_TAG:-latest}
     build: .
     restart: unless-stopped
     env_file: .env

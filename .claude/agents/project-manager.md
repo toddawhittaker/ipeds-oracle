@@ -107,7 +107,7 @@ weren't separately invoked.
 
 ## Repo context
 
-This is the **ipeds / ipeds-ai** project: a unified cross-year IPEDS SQLite
+This is the **ipeds / ipeds-oracle** project: a unified cross-year IPEDS SQLite
 database plus a private FastAPI + React natural-language query web app
 (magic-link auth, self-learning DeepSeek agent). Read `CLAUDE.md` and `docs/SCHEMA.md`
 before planning anything that touches queries; the SQL safety and CIP/award-level
