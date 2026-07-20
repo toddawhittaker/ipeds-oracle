@@ -164,9 +164,10 @@ Browser-tested components stay out of the floor (Playwright covers them).
 **Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
 three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
 `git config core.hooksPath .githooks`). Bypass with `git push --no-verify`; skip
-just the slow e2e job with `SKIP_E2E=1`. This is the real merge gate — branch
-protection isn't available on this repo's plan, so a red CI check can otherwise
-land on `main`.
+just the slow e2e job with `SKIP_E2E=1`. It's a fast pre-check — the
+**authoritative gate is GitHub CI**: `main` is **branch-protected**, so every
+change lands through a PR with all checks (lint · unit · backend · e2e · image)
+green before it can merge; direct and force pushes to `main` are blocked.
 
 > A real production `.env` bleeds into the suites two ways. With
 > `COOKIE_SECURE=true` the auth‑dependent suites can't hold the session cookie
