@@ -146,11 +146,24 @@ class Settings(BaseSettings):
     # Set to 1 in production behind a single proxy hop (see the README).
     trusted_proxy_count: int = Field(default=0)
 
-    # --- Email (Resend) ----------------------------------------------------
-    resend_api_key: str = Field(default="")
+    # --- Email --------------------------------------------------------------
+    # Which transport delivers the magic-link / access-request / approval emails.
+    # "auto" (default) picks resend if a Resend key is set, else smtp if SMTP_HOST
+    # is set, else console (log-only, for dev). Force one with resend/smtp/console.
+    mail_backend: str = Field(default="auto")     # auto | console | resend | smtp
     mail_from: str = Field(default="IPEDS Oracle <noreply@example.com>")
     # Where "request access" notifications are sent (defaults to first admin).
     access_request_to: str = Field(default="")
+    # Resend (a hosted email API — the easiest path for a pilot).
+    resend_api_key: str = Field(default="")
+    # SMTP (use your own mail: Google Workspace, Microsoft 365, or any relay).
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587)
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_starttls: bool = Field(default=True)     # STARTTLS on 587 (the common case)
+    smtp_ssl: bool = Field(default=False)         # implicit TLS on 465 instead
+    smtp_timeout: float = Field(default=15.0)
 
     # --- Embeddings / self-learning ---------------------------------------
     embed_model: str = Field(default="BAAI/bge-small-en-v1.5")

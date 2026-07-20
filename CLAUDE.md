@@ -310,7 +310,12 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 - A **semantic answer cache** short-circuits repeat questions.
 
 ### Auth & access control
-- Passwordless **magic link**, manual **allowlist**, email via **Resend**. The
+- Passwordless **magic link**, manual **allowlist**, email via a **pluggable
+  backend** (`mail_backend`: `auto`/`resend`/`smtp`/`console`) — Resend (hosted API,
+  easy pilot) or the institution's own **SMTP** (Google/Microsoft/relay, stdlib
+  `smtplib`), console-log in dev. One seam: `mailer.send_email` dispatches via
+  `_resolve_backend`; a backend failure is swallowed (returns False, never 500s the
+  login/approval). The Outlook-safe HTML templates are backend-agnostic. The
   allowlist is the **sole authority on sign-in**.
 - **Approval mints no token.** Only a user's OWN `POST /api/auth/request` mints +
   emails a real one-time sign-in link (`auth.py` `mint_login_link` + `send_magic_link`).
@@ -338,8 +343,8 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   gets the **same neutral response** as every other path.
 - **No enumeration oracle:** every branch's outbound send is scheduled via
   `BackgroundTasks`, never inline, so denial leaks nothing by response body **or**
-  by wall-clock (a synchronous Resend call on only some branches was a measured
-  400×+ timing oracle). A residual sub-ms DB-local timing difference (denied/unknown
+  by wall-clock (a synchronous provider call — Resend or SMTP — on only some
+  branches was a measured 400×+ timing oracle). A residual sub-ms DB-local timing difference (denied/unknown
   skip the INSERT the allowlisted/pending branches do) is **accepted** — it doesn't
   isolate the sensitive states, and equalizing it would violate "store nothing on
   deny"; see `auth.request_login`'s docstring.

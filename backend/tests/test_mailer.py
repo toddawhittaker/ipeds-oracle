@@ -50,7 +50,8 @@ def test_send_email_swallows_provider_errors():
     orig_send = resend.Emails.send
     try:
         mailer.get_settings = lambda: types.SimpleNamespace(
-            resend_api_key="re_test_key", mail_from="IPEDS <x@example.com>")
+            mail_backend="auto", resend_api_key="re_test_key",
+            smtp_host="", mail_from="IPEDS <x@example.com>")
 
         def boom(*a, **k):
             raise RuntimeError("domain is not verified")
@@ -66,11 +67,96 @@ def test_send_email_swallows_provider_errors():
 def test_send_email_no_key_returns_false():
     orig_get = mailer.get_settings
     try:
+        # No Resend key and no SMTP host -> auto resolves to console (log-only).
         mailer.get_settings = lambda: types.SimpleNamespace(
-            resend_api_key="", mail_from="x@example.com")
+            mail_backend="auto", resend_api_key="", smtp_host="", mail_from="x@example.com")
         assert mailer.send_email("u@example.com", "s", "<p>h</p>") is False
     finally:
         mailer.get_settings = orig_get
+
+
+def test_resolve_backend_selects_the_right_transport():
+    """auto prefers resend (key), then smtp (host), else console; an explicit
+    backend wins over auto-detection, and an unknown value falls back to console."""
+    ns = types.SimpleNamespace
+    r = mailer._resolve_backend
+    assert r(ns(mail_backend="auto", resend_api_key="re_x", smtp_host="")) == "resend"
+    assert r(ns(mail_backend="auto", resend_api_key="", smtp_host="smtp.x")) == "smtp"
+    assert r(ns(mail_backend="auto", resend_api_key="", smtp_host="")) == "console"
+    # Explicit choice overrides what auto would have picked.
+    assert r(ns(mail_backend="smtp", resend_api_key="re_x", smtp_host="")) == "smtp"
+    assert r(ns(mail_backend="console", resend_api_key="re_x", smtp_host="smtp.x")) == "console"
+    # Unknown backend -> console (log-only), never a crash.
+    assert r(ns(mail_backend="sendgrid", resend_api_key="", smtp_host="")) == "console"
+
+
+def _smtp_settings(**overrides):
+    base = dict(mail_backend="smtp", mail_from="IPEDS <no@school.edu>", resend_api_key="",
+                smtp_host="smtp.school.edu", smtp_port=587, smtp_username="no@school.edu",
+                smtp_password="pw", smtp_starttls=True, smtp_ssl=False, smtp_timeout=15.0)
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+def test_smtp_backend_builds_multipart_and_sends():
+    """The smtp backend sends a multipart/alternative (text + html) with the right
+    headers, STARTTLSes, and logs in — all via stdlib smtplib (monkeypatched)."""
+    import smtplib
+    orig_get, orig_smtp = mailer.get_settings, smtplib.SMTP
+    calls = {"starttls": 0, "login": None, "msg": None, "host": None, "port": None}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            calls["host"], calls["port"] = host, port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, context=None):
+            calls["starttls"] += 1
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def send_message(self, msg):
+            calls["msg"] = msg
+
+    try:
+        mailer.get_settings = lambda: _smtp_settings()
+        smtplib.SMTP = FakeSMTP
+        ok = mailer.send_email("u@example.com", "Sub", "<p>hi</p>", "hi (text)")
+        assert ok is True, "expected True on a successful SMTP send"
+        assert (calls["host"], calls["port"]) == ("smtp.school.edu", 587), calls
+        assert calls["starttls"] == 1, "STARTTLS should run on the 587 path"
+        assert calls["login"] == ("no@school.edu", "pw"), calls["login"]
+        msg = calls["msg"]
+        assert msg["From"] == "IPEDS <no@school.edu>", msg["From"]
+        assert msg["To"] == "u@example.com" and msg["Subject"] == "Sub"
+        assert msg.get_content_type() == "multipart/alternative", msg.get_content_type()
+        parts = [p.get_content_type() for p in msg.iter_parts()]
+        assert "text/plain" in parts and "text/html" in parts, parts
+    finally:
+        mailer.get_settings, smtplib.SMTP = orig_get, orig_smtp
+
+
+def test_smtp_backend_swallows_errors():
+    """An SMTP failure (relay down, auth/TLS error) returns False, not a crash."""
+    import smtplib
+    orig_get, orig_smtp = mailer.get_settings, smtplib.SMTP
+
+    class BoomSMTP:
+        def __init__(self, *a, **k):
+            raise smtplib.SMTPException("relay down")
+
+    try:
+        mailer.get_settings = lambda: _smtp_settings(smtp_username="")
+        smtplib.SMTP = BoomSMTP
+        assert mailer.send_email("u@example.com", "s", "<p>h</p>", "t") is False
+    finally:
+        mailer.get_settings, smtplib.SMTP = orig_get, orig_smtp
 
 
 def test_admin_recipients_includes_all_admins_deduped():
@@ -212,7 +298,14 @@ def run():
     print("mailer contract:")
     check("send_email swallows provider errors (returns False)",
           test_send_email_swallows_provider_errors)
-    check("send_email with no key returns False", test_send_email_no_key_returns_false)
+    check("send_email with no key/host returns False (console backend)",
+          test_send_email_no_key_returns_false)
+    check("_resolve_backend selects resend/smtp/console (auto + explicit + unknown)",
+          test_resolve_backend_selects_the_right_transport)
+    check("smtp backend builds a multipart message, STARTTLSes, logs in, sends",
+          test_smtp_backend_builds_multipart_and_sends)
+    check("smtp backend swallows send failures (returns False)",
+          test_smtp_backend_swallows_errors)
     check("admin_recipients gathers all admins + override, deduped",
           test_admin_recipients_includes_all_admins_deduped)
     check("send_access_request fans out to every admin",

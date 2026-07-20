@@ -107,8 +107,9 @@ your own LLM + email keys and the built `ipeds.db`.
 - **Docker** with Compose (or Python 3.12 for a from‑source run — see
   [CONTRIBUTING.md](CONTRIBUTING.md)).
 - An **OpenRouter** API key (or any OpenAI‑compatible provider).
-- A **Resend** API key + a verified sending domain, for the magic‑link and
-  access‑request emails.
+- **Email delivery** for the magic‑link and access‑request emails — either a
+  **Resend** API key (easiest for a pilot) **or your own SMTP** (Google Workspace,
+  Microsoft 365, or any relay). See [Email](#email) below.
 - **Outbound HTTPS to `nces.ed.gov`** — the Admin → Imports year catalog fetches
   IPEDS releases from there. Without it the catalog degrades gracefully and the
   manual `.accdb` upload still works. No other outbound access is required.
@@ -157,6 +158,24 @@ The app listens on **:8000**. Give it TLS one of two ways:
 
 Either way keep `COOKIE_SECURE=true` — the session cookie is only sent over HTTPS.
 
+### Email
+
+The app sends one‑time sign‑in links, access‑request notices, and approval
+welcomes. `MAIL_BACKEND` chooses how (default `auto`):
+
+- **Resend** (`RESEND_API_KEY`) — a hosted email API; the quickest way to stand up
+  a pilot. Needs a verified sending domain in Resend.
+- **SMTP** (`SMTP_HOST` + friends) — your own mail infrastructure. Point it at
+  **Microsoft 365** (`smtp.office365.com:587`, STARTTLS), **Google Workspace**
+  (`smtp-relay.gmail.com:587`, or `smtp.gmail.com:587` with an app password), or
+  any relay. Auth is skipped when `SMTP_USERNAME` is empty (IP‑authed relays).
+- **console** — no send; the message (including the sign‑in link) is written to
+  the log. Handy for local dev without any provider.
+
+`auto` picks Resend if a key is set, else SMTP if `SMTP_HOST` is set, else console.
+`MAIL_FROM` must be an address the chosen backend is allowed to send as. See
+[`.env.example`](.env.example) for every SMTP option.
+
 ### Configuration
 
 All settings come from `.env` — see [`.env.example`](.env.example) for the full,
@@ -165,7 +184,7 @@ commented list. The essentials:
 | Variable | What |
 | --- | --- |
 | `LLM_API_KEY` / `LLM_BASE_URL` | LLM provider (OpenRouter by default) |
-| `RESEND_API_KEY` / `MAIL_FROM` | transactional email (magic links) |
+| `MAIL_BACKEND` / `RESEND_API_KEY` / `SMTP_*` / `MAIL_FROM` | email delivery (see [Email](#email)) |
 | `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted on first boot |
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
