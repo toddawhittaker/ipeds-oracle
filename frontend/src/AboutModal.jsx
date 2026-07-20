@@ -6,6 +6,10 @@ import Wordmark from "./Wordmark.jsx";
 const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
 const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
+// The guides live in the repo and render on GitHub (with screenshots). The Admin
+// guide link is shown only to admins (see the `isAdmin` gate below).
+const USER_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/USER_GUIDE.md";
+const ADMIN_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/ADMIN_GUIDE.md";
 
 // An informational "About" dialog. Deliberately NOT built on useConfirm (that's
 // action-shaped — a confirm/cancel button row and an onConfirm callback); this is
@@ -14,7 +18,7 @@ const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
 // in on open and returns to the opener on close, Escape / overlay-click / Close all
 // dismiss, and the background is inert while it's open. Pinned in
 // frontend/e2e/user-menu.spec.js.
-export default function AboutModal({ onClose }) {
+export default function AboutModal({ onClose, isAdmin = false }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
   const openerRef = useRef(null);
@@ -95,6 +99,16 @@ export default function AboutModal({ onClose }) {
             Ask a question in plain English and an AI agent turns it into SQL against
             the read-only IPEDS database, then streams back an answer with the figures,
             tables, and charts behind it.
+          </p>
+          <p className="about-guides">
+            <strong>Guides:</strong>{" "}
+            <a href={USER_GUIDE_URL} target="_blank" rel="noreferrer">Using IPEDS Oracle</a>
+            {isAdmin && (
+              <>
+                {" · "}
+                <a href={ADMIN_GUIDE_URL} target="_blank" rel="noreferrer">Admin guide</a>
+              </>
+            )}
           </p>
         </div>
         <div className="modal-actions about-actions">

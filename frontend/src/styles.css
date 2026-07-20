@@ -290,6 +290,8 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* The ochre divider is a baseline-less bar; center it on the caps rather than
    letting baseline alignment drop it. */
 .about-title .wm-div { align-self: center; }
+.about-guides { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; }
+.about-guides strong { color: var(--text); }
 .about-actions { justify-content: space-between; align-items: center; }
 /* Sized to match the Close button's footprint (icon + padding ≈ its height). */
 .about-gh {
