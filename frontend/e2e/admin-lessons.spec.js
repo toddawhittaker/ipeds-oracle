@@ -248,7 +248,10 @@ test("Save PATCHes exactly {headline, lesson, notes, canonical_sql} trimmed, rel
   await page.goto("/");
   await gotoAdmin(page);
   await page.getByRole("link", { name: "Skills" }).click();
-  expect(getCount).toBe(1);
+  // The Skills fetch fires from a mount effect, so poll rather than assert
+  // synchronously (a bare expect(getCount) races the effect on the slower CI
+  // preview build — exactly-1 still catches a double-fetch, it just waits for it).
+  await expect.poll(() => getCount).toBe(1);
 
   const editBtn = page.getByRole("button", { name: "Edit lesson: Add majornum=1 for every completions total." });
   await editBtn.click();
