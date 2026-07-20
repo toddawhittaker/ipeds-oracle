@@ -198,7 +198,7 @@ commented list. The essentials:
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
-| `IPEDS_TAG` | which published image to run (`:latest` or a pinned `vX.Y.Z`) |
+| `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 
 ## How this was built
 
