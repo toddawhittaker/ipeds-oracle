@@ -1,20 +1,24 @@
-# Single-VPS deployment: FastAPI app + Caddy for automatic HTTPS.
+# Self-hosting: run IPEDS Oracle with Docker Compose.
 #
-#   1. Put ipeds.db and the source data/ under ./srv-data (see volume below):
+#   1. Put ipeds.db (and, for admin re-imports, the source .accdb files) under
+#      ./srv-data — see the volume below:
 #        srv-data/ipeds.db          the built database
 #        srv-data/accdb/*.accdb     source Access files (for admin re-imports)
-#   2. Copy .env.example -> .env and fill it in (APP_PUBLIC_URL, keys, admins).
-#   3. Set DOMAIN in .env, then: docker compose up -d --build
+#   2. Copy .env.example -> .env and fill it in (keys, ADMIN_EMAILS, APP_PUBLIC_URL).
+#   3. docker compose up -d --build
 #
-# Data lives on the host volume, NOT in the image — rebuilds/atomic swaps and
-# app state (users, skills, chats) all persist across container restarts.
+# The app listens on :8000. For HTTPS either put it behind a reverse proxy or
+# tunnel that terminates TLS, or serve TLS directly with a self-signed cert — see
+# the README "Self-hosting" section.
+#
+# Data lives on the host volume, NOT in the image — rebuilds/atomic swaps and app
+# state (users, skills, chats) all persist across container restarts.
 
 services:
   app:
-    # Production pulls a CI-built, smoke-tested image from GHCR; `docker compose
-    # pull` picks the release you want via IPEDS_TAG (defaults to :latest, which
-    # CI moves only on a v* release tag). `build:` stays for local dev, so
-    # `docker compose up --build` still builds from source without a registry.
+    # Pull a CI-built, smoke-tested image from GHCR (`docker compose pull`), pinned
+    # via IPEDS_TAG (defaults to :latest). `build:` stays so `docker compose up
+    # --build` also builds from source without a registry.
     image: ghcr.io/toddawhittaker/ipeds-oracle:${IPEDS_TAG:-latest}
     build: .
     restart: unless-stopped
@@ -25,33 +29,13 @@ services:
       LOG_DB_PATH: /data/logs.db   # persistent server logs (survive restarts)
       DATA_DIR: /data/accdb
       UPLOAD_DIR: /data/uploads
-      NCES_WORK_DIR: /data/work  # scratch space for the Imports year-catalog fetch; cleaned up after every run
-      COOKIE_SECURE: "true"
-      # Exactly one trusted proxy hop (the caddy service below) — so the per-IP
-      # rate limiter reads the real client from the right-most X-Forwarded-For
-      # entry and can't be fooled by a client-spoofed header. Bump if you add
-      # another proxy (e.g. Cloudflare) in front of Caddy.
-      TRUSTED_PROXY_COUNT: "1"
+      NCES_WORK_DIR: /data/work  # scratch for the Imports year-catalog fetch; cleaned after every run
+      # COOKIE_SECURE and TRUSTED_PROXY_COUNT come from .env — set them to match
+      # your ingress (see .env.example).
     volumes:
       - ./srv-data:/data
-    expose:
-      - "8000"
-
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    depends_on:
-      - app
+      # For direct HTTPS with a self-signed cert, also mount your certs here and
+      # set SSL_CERTFILE=/certs/cert.pem, SSL_KEYFILE=/certs/key.pem in .env (README).
+      # - ./certs:/certs:ro
     ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-
-volumes:
-  caddy_data:
-  caddy_config:
+      - "8000:8000"

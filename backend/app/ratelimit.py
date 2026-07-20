@@ -19,7 +19,7 @@ from app.db import connect
 def client_ip(request: Request) -> str:
     """Client IP for per-IP rate limiting, resilient to X-Forwarded-For spoofing.
 
-    X-Forwarded-For is a client-settable header. A trusted reverse proxy (Caddy)
+    X-Forwarded-For is a client-settable header. A trusted reverse proxy/tunnel
     APPENDS the connecting peer to it, so the genuine client is the Nth entry
     counting FROM THE RIGHT, where N = `trusted_proxy_count`. Reading the
     left-most entry (as we used to) trusts whatever the client prepended, letting

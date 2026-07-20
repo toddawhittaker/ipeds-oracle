@@ -4,12 +4,12 @@ Ask questions about U.S. colleges and universities in plain English and get
 back conversational answers with tables and charts — no SQL, no spreadsheets.
 
 It's a private, invitation-only web app for exploring **IPEDS** (the U.S.
-Department of Education's annual census of colleges) across collection years
-**2020‑21 through 2024‑25**: degrees awarded, enrollment, tuition and financial
-aid, graduation and outcome rates, admissions, and institutional details.
+Department of Education's annual census of colleges) across recent collection
+years: degrees awarded, enrollment, tuition and financial aid, graduation and
+outcome rates, admissions, and institutional details.
 
 > **Just want to use it?** Read the rest of this page.
-> **Running or deploying it?** See [DEPLOY.md](docs/DEPLOY.md).
+> **Self-hosting it?** See [Self-hosting](#self-hosting) below.
 > **Working on the code?** See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
@@ -49,18 +49,15 @@ Ask a question in the box at the bottom and watch the answer stream in.
   exact SQL the assistant ran.
 - **Tables** — each result table has its own **Download CSV** button, and
   **Chart this** when the data suits a graph.
-- **Charts** — switch between **Line** and **Bar**, toggle **data labels**, and
-  **Copy image** to paste a chart straight into an email, doc, or slide. Charts
-  paste as clean images that look right in light or dark mode.
+- **Charts** — pick the chart type (**Line**, **Bar**, or **Line + trend**),
+  toggle **data labels**, **maximize** for a bigger view, and **copy the image**
+  to paste straight into an email, doc, or slide (clean in light or dark mode).
 - **Copy** a whole answer as **Markdown** or **HTML** (the HTML keeps the table
   and chart formatting when pasted into Word, Outlook, or Google Docs).
 - **Edit** or **Rerun** any of your earlier prompts to refine a question — the
   new answer replaces the old one in place.
 - **Conversations** are saved in the sidebar (named automatically), and you can
   delete any you don't need. Collapse the sidebar for more room.
-- **👍 / 👎** on an answer tells the app which queries were good — helpful
-  answers are remembered and reused to make future questions faster and more
-  accurate.
 - **Light or dark mode** — toggle in the top bar; your choice is remembered.
 
 A repeat of a near‑identical question may return instantly from a cache, but the
@@ -68,9 +65,9 @@ numbers are always re‑checked against the live data.
 
 ## Data coverage & accuracy
 
-The database contains **five collection years, 2020‑21 → 2024‑25**, covering the
-main IPEDS surveys. When a new year is published, an administrator loads it and
-the app picks it up automatically.
+The database holds the most recent IPEDS collection years, covering the main
+surveys. When a new year is published, an administrator loads it and the app
+picks it up automatically.
 
 The assistant sanity‑checks magnitudes before answering (for example, ~1 million
 associate's degrees are awarded nationally per year), but it's a tool, not an
@@ -97,5 +94,80 @@ A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
 SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
 charts. It's designed to be cheap to run and safe by construction — the model
 can only issue read‑only queries, guarded by a timeout. Details in
-[CONTRIBUTING.md](CONTRIBUTING.md) and [DEPLOY.md](docs/DEPLOY.md); the data model and
-query conventions are documented in [SCHEMA.md](docs/SCHEMA.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) and [Self-hosting](#self-hosting) below; the
+data model and query conventions are documented in [SCHEMA.md](docs/SCHEMA.md).
+
+## Self-hosting
+
+IPEDS Oracle runs as a single container (or a plain Python process). You bring
+your own LLM + email keys and the built `ipeds.db`.
+
+### Requirements
+
+- **Docker** with Compose (or Python 3.12 for a from‑source run — see
+  [CONTRIBUTING.md](CONTRIBUTING.md)).
+- An **OpenRouter** API key (or any OpenAI‑compatible provider).
+- A **Resend** API key + a verified sending domain, for the magic‑link and
+  access‑request emails.
+- **Outbound HTTPS to `nces.ed.gov`** — the Admin → Imports year catalog fetches
+  IPEDS releases from there. Without it the catalog degrades gracefully and the
+  manual `.accdb` upload still works. No other outbound access is required.
+
+### Run
+
+```bash
+git clone https://github.com/toddawhittaker/ipeds-oracle && cd ipeds-oracle
+cp .env.example .env && $EDITOR .env    # LLM_API_KEY, RESEND_API_KEY, ADMIN_EMAILS, APP_PUBLIC_URL, …
+mkdir -p srv-data/accdb                  # the /data volume (holds the DBs + import sources)
+cp /path/to/ipeds.db srv-data/ipeds.db   # the built database (see "Data" below)
+docker compose up -d --build             # --build until you pull a published image
+```
+
+Open the app, sign in with an address in `ADMIN_EMAILS` (auto‑allowlisted + admin
+on first boot), and add colleagues under **Admin → Allowlist**. Update later with
+`docker compose pull && docker compose up -d` (pin a release via `IPEDS_TAG`).
+
+### Data
+
+The app serves a read‑only `ipeds.db`. Either drop a prebuilt one into the `/data`
+volume (`srv-data/ipeds.db`), or start with none and build the first year through
+**Admin → Imports** (it fetches from NCES, or accepts an `.accdb` upload). Keep the
+source `.accdb` files under `srv-data/accdb/` for later re‑imports. `ipeds.db` is
+rebuildable, so it is **not** backed up; `app.db` (users, chats, learned skills) is
+the irreplaceable state — back it up with `scripts/backup_app_db.py` (optional
+off‑site copy to any S3‑compatible store via rclone; set `BACKUP_REMOTE`).
+
+### HTTPS
+
+The app listens on **:8000**. Give it TLS one of two ways:
+
+1. **Behind a reverse proxy or tunnel** (recommended for anything public) — let
+   your proxy/tunnel terminate TLS and forward to `:8000`. Set `APP_PUBLIC_URL` to
+   your public URL and `TRUSTED_PROXY_COUNT` to the number of proxy hops.
+2. **Direct HTTPS with a self‑signed cert** (handy on a LAN) — generate a cert and
+   point the app at it:
+
+   ```bash
+   scripts/gen-selfsigned-cert.sh certs your-host   # writes certs/cert.pem + key.pem
+   ```
+
+   Uncomment the `./certs:/certs:ro` mount in `compose.yaml`, and in `.env` set
+   `SSL_CERTFILE=/certs/cert.pem`, `SSL_KEYFILE=/certs/key.pem`, and
+   `APP_PUBLIC_URL=https://your-host:8000`. Browsers warn until you trust the cert.
+
+Either way keep `COOKIE_SECURE=true` — the session cookie is only sent over HTTPS.
+
+### Configuration
+
+All settings come from `.env` — see [`.env.example`](.env.example) for the full,
+commented list. The essentials:
+
+| Variable | What |
+| --- | --- |
+| `LLM_API_KEY` / `LLM_BASE_URL` | LLM provider (OpenRouter by default) |
+| `RESEND_API_KEY` / `MAIL_FROM` | transactional email (magic links) |
+| `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted on first boot |
+| `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
+| `EMAIL_DOMAIN` | restrict who may request access (optional) |
+| `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
+| `IPEDS_TAG` | which published image to run (`:latest` or a pinned `vX.Y.Z`) |

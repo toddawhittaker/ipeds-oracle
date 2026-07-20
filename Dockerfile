@@ -34,5 +34,10 @@ COPY --from=frontend /frontend/dist ./frontend/dist
 # Warm the embedding model at build time so first request is fast (optional).
 # RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
+RUN chmod +x scripts/docker-entrypoint.sh
+
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The entrypoint serves plain HTTP on :8000, or HTTPS when SSL_CERTFILE and
+# SSL_KEYFILE are set (a self-signed cert — see the README). With neither set it's
+# a bare `uvicorn app.main:app`, so the default is unchanged.
+CMD ["/srv/scripts/docker-entrypoint.sh"]

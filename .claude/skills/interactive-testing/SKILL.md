@@ -1,6 +1,6 @@
 ---
 name: interactive-testing
-description: Run the IPEDS app locally for hands-on / interactive testing via the repo-root Makefile — `make up` (LLM key, NO Resend key; sign-in links go to the log), `make full` (also sends real email), `make down` to stop. Use when asked to start/serve/spin up the app on port 8000 for manual testing, sign in locally, or stop the local server. NOT for automated tests (scripts/run_ci_local.sh) or deployment (docs/DEPLOY.md).
+description: Run the IPEDS app locally for hands-on / interactive testing via the repo-root Makefile — `make up` (LLM key, NO Resend key; sign-in links go to the log), `make full` (also sends real email), `make down` to stop. Use when asked to start/serve/spin up the app on port 8000 for manual testing, sign in locally, or stop the local server. NOT for automated tests (scripts/run_ci_local.sh) or deployment (Docker — see the README's Self-hosting section).
 ---
 
 # Interactive testing — run the app on :8000
@@ -43,7 +43,7 @@ allowlisted admin already in `app.db`) lands in `/admin`.
 - Uses the **real** local `app.db` / `logs.db` and the read-only `ipeds.db` — not throwaway fixtures.
 - `make full` sends REAL email, but with `APP_PUBLIC_URL=localhost` links: fine for signing in on the same machine; an external recipient would get a non-routable localhost link.
 - Bound to `0.0.0.0` with `COOKIE_SECURE=false` = plaintext http exposed to the LAN. Fine on a trusted network for dev; don't leave it up on an untrusted one.
-- Do NOT confuse with the merge gate (`scripts/run_ci_local.sh`) or deployment (Docker — `docs/DEPLOY.md`).
+- Do NOT confuse with the merge gate (`scripts/run_ci_local.sh`) or deployment (Docker — see the README's Self-hosting section).
 - If you can't use `make` for some reason, the equivalent for `up` is:
   ```bash
   cd frontend && npm run build && cd ../backend && \
