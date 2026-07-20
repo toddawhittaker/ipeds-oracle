@@ -7,6 +7,8 @@ name: CI
 #                    and runs the SQL-guard, hardening, backend and security suites.
 #   * e2e job      — Playwright specs that mock every /api/** call at the network
 #                    layer (frontend/e2e/mocks.js); no backend process is started.
+#   * secrets job  — gitleaks scans full git history for leaked credentials
+#                    (defense-in-depth under GitHub's native push protection).
 #
 # NOT run here: backend/tests/eval_nl2sql.py asserts known-good national totals
 # against the real database and needs LLM_API_KEY. Run it locally against the
@@ -63,6 +65,31 @@ jobs:
       - name: ESLint
         run: npm run lint
         working-directory: frontend
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so a secret introduced in ANY pushed commit is caught,
+          # not just the current working tree.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          VERSION=8.21.2
+          curl -sSLo /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks version
+
+      # Defense-in-depth under GitHub's native push-protection + secret scanning:
+      # gitleaks adds generic/high-entropy detection (the "non-provider patterns"
+      # our plan won't enable via API) and runs on every PR regardless of account
+      # settings. Non-zero exit = a leak was found → the job (and the merge) fails.
+      - name: Scan git history for secrets
+        run: /tmp/gitleaks git --no-banner --redact .
 
   backend:
     name: Backend suites (guards · hardening · backend · security)

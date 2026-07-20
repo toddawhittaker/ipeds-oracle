@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# pre-push — client-side CI merge gate.
+# pre-push — fast local pre-check mirroring GitHub CI.
 #
-# Branch protection / required status checks aren't available on this repo's
-# plan, so GitHub CI can't block a merge. This hook runs the full CI scope
-# locally before every push and aborts the push if anything is red.
+# GitHub CI is the authoritative merge gate (main is branch-protected, all
+# checks required). This hook runs the same CI scope locally before every push
+# and aborts the push if anything is red, so failures surface here instead of
+# after a round-trip to GitHub.
 #
 # Bypass (use sparingly): git push --no-verify
 # Skip only the slow e2e job:  SKIP_E2E=1 git push
