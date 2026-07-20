@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { svgToPngDataUrl } from "./chartimg.js";
-import { IconCopy } from "./icons.jsx";
+import { IconCopy, IconCheck, IconTag } from "./icons.jsx";
 import { pctChange, trendValues } from "./trendstats.js";
 
 const PALETTE = ["#3b82c4", "#e0803a", "#38a169", "#a23bc9", "#d64f6b", "#0e9aa7"];
@@ -42,10 +42,18 @@ function useThemeColors() {
 function titleRenderer(title, fill) {
   // x="50%" is relative to the chart SVG, so the title is reliably centered
   // (the <Customized> width prop was unreliable and pushed it to the left).
-  return function ChartTitle() {
+  return function ChartTitle(props) {
+    // Wrap a long title onto up to 2 lines so a narrow (side-by-side) chart doesn't
+    // clip it. x="50%" keeps centering reliable; the width prop is used only as an
+    // approximate character budget (a wide export chart keeps the title on one line).
+    const w = Number(props?.width) || 320;
+    const maxChars = Math.max(12, Math.floor((w - 30) / 6.6));
+    const lines = wrapLabel(title, maxChars, 2);
     return (
-      <text x="50%" y={16} textAnchor="middle" fontSize={13} fontWeight="600" fill={fill}>
-        {title}
+      <text x="50%" y={15} textAnchor="middle" fontSize={13} fontWeight="600" fill={fill}>
+        {lines.map((ln, i) => (
+          <tspan key={i} x="50%" dy={i === 0 ? 0 : 14}>{ln}</tspan>
+        ))}
       </text>
     );
   };
@@ -170,7 +178,8 @@ export default function Chart({ spec }) {
   // long ones, giving the axis extra vertical room.
   const catLabels = spec.data.map((r) => String(r?.[spec.x] ?? ""));
   const longLabels = isBar && catLabels.some((l) => l.length > 12);
-  const margin = { top: spec.title ? 28 : 10, right: 22, bottom: longLabels ? 12 : 24, left: 10 };
+  // Reserve vertical room for a title that may wrap to two lines on a narrow chart.
+  const margin = { top: spec.title ? 40 : 10, right: 22, bottom: longLabels ? 12 : 24, left: 10 };
   const chartH = longLabels ? 372 : 320;
 
   // Trend intelligence (single numeric series only): a fitted trend LINE for a
@@ -219,17 +228,26 @@ export default function Chart({ spec }) {
   const alt = `${spec.title || "Chart"}: ${type} chart of ${keys.join(", ")}`
     + (spec.x ? ` by ${spec.x}` : "");
 
+  // One compact <select> collapses the old Line/Bar buttons AND the Trend toggle:
+  // "Line + trend" is just a line subtype (offered only when a trend is available —
+  // a single numeric time-series). Keeps the toolbar narrow enough to sit beside a
+  // table without its controls overflowing the chart.
+  const typeValue = isBar ? "bar" : (showTrend && trend ? "line-trend" : "line");
+  function onTypeChange(v) {
+    if (v === "bar") { setType("bar"); return; }
+    setType("line");
+    setShowTrend(v === "line-trend");
+  }
+
   return (
     <figure className="chart" role="img" aria-label={alt}>
       <div className="chart-head">
-        <div className="chart-types" role="group" aria-label="Chart type">
-          {["line", "bar"].map((t) => (
-            <button key={t} type="button" className={type === t ? "on" : ""}
-                    aria-pressed={type === t} onClick={() => setType(t)}>
-              {t[0].toUpperCase() + t.slice(1)}
-            </button>
-          ))}
-        </div>
+        <select className="chart-type" value={typeValue} aria-label="Chart type"
+                onChange={(e) => onTypeChange(e.target.value)}>
+          <option value="line">Line</option>
+          {trend && <option value="line-trend">Line + trend</option>}
+          <option value="bar">Bar</option>
+        </select>
         {delta && (
           <span className={"chart-delta " + delta.dir}
                 title={`${Math.abs(delta.pct).toFixed(1)}% change over the range shown`}>
@@ -237,19 +255,16 @@ export default function Chart({ spec }) {
           </span>
         )}
         <div className="chart-head-tools">
-          {trend && (
-            <button type="button" className={"pill-toggle" + (showTrend ? " on" : "")}
-                    aria-pressed={showTrend} onClick={() => setShowTrend((v) => !v)}>
-              Trend
-            </button>
-          )}
-          <button type="button" className={"pill-toggle" + (showLabels ? " on" : "")}
-                  aria-pressed={showLabels} onClick={() => setShowLabels((v) => !v)}>
-            Data labels
+          <button type="button" className={"chart-ico-toggle" + (showLabels ? " on" : "")}
+                  aria-pressed={showLabels} onClick={() => setShowLabels((v) => !v)}
+                  title="Show data labels" aria-label="Show data labels">
+            <IconTag />
           </button>
-          <button type="button" className="link ico" onClick={copyChart}
-                  disabled={!png} title="Copy this chart as an image">
-            <IconCopy />{copied ? "Copied!" : "Copy image"}
+          <button type="button" className="chart-ico-btn" onClick={copyChart}
+                  disabled={!png}
+                  title={copied ? "Copied!" : "Copy chart as an image"}
+                  aria-label={copied ? "Chart image copied" : "Copy chart as an image"}>
+            {copied ? <IconCheck /> : <IconCopy />}
           </button>
         </div>
       </div>

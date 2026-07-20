@@ -727,7 +727,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .md .table-wrap { overflow-x: auto; }
 .md table { border-collapse: collapse; margin: 8px 0; }
 .md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; white-space: nowrap; }
-.md th { background: var(--bg); }
+/* Headers autofit: a multi-word header (e.g. "Undergraduate Enrollment") may wrap
+   to keep the column — and the whole table — from forcing an over-wide layout. Data
+   cells stay nowrap (a number must not break). A genuinely wide table still scrolls
+   inside .table-wrap. */
+.md th { background: var(--bg); white-space: normal; overflow-wrap: break-word; vertical-align: bottom; }
 .md code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 .md pre { background: var(--bg); padding: 12px; border-radius: 8px; overflow: auto; }
 
@@ -745,15 +749,24 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .compare-panel { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
 .compare-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px; }
 /* The single-number "brief": a compact recent-years table beside its trend chart.
-   Flex-wrap degrades gracefully to stacked when the table is too wide to share. */
-.brief-figrow { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: flex-start; margin: 10px 0; }
-.brief-figrow .table-block { flex: 0 1 auto; margin: 0; }
-.brief-figrow figure.chart { flex: 1 1 340px; min-width: 280px; margin: 0; }
+   The table takes its (shrink-to-fit, header-wrapping) content width and the chart
+   fills the rest; flex-wrap degrades to stacked on a narrow viewport. A many-column
+   table gets .stacked from JS (headers.length > 4) — chart below, both full width —
+   since it can't share a row without squeezing the chart. */
+.brief-figrow { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: flex-start; margin: 10px 0; }
+.brief-figrow .table-block { flex: 0 1 auto; min-width: 0; margin: 0; }
+/* min() cap: on a very narrow container the chart shrinks to fit instead of
+   forcing the row to overflow (the page can't scroll sideways — overflow:hidden). */
+.brief-figrow figure.chart { flex: 1 1 300px; min-width: min(260px, 100%); margin: 0; }
+.brief-figrow.stacked { flex-direction: column; flex-wrap: nowrap; }
+.brief-figrow.stacked .table-block, .brief-figrow.stacked figure.chart { flex: none; width: 100%; min-width: 0; }
 
 /* charts */
 .chart { margin: 10px 0; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-.chart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 6px; }
-.chart-head-tools { display: flex; align-items: center; gap: 12px; flex: none; }
+/* Toolbar wraps (row-gap) rather than overflowing when the chart shares a row with
+   a table and gets narrow — the "controls spill off the graph" bug. */
+.chart-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; padding: 0 4px 6px; }
+.chart-head-tools { display: flex; align-items: center; gap: 6px; flex: none; }
 /* %-change over the range, featured in the chart header. Colored TEXT (not a
    tinted background) so the dark-mode --danger stays AA on any surface. */
 .chart-delta { font-family: var(--mono); font-size: 13px; font-weight: 700; white-space: nowrap; }
@@ -761,9 +774,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .chart-delta.down { color: var(--danger); }
 .chart-delta.flat { color: var(--muted); }
 .chart-types { display: flex; gap: 4px; }
-.chart-types button, .pill-toggle { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
-.chart-types button.on, .pill-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
-.chart-head-tools .link { font-size: 13px; }
+.chart-types button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+.chart-types button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
+/* Chart-type <select> collapses Line/Bar/Line+trend into one compact control. */
+.chart-type { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 12px; font-family: inherit; cursor: pointer; }
+/* Icon-only header controls (data-labels toggle, copy image) — square, tooltip on hover. */
+.chart-ico-toggle, .chart-ico-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; cursor: pointer; }
+.chart-ico-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
+.chart-ico-toggle:hover:not(.on), .chart-ico-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.chart-ico-btn:disabled { opacity: .5; cursor: default; }
 .chart-export-img { display: none; }
 /* Off-screen but laid out, so its SVG has real dimensions to rasterize. */
 .chart-export-src { position: absolute; left: -99999px; top: 0; width: 600px; height: 300px; opacity: 0; pointer-events: none; }

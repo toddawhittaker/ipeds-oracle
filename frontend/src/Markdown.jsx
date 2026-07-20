@@ -130,10 +130,17 @@ function DataTable({ node, sideChart, pairChart, ...props }) {
       {!pairChart && showChart && inferred && <Chart spec={inferred} />}
     </div>
   );
-  // Compact table + the answer's trend chart, side by side (the row wraps to
-  // stacked when the table is too wide to share — see .brief-figrow).
+  // Compact table + the answer's trend chart. Side by side when the table is
+  // narrow enough to share the row (few columns); a many-column table would
+  // squeeze the chart, so those STACK — chart below the full-width table. The
+  // side-by-side row also wraps to stacked on a narrow viewport (see .brief-figrow).
   if (sideChart) {
-    return <div className="brief-figrow">{table}<Chart spec={sideChart} /></div>;
+    const wide = headers.length > 4;
+    return (
+      <div className={"brief-figrow" + (wide ? " stacked" : "")}>
+        {table}<Chart spec={sideChart} />
+      </div>
+    );
   }
   return table;
 }
