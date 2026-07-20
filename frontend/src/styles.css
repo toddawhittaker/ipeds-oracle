@@ -279,12 +279,17 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* The wordmark type lockup ("IPEDS | Oracle") inline in the About title, after
    the plain-serif "About". Sized to sit with the h2; the head icon carries the
    mark, so the wordmark here is text-only (showIcon={false}). */
-.about-title { display: flex; align-items: center; gap: .32em; }
-.about-title .wordmark { font-size: 17px; }
+/* Align "About" with the wordmark on a shared text BASELINE (not box centers —
+   that's what made them look off). */
+.about-title { display: flex; align-items: baseline; gap: .32em; }
+.about-title .wordmark { font-size: 17px; align-items: baseline; }
 /* In the wordmark elsewhere "IPEDS" is a small mono tag (.62em); in this title it
    should read at the SAME size as "About"/"Oracle" — bump it to 1em (tightening
    its tracking a touch so the larger mono caps don't sprawl). */
 .about-title .wm-ipeds { font-size: 1em; letter-spacing: .06em; }
+/* The ochre divider is a baseline-less bar; center it on the caps rather than
+   letting baseline alignment drop it. */
+.about-title .wm-div { align-self: center; }
 .about-actions { justify-content: space-between; align-items: center; }
 /* Sized to match the Close button's footprint (icon + padding ≈ its height). */
 .about-gh {
