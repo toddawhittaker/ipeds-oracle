@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { IconInfo, IconGitHub } from "./icons.jsx";
+import Wordmark from "./Wordmark.jsx";
 
 const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
@@ -77,7 +78,9 @@ export default function AboutModal({ onClose }) {
       >
         <div className="modal-head">
           <span className="modal-icon neutral"><IconInfo size={20} /></span>
-          <h2 className="modal-title" id={titleId}>About IPEDS Oracle</h2>
+          <h2 className="modal-title about-title" id={titleId}>
+            About <Wordmark showIcon={false} />
+          </h2>
         </div>
         <div className="modal-body" id={bodyId}>
           <p>
@@ -97,7 +100,7 @@ export default function AboutModal({ onClose }) {
         <div className="modal-actions about-actions">
           <a className="about-gh" href={GITHUB_URL} target="_blank" rel="noreferrer"
              aria-label="View the source code on GitHub">
-            <IconGitHub size={22} />
+            <IconGitHub size={26} />
           </a>
           <button type="button" className="modal-confirm" ref={closeRef} onClick={onClose}>
             Close
