@@ -52,7 +52,7 @@ frontend/             React + Vite front end
 docs/               SCHEMA.md (data model + query guide)
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
 data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
-.github/workflows/  CI (lint · unit · backend · e2e · image) + manual NL→SQL eval
+.github/workflows/  CI (secrets · lint · unit · backend · e2e · image) + manual NL→SQL eval
 .claude/agents/     the specialist agent team (see below)
 ```
 
@@ -166,8 +166,11 @@ three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
 `git config core.hooksPath .githooks`). Bypass with `git push --no-verify`; skip
 just the slow e2e job with `SKIP_E2E=1`. It's a fast pre-check — the
 **authoritative gate is GitHub CI**: `main` is **branch-protected**, so every
-change lands through a PR with all checks (lint · unit · backend · e2e · image)
-green before it can merge; direct and force pushes to `main` are blocked.
+change lands through a PR with all checks (secrets · lint · unit · backend · e2e ·
+image) green before it can merge; direct and force pushes to `main` are blocked.
+The **secrets** check runs `gitleaks` over full history (defense-in-depth under
+GitHub's native push protection); the local gate runs it too when `gitleaks` is
+on your `PATH`.
 
 > A real production `.env` bleeds into the suites two ways. With
 > `COOKIE_SECURE=true` the auth‑dependent suites can't hold the session cookie
@@ -273,7 +276,8 @@ Workflow:
 3. Add or update tests for behavior changes — the **test‑engineer** agent owns
    test files (see below); new behavior is written test‑first where practical.
 4. Open a PR; watch CI **in the background** (`gh pr checks <n> --watch`, so you
-   keep working) and merge only when lint · unit · backend · e2e · image are green.
+   keep working) and merge only when secrets · lint · unit · backend · e2e · image
+   are green.
 5. End commit messages with the `Co-Authored-By:` trailer.
 
 ## The agent team

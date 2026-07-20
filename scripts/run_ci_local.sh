@@ -2,11 +2,11 @@
 #
 # run_ci_local.sh — run the full GitHub CI scope on this machine.
 #
-# This mirrors .github/workflows/ci.yml (the lint · unit · backend · e2e jobs)
-# so a red check can be caught BEFORE it reaches GitHub. It exists because branch
-# protection / required status checks are not available on this private repo's
-# plan, so CI is not a server-side merge gate — this is the client-side gate
-# (wired up as a pre-push hook via .githooks/pre-push).
+# This mirrors .github/workflows/ci.yml (the secrets · lint · unit · backend · e2e
+# jobs) so a red check can be caught BEFORE it reaches GitHub. GitHub CI is now the
+# authoritative server-side merge gate (main is branch-protected, all checks
+# required); this stays as a FAST pre-check, wired up as a pre-push hook via
+# .githooks/pre-push, so failures surface locally instead of after a push.
 #
 # Usage:
 #   scripts/run_ci_local.sh            # run everything (lint, backend, e2e)
@@ -36,6 +36,19 @@ else BOLD=""; RED=""; GRN=""; YEL=""; RST=""; fi
 
 step() { printf '%s\n' "${BOLD}${YEL}==> $*${RST}"; }
 fail() { printf '%s\n' "${BOLD}${RED}CI FAILED: $*${RST}" >&2; exit 1; }
+
+# =========================================================================
+# Job 0 — secret scan (gitleaks) — matches CI's "Secret scan (gitleaks)" job
+# =========================================================================
+# Runs only if gitleaks is on PATH; CI enforces it unconditionally, so a missing
+# local binary downgrades to a warning rather than a false green. Install:
+#   https://github.com/gitleaks/gitleaks (or `brew install gitleaks`).
+if command -v gitleaks >/dev/null 2>&1; then
+  step "Secrets: gitleaks (git history)"
+  gitleaks git --no-banner --redact "$REPO_ROOT" || fail "gitleaks (secret detected)"
+else
+  printf '%s\n' "${YEL}Skipping secret scan — gitleaks not on PATH (CI still enforces it).${RST}"
+fi
 
 # =========================================================================
 # Job 1 — lint (ruff · eslint)

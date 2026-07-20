@@ -503,14 +503,16 @@ escapes a gate. Browser-tested components (`Chat.jsx`, `Admin.jsx`, …) are
 deliberately not in the floor — Playwright covers them.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/` **vitest** unit tests; the
+CI (a **gitleaks** secret scan when the binary is on `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/` **vitest** unit tests; the
 `backend/tests/` backend suites against a fixture DB; Playwright e2e). A
 `.githooks/pre-push` hook runs it automatically (bypass: `git push --no-verify`;
 skip e2e: `SKIP_E2E=1`). It's a **fast pre-check** so failures surface before CI —
 but since the repo went public the **authoritative gate is GitHub CI**: `main` is
-**branch-protected** (a PR is required; all of lint · unit · backend · e2e · image
-must be green AND up to date before merge; force pushes and direct pushes are
-blocked). Admin override is left enabled only as a safety valve for a flaky check.
+**branch-protected** (a PR is required; all of secrets · lint · unit · backend · e2e ·
+image must be green AND up to date before merge; force pushes and direct pushes are
+blocked). The **secrets** job runs gitleaks over full history as defense-in-depth
+under GitHub's native secret-scanning + push-protection (both enabled). Admin
+override is left enabled only as a safety valve for a flaky check.
 
 **Ship via branch → PR → merge on green.** You can't commit straight to `main`
 (branch protection blocks it). Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`),
