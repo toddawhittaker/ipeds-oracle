@@ -384,9 +384,18 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   access-request notification** (`send_access_request`) deep-links straight to
   `/admin/users/pending` and carries no "Reason" line (nothing ever set one). All
   three emails share one **Outlook-safe HTML shell** in `mailer.py` (`_email_document`
-  + a VML bulletproof `_button`: doctype/head, 600px `role=presentation` tables,
-  Arial not `system-ui`) in the app's teal palette — `mailer.py` is E501-exempt in
-  `pyproject.toml` because the templates are legitimately long.
+  + a VML bulletproof `_button`: doctype/head, **full-bleed** `role=presentation`
+  tables — a teal header band edge-to-edge, no centered card — Arial not
+  `system-ui`) in the app's teal palette. The band carries the real **wordmark**
+  (`_wordmark_html`: Column mark · mono "IPEDS" · gold rule · serif "Oracle"),
+  whose icon ships as an **inline CID attachment** (`_LOGO_PNG`, base64-embedded —
+  Gmail and Outlook both refuse `data:` images), attached by *both* transports:
+  Resend's `attachments=[{content,content_id,…}]` and SMTP's `add_related(…,
+  cid=…)` (which nests the HTML part inside a `multipart/related` — hence
+  `msg.walk()`, not `iter_parts()`, in `test_mailer.py`). The PNG is
+  cream-shaft/gold-caps on purpose: the app's teal shaft is invisible on the teal
+  band. `mailer.py` is E501-exempt in `pyproject.toml` because the templates are
+  legitimately long.
 - Optional `EMAIL_DOMAIN` keeps *access requests* to the institution's own domain
   (and feeds the login form's hint via unauthenticated `GET /api/auth/config`) — it
   does **not** gate sign-in.

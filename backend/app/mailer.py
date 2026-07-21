@@ -7,14 +7,25 @@ a login or approval must not 500 because email is down — it is logged and
 `send_email` returns False.
 
 All three emails share one Outlook-safe HTML shell (`_email_document`) and a
-bulletproof MSO button (`_button`): a real `<!DOCTYPE>` + `<head>`, a 600px
-`role="presentation"` table layout, web-safe fonts (Arial for body / Georgia for
-the bookish headings — never `system-ui`, which Outlook's Word engine renders as
-Times), and a VML button so the call-to-action keeps its fill + rounded corners in
-Outlook desktop. Emails render outside the app's CSP, so inline styles are fine.
+bulletproof MSO button (`_button`): a real `<!DOCTYPE>` + `<head>`, a full-bleed
+`role="presentation"` table layout (a teal header band edge-to-edge, no floating
+card — the message reads as part of the inbox), web-safe fonts (Arial for body /
+Georgia for the bookish headings — never `system-ui`, which Outlook's Word engine
+renders as Times), and a VML button so the call-to-action keeps its fill + rounded
+corners in Outlook desktop. Emails render outside the app's CSP, so inline styles
+are fine.
+
+The header carries the real Column mark, sent as an **inline (CID) attachment** —
+`_LOGO_PNG`, a cream-shaft/gold-caps rendering of `brand/icon.svg` (a teal shaft
+would vanish against the teal band). It ships base64-embedded in this module so
+there's no runtime file read, and both transports attach it: Resend via
+`attachments=[{content, content_id, …}]`, SMTP via `add_related(..., cid=…)`.
+Gmail and Outlook both refuse `data:` URI images, so CID is the only option that
+renders everywhere.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from html import escape as _esc
 
@@ -29,10 +40,34 @@ _ON_TEAL = "#f7f8f4"   # --on-fg (text on a teal fill)
 _INK = "#1b2624"       # --text
 _MUTED = "#5c6a65"     # --muted
 _LINE = "#d8ddd5"      # --line
-_PAGE_BG = "#eceee9"   # --bg (outer canvas)
-_PANEL = "#fafbf8"     # --panel (the card)
+_PAGE_BG = "#fafbf8"   # --panel (the page — full-bleed, no outer canvas/card)
+_GOLD = "#d89a4b"      # --accent-2 (the wordmark's rule)
+_MONO = "Consolas,'Courier New',monospace"
 _SERIF = "Georgia,'Times New Roman',serif"
 _SANS = "Arial,Helvetica,sans-serif"
+
+# The Column mark, inline-attached by Content-ID (see the module docstring). 256px
+# PNG in cream + gold, regenerated from `brand/icon.svg` with the ImageMagick recipe
+# in `brand/`; base64-embedded so sending never touches the filesystem.
+_LOGO_CID = "column-mark"
+_LOGO_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAADeklEQVR4nO3csVHrQBRAUfEjmKEQeqEPiqIPeqEQ"
+    "ZiDjpyR4JK1kM3vPiS2v7H17I1vLAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABz"
+    "ubv1DVzb++vz963vgb/t6eUtcy7+3foGrsnhZ43SnGQCUNpUxlXmJRGAymZyrMLcTB+AwiZyntnnZ/oAAL8TAAgT"
+    "AAgTAAgTAAgTAAgTAAgTAAgTAAgTAAgTAAgTAAgTAAgTALhg9qcDTR+A2TcQRkwfgGURAfYpzE0iAMvS2EyOU5mX"
+    "xIf8afYnvDCmcvABAAAAAAAAAICJ+NXTQT6/Plb/wvDh/nHX9z7DGlvef+8arJf5L8CZtg711tfPssY17oltBGDQ"
+    "3gHdct0Ma4wcZBE4jwAMGB3MNdfPsMYRB1gEziEAOx01kJfeZ4Y1jjy4InA8AYAwAYAwAYAwAYAwAYAwAYAwAYAw"
+    "AYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAw"
+    "AYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAw"
+    "AYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAw"
+    "AYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAwAYAw"
+    "Abixh/vHO2v8nTVqBGCnWQb+7DUc2r9NAAaMDvea62dY44gICMk5BGDQ3sHcct0Ma4wcYIf/PL7Yg3x+fXyved3I"
+    "MM+wxtr3H1kDAAAAAAAAAAAgJfdLq/fX59W/RKPp6eUtcy5S/wVw+FmjNCeZAJQ2lXGVeUkEoLKZHKswN9MHoLCJ"
+    "nGf2+Zk+AMDvBADCBADCBADCBADCBADCBADCBADCBADCBADCBADCBADCBADCBAAumP3pQNMHYPYNhBHTB2BZRIB9"
+    "CnOTCMCyNDaT41TmJfEhf5r9CS+MqRx8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "mNx/SE7rKSq69L8AAAAASUVORK5CYII="
+)
+_LOGO_PNG = base64.b64decode(_LOGO_PNG_B64)
 
 
 def _resolve_backend(s) -> str:
@@ -83,14 +118,23 @@ def _send_resend(s, to: str, subject: str, html: str, text: str | None) -> None:
         "subject": subject,
         "html": html,
         **({"text": text} if text else {}),
+        # Inline (not downloadable) — a `content_id` is what makes Resend emit it as
+        # a related part the header's `cid:` <img> can resolve.
+        "attachments": [{
+            "content": _LOGO_PNG_B64,
+            "filename": "column.png",
+            "content_id": _LOGO_CID,
+            "content_type": "image/png",
+        }],
     })
 
 
 def _send_smtp(s, to: str, subject: str, html: str, text: str | None) -> None:
     """Send via the institution's own SMTP (Google/Microsoft/relay) using stdlib.
-    A multipart/alternative message (plain text + the HTML the reader sees); TLS via
-    STARTTLS (587) or implicit SSL (465); auth only when a username is set — some
-    relays authenticate by IP and take no login."""
+    A multipart/alternative message (plain text + the HTML the reader sees, the HTML
+    part itself a multipart/related carrying the CID logo); TLS via STARTTLS (587) or
+    implicit SSL (465); auth only when a username is set — some relays authenticate
+    by IP and take no login."""
     import smtplib
     import ssl
     from email.message import EmailMessage
@@ -101,6 +145,9 @@ def _send_smtp(s, to: str, subject: str, html: str, text: str | None) -> None:
     msg["Subject"] = subject
     msg.set_content(text or "This message requires an HTML-capable email client.")
     msg.add_alternative(html, subtype="html")
+    # Wrap the HTML part in a multipart/related so the header's `cid:` <img> resolves.
+    msg.get_payload()[-1].add_related(
+        _LOGO_PNG, maintype="image", subtype="png", cid=f"<{_LOGO_CID}>")
 
     if s.smtp_ssl:
         with smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=s.smtp_timeout,
@@ -136,10 +183,25 @@ def _button(href: str, label: str) -> str:
 <!--<![endif]-->"""
 
 
+def _wordmark_html() -> str:
+    """The app's wordmark, rebuilt in table-and-inline-style HTML: the CID Column
+    mark · mono "IPEDS" · gold rule · serif "Oracle" — the same device as
+    `frontend/src/Wordmark.jsx`, in cream on the teal band. A table (not flexbox,
+    which Outlook's Word engine ignores) keeps the three cells baseline-aligned."""
+    return f"""\
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td style="vertical-align:middle;padding-right:12px;"><img src="cid:{_LOGO_CID}" width="30" height="30" alt="" style="display:block;width:30px;height:30px;border:0;" /></td>
+<td style="font-family:{_MONO};font-size:15px;font-weight:bold;letter-spacing:2px;color:{_ON_TEAL};vertical-align:middle;padding-right:11px;">IPEDS</td>
+<td style="font-family:{_SERIF};font-size:23px;font-weight:bold;color:{_ON_TEAL};letter-spacing:-.01em;vertical-align:middle;border-left:2px solid {_GOLD};padding-left:11px;">Oracle</td>
+</tr></table>"""
+
+
 def _email_document(preheader: str, inner_html: str) -> str:
     """Wrap a body fragment in the Outlook-safe shell: doctype + head (charset,
-    viewport, MSO font override), a hidden preheader (inbox preview text), a teal
-    header bar with the product wordmark, the body card, and a footer."""
+    viewport, MSO font override), a hidden preheader (inbox preview text), the
+    full-bleed teal header band carrying the wordmark, the body, and a footer.
+    Full-bleed by design — no centered card, no outer canvas colour: the message
+    sits flush in the reading pane instead of floating on a fake page."""
     return f"""\
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -151,23 +213,22 @@ def _email_document(preheader: str, inner_html: str) -> str:
 <!--[if mso]>
 <style type="text/css">body,table,td,a,h1,h2,p,li{{font-family:{_SANS} !important;}}</style>
 <![endif]-->
-<style type="text/css">body{{margin:0;padding:0;}} a{{color:{_TEAL};}}</style>
+<style type="text/css">
+body{{margin:0;padding:0;width:100%;background-color:{_PAGE_BG};-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}}
+table{{border-collapse:collapse;}} a{{color:{_TEAL};}}
+.pad{{padding:34px 40px;}}
+@media only screen and (max-width:600px){{ .pad{{padding:26px 22px !important;}} }}
+</style>
 </head>
 <body style="margin:0;padding:0;background-color:{_PAGE_BG};">
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{_PAGE_BG};">{_esc(preheader)}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{_PAGE_BG};">
-<tr><td align="center" style="padding:28px 12px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background-color:{_PANEL};border:1px solid {_LINE};border-radius:10px;">
-<tr><td style="background-color:{_TEAL};border-radius:10px 10px 0 0;padding:18px 28px;">
-<span style="font-family:{_SERIF};font-size:20px;font-weight:bold;color:{_ON_TEAL};letter-spacing:.2px;">{PRODUCT_NAME}</span>
-</td></tr>
-<tr><td style="padding:28px;font-family:{_SANS};font-size:15px;line-height:1.55;color:{_INK};">
+<tr><td style="background-color:{_TEAL};padding:20px 40px;">{_wordmark_html()}</td></tr>
+<tr><td class="pad" style="font-family:{_SANS};font-size:15px;line-height:1.6;color:{_INK};">
 {inner_html}
 </td></tr>
-<tr><td style="padding:16px 28px 22px;border-top:1px solid {_LINE};font-family:{_SANS};font-size:12px;line-height:1.5;color:{_MUTED};">
+<tr><td style="padding:18px 40px 26px;border-top:1px solid {_LINE};font-family:{_SANS};font-size:12px;line-height:1.5;color:{_MUTED};">
 {PRODUCT_NAME} · U.S. postsecondary data (IPEDS), explored in plain English.
-</td></tr>
-</table>
 </td></tr>
 </table>
 </body>
