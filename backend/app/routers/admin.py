@@ -1081,15 +1081,33 @@ def usage(since: float | None = None, until: float | None = None):
             "COALESCE(SUM(l.cost),0.0) AS spend FROM usage_log l "
             "JOIN users u ON u.id=l.user_id WHERE l.created_at BETWEEN ? AND ? "
             "GROUP BY u.email ORDER BY queries DESC LIMIT 10", args).fetchall()
-        # No "recent" (verbatim question text) here, deliberately: this endpoint's
-        # caller-controlled since/until plus top_users' per-user naming would make
-        # a raw recent-questions feed an attributable privacy leak across all
-        # users, not just an aggregate view. eval/test_admin_router.py pins this
-        # absence as a contract — do not restore it.
+        # Spend-health probe: is the "Spend" number trustworthy, or silently 0?
+        # Spend is provider-reported (OpenRouter's usage.cost); a provider that
+        # doesn't report it leaves cost=0 unless the admin sets fallback prices.
+        # This is deliberately DECOUPLED from the selected window (a fixed 30-day
+        # look-back) so the warning is a stable config-health signal, not a
+        # per-range artifact that vanishes when you pick a quiet hour. It fires
+        # only when there's real LLM activity (a non-answer-cache turn that spent
+        # tokens) whose cost never landed AND no fallback prices are set — the two
+        # conditions in one: with prices set, cost>0 for those turns, so
+        # priced_turns>0 and the warning clears; likewise once the provider starts
+        # reporting. See app/llm.py effective_cost + docs/ADMIN_GUIDE.md.
+        s = get_settings()
+        prices_configured = (s.llm_input_cost_per_mtok > 0
+                             or s.llm_output_cost_per_mtok > 0)
+        health = con.execute(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            "THEN 1 ELSE 0 END),0) AS llm_turns, "
+            "COALESCE(SUM(CASE WHEN cost>0 THEN 1 ELSE 0 END),0) AS priced_turns "
+            "FROM usage_log WHERE created_at >= ?", (now - 30 * 86400,)).fetchone()
+        cost_warning = (health["llm_turns"] > 0 and health["priced_turns"] == 0
+                        and not prices_configured)
         return {"since": since, "until": until, "bucket": "hour" if hourly else "day",
                 "totals": dict(totals),
                 "series": [dict(r) for r in series],
-                "top_users": [dict(r) for r in top_users]}
+                "top_users": [dict(r) for r in top_users],
+                "cost_warning": cost_warning}
     finally:
         con.close()
 

@@ -145,7 +145,10 @@ The catch: reporting cost this way is an **OpenRouter** feature. If you point
 `LLM_BASE_URL` at a provider that doesn't return a per-request cost (DeepSeek-direct,
 a self-hosted gateway, most raw OpenAI-compatible endpoints), **Spend reads $0** —
 not because nothing was spent, but because nobody told the app the price. Token
-counts still populate; only the dollar figure is blank.
+counts still populate; only the dollar figure is blank. When the app detects this
+(real activity, but no cost recorded and no fallback prices set), it shows a **yellow
+warning** at the top of the Usage tab so a silent $0 never looks like "free." The
+warning clears on its own once cost data starts arriving or you set the prices below.
 
 To get spend back in that case, set your model's list prices in `.env` and the app
 will **estimate** the cost from token counts:

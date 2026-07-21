@@ -1247,6 +1247,7 @@ def test_usage_totals_expose_prompt_cache_tokens():
     any of the four cache columns the /usage caller (usagestats.js) relies on --
     and that the two are summed independently, not conflated."""
     now = time.time()
+    _clear_usage_log()  # own the window: other tests seed rows at ~now too
     with TestClient(app) as c:
         _login(c)
         _seed_usage_log("cacheuser@x.edu", "q1", created_at=now - 100,
@@ -1262,6 +1263,71 @@ def test_usage_totals_expose_prompt_cache_tokens():
         assert totals["cached_prompt_tokens"] == 800, totals
         assert totals["first_call_prompt_tokens"] == 700, totals
         assert totals["first_call_cached_prompt_tokens"] == 150, totals
+
+
+def _clear_usage_log():
+    # The spend-health probe is a GLOBAL 30-day look-back, so an accurate warning
+    # test must own the whole usage_log (other tests seed priced rows into the
+    # shared module fixture db).
+    con = connect()
+    try:
+        con.execute("DELETE FROM usage_log")
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_usage_cost_warning_flags_missing_spend():
+    """cost_warning=True when real LLM turns spent tokens but recorded NO cost
+    (provider not reporting) AND no fallback prices are set -- so the dashboard
+    can tell the admin 'Spend' is silently $0 rather than genuinely free. It must
+    clear the moment a priced turn appears. This is the detection that pairs with
+    effective_cost's price fallback; without it a misconfigured provider looks
+    free forever."""
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        # No LLM activity yet -> nothing to price -> no warning.
+        assert c.get("/api/admin/usage").json()["cost_warning"] is False
+        # A real LLM turn that spent tokens but recorded cost=0 (provider silent),
+        # prices unset (CI default) -> warn.
+        _seed_usage_log("spend@x.edu", "q", prompt_tokens=500, completion_tokens=200,
+                        cost=0.0)
+        assert c.get("/api/admin/usage").json()["cost_warning"] is True
+        # A later turn carrying a provider-reported cost -> warning clears.
+        _seed_usage_log("spend@x.edu", "q2", prompt_tokens=500, completion_tokens=200,
+                        cost=0.02)
+        assert c.get("/api/admin/usage").json()["cost_warning"] is False
+
+
+def test_usage_cost_warning_ignores_answer_cache_only_activity():
+    """Answer-cache hits make no LLM call (cached=1, tokens=0), so a period with
+    only those has no spend to report and must NOT warn -- otherwise every quiet,
+    fully-cached stretch would false-alarm."""
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("cacheonly@x.edu", "q", prompt_tokens=0, completion_tokens=0,
+                        cost=0.0, cached=1)
+        assert c.get("/api/admin/usage").json()["cost_warning"] is False
+
+
+def test_usage_cost_warning_suppressed_when_fallback_prices_set():
+    """With fallback prices configured, spend is ESTIMATED (never silently 0), so
+    the warning stays off even for a provider that reports no cost -- the second
+    of the two conditions that clears it."""
+    _clear_usage_log()
+    s = get_settings()
+    old = s.llm_input_cost_per_mtok
+    s.llm_input_cost_per_mtok = 0.5
+    try:
+        with TestClient(app) as c:
+            _login(c)
+            _seed_usage_log("priced@x.edu", "q", prompt_tokens=500,
+                            completion_tokens=200, cost=0.0)
+            assert c.get("/api/admin/usage").json()["cost_warning"] is False
+    finally:
+        s.llm_input_cost_per_mtok = old
 
 
 # ---------------------------------------------------------------------------
@@ -3117,6 +3183,14 @@ def run():
           test_bulk_add_sends_approval_notice_but_mints_no_token)
     check("usage dashboard swaps since/until when reversed",
           test_usage_since_after_until_is_swapped)
+    check("usage totals expose the four prompt-cache columns, summed independently",
+          test_usage_totals_expose_prompt_cache_tokens)
+    check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
+          test_usage_cost_warning_flags_missing_spend)
+    check("usage cost_warning ignores answer-cache-only activity",
+          test_usage_cost_warning_ignores_answer_cache_only_activity)
+    check("usage cost_warning suppressed when fallback prices are set",
+          test_usage_cost_warning_suppressed_when_fallback_prices_set)
     check("usage dashboard response has no 'recent' key",
           test_usage_response_has_no_recent_key)
     check("usage dashboard PRIVACY CONTRACT: never leaks question text (sentinel)",

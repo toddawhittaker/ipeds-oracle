@@ -1984,6 +1984,16 @@ function Usage() {
 
       {!u ? <div className="muted">Loading…</div> : (
         <div className={"usage-body" + (loading ? " updating" : "")}>
+          {u.cost_warning && (
+            <p className="notice warn small" role="status">
+              <strong>Spend isn’t being recorded.</strong> Your LLM provider isn’t
+              reporting per-request cost and no fallback prices are set, so “Spend”
+              reads $0 despite real activity. Set <code>LLM_INPUT_COST_PER_MTOK</code>{" "}
+              and <code>LLM_OUTPUT_COST_PER_MTOK</code> in the server’s environment
+              to estimate it (see the admin guide). This clears once cost data
+              appears or those prices are set.
+            </p>
+          )}
           <div className="stats">
             <Stat label="Queries" value={(t.queries || 0).toLocaleString()} />
             <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
