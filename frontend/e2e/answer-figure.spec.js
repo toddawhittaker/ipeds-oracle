@@ -60,20 +60,22 @@ test("a figure renders above the prose and outside the copy surface", async ({ p
   await expect(page.locator(".md .answer-figure")).toHaveCount(0);
 });
 
-// A many-column brief can't share a row without squeezing the chart, so the pair
-// STACKS — chart below the full-width table (Markdown.jsx: headers.length > 4).
+// A wider brief table can't share a row without its nowrap cells sliding UNDER the
+// chart, so the pair STACKS — chart below the full-width table. 4 columns is the
+// regression boundary (Markdown.jsx: headers.length > 3): a 4-column ranking table
+// used to sit side-by-side and overlap the chart.
 const WIDE_ANSWER = "Degrees by level and year.\n\n"
-  + "| Year | Bachelor's | Master's | Doctoral | Total |\n"
-  + "|---|---|---|---|---|\n"
-  + "| 2022 | 6,100 | 2,000 | 300 | 8,400 |\n"
-  + "| 2023 | 6,900 | 2,100 | 320 | 9,320 |\n"
-  + "| 2024 | 7,679 | 2,200 | 340 | 10,219 |\n\n"
+  + "| Year | Bachelor's | Master's | Total |\n"
+  + "|---|---|---|---|\n"
+  + "| 2022 | 6,100 | 2,000 | 8,100 |\n"
+  + "| 2023 | 6,900 | 2,100 | 9,000 |\n"
+  + "| 2024 | 7,679 | 2,200 | 9,879 |\n\n"
   + "```chart\n"
   + '{"type":"line","x":"year","y":"total","title":"Total degrees",'
-  + '"data":[{"year":2022,"total":8400},{"year":2023,"total":9320},{"year":2024,"total":10219}]}\n'
+  + '"data":[{"year":2022,"total":8100},{"year":2023,"total":9000},{"year":2024,"total":9879}]}\n'
   + "```";
 
-test("a many-column brief stacks the chart below the table", async ({ page }) => {
+test("a 4-column brief stacks the chart below the table (no overlap)", async ({ page }) => {
   await signedIn(page);
   await mockStreamChat(page, {
     conversationId: 12, answer: WIDE_ANSWER, figure: FIGURE, messageId: 1, userMessageId: 2 });
@@ -81,10 +83,32 @@ test("a many-column brief stacks the chart below the table", async ({ page }) =>
   await page.getByPlaceholder("Ask about IPEDS data…").fill("degrees by level?");
   await page.getByRole("button", { name: "Send" }).click();
 
-  // Still one paired brief (table + chart), but flagged .stacked (5 columns > 4).
+  // Still one paired brief (table + chart), but flagged .stacked (4 columns > 3).
   await expect(page.locator(".brief-figrow.stacked")).toBeVisible();
   await expect(page.locator(".brief-figrow.stacked .table-block")).toBeVisible();
   await expect(page.locator(".brief-figrow.stacked figure.chart")).toBeVisible();
+});
+
+// A tall table (many rows) also stacks even with few columns — the chart is short,
+// so side-by-side would strand it next to a long scroll of rows (Markdown.jsx:
+// rows.length > 8).
+const TALL_ANSWER = "Enrollment by year.\n\n"
+  + "| Year | N |\n|---|---|\n"
+  + Array.from({ length: 10 }, (_, i) => `| ${2015 + i} | ${1000 + i * 10} |`).join("\n")
+  + "\n\n```chart\n"
+  + '{"type":"line","x":"year","y":"n","title":"Enrollment",'
+  + '"data":[{"year":2015,"n":1000},{"year":2016,"n":1010},{"year":2017,"n":1020}]}\n'
+  + "```";
+
+test("a tall (many-row) brief stacks the chart below the table", async ({ page }) => {
+  await signedIn(page);
+  await mockStreamChat(page, {
+    conversationId: 13, answer: TALL_ANSWER, figure: FIGURE, messageId: 1, userMessageId: 2 });
+  await page.goto("/");
+  await page.getByPlaceholder("Ask about IPEDS data…").fill("enrollment by year?");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(page.locator(".brief-figrow.stacked")).toBeVisible();
 });
 
 test("a figure survives a reload (persisted like sql_log)", async ({ page }) => {
