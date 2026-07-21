@@ -36,6 +36,13 @@ _handler: SqliteLogHandler | None = None
 
 _EXCLUDED_LOGGERS = ("ipeds.mail",)
 _REDACT_RE = re.compile(r"(?i)(token=|bearer\s+|sk-or-[\w-]{0,4})[\w.\-]+")
+# Flatten CR/LF and other C0/DEL control chars to a space before a record is
+# persisted. This neutralizes log-injection (forged log lines via a newline in a
+# user-controlled value — an email, an entity label, an upstream error) for EVERY
+# log site at once, present and future, rather than relying on each call site to
+# sanitize its own arguments. Records are one row each in logs.db, so collapsing
+# embedded newlines to spaces loses nothing meaningful.
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS logs (
@@ -119,6 +126,7 @@ class SqliteLogHandler(logging.Handler):
             return
         try:
             msg = _REDACT_RE.sub(r"\1<redacted>", record.getMessage())
+            msg = _CTRL_RE.sub(" ", msg)  # flatten CR/LF — see _CTRL_RE
         except Exception:  # noqa: BLE001 — logging must never raise
             return
         try:

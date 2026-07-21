@@ -1,0 +1,13 @@
+# CodeQL configuration (referenced by .github/workflows/codeql.yml).
+#
+# The query suite is set in the workflow (`security-extended`). This file scopes
+# analysis to the deployed attack surface by excluding TEST code: test suites are
+# never shipped, and CodeQL's security queries produce only false positives there
+# (e.g. escaping a literal email for a Playwright getByRole regex, or substring
+# URL assertions). Application code (backend/app), the SPA (frontend/src), and
+# operational scripts (scripts/) stay in scope.
+name: "IPEDS Oracle CodeQL config"
+
+paths-ignore:
+  - backend/tests
+  - frontend/e2e
