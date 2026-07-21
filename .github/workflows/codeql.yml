@@ -33,7 +33,13 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          # security-extended: a superset of the default `security` suite (more
+          # security queries), WITHOUT the `security-and-quality` suite's style/
+          # maintainability queries (unnecessary-lambda, cyclic-import, import
+          # style, etc.) — those are noise here; ruff already owns Python style.
+          queries: security-extended
+          # Excludes test code (not the deployed attack surface) — see paths-ignore.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4

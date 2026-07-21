@@ -53,6 +53,20 @@ def run():
     check("bearer/api-key value redacted", "abc123" not in blob and "sk-or-v1-abc123" not in blob)
     check("non-secret content retained", any("kept-tail" in r["msg"] for r in recs))
 
+    # --- log-injection scrub (security regression) ------------------------
+    # A user-controlled value (email, entity label, upstream error) can carry a
+    # newline to forge a second log line. emit() flattens CR/LF + other control
+    # chars to a space before persisting, so a single record can never become
+    # two — the whole point of the _CTRL_RE pass (CodeQL py/log-injection).
+    h.emit(_rec("ipeds.app",
+                "approval email to victim@x\r\nWARNING forged-admin-line failed"))
+    inj = [r for r in h.records() if "forged-admin-line" in r["msg"]]
+    check("injected record is stored", len(inj) == 1)
+    check("CR/LF stripped from the stored message — no forged newline",
+          "\n" not in inj[0]["msg"] and "\r" not in inj[0]["msg"])
+    check("control chars flattened but text preserved on one line",
+          "victim@x" in inj[0]["msg"] and "forged-admin-line" in inj[0]["msg"])
+
     # --- persistence across a restart -------------------------------------
     h2 = SqliteLogHandler(db, retention_days=30)  # reopen same file
     check("records persist across a restart", any("kept-tail" in r["msg"] for r in h2.records()))
