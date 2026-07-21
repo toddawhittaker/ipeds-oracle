@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { initials } from "./initials.js";
 import { formatBadge } from "./attention.js";
 import { IconShield, IconInfo, IconSun, IconMoon, IconSignOut } from "./icons.jsx";
@@ -24,7 +24,6 @@ export default function UserMenu({
   onSignOut,
   onAbout,
 }) {
-  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const wrapRef = useRef(null);
@@ -43,7 +42,10 @@ export default function UserMenu({
       label: "Admin",
       Icon: IconShield,
       badge,
-      onSelect: () => navigate("/admin"),
+      // A real link target, not a navigate() button — so middle-click / ⌘-click /
+      // ctrl-click open Admin in a new tab (a <button> can't). Left-click still
+      // does in-app SPA nav via <Link> below.
+      to: "/admin",
     });
   }
   items.push({ key: "about", label: "About IPEDS Oracle", Icon: IconInfo, onSelect: onAbout });
@@ -166,23 +168,36 @@ export default function UserMenu({
           onKeyDown={onMenuKeyDown}
         >
           {email && <div className="user-menu-email" role="presentation">{email}</div>}
-          {items.map((item, i) => (
-            <button
-              key={item.key}
-              type="button"
-              role="menuitem"
-              className="user-menu-item"
-              ref={(el) => { itemRefs.current[i] = el; }}
-              tabIndex={i === activeIndex ? 0 : -1}
-              onClick={() => activate(item)}
-            >
-              <item.Icon size={16} />
-              <span className="user-menu-label">{item.label}</span>
-              {item.badge && (
-                <span className="tab-badge attention" aria-hidden="true">{item.badge}</span>
-              )}
-            </button>
-          ))}
+          {items.map((item, i) => {
+            const shared = {
+              role: "menuitem",
+              className: "user-menu-item",
+              ref: (el) => { itemRefs.current[i] = el; },
+              tabIndex: i === activeIndex ? 0 : -1,
+            };
+            const body = (
+              <>
+                <item.Icon size={16} />
+                <span className="user-menu-label">{item.label}</span>
+                {item.badge && (
+                  <span className="tab-badge attention" aria-hidden="true">{item.badge}</span>
+                )}
+              </>
+            );
+            // A `to` item renders as a real <Link> (an <a href>): left-click does
+            // SPA nav and we just close the menu; we never preventDefault, so
+            // middle/⌘/ctrl-click fall through to the browser and open a new tab.
+            // Everything else stays a <button> going through activate().
+            return item.to ? (
+              <Link key={item.key} {...shared} to={item.to} onClick={() => close(true)}>
+                {body}
+              </Link>
+            ) : (
+              <button key={item.key} type="button" {...shared} onClick={() => activate(item)}>
+                {body}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

@@ -84,6 +84,9 @@ test("admin menu carries an Admin item, and attention shows on the avatar + the 
   const adminItem = page.getByRole("menuitem", { name: "Admin" });
   await expect(adminItem).toBeVisible();
   await expect(adminItem.locator(".tab-badge.attention")).toHaveText("5");
+  // It's a real anchor (href), not a navigate() button — so middle/⌘/ctrl-click
+  // can open Admin in a new tab. Regression guard for that capability.
+  await expect(adminItem).toHaveAttribute("href", "/admin");
 
   await adminItem.click();
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
