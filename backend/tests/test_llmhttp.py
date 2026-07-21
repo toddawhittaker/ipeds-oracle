@@ -336,6 +336,32 @@ def test_model_and_messages_passthrough_and_returns_parsed_json():
     assert result == _OK_BODY, result
 
 
+# ---------------------------------------------------------------------------
+# 10. cached_tokens(usage) — reads the provider's prompt-cache-hit count for
+#     the Usage dashboard's prompt-cache rate. Must accept BOTH the OpenRouter
+#     shape (nested prompt_tokens_details.cached_tokens) and the DeepSeek-native
+#     spelling (prompt_cache_hit_tokens), and degrade to 0 — never raise — on a
+#     provider that reports neither. Dropping it silently is the regression: the
+#     dashboard could then never show cache reuse.
+# ---------------------------------------------------------------------------
+
+def test_cached_tokens_reads_openrouter_nested_shape():
+    usage = {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 80}}
+    assert llmhttp.cached_tokens(usage) == 80, usage
+
+
+def test_cached_tokens_reads_deepseek_native_shape():
+    usage = {"prompt_tokens": 100, "prompt_cache_hit_tokens": 45}
+    assert llmhttp.cached_tokens(usage) == 45, usage
+
+
+def test_cached_tokens_zero_when_provider_reports_none():
+    assert llmhttp.cached_tokens({"prompt_tokens": 100}) == 0
+    assert llmhttp.cached_tokens({}) == 0
+    # A present-but-null details block must not blow up (some providers send null).
+    assert llmhttp.cached_tokens({"prompt_tokens_details": None}) == 0
+
+
 def run():
     print("shared LLM transport contract (backend/app/llmhttp.py):")
     check("URL == base + /chat/completions", test_url_is_base_plus_chat_completions)
@@ -371,6 +397,12 @@ def run():
           test_non_json_200_response_raises_valueerror_and_propagates)
     check("model/messages pass through; parsed JSON body is returned",
           test_model_and_messages_passthrough_and_returns_parsed_json)
+    check("cached_tokens reads the OpenRouter nested cached_tokens shape",
+          test_cached_tokens_reads_openrouter_nested_shape)
+    check("cached_tokens reads the DeepSeek-native prompt_cache_hit_tokens shape",
+          test_cached_tokens_reads_deepseek_native_shape)
+    check("cached_tokens degrades to 0 when the provider reports no cache stats",
+          test_cached_tokens_zero_when_provider_reports_none)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

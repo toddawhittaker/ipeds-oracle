@@ -17,6 +17,7 @@ import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
+import { promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
@@ -1983,11 +1984,23 @@ function Usage() {
 
       {!u ? <div className="muted">Loading…</div> : (
         <div className={"usage-body" + (loading ? " updating" : "")}>
+          {u.cost_warning && (
+            <p className="notice warn small" role="status">
+              <strong>Spend isn’t being recorded.</strong> Your LLM provider isn’t
+              reporting per-request cost and no fallback prices are set, so “Spend”
+              reads $0 despite real activity. Set <code>LLM_INPUT_COST_PER_MTOK</code>{" "}
+              and <code>LLM_OUTPUT_COST_PER_MTOK</code> in the server’s environment
+              to estimate it (see the admin guide). This clears once cost data
+              appears or those prices are set.
+            </p>
+          )}
           <div className="stats">
             <Stat label="Queries" value={(t.queries || 0).toLocaleString()} />
             <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
             <Stat label="Spend" value={money(t.spend)} />
-            <Stat label="Cache hits" value={t.cache_hits || 0} />
+            <Stat label="Answer cache" value={t.cache_hits || 0} />
+            <Stat label="Schema cache" value={schemaCacheRate(t)} />
+            <Stat label="Prompt cache" value={promptCacheRate(t)} />
             <Stat label="Escalations" value={t.escalations || 0} />
             <Stat label="Failures" value={t.failures || 0} />
           </div>

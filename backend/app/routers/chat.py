@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from app import guard, skills
 from app.auth import current_user
 from app.db import connect
-from app.llm import generate_title, stream_agent
+from app.llm import effective_cost, generate_title, stream_agent
 from app.tools.sql import SQLValidationError, ipeds_years, run_sql
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -235,7 +235,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 ok=result.error is None, escalated=result.escalated,
                 prompt_tokens=result.prompt_tokens,
                 completion_tokens=result.completion_tokens,
-                cost=result.cost, thinking=thinking, figure=figure,
+                cached_prompt_tokens=result.cached_prompt_tokens,
+                first_call_prompt_tokens=result.first_call_prompt_tokens,
+                first_call_cached_prompt_tokens=result.first_call_cached_prompt_tokens,
+                cost=effective_cost(result.cost, result.prompt_tokens,
+                                    result.completion_tokens),
+                thinking=thinking, figure=figure,
                 suggestions=suggestions, delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
@@ -313,8 +318,9 @@ def _delete_if_empty(conv_id: int) -> None:
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
-             cost=0.0, thinking=None, figure=None, suggestions=None,
-             delete_from_id=None):
+             cached_prompt_tokens=0, first_call_prompt_tokens=0,
+             first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
+             suggestions=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -346,10 +352,13 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
-            "prompt_tokens, completion_tokens, ok, cached, cost, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "prompt_tokens, completion_tokens, cached_prompt_tokens, "
+            "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
+            "ok, cached, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
-             completion_tokens, int(ok), int(cached), float(cost), now))
+             completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
+             first_call_cached_prompt_tokens, int(ok), int(cached),
+             float(cost), now))
         con.commit()
         return user_msg_id, assistant_id
     finally:

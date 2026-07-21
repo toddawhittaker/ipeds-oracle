@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, chat_completion
+from app.llmhttp import PROBE_TIMEOUT, cached_tokens, chat_completion
 
 _SYSTEM = (
     "You are a strict reviewer checking an IPEDS (U.S. postsecondary education) "
@@ -93,6 +93,7 @@ class Critique:
     description: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int = 0  # provider-reported prompt-cache hits (0 if unreported)
     cost: float = 0.0
     raw: str = ""
 
@@ -209,6 +210,7 @@ async def review(question: str, sql_log: list[str], answer: str) -> Critique:
         ok=ok, headline=headline, description=description,
         prompt_tokens=usage.get("prompt_tokens", 0),
         completion_tokens=usage.get("completion_tokens", 0),
+        cached_prompt_tokens=cached_tokens(usage),
         cost=usage.get("cost") or 0,
         raw=content.strip(),
     )
