@@ -5,6 +5,7 @@ re-runs are idempotent, only newly-added migrations apply, a pre-version db
 (tables already present, user_version 0) advances without losing data, and the
 real init_db lands at the baseline version with all tables + bootstrap intact.
 """
+import json
 import os
 import sqlite3
 import sys
@@ -387,6 +388,231 @@ def test_is_denied_lookup_uses_an_index_not_a_scan():
         f"expected an index SEARCH in the query plan, got: {plan_text!r}")
 
 
+# ---------------------------------------------------------------------------
+# Schema-drift guard (release hardening). Every OTHER test in this file drives
+# the schema THROUGH `MIGRATIONS`, so none of them catch the one mistake that
+# silently breaks upgrades: editing the FROZEN baseline `SCHEMA` (or a shipped
+# migration) instead of appending a new migration tuple. A column added straight
+# to `SCHEMA` reaches a FRESH install (which runs SCHEMA as migration 1) but
+# NEVER reaches an UPGRADED install (no migration adds it) -- the two diverge,
+# and because both answer queries fine the divergence is invisible. The golden
+# fingerprint below turns any app.db schema change into a readable, reviewable
+# diff of EXPECTED_SCHEMA_FINGERPRINT, forcing the "did this need a migration?"
+# checkpoint. Regenerate it deliberately: `python test_migrations.py --print-schema`.
+# ---------------------------------------------------------------------------
+
+def _schema_fingerprint(con):
+    """A deterministic, structural fingerprint of the whole app.db schema.
+
+    PRAGMA-based (not raw `sqlite_master.sql` text, which is whitespace-fragile):
+    every user table -> its columns as (name, type, notnull, dflt_value, pk)
+    sorted by column name; every index -> (table, unique, [indexed columns]).
+    An EXPRESSION index (idx_access_requests_canon_expr) reports [null] columns
+    -- expected and stable; the index name still anchors its existence."""
+    tables = {}
+    for (name,) in sorted(con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'")):
+        tables[name] = sorted(
+            [list(r[1:]) for r in con.execute(f"PRAGMA table_info({name})")],
+            key=lambda c: c[0])
+    indexes = {}
+    for (name, tbl) in sorted(con.execute(
+            "SELECT name, tbl_name FROM sqlite_master WHERE type='index' "
+            "AND name NOT LIKE 'sqlite_%'")):
+        info = con.execute(f"PRAGMA index_list({tbl})").fetchall()
+        unique = next((r[2] for r in info if r[1] == name), 0)
+        icols = [r[2] for r in con.execute(f"PRAGMA index_info({name})")]
+        indexes[name] = {"table": tbl, "unique": unique, "columns": icols}
+    return {"tables": tables, "indexes": indexes}
+
+
+def _current_fingerprint():
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, MIGRATIONS)
+    return _schema_fingerprint(con)
+
+
+# The expected app.db schema after ALL migrations apply. A change here is a
+# CHECKPOINT, not a chore: regenerate with `python test_migrations.py
+# --print-schema` and confirm the change shipped as a NEW migration tuple (never
+# an edit to the frozen SCHEMA or a shipped migration). Compared as a parsed
+# structure, so whitespace/formatting of this literal is irrelevant.
+EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
+{
+  "indexes": {
+    "idx_access_requests_canon_email":
+      {"table": "access_requests", "unique": 0, "columns": ["canon_email"]},
+    "idx_access_requests_canon_expr":
+      {"table": "access_requests", "unique": 0, "columns": [null]},
+    "idx_access_requests_email":
+      {"table": "access_requests", "unique": 0, "columns": ["email"]},
+    "idx_auth_attempts_created":
+      {"table": "auth_request_attempts", "unique": 0, "columns": ["created_at"]},
+    "ix_conv_user": {"table": "conversations", "unique": 0, "columns": ["user_id", "updated_at"]},
+    "ix_msg_conv": {"table": "messages", "unique": 0, "columns": ["conversation_id", "id"]},
+    "ix_usage_time": {"table": "usage_log", "unique": 0, "columns": ["created_at"]}
+  },
+  "tables": {
+    "access_requests": [
+      ["canon_email", "TEXT", 0, null, 0],
+      ["created_at", "REAL", 1, null, 0],
+      ["denied_at", "REAL", 0, null, 0],
+      ["email", "TEXT", 1, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["reason", "TEXT", 0, null, 0],
+      ["status", "TEXT", 1, "'pending'", 0]
+    ],
+    "admin_log_seen": [
+      ["email", "TEXT", 0, null, 1],
+      ["seen_ts", "REAL", 1, null, 0]
+    ],
+    "allowlist": [
+      ["added_at", "REAL", 1, null, 0],
+      ["added_by", "TEXT", 0, null, 0],
+      ["email", "TEXT", 0, null, 1],
+      ["note", "TEXT", 0, null, 0]
+    ],
+    "auth_request_attempts": [
+      ["created_at", "REAL", 1, null, 0],
+      ["email", "TEXT", 1, null, 0],
+      ["ip", "TEXT", 1, null, 0]
+    ],
+    "conversations": [
+      ["created_at", "REAL", 1, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["title", "TEXT", 0, null, 0],
+      ["updated_at", "REAL", 1, null, 0],
+      ["user_id", "INTEGER", 1, null, 0]
+    ],
+    "import_jobs": [
+      ["created_at", "REAL", 1, null, 0],
+      ["created_by", "TEXT", 0, null, 0],
+      ["filename", "TEXT", 0, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["log", "TEXT", 0, null, 0],
+      ["progress", "TEXT", 0, null, 0],
+      ["report", "TEXT", 0, null, 0],
+      ["status", "TEXT", 1, "'pending'", 0],
+      ["updated_at", "REAL", 1, null, 0]
+    ],
+    "login_tokens": [
+      ["email", "TEXT", 1, null, 0],
+      ["expires_at", "REAL", 1, null, 0],
+      ["token_hash", "TEXT", 0, null, 1],
+      ["used_at", "REAL", 0, null, 0]
+    ],
+    "messages": [
+      ["content", "TEXT", 1, null, 0],
+      ["conversation_id", "INTEGER", 1, null, 0],
+      ["created_at", "REAL", 1, null, 0],
+      ["feedback", "INTEGER", 0, null, 0],
+      ["figure", "TEXT", 0, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["model_used", "TEXT", 0, null, 0],
+      ["role", "TEXT", 1, null, 0],
+      ["sql_log", "TEXT", 0, null, 0],
+      ["suggestions", "TEXT", 0, null, 0],
+      ["thinking", "TEXT", 0, null, 0],
+      ["tokens", "INTEGER", 0, null, 0]
+    ],
+    "meta": [
+      ["key", "TEXT", 0, null, 1],
+      ["value", "TEXT", 0, null, 0]
+    ],
+    "query_cache": [
+      ["answer_md", "TEXT", 0, null, 0],
+      ["created_at", "REAL", 1, null, 0],
+      ["data_version", "INTEGER", 1, null, 0],
+      ["embedding", "BLOB", 0, null, 0],
+      ["figure", "TEXT", 0, null, 0],
+      ["final_sql", "TEXT", 0, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["question", "TEXT", 1, null, 0],
+      ["suggestions", "TEXT", 0, null, 0]
+    ],
+    "sessions": [
+      ["created_at", "REAL", 1, null, 0],
+      ["expires_at", "REAL", 1, null, 0],
+      ["token_hash", "TEXT", 0, null, 1],
+      ["user_id", "INTEGER", 1, null, 0]
+    ],
+    "skills": [
+      ["canonical_sql", "TEXT", 1, null, 0],
+      ["created_at", "REAL", 1, null, 0],
+      ["created_by", "TEXT", 0, null, 0],
+      ["downvotes", "INTEGER", 1, "0", 0],
+      ["embedding", "BLOB", 0, null, 0],
+      ["headline", "TEXT", 0, null, 0],
+      ["hits", "INTEGER", 1, "0", 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["lesson", "TEXT", 0, null, 0],
+      ["notes", "TEXT", 0, null, 0],
+      ["question", "TEXT", 1, null, 0],
+      ["tags", "TEXT", 0, null, 0],
+      ["upvotes", "INTEGER", 1, "0", 0],
+      ["verified", "INTEGER", 1, "0", 0]
+    ],
+    "usage_log": [
+      ["cached", "INTEGER", 1, "0", 0],
+      ["completion_tokens", "INTEGER", 0, null, 0],
+      ["cost", "REAL", 1, "0", 0],
+      ["created_at", "REAL", 1, null, 0],
+      ["escalated", "INTEGER", 0, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["model_used", "TEXT", 0, null, 0],
+      ["ok", "INTEGER", 0, null, 0],
+      ["prompt_tokens", "INTEGER", 0, null, 0],
+      ["question", "TEXT", 0, null, 0],
+      ["user_id", "INTEGER", 0, null, 0]
+    ],
+    "users": [
+      ["created_at", "REAL", 1, null, 0],
+      ["email", "TEXT", 1, null, 0],
+      ["id", "INTEGER", 0, null, 1],
+      ["is_admin", "INTEGER", 1, "0", 0],
+      ["last_login", "REAL", 0, null, 0]
+    ],
+    "year_provenance": [
+      ["end_year", "INTEGER", 1, null, 0],
+      ["release", "TEXT", 0, null, 0],
+      ["source", "TEXT", 0, null, 0],
+      ["start_year", "INTEGER", 0, null, 1],
+      ["updated_at", "REAL", 1, null, 0]
+    ]
+  }
+}
+""")
+
+
+def test_migration_versions_are_contiguous():
+    """Version numbers must be 1..N with no gap, duplicate, or renumber -- the
+    runner keys off `> user_version`, so a gap would silently skip a migration
+    and a duplicate/renumber means a shipped migration was edited in place."""
+    versions = [v for v, _ in sorted(MIGRATIONS)]
+    assert versions == list(range(1, len(MIGRATIONS) + 1)), (
+        f"migration versions must be contiguous 1..{len(MIGRATIONS)}, got {versions}")
+
+
+def test_fresh_schema_matches_golden_fingerprint():
+    """DRIFT GUARD: the full post-migration app.db schema must match the checked-in
+    golden fingerprint. Goes RED on ANY schema change -- an edited shipped
+    migration, or (the invisible one) a column added straight to the frozen
+    SCHEMA constant without a new migration. Regenerate deliberately via
+    `python test_migrations.py --print-schema` and confirm the change shipped as
+    a new migration tuple."""
+    con = sqlite3.connect(":memory:")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), f"user_version {v}"
+    actual = _schema_fingerprint(con)
+    assert actual == EXPECTED_SCHEMA_FINGERPRINT, (
+        "app.db schema drifted from the golden fingerprint. If this change is "
+        "INTENTIONAL, it must ship as a NEW migration tuple (never an edit to the "
+        "frozen SCHEMA or a shipped migration) -- then regenerate the golden value "
+        "with `python backend/tests/test_migrations.py --print-schema`.\n"
+        f"actual:\n{json.dumps(actual, sort_keys=True, indent=2)}")
+
+
 def test_real_init_db_sets_baseline_and_bootstraps():
     init_db()
     con = connect()
@@ -441,6 +667,10 @@ def run():
           test_is_denied_lookup_uses_an_index_not_a_scan)
     check("real init_db sets baseline version + tables + bootstrap",
           test_real_init_db_sets_baseline_and_bootstraps)
+    check("migration versions are contiguous 1..N (no gap/dup/renumber)",
+          test_migration_versions_are_contiguous)
+    check("fresh schema matches the golden fingerprint (drift guard)",
+          test_fresh_schema_matches_golden_fingerprint)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")
@@ -449,4 +679,10 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    if "--print-schema" in sys.argv:
+        # Regen path for the golden fingerprint: paste this into
+        # EXPECTED_SCHEMA_FINGERPRINT after an INTENTIONAL, migration-backed
+        # schema change.
+        print(json.dumps(_current_fingerprint(), sort_keys=True, indent=2))
+    else:
+        run()
