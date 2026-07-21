@@ -1,7 +1,12 @@
 """Self-learning "lessons" (backend/app/skills.py): a lesson is a short HEADLINE + a
-longer generalized DESCRIPTION + a commented SQL worked example. The critic is
-the sole lesson source (thumbs-up feedback was removed); saves dedup against
-near-duplicates; retrieval leads with the headline and is gated by the
+longer generalized DESCRIPTION + a commented SQL worked example. There are TWO
+lesson sources: the post-answer critic (mining the model's own mistakes,
+`created_by="critic"`) and the feedback distiller (mining a user's corrective
+feedback on a follow-up turn, `created_by="user-feedback"`) — the old
+thumbs-up feedback path was removed, but this is a distinct, newer mechanism,
+not its return. Saves dedup against near-duplicates SCOPED TO THE SAME SOURCE
+(a critic finding never dedups into a user-feedback row or vice versa, nor into
+a verified seed); retrieval leads with the headline and is gated by the
 skills_enabled flag. The embedding source is headline+description — NEVER the
 question — on every write, dedup lookup, and re-embed pass.
 
@@ -298,6 +303,95 @@ def test_critic_lesson_not_collapsed_into_verified_seed():
     assert seed == 0, "the verified seed's upvotes must not be inflated by dedup"
 
 
+
+# --- feedback-distiller emission (mirrors the critic emission tests above) -----
+# The feedback distiller (app/feedback.py) mines the USER's corrective feedback
+# (rather than the critic mining the model's own mistake) into the SAME
+# unverified-lesson pool via a THIN wrapper, `record_lesson_from_feedback`,
+# reusing `_upvote_or_save(..., source="user-feedback")` — the whole dedup ->
+# unverified -> admin-approve pipeline unchanged, just a distinct `created_by`.
+
+def test_record_lesson_from_feedback_is_unverified_with_user_feedback_source():
+    _reset()
+    _with_embed(lambda: skills.record_lesson_from_feedback(
+        "which undergraduate major produces the most graduates?",
+        "Ask a clarifying question before assuming an award-level scope.",
+        "when a request doesn't specify an award level, ask instead of silently "
+        "assuming bachelor's-only"))
+    con = connect()
+    r = con.execute(
+        "SELECT created_by, verified, headline, lesson, canonical_sql FROM skills").fetchone()
+    con.close()
+    assert r["created_by"] == "user-feedback", r["created_by"]
+    assert r["verified"] == 0, "a feedback-distilled lesson must start unverified"
+    assert r["headline"] == \
+        "Ask a clarifying question before assuming an award-level scope.", r["headline"]
+    # This phrase lives ONLY in the lesson/description text passed above (the
+    # headline has no "bachelor's-only" text) -- pins that `lesson` is really the
+    # description arg stored verbatim, not the headline or some other field.
+    assert "silently assuming bachelor's-only" in r["lesson"], r["lesson"]
+
+
+def test_record_lesson_from_feedback_both_blank_is_noop():
+    _reset()
+    _with_embed(lambda: skills.record_lesson_from_feedback("q", "   ", "   "))
+    assert _count() == 0, "a blank headline AND description must not create a lesson"
+
+
+def test_feedback_dedups_a_true_repeat_via_embedding():
+    _reset()
+    q = "which undergraduate major produces the most graduates?"
+    headline = "Ask a clarifying question before assuming an award-level scope."
+    description = "don't silently assume bachelor's-only when the level is unstated"
+    _with_embed(lambda: skills.record_lesson_from_feedback(q, headline, description))
+    _with_embed(lambda: skills.record_lesson_from_feedback(q, headline, description))
+    assert _count() == 1, "an identical repeat must upvote, not insert a second row"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills").fetchone()[0]
+    con.close()
+    assert up == 1, f"expected 1 upvote on the deduped row, got {up}"
+
+
+def test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario():
+    # The dedup-scoping requirement from the spec: a feedback-distilled lesson
+    # must dedup ONLY against other PENDING user-feedback candidates, never a
+    # critic (or seed) row — even one with the IDENTICAL headline+description on
+    # the SAME scenario. Distinct source, so it must survive as its own row and
+    # must not inflate the critic row's upvotes.
+    _reset()
+    q = "same scenario, two sources"
+    headline = "Filter on an exact 6-digit CIP code, not a rollup."
+    description = "cipcode LIKE '51.%' double counts across the 2-/4-/6-digit rollup rows"
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
+    _with_embed(lambda: skills.record_lesson_from_feedback(q, headline, description))
+    assert _count() == 2, \
+        "a feedback lesson must not collapse into a critic row on the same scenario"
+    con = connect()
+    critic_upvotes = con.execute(
+        "SELECT upvotes FROM skills WHERE created_by='critic'").fetchone()[0]
+    con.close()
+    assert critic_upvotes == 0, \
+        "the critic row's upvotes must not be inflated by a feedback-source dedup"
+
+
+def test_feedback_lesson_not_collapsed_into_verified_seed():
+    _reset()
+    q = "national total associate degrees per year"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", headline="Use cipcode='99'.", lesson="use the grand-total row",
+        created_by="seed", verified=True))
+    _with_embed(lambda: skills.record_lesson_from_feedback(
+        q, "Keep the scope established by an earlier turn.",
+        "a follow-up question should inherit the award level/year set earlier "
+        "in the conversation unless the user changes it"))
+    assert _count() == 2, "a distinct feedback lesson must not collapse into a verified seed"
+    con = connect()
+    seed_upvotes = con.execute(
+        "SELECT upvotes FROM skills WHERE created_by='seed'").fetchone()[0]
+    con.close()
+    assert seed_upvotes == 0, "the verified seed's upvotes must not be inflated by dedup"
+
+
 def test_dedup_is_scoped_to_same_source():
     # An unverified row from a DIFFERENT source on the same scenario must not
     # dedup into (or be dedupped by) a critic finding — dedup is source-scoped.
@@ -582,6 +676,16 @@ def run():
     check("a headline alone is NOT a no-op", test_record_lesson_headline_only_is_not_noop)
     check("distinct critic rule not collapsed into a verified seed",
           test_critic_lesson_not_collapsed_into_verified_seed)
+    check("record_lesson_from_feedback is unverified, created_by='user-feedback'",
+          test_record_lesson_from_feedback_is_unverified_with_user_feedback_source)
+    check("record_lesson_from_feedback: blank headline AND description is a no-op",
+          test_record_lesson_from_feedback_both_blank_is_noop)
+    check("feedback finding dedups a TRUE repeat (identical rule) via embedding",
+          test_feedback_dedups_a_true_repeat_via_embedding)
+    check("a feedback lesson is not collapsed into a critic row on the same scenario",
+          test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario)
+    check("a feedback lesson is not collapsed into a verified seed",
+          test_feedback_lesson_not_collapsed_into_verified_seed)
     check("dedup is scoped to the same source", test_dedup_is_scoped_to_same_source)
     check("dedup backfills an empty headline + lesson (exact match, no embeddings)",
           test_dedup_backfills_empty_headline_and_lesson_without_embeddings)

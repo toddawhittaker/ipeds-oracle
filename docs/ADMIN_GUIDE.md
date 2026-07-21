@@ -215,8 +215,11 @@ plus a worked SQL example — that it recalls when answering similar questions.
 
 ![The Skills tab, listing learned lessons](images/admin-skills.png)
 
-Lessons are proposed automatically (when the built-in reviewer catches and fixes a
-mistake) and start **unverified**. Your job is to curate them:
+Lessons are proposed automatically from two sources, and start **unverified**:
+the built-in reviewer (when it catches and fixes a mistake), and a user's own
+**corrective feedback** on a follow-up turn (e.g. "you should have kept the
+bachelor's scope" or "you could have asked me a clarifying question") — each
+lesson's "from …" tag shows which. Your job is to curate them:
 
 - **Verify** a lesson you trust, so it's used with confidence.
 - **Edit** a headline or description to sharpen it.

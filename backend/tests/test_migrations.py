@@ -177,6 +177,29 @@ def test_migration_15_16_add_suggestions_columns():
     assert "suggestions" in _cols(con, "query_cache"), _cols(con, "query_cache")
 
 
+def test_migration_20_adds_clarify_column():
+    # The disambiguation "clarify" turn's structured {question, options[]} payload
+    # (parsed from the model's ```clarify fence), persisted on the assistant
+    # message like figure/suggestions — so a reload shows the same clarifying
+    # question + chips, not just the live in-session turn. Deliberately NO
+    # query_cache.clarify column (unlike figure/suggestions): a clarify turn is
+    # never cached (see backend/tests/test_chat_router.py).
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 19])
+    assert "clarify" not in _cols(con, "messages"), _cols(con, "messages")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "clarify" in _cols(con, "messages"), _cols(con, "messages")
+    # Nullable: pre-migration rows aren't backfilled, and a normal (non-clarify)
+    # answer never carries one — the client maps NULL -> no clarify chips.
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+               "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, created_at) "
+               "VALUES (1, 'assistant', 'a', 0)")
+    row = con.execute("SELECT clarify FROM messages WHERE role='assistant'").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -503,6 +526,7 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["used_at", "REAL", 0, null, 0]
     ],
     "messages": [
+      ["clarify", "TEXT", 0, null, 0],
       ["content", "TEXT", 1, null, 0],
       ["conversation_id", "INTEGER", 1, null, 0],
       ["created_at", "REAL", 1, null, 0],
@@ -652,6 +676,8 @@ def run():
           test_migration_13_14_add_figure_columns)
     check("migration 15+16 add suggestions columns (messages + query_cache)",
           test_migration_15_16_add_suggestions_columns)
+    check("migration 20 adds messages.clarify (nullable, no query_cache column)",
+          test_migration_20_adds_clarify_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

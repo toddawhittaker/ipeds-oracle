@@ -3,11 +3,17 @@ answer cache.
 
 A "lesson" is a short generalized HEADLINE (the rule title) + a longer
 generalized DESCRIPTION (the transferable technique, explained in plain prose)
-+ an OPTIONAL commented SQL worked example. The post-answer critic is the SOLE
-lesson source (a 👍/👎 feedback path used to exist but was removed — a "like"
-is a weak signal, not a reusable rule): when it catches a real mistake, it
-phrases the fix as a headline + description, which is captured as an
-UNVERIFIED lesson pending admin approval before it is ever retrieved.
++ an OPTIONAL commented SQL worked example. The critic is NO LONGER the sole
+lesson source: TWO sources feed the same unverified pool. The post-answer
+critic (app.critic) mines the MODEL's own mistakes — when it catches a real
+one, it phrases the fix as a headline + description, captured via
+`record_lesson_from_critic`. The feedback distiller (app.feedback) mines the
+USER's corrective feedback on a follow-up turn ("you should have kept the
+bachelor's scope", "you could have asked me a clarifying question") the same
+way, captured via `record_lesson_from_feedback`. Both land as an UNVERIFIED
+lesson pending admin approval before either is ever retrieved. (A 👍/👎
+feedback path used to exist but was removed — a "like" is a weak signal, not a
+reusable rule; this is a different, generalized-rule-shaped feedback path.)
 
 Retrieval embeds the incoming question and returns the lessons attached to the
 most similar past scenarios (ranked against each lesson's headline+description
@@ -259,6 +265,24 @@ def record_lesson_from_critic(question: str, canonical_sql: str, headline: str,
         return
     _upvote_or_save(question, canonical_sql or "", headline=headline,
                     lesson=description, source="critic")
+
+
+def record_lesson_from_feedback(question_context: str, headline: str,
+                                description: str) -> None:
+    """The feedback distiller (app.feedback) judged the user's follow-up message
+    to carry generalizable corrective feedback about a prior answer; its finding
+    IS the rule that fixes it, in the same headline + description shape the
+    critic emits. Capture it as an UNVERIFIED lesson (deduped only against other
+    pending user-feedback candidates — never a critic or seed row on the same
+    scenario) pending admin review. No-op if both headline and description are
+    blank. There is no SQL to attach (the user is correcting the ASSISTANT's
+    behavior, not one query), so canonical_sql is always empty."""
+    headline = (headline or "").strip()
+    description = (description or "").strip()
+    if not headline and not description:
+        return
+    _upvote_or_save(question_context, "", headline=headline,
+                    lesson=description, source="user-feedback")
 
 
 # --- Semantic answer cache -----------------------------------------------------

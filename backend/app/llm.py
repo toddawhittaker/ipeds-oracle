@@ -131,6 +131,55 @@ def _extract_suggestions(answer: str) -> tuple[str, list | None]:
     return clean, (out or None)
 
 
+# The model MAY, instead of answering, emit a ```clarify {"question":"...",
+# "options":[...]}``` fence when the request is MATERIALLY ambiguous (prompt
+# INSTRUCTIONS' leading "Before you answer" step) — one short clarifying question
+# plus 2-4 short answer-phrase chips. Parsed + stripped server-side like the
+# figure/followups fences, so raw JSON never reaches the user.
+_CLARIFY_FENCE_RE = re.compile(r"```clarify[ \t]*\r?\n(.*?)```", re.DOTALL)
+_MAX_CLARIFY_OPTIONS = 4
+# Length caps mirror the _MAX_* precedent in critic.py/feedback.py: the model is
+# asked for "one line" / "short phrases", but nothing stops a runaway or
+# adversarial value from ignoring that, and an unbounded string would flow
+# straight into a rendered chip label. Plain-slice truncation, same as
+# critic._MAX_ANSWER_CHARS / feedback._MAX_FEEDBACK_CHARS.
+_MAX_CLARIFY_QUESTION_CHARS = 200
+_MAX_CLARIFY_OPTION_CHARS = 80
+
+
+def _extract_clarify(answer: str) -> tuple[str, dict | None]:
+    """Pull a ```clarify fence (a JSON object {question, options[]}) out of the
+    answer. ALWAYS strips every clarify fence first (so raw JSON never reaches the
+    user, even on a parse failure); returns a {question, options} dict only when
+    the first fence is valid JSON with a non-empty question and >=1 non-empty
+    option (deduped, capped at 4 options, and length-capped per string)."""
+    matches = _CLARIFY_FENCE_RE.findall(answer or "")
+    if not matches:
+        return answer, None
+    clean = _CLARIFY_FENCE_RE.sub("", answer).strip()
+    try:
+        data = json.loads(matches[0].strip())
+    except (json.JSONDecodeError, ValueError):
+        return clean, None
+    if not isinstance(data, dict):
+        return clean, None
+    question = str(data.get("question") or "").strip()[:_MAX_CLARIFY_QUESTION_CHARS].strip()
+    if not question:
+        return clean, None
+    seen = set()
+    options = []
+    for o in data.get("options") or []:
+        s = str(o).strip()[:_MAX_CLARIFY_OPTION_CHARS].strip()
+        if s and s not in seen:
+            seen.add(s)
+            options.append(s)
+        if len(options) >= _MAX_CLARIFY_OPTIONS:
+            break
+    if not options:
+        return clean, None
+    return clean, {"question": question, "options": options}
+
+
 @dataclass
 class AgentResult:
     answer: str = ""
@@ -155,6 +204,7 @@ class AgentResult:
     critic_description: str = ""    # the critic's finding, description (candidate lesson body)
     figure: dict | None = None      # structured hero statistic from the answer's figure fence
     suggestions: list | None = None  # drill-down questions from the followups fence
+    clarify: dict | None = None     # {question, options[]} from a disambiguation fence
     error: str | None = None
 
     @property
@@ -256,10 +306,26 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
             if not tool_calls:
                 answer = msg.get("content") or ""
+                # Disambiguation: the model may ask ONE clarifying question instead
+                # of answering (prompt INSTRUCTIONS' leading "Before you answer"
+                # step). Extract it FIRST, ahead of the critic — a clarify turn has
+                # no data claim to sanity-check, and must never carry a figure or
+                # followups (those belong to a real answer). Terminates the turn.
+                clarify_answer, clarify = _extract_clarify(answer)
+                if clarify:
+                    res.answer = clarify_answer
+                    res.clarify = clarify
+                    res.model_used = model
+                    res.last_result = last_sql_result["result"]
+                    yield {"type": "clarify", "clarify": clarify}
+                    yield {"type": "answer", "text": res.answer}
+                    yield {"type": "done", "result": res}
+                    return
                 # Post-answer critic: once per turn, and only for answers built
                 # from SQL (a plain refusal has nothing to sanity-check). If it
                 # flags a likely error, feed the critique back for ONE revision
-                # round instead of returning the suspect number.
+                # round instead of returning the suspect number. A clarify fence
+                # (handled above) always skips this — there is no data claim yet.
                 if s.critic_enabled and not critiqued and res.sql_log and answer.strip():
                     critiqued = True
                     crit = await critic.review(question, res.sql_log, answer)
@@ -377,6 +443,14 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         res.model_used = model
         res.last_result = last_sql_result["result"]
         if final.strip():
+            final, clarify = _extract_clarify(final)
+            if clarify:
+                res.answer = final
+                res.clarify = clarify
+                yield {"type": "clarify", "clarify": clarify}
+                yield {"type": "answer", "text": res.answer}
+                yield {"type": "done", "result": res}
+                return
             final, res.figure = _extract_figure(final)
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final

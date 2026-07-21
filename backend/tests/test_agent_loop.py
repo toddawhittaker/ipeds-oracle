@@ -20,8 +20,9 @@ os.environ["LLM_MAX_TOOL_ITERS"] = "3"
 
 import httpx  # noqa: E402
 
-from app import llm  # noqa: E402
+from app import critic, llm  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.critic import Critique  # noqa: E402
 from app.tools import registry  # noqa: E402
 
 get_settings.cache_clear()
@@ -272,6 +273,108 @@ def test_final_synthesis_transport_error_falls_back_to_max_iter_error():
 
 
 # ---------------------------------------------------------------------------
+# Clarify (disambiguation) protocol: the model emits a ```clarify {"question":
+# "...","options":[...]}``` fence when a request is materially ambiguous. Mirrors
+# _extract_figure/_extract_suggestions (llm.py): always strip the fence, parse a
+# dict only on valid JSON with a non-empty question and >=1 option. When present,
+# the loop must skip the critic pass and leave figure/suggestions unset.
+# ---------------------------------------------------------------------------
+
+def test_extract_clarify_valid_json_strips_fence_and_parses():
+    from app.llm import _extract_clarify
+    ans = ("Do you mean bachelor's degrees only, or all award levels?\n\n"
+           "```clarify\n"
+           '{"question":"Which award level?",'
+           '"options":["Bachelor\'s only","Include all levels"]}\n'
+           "```\n")
+    clean, clarify = _extract_clarify(ans)
+    assert "```clarify" not in clean, clean
+    assert clarify == {"question": "Which award level?",
+                       "options": ["Bachelor's only", "Include all levels"]}, clarify
+
+
+def test_extract_clarify_invalid_json_strips_fence_returns_none():
+    from app.llm import _extract_clarify
+    clean, clarify = _extract_clarify("x\n```clarify\nnot json\n```\ny")
+    assert "```clarify" not in clean, \
+        "the fence must be stripped even when it fails to parse (no raw JSON leak)"
+    assert clarify is None, clarify
+
+
+def test_extract_clarify_no_fence_is_unchanged():
+    from app.llm import _extract_clarify
+    assert _extract_clarify("a plain answer, no fence") == ("a plain answer, no fence", None)
+    assert _extract_clarify("") == ("", None)
+
+
+def test_extract_clarify_missing_question_or_options_is_none():
+    from app.llm import _extract_clarify
+    # No question at all.
+    _, c1 = _extract_clarify('```clarify\n{"options":["a","b"]}\n```')
+    assert c1 is None, c1
+    # Blank question.
+    _, c2 = _extract_clarify('```clarify\n{"question":"   ","options":["a"]}\n```')
+    assert c2 is None, c2
+    # No options.
+    _, c3 = _extract_clarify('```clarify\n{"question":"Which?","options":[]}\n```')
+    assert c3 is None, c3
+    _, c4 = _extract_clarify('```clarify\n{"question":"Which?"}\n```')
+    assert c4 is None, c4
+
+
+def test_clarify_present_skips_critic_and_unsets_figure_and_suggestions():
+    # A defensive scenario: the model ran SQL (sql_log non-empty, so the EXISTING
+    # `res.sql_log` gate alone would let the critic through) but then decided the
+    # request was materially ambiguous and asked a clarifying question instead of
+    # answering. The clarify branch must override that gate explicitly -- this is
+    # the regression a bare "no SQL -> no critic" check (already covered in
+    # test_critic.py) can NOT catch, because sql_log is non-empty here.
+    calls = {"chat": 0, "critic": 0}
+    clarify_fence = (
+        "Do you mean bachelor's degrees only, or all award levels?\n\n"
+        "```clarify\n"
+        '{"question":"Which award level?",'
+        '"options":["Bachelor\'s only","Include all levels"]}\n'
+        "```\n")
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql", "arguments": '{"sql": "SELECT 1"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        return _text_response(clarify_fence)
+
+    async def fake_review(question, sql_log, answer):
+        calls["critic"] += 1
+        return Critique(ok=True)
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("which undergraduate major produces the most graduates?")
+    finally:
+        llm.critic.review = critic.review
+    assert res.clarify == {"question": "Which award level?",
+                           "options": ["Bachelor's only", "Include all levels"]}, res.clarify
+    assert "```clarify" not in res.answer, res.answer
+    assert calls["critic"] == 0, "the critic must never run on a clarify turn"
+    assert res.figure is None, "a clarify turn must not carry a figure"
+    assert res.suggestions is None, "a clarify turn must not carry followup suggestions"
+
+
+def test_clarify_absent_on_a_normal_answer():
+    async def fake_chat(client, model, messages, tools=None):
+        return _text_response("California awarded 7,679 CS bachelor's degrees.")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run("q")
+    assert res.clarify is None, res.clarify
+
+
+# ---------------------------------------------------------------------------
 # Live-transport tests: llm._chat is restored to the REAL implementation, and
 # only httpx.AsyncClient is mocked (returning a real httpx.Response so
 # raise_for_status()/.json() behave exactly like the real thing) — this
@@ -388,6 +491,17 @@ def run():
           test_non_run_sql_tool_call_yields_status_event)
     check("a transport error during the final synthesis pass still errors cleanly",
           test_final_synthesis_transport_error_falls_back_to_max_iter_error)
+    check("_extract_clarify parses valid JSON and strips the fence",
+          test_extract_clarify_valid_json_strips_fence_and_parses)
+    check("_extract_clarify strips the fence even on invalid JSON",
+          test_extract_clarify_invalid_json_strips_fence_returns_none)
+    check("_extract_clarify is a no-op with no fence present",
+          test_extract_clarify_no_fence_is_unchanged)
+    check("_extract_clarify returns None for a missing question/options",
+          test_extract_clarify_missing_question_or_options_is_none)
+    check("a clarify turn skips the critic and unsets figure/suggestions",
+          test_clarify_present_skips_critic_and_unsets_figure_and_suggestions)
+    check("a normal answer carries no clarify", test_clarify_absent_on_a_normal_answer)
     check("real _chat: immediate answer over a mocked httpx transport",
           test_real_chat_transport_immediate_answer)
     check("real _chat: an HTTPStatusError surfaces as an agent error",

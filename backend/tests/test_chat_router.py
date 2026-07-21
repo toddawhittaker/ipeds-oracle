@@ -5,14 +5,16 @@ fresh-deploy no-data guard (admin/non-admin wording, no agent run, no
 conversation created), and the CSV export's error branches.
 
 The 👍/👎 feedback feature (and its `promote_from_message` lesson path) was
-removed — the critic is now the sole lesson source. `POST
-/messages/{id}/feedback` must 404 (route gone), and `get_conversation` no
-longer selects a `feedback` column.
+removed. Lessons now come from the critic (the model's own mistakes) AND the
+user-feedback distiller (corrective feedback on a follow-up turn) — see
+`_record_feedback_lesson`/`_fire_and_forget` below. `POST /messages/{id}/feedback`
+must 404 (route gone), and `get_conversation` no longer selects a `feedback` column.
 
 No LLM/API key needed: guard.classify is patched to always allow, and
 chat_router.stream_agent is replaced per-test with a canned async generator
 (same pattern as backend/tests/test_guard.py) so every branch runs deterministically.
 """
+import asyncio
 import json
 import os
 import sys
@@ -517,6 +519,67 @@ def test_suggestions_are_persisted_and_returned_on_reload():
         assert user_msg["suggestions"] is None, user_msg["suggestions"]
 
 
+def test_clarify_turn_persists_is_never_cached_and_records_no_lesson():
+    """The disambiguation "clarify" turn: the `clarify` SSE event reaches the
+    client, is persisted on the assistant message (GET /conversations/{id} must
+    select it, mirroring figure/suggestions), and — the two behavioral contracts
+    that ONLY this test catches — is never written to the answer cache and never
+    triggers a critic-lesson recording. `sql_log` is deliberately non-empty here
+    (a defensive "the model ran SQL anyway" scenario): the pre-existing cache
+    gate (`... and result.sql_log`) and critic-lesson gate would otherwise let
+    this turn through on their OWN, un-related conditions, masking a missing
+    `clarify is None` guard."""
+    clarify = {"question": "Do you mean bachelor's degrees only, or all award levels?",
+              "options": ["Bachelor's only", "Include all levels"]}
+
+    async def _clarify_agent(question, *, history=None, skills_block=""):
+        yield {"type": "clarify", "clarify": clarify}
+        yield {"type": "answer", "text": clarify["question"]}
+        yield {"type": "done", "result": AgentResult(
+            answer=clarify["question"], model_used="test-model", error=None,
+            sql_log=["SELECT 1"], clarify=clarify,
+            prompt_tokens=1, completion_tokens=1)}
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        orig_record_critic = skills.record_lesson_from_critic
+        cache_calls = {"n": 0}
+        lesson_calls = {"n": 0}
+        chat_router.stream_agent = _clarify_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        skills.cache_store = lambda *a, **k: cache_calls.__setitem__("n", cache_calls["n"] + 1)
+        skills.record_lesson_from_critic = \
+            lambda *a, **k: lesson_calls.__setitem__("n", lesson_calls["n"] + 1)
+        try:
+            r = c.post("/api/chat/stream",
+                       json={"question": "which undergraduate major produces the most graduates?"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+            skills.record_lesson_from_critic = orig_record_critic
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        assert any(e["type"] == "clarify" and e["clarify"] == clarify for e in events), events
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        assert json.loads(assistant["clarify"]) == clarify, assistant["clarify"]
+        user_msg = next(m for m in msgs if m["role"] == "user")
+        assert user_msg["clarify"] is None, user_msg["clarify"]
+
+        assert cache_calls["n"] == 0, "a clarify turn must never be written to the answer cache"
+        assert lesson_calls["n"] == 0, "a clarify turn must never record a critic lesson"
+
+
 def test_retrieved_skills_bump_their_hit_count():
     with TestClient(app) as c:
         _login(c)
@@ -624,6 +687,94 @@ def test_critic_lesson_not_recorded_on_followup_turn():
             skills.cache_store = orig_cache_store
             skills.record_lesson_from_critic = orig_record
         assert calls["n"] == 1, "a follow-up turn must not record a context-less lesson"
+
+
+# ---------------------------------------------------------------------------
+# feedback-distilled lessons (the background helpers)
+#
+# The production call site fires _record_feedback_lesson FIRE-AND-FORGET (a
+# detached task, so the SSE body can close and re-enable the composer without
+# waiting for the distiller's LLM round-trip). A detached task can't be awaited
+# by a test event loop, so these exercise the helpers DIRECTLY — awaited and
+# drained — which both covers them deterministically AND documents the
+# contract. The call site itself is gated on a configured key, so key-free CI
+# never spawns the detached task (a task still pending at loop teardown would
+# non-deterministically drop the streaming generator's coverage).
+# ---------------------------------------------------------------------------
+
+def test_record_feedback_lesson_records_when_distiller_finds_a_rule():
+    captured = {}
+
+    async def _distill(history, question):
+        return ("Keep the established scope.", "inherit the award-level scope on follow-ups")
+
+    orig_distill = chat_router.feedback.distill_feedback
+    orig_record = skills.record_lesson_from_feedback
+    chat_router.feedback.distill_feedback = _distill
+    skills.record_lesson_from_feedback = (
+        lambda q, headline, description: captured.update(
+            q=q, headline=headline, description=description))
+    try:
+        asyncio.run(chat_router._record_feedback_lesson(
+            [{"role": "user", "content": "prior turn"}], "you should have kept the scope"))
+    finally:
+        chat_router.feedback.distill_feedback = orig_distill
+        skills.record_lesson_from_feedback = orig_record
+
+    assert captured.get("q") == "you should have kept the scope", captured
+    assert captured.get("headline") == "Keep the established scope.", captured
+    assert "scope" in captured.get("description", ""), captured
+
+
+def test_record_feedback_lesson_noops_when_distiller_finds_nothing():
+    calls = {"n": 0}
+
+    async def _distill(history, question):
+        return None
+
+    orig_distill = chat_router.feedback.distill_feedback
+    orig_record = skills.record_lesson_from_feedback
+    chat_router.feedback.distill_feedback = _distill
+    skills.record_lesson_from_feedback = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+    try:
+        asyncio.run(chat_router._record_feedback_lesson(
+            [{"role": "user", "content": "x"}], "thanks, that's great!"))
+    finally:
+        chat_router.feedback.distill_feedback = orig_distill
+        skills.record_lesson_from_feedback = orig_record
+    assert calls["n"] == 0, "no finding must record no lesson"
+
+
+def test_record_feedback_lesson_swallows_distiller_errors():
+    """The answer is already persisted when this runs, so a distiller failure
+    only costs a missed lesson — it must never raise out of the task."""
+    async def _boom(history, question):
+        raise RuntimeError("distiller exploded")
+
+    orig_distill = chat_router.feedback.distill_feedback
+    chat_router.feedback.distill_feedback = _boom
+    try:
+        # Must NOT raise.
+        asyncio.run(chat_router._record_feedback_lesson(
+            [{"role": "user", "content": "x"}], "you got that wrong"))
+    finally:
+        chat_router.feedback.distill_feedback = orig_distill
+
+
+def test_fire_and_forget_runs_then_self_discards():
+    ran = {"ok": False}
+
+    async def _job():
+        ran["ok"] = True
+
+    async def _drive():
+        chat_router._fire_and_forget(_job())
+        await asyncio.gather(*list(chat_router._background_tasks))
+        await asyncio.sleep(0)  # let the done-callback (discard) run
+
+    asyncio.run(_drive())
+    assert ran["ok"] is True, "the scheduled coroutine must run"
+    assert len(chat_router._background_tasks) == 0, "the task must self-discard when done"
 
 
 # ---------------------------------------------------------------------------
@@ -842,10 +993,20 @@ def run():
           test_extract_suggestions_parses_and_strips_the_fence)
     check("suggestions are persisted and returned on reload",
           test_suggestions_are_persisted_and_returned_on_reload)
+    check("a clarify turn persists, is never cached, and records no lesson",
+          test_clarify_turn_persists_is_never_cached_and_records_no_lesson)
     check("retrieved few-shot skills bump their hit count",
           test_retrieved_skills_bump_their_hit_count)
     check("a critic-driven correction records a candidate lesson",
           test_critic_revision_records_a_lesson)
+    check("feedback distiller finds a rule → records a user-feedback lesson",
+          test_record_feedback_lesson_records_when_distiller_finds_a_rule)
+    check("feedback distiller finds nothing → records no lesson",
+          test_record_feedback_lesson_noops_when_distiller_finds_nothing)
+    check("feedback distiller error is swallowed (never breaks the turn)",
+          test_record_feedback_lesson_swallows_distiller_errors)
+    check("_fire_and_forget runs the coroutine then self-discards the task",
+          test_fire_and_forget_runs_then_self_discards)
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
     check("conversation list/get/delete (+404s)", test_conversation_crud)

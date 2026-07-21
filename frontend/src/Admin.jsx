@@ -2164,14 +2164,16 @@ function Skills({ onAttentionChanged }) {
       <h2 ref={headingRef} tabIndex={-1}>Learned lessons ({rows.length})</h2>
       <p className="muted small">
         Rules the assistant applies as guidance. The post-answer critic proposes a
-        lesson when it catches a mistake — a short headline plus a longer
+        lesson when it catches a mistake, and a user’s corrective feedback on a
+        follow-up turn proposes one too — each a short headline plus a longer
         description — and it starts <strong>unverified</strong> until you approve
         it here.
         {pending > 0 && ` ${pending} awaiting review.`}
       </p>
       {rows.length === 0 && (
         <p className="muted small">
-          No lessons yet — they’ll appear here as the critic proposes them.
+          No lessons yet — they’ll appear here as the critic or a user’s
+          corrective feedback proposes them.
         </p>
       )}
       {rows.map((s) => {
