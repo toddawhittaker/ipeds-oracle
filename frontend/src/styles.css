@@ -864,10 +864,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .usage-chart-head h3 { margin: 0; }
 .usage-body { transition: opacity .12s; }
 .usage-body.updating { opacity: .5; }
-.stats { display: flex; gap: 14px; flex-wrap: wrap; }
-.stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; min-width: 110px; }
-.stat .v { font-size: 24px; font-weight: 700; }
-.stat .l { color: var(--muted); font-size: 13px; }
+/* An even grid, not ragged flex-wrap: equal-width cards align into tidy rows
+   (4-up on desktop → a clean 2 rows for the 8 stats, 2-up on narrow) instead of
+   growing to fit their content and leaving a jagged second row. */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 620px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+.stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.stat .l { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 /* An opaque background (not "transparent"/inherit) keeps badge text contrast
    independent of whatever it's sitting on — e.g. a .year-card.selected's
    --selected-tint background, against which the accent/warn badge text
