@@ -43,6 +43,7 @@ export default defineConfig({
         "src/tabledata.js",
         "src/trendstats.js",
         "src/typeahead.js",
+        "src/usagestats.js",
         "src/userlist.js",
         "src/usertabs.js",
       ],

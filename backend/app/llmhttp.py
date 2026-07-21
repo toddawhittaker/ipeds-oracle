@@ -20,6 +20,17 @@ DEFAULT_TIMEOUT = 120.0  # full agent turns (tool-calling rounds)
 PROBE_TIMEOUT = 30.0     # cheap guard / critic classification calls
 
 
+def cached_tokens(usage: dict) -> int:
+    """Prompt tokens the provider served from ITS OWN prompt cache, for this
+    response. OpenRouter normalizes to `prompt_tokens_details.cached_tokens`;
+    DeepSeek-native reports `prompt_cache_hit_tokens`. Returns 0 on a provider
+    that reports neither — so the metric degrades to "no reuse observed" rather
+    than raising. (This is the LLM provider's prefix cache — distinct from our
+    own semantic answer cache in query_cache.)"""
+    details = usage.get("prompt_tokens_details") or {}
+    return details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0
+
+
 def provider_headers(s: Any) -> dict[str, str]:
     """Build the request headers from a settings object: bearer auth plus the
     optional attribution headers (HTTP-Referer/X-Title), each omitted when its

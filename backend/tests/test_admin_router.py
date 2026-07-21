@@ -141,7 +141,8 @@ def _get_or_create_user(email):
 
 def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-flash",
                      ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
-                     escalated=0):
+                     cached_prompt_tokens=0, first_call_prompt_tokens=0,
+                     first_call_cached_prompt_tokens=0, escalated=0):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -152,10 +153,12 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
     try:
         con.execute(
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
-            "prompt_tokens, completion_tokens, ok, cached, cost, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "prompt_tokens, completion_tokens, cached_prompt_tokens, "
+            "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
+            "ok, cached, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
-             completion_tokens, ok, cached, cost,
+             completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
+             first_call_cached_prompt_tokens, ok, cached, cost,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1234,6 +1237,31 @@ def test_usage_since_after_until_is_swapped():
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["since"] <= body["until"], body
+
+
+def test_usage_totals_expose_prompt_cache_tokens():
+    """The dashboard's two prompt-cache rates each need a denominator + a
+    provider-reported numerator in the totals: the BLENDED rate divides
+    cached_prompt_tokens/prompt_tokens, and the SCHEMA-PREFIX rate divides the
+    first_call_* pair. Guards against the endpoint summing tokens but dropping
+    any of the four cache columns the /usage caller (usagestats.js) relies on --
+    and that the two are summed independently, not conflated."""
+    now = time.time()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("cacheuser@x.edu", "q1", created_at=now - 100,
+                        prompt_tokens=1000, cached_prompt_tokens=600,
+                        first_call_prompt_tokens=400, first_call_cached_prompt_tokens=100)
+        _seed_usage_log("cacheuser@x.edu", "q2", created_at=now - 50,
+                        prompt_tokens=500, cached_prompt_tokens=200,
+                        first_call_prompt_tokens=300, first_call_cached_prompt_tokens=50)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        assert r.status_code == 200, r.text
+        totals = r.json()["totals"]
+        assert totals["prompt_tokens"] == 1500, totals
+        assert totals["cached_prompt_tokens"] == 800, totals
+        assert totals["first_call_prompt_tokens"] == 700, totals
+        assert totals["first_call_cached_prompt_tokens"] == 150, totals
 
 
 # ---------------------------------------------------------------------------

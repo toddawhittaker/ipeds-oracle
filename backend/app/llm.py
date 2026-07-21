@@ -21,7 +21,7 @@ import httpx
 
 from app import critic
 from app.config import get_settings
-from app.llmhttp import DEFAULT_TIMEOUT, chat_completion
+from app.llmhttp import DEFAULT_TIMEOUT, cached_tokens, chat_completion
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
@@ -43,6 +43,25 @@ def _leaks_review_meta(text: str) -> bool:
     """True if `text` references the critique conversation (reviewer/review) —
     the tell of a leaked rebuttal that must not reach the user."""
     return bool(_REVIEW_LEAK_RE.search(text or ""))
+
+
+def effective_cost(reported_cost: float, prompt_tokens: int,
+                   completion_tokens: int, s=None) -> float:
+    """The USD cost to record for a turn. Prefer the provider-reported cost
+    (OpenRouter's usage.cost); when that's absent/zero, fall back to an estimate
+    from the admin-configured per-Mtok list prices — so a provider that doesn't
+    report cost still yields a spend figure instead of 0. Both prices default to
+    0, in which case there's no estimate and the reported (0) cost stands.
+
+    The estimate prices EVERY prompt token at the input rate — it does not
+    discount cached-prefix tokens (we can't know the provider's cached rate), so
+    it slightly over-states spend on cache-heavy traffic. It's a stand-in for a
+    real per-request bill, not a substitute for one."""
+    if reported_cost and reported_cost > 0:
+        return reported_cost
+    s = s or get_settings()
+    return (prompt_tokens * s.llm_input_cost_per_mtok
+            + completion_tokens * s.llm_output_cost_per_mtok) / 1_000_000
 
 
 # The model emits an OPTIONAL ```figure {…}``` fence when a single headline number
@@ -122,6 +141,14 @@ class AgentResult:
     last_result: QueryResult | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int = 0  # prompt tokens the provider served from its prefix cache
+    # The FIRST LLM call of the turn only — its prompt is schema-prefix + prior-turn
+    # history + question, with NO in-turn tool rounds accumulated yet. So its cache
+    # rate isolates cross-question SCHEMA-PREFIX reuse, distinct from the blended
+    # `cached_prompt_tokens` above (which later tool rounds inflate by re-caching the
+    # growing in-turn conversation). See build_system_prompt's cache-contract note.
+    first_call_prompt_tokens: int = 0
+    first_call_cached_prompt_tokens: int = 0
     cost: float = 0.0  # summed OpenRouter cost (USD) across the turn's calls
     critic_revised: bool = False    # the critic flagged the draft and forced a revision
     critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
@@ -162,6 +189,12 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     # concurrent turns can't clobber each other's data behind the answer).
     last_sql_result: dict = {"result": None}
     tools = registry.tool_specs()
+    # Message ORDER preserves the provider prompt cache: the system prompt (the big
+    # static schema prefix — see build_system_prompt) goes FIRST so it stays the
+    # cacheable prefix, then the per-request-dynamic parts (history, the question)
+    # follow. Keep it that way — never prepend anything per-request ahead of the
+    # system prompt, or the cached prefix collapses and every schema token bills at
+    # full price.
     messages: list[dict] = [{"role": "system", "content": build_system_prompt(skills_block)}]
     if history:
         messages.extend(history)
@@ -203,6 +236,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             usage = data.get("usage") or {}
             res.prompt_tokens += usage.get("prompt_tokens", 0)
             res.completion_tokens += usage.get("completion_tokens", 0)
+            res.cached_prompt_tokens += cached_tokens(usage)
+            if i == 0:  # first call only — the clean schema-prefix cache signal
+                res.first_call_prompt_tokens = usage.get("prompt_tokens", 0)
+                res.first_call_cached_prompt_tokens = cached_tokens(usage)
             res.cost += usage.get("cost") or 0
 
             msg = (data.get("choices") or [{}])[0].get("message") or {}
@@ -228,6 +265,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     crit = await critic.review(question, res.sql_log, answer)
                     res.prompt_tokens += crit.prompt_tokens
                     res.completion_tokens += crit.completion_tokens
+                    res.cached_prompt_tokens += crit.cached_prompt_tokens
                     res.cost += crit.cost
                     if not crit.ok:
                         # Capture the clean draft + the SQL count NOW, before the
@@ -330,6 +368,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             usage = data.get("usage") or {}
             res.prompt_tokens += usage.get("prompt_tokens", 0)
             res.completion_tokens += usage.get("completion_tokens", 0)
+            res.cached_prompt_tokens += cached_tokens(usage)
             res.cost += usage.get("cost") or 0
             final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         except httpx.HTTPError:

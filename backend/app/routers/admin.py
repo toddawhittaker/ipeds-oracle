@@ -1060,6 +1060,10 @@ def usage(since: float | None = None, until: float | None = None):
         totals = con.execute(
             "SELECT COUNT(*) AS queries, "
             "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens, "
+            "COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, "
+            "COALESCE(SUM(cached_prompt_tokens),0) AS cached_prompt_tokens, "
+            "COALESCE(SUM(first_call_prompt_tokens),0) AS first_call_prompt_tokens, "
+            "COALESCE(SUM(first_call_cached_prompt_tokens),0) AS first_call_cached_prompt_tokens, "
             "COALESCE(SUM(cost),0.0) AS spend, "
             "COALESCE(SUM(cached),0) AS cache_hits, "
             "COALESCE(SUM(escalated),0) AS escalations, "

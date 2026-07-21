@@ -555,10 +555,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
     ],
     "usage_log": [
       ["cached", "INTEGER", 1, "0", 0],
+      ["cached_prompt_tokens", "INTEGER", 1, "0", 0],
       ["completion_tokens", "INTEGER", 0, null, 0],
       ["cost", "REAL", 1, "0", 0],
       ["created_at", "REAL", 1, null, 0],
       ["escalated", "INTEGER", 0, null, 0],
+      ["first_call_cached_prompt_tokens", "INTEGER", 1, "0", 0],
+      ["first_call_prompt_tokens", "INTEGER", 1, "0", 0],
       ["id", "INTEGER", 0, null, 1],
       ["model_used", "TEXT", 0, null, 0],
       ["ok", "INTEGER", 0, null, 0],

@@ -147,6 +147,23 @@ def _years_fact() -> str:
 
 
 def build_system_prompt(skills_block: str = "") -> str:
+    # ORDERING IS A CACHE CONTRACT — keep dynamic content OUT of the prefix.
+    # The provider caches the longest IDENTICAL token prefix of each request and
+    # bills a hit at a fraction of the input price. This ~5k-token block (mostly
+    # SCHEMA.md) is re-sent on every tool-calling round of every question, so its
+    # cost hinges entirely on that cache reuse. For a hit, everything AHEAD of the
+    # first byte that varies per request must be byte-identical across requests:
+    #   - INSTRUCTIONS — a module constant (static). Good.
+    #   - _years_fact() — NOT per-request; its TEXT is stable within a deployment
+    #     and only changes when an admin adds/removes a dataset year. Good — but if
+    #     you ever make it depend on the question/user/time, it MUST move below the
+    #     schema (or the whole prefix stops caching).
+    #   - _schema_md() — a static file (static). Good.
+    #   - skills_block — the one per-QUESTION-dynamic part, so it is appended LAST,
+    #     after the schema. Anything new that varies per request/user/turn belongs
+    #     here at the tail too, never spliced above the schema. See
+    #     docs/ADMIN_GUIDE.md ("Usage") + the prompt-cache telemetry on the
+    #     dashboard for how to tell whether reuse is actually happening.
     parts = [INSTRUCTIONS,
              "\n\n===== DATASET (this deployment) =====\n",
              _years_fact(),

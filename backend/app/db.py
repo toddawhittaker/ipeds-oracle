@@ -272,6 +272,23 @@ MIGRATIONS: list[tuple[int, str]] = [
     # a log record.
     (17, "CREATE TABLE IF NOT EXISTS admin_log_seen("
          "email TEXT PRIMARY KEY, seen_ts REAL NOT NULL);"),
+    # Prompt tokens the LLM provider served from ITS OWN prefix cache (the big
+    # static SCHEMA.md prefix), per request — lets the Usage dashboard show a
+    # prompt-cache-hit rate. Provider-reported (OpenRouter's
+    # prompt_tokens_details.cached_tokens / DeepSeek's prompt_cache_hit_tokens);
+    # stays 0 on a provider that reports neither. Distinct from `cached`, which
+    # flags our own semantic answer-cache short-circuits.
+    (18, "ALTER TABLE usage_log ADD COLUMN cached_prompt_tokens INTEGER NOT NULL DEFAULT 0;"),
+    # The FIRST LLM call of a turn, split out from the blended totals above so the
+    # dashboard can show a SCHEMA-PREFIX cache rate (cross-question reuse of the big
+    # static prefix) distinct from the blended prompt-cache rate (which later tool
+    # rounds inflate). Provider-reported, same source as cached_prompt_tokens; 0 when
+    # unreported. See app/llm.py AgentResult.first_call_* for why the first call is
+    # the clean signal.
+    (19, "ALTER TABLE usage_log ADD COLUMN first_call_prompt_tokens "
+         "INTEGER NOT NULL DEFAULT 0;\n"
+         "ALTER TABLE usage_log ADD COLUMN first_call_cached_prompt_tokens "
+         "INTEGER NOT NULL DEFAULT 0;"),
 ]
 
 

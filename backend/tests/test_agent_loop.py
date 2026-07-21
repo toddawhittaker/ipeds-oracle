@@ -68,6 +68,74 @@ def test_plain_answer_path(monkeypatch=None):
     res = _run("simple question")
     assert res.error is None, f"unexpected error: {res.error}"
     assert "42" in res.answer, res.answer
+    # A usage payload with NO cache field leaves the metric at 0 (not None/NaN) —
+    # the "provider reports nothing" baseline the dashboard degrades to gracefully.
+    assert res.cached_prompt_tokens == 0, res.cached_prompt_tokens
+
+
+def test_cached_prompt_tokens_accumulate_across_calls_openrouter_shape():
+    # The regression: we sum prompt_tokens/cost from each call's usage but silently
+    # DROP the provider's prompt-cache field, so the dashboard can never show a
+    # prompt-cache-hit rate. Two LLM calls (a tool round + the final answer), each
+    # reporting cached tokens the OpenRouter way, must roll up AND sum.
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function",
+                    "function": {"name": "run_sql", "arguments": '{"sql": "SELECT 1"}'}}]}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 5,
+                          "prompt_tokens_details": {"cached_tokens": 60}}}
+        return {"choices": [{"message": {"content": "Answer."}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 5,
+                          "prompt_tokens_details": {"cached_tokens": 80}}}
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run("q")
+    assert res.error is None, res.error
+    assert res.cached_prompt_tokens == 140, res.cached_prompt_tokens
+    # The schema-prefix split records ONLY the first call (60 cached / 100 prompt),
+    # NOT the blended 140 — later tool rounds must not leak into the first-call
+    # figures, or the "schema cache" rate would be inflated by in-turn caching.
+    assert res.first_call_cached_prompt_tokens == 60, res.first_call_cached_prompt_tokens
+    assert res.first_call_prompt_tokens == 100, res.first_call_prompt_tokens
+
+
+def test_cached_prompt_tokens_accept_deepseek_native_shape():
+    # DeepSeek-direct reports the same fact as `prompt_cache_hit_tokens` (not the
+    # nested OpenRouter details) — the reader must accept both spellings.
+    async def fake_chat(client, model, messages, tools=None):
+        return {"choices": [{"message": {"content": "Answer."}}],
+                "usage": {"prompt_tokens": 50, "completion_tokens": 2,
+                          "prompt_cache_hit_tokens": 45}}
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run("q")
+    assert res.cached_prompt_tokens == 45, res.cached_prompt_tokens
+
+
+def test_effective_cost_prefers_provider_reported():
+    # When the provider reports a real cost, that wins — the fallback prices are
+    # never consulted (they could be stale/wrong; the bill is authoritative).
+    s = types.SimpleNamespace(llm_input_cost_per_mtok=999.0, llm_output_cost_per_mtok=999.0)
+    assert llm.effective_cost(0.0123, 1000, 500, s) == 0.0123
+
+
+def test_effective_cost_estimates_from_prices_when_report_is_zero():
+    # Provider silent (cost=0) but admin set list prices -> estimate from tokens.
+    # 2,000,000 input @ $0.30/Mtok + 1,000,000 output @ $1.20/Mtok = 0.60 + 1.20.
+    s = types.SimpleNamespace(llm_input_cost_per_mtok=0.30, llm_output_cost_per_mtok=1.20)
+    assert abs(llm.effective_cost(0.0, 2_000_000, 1_000_000, s) - 1.80) < 1e-9
+
+
+def test_effective_cost_zero_when_no_report_and_no_prices():
+    # The default posture: provider reports cost (so prices stay 0). If a provider
+    # is ALSO silent and no prices are set, spend legitimately stays 0 — never NaN.
+    s = types.SimpleNamespace(llm_input_cost_per_mtok=0.0, llm_output_cost_per_mtok=0.0)
+    assert llm.effective_cost(0.0, 5000, 2000, s) == 0.0
 
 
 def test_synthesis_on_budget_exhaustion():
@@ -332,6 +400,12 @@ def run():
           test_generate_title_success_strips_quotes_and_period)
     check("generate_title returns '' on a transport error",
           test_generate_title_transport_error_returns_empty)
+    check("effective_cost prefers the provider-reported cost over fallback prices",
+          test_effective_cost_prefers_provider_reported)
+    check("effective_cost estimates from list prices when the report is 0",
+          test_effective_cost_estimates_from_prices_when_report_is_zero)
+    check("effective_cost stays 0 with no report and no configured prices",
+          test_effective_cost_zero_when_no_report_and_no_prices)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

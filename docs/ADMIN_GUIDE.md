@@ -128,10 +128,76 @@ choose (hour / day / 7 days / 30 days / custom):
 
 ![The Usage tab: totals, a trend chart, and top users](images/admin-usage.png)
 
-- **Totals** — queries, tokens, spend, cache hits, escalations, and failures.
+- **Totals** — queries, tokens, spend, the three cache stats below, escalations, and
+  failures.
 - **A trend chart** — queries, tokens, or spend over time (switch with the toggle;
   the chart has the same controls as any answer chart, including image copy).
 - **Top users** — the busiest accounts, by queries, tokens, and spend.
+
+### Where "Spend" comes from (and what to do if it reads $0)
+
+Spend is **not** computed from a price list we maintain — it's the **actual dollar
+cost the LLM provider reports for each request** (OpenRouter returns it per call),
+summed over the window. That means it's always current: switch models, or the
+provider changes its rates, and Spend follows automatically with nothing to update.
+
+The catch: reporting cost this way is an **OpenRouter** feature. If you point
+`LLM_BASE_URL` at a provider that doesn't return a per-request cost (DeepSeek-direct,
+a self-hosted gateway, most raw OpenAI-compatible endpoints), **Spend reads $0** —
+not because nothing was spent, but because nobody told the app the price. Token
+counts still populate; only the dollar figure is blank.
+
+To get spend back in that case, set your model's list prices in `.env` and the app
+will **estimate** the cost from token counts:
+
+```
+LLM_INPUT_COST_PER_MTOK=0.27    # USD per 1,000,000 prompt (input) tokens
+LLM_OUTPUT_COST_PER_MTOK=1.10   # USD per 1,000,000 completion (output) tokens
+```
+
+Leave both unset (the default) whenever the provider reports real cost — the
+provider's figure always wins; the estimate only fills in when the reported cost is
+0. Two caveats on the estimate: it uses the prices **you** enter, so keep them in
+sync with your provider if they change (unlike the reported cost, this one *can* go
+stale), and it prices every prompt token at the input rate **without** the
+cached-prefix discount, so it slightly over-states spend when the **Prompt cache**
+rate is high.
+
+### The three caches (they mean different things)
+
+The dashboard shows **three** cache figures — don't confuse them:
+
+- **Answer cache** — a *count* of questions answered straight from the app's own
+  semantic cache of past answers, with **no LLM call at all**. A repeat or
+  near-repeat question is served instantly and for free.
+- **Schema cache** — a *percentage* measured on the **first** model call of each
+  question: how much of that call's prompt the LLM provider served from **its own
+  cache**. Every request carries a large, identical block of schema instructions up
+  front, and the first call is the clean signal for whether that block is being
+  reused *across* questions and users. **This is the number to watch** — a healthy,
+  busy deployment runs it high, and that reuse is what keeps sending the full schema
+  on every request cheap.
+- **Prompt cache** — the same idea as Schema cache, but *blended across every model
+  call of every question* (a hard question makes several calls as the assistant
+  works through the data). It's the truest **cost** figure — it reflects the actual
+  billing discount — but it runs higher than Schema cache because those follow-on
+  calls also reuse the growing within-question conversation, not just the schema. Use
+  Prompt cache to gauge spend; use **Schema cache** to judge whether the schema
+  prefix itself is being amortized.
+
+> **Watch the Schema cache rate.** If it sits low over a range with real traffic,
+> the provider isn't reusing the schema prefix and you're paying close to full price
+> for it on every question. The usual cause is **routing**, explained next.
+
+> **Routing caveat — switching models/providers blows the cache away.** Prompt
+> caching lives on the provider's servers and is *node-local*: a cached prefix on
+> one machine is invisible to another. If your gateway (e.g. OpenRouter) spreads
+> requests across several upstream providers, the cache lapses between bursts (common
+> on a quiet, low-traffic pilot), or you **change the model or `LLM_BASE_URL`**, the
+> rate drops even though the prompt text is byte-for-byte identical. For steady
+> reuse: keep the model stable, and pin a single provider (OpenRouter's
+> `provider.order` / `only`) or talk to one provider directly. A persistently low
+> rate is a signal to check your routing — not the schema.
 
 > **Privacy by design.** Usage shows only aggregates. The **text of people's
 > questions is never shown here** — that would be an attributable privacy leak.

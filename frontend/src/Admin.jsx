@@ -17,6 +17,7 @@ import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
+import { promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
@@ -1987,7 +1988,9 @@ function Usage() {
             <Stat label="Queries" value={(t.queries || 0).toLocaleString()} />
             <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
             <Stat label="Spend" value={money(t.spend)} />
-            <Stat label="Cache hits" value={t.cache_hits || 0} />
+            <Stat label="Answer cache" value={t.cache_hits || 0} />
+            <Stat label="Schema cache" value={schemaCacheRate(t)} />
+            <Stat label="Prompt cache" value={promptCacheRate(t)} />
             <Stat label="Escalations" value={t.escalations || 0} />
             <Stat label="Failures" value={t.failures || 0} />
           </div>

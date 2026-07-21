@@ -39,6 +39,9 @@
 #   * MAIL_BACKEND + SMTP_HOST blank — with RESEND_API_KEY also blank, the mailer
 #     resolves to the console (log-only) backend; a dev .env pointing SMTP_HOST at
 #     a real relay would otherwise make the suite attempt a live SMTP send.
+#   * LLM_INPUT/OUTPUT_COST_PER_MTOK=0 — a dev .env with real fallback prices would
+#     make effective_cost() estimate a nonzero spend where CI (no .env → 0) records
+#     0, drifting any cost assertion. Explicit 0 pins the provider-reported-only path.
 
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
@@ -48,3 +51,5 @@ export TRUST_LLM_PROVIDER=""
 export TRUSTED_PROXY_COUNT=0
 export MAIL_BACKEND=""
 export SMTP_HOST=""
+export LLM_INPUT_COST_PER_MTOK=0
+export LLM_OUTPUT_COST_PER_MTOK=0

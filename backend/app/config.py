@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
     llm_max_tool_iters: int = Field(default=12)
+    # Fallback token prices (USD per 1,000,000 tokens) for the Usage spend total.
+    # Spend normally uses the provider-reported per-request cost (OpenRouter's
+    # usage.cost). A provider that doesn't report it leaves cost at 0 → set these to
+    # your model's list prices and spend is estimated as
+    # prompt_tokens*input + completion_tokens*output (per Mtok). 0 = no estimate
+    # (spend stays 0 when the provider is silent). The estimate does NOT discount
+    # cached input tokens, so it slightly over-states spend on cache-heavy traffic.
+    llm_input_cost_per_mtok: float = Field(default=0.0)
+    llm_output_cost_per_mtok: float = Field(default=0.0)
     # Topical input guardrail: a cheap pre-flight classifier refuses off-topic /
     # prompt-injection messages before the agent runs. Set false to disable.
     guard_enabled: bool = Field(default=True)
