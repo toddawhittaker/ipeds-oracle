@@ -190,7 +190,12 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "done", "result": res}
                 return
             except httpx.HTTPError as e:
-                res.error = f"LLM request failed: {e}"
+                # Same policy as the status branch above: a transport error's
+                # string can carry connection/host detail (the provider URL, a
+                # proxy). Log it server-side, but return only a generic message —
+                # never reflect the exception text into the UI.
+                log.warning("LLM request failed: %s", e)
+                res.error = "LLM request failed."
                 yield {"type": "error", "text": res.error}
                 yield {"type": "done", "result": res}
                 return
