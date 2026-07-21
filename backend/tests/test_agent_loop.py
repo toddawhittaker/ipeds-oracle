@@ -269,6 +269,10 @@ def test_chat_transport_generic_http_error_surfaces_as_agent_error():
     res = _with_fake_transport(httpx.ConnectError("connection refused"),
                                lambda: _run("q"))
     assert res.error and "LLM request failed" in res.error, res.error
+    # Security (CodeQL py/stack-trace-exposure): the transport exception's text
+    # can carry connection/host detail and is surfaced to the user via the
+    # persisted message — it must NOT leak into the client-facing error string.
+    assert "connection refused" not in res.error, res.error
 
 
 def test_generate_title_no_key_returns_empty():
