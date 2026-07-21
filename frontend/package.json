@@ -16,8 +16,8 @@
     "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" \"e2e/**/*.js\""
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.1",
     "react-syntax-highlighter": "^16.1.1",
