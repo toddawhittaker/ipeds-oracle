@@ -21,7 +21,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.1",
     "react-syntax-highlighter": "^16.1.1",
-    "recharts": "^3.9.2",
+    "recharts": "^3.10.0",
     "remark-gfm": "^4.0.0",
     "sql-formatter": "^15.8.2"
   },
