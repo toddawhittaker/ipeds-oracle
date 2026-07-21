@@ -6,6 +6,7 @@ import contextlib
 import csv
 import io
 import json
+import logging
 import sqlite3
 import time
 
@@ -14,15 +15,52 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app import guard, skills
+from app import feedback, guard, skills
 from app.auth import current_user
+from app.config import get_settings
 from app.db import connect
 from app.llm import effective_cost, generate_title, stream_agent
 from app.tools.sql import SQLValidationError, ipeds_years, run_sql
 
+log = logging.getLogger("ipeds.chat")
+
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 HISTORY_TURNS = 6  # prior messages fed back to the model for context
+
+# Fire-and-forget async tasks (the feedback distiller below) need a strong
+# reference kept somewhere until they finish, or asyncio can garbage-collect a
+# still-pending Task and log "Task was destroyed but it is pending". A
+# module-level set + a done-callback that discards itself is the standard
+# pattern for this.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def _record_feedback_lesson(history: list[dict], question: str) -> None:
+    """Mine corrective feedback on a follow-up turn into a candidate lesson —
+    run as a background task (see _fire_and_forget), NOT awaited from gen(), so
+    the SSE stream's body closes and the composer re-enables the instant the
+    answer finishes rendering, rather than staying disabled for an extra
+    PROBE_TIMEOUT-bounded LLM round-trip after the user already has their
+    answer. The answer is already persisted by the time this runs, so a
+    failure here only costs a missed lesson, never a broken turn — caught and
+    logged rather than left to surface as an "exception never retrieved"
+    warning. Like generate_title's title call, this call's own token/cost
+    usage is intentionally NOT recorded in usage_log (a cheap probe call, not
+    part of the billed turn)."""
+    try:
+        fb = await feedback.distill_feedback(history, question)
+        if fb:
+            await run_in_threadpool(skills.record_lesson_from_feedback, question, fb[0], fb[1])
+    except Exception:
+        log.exception("feedback-distilled lesson recording failed")
+
 
 # Fresh-deploy "no data" guard wording (module-level constants for testability
 # -- see chat_stream). Admin wording routes to Admin -> Imports; non-admin
@@ -201,6 +239,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             answer = ""
             figure = None
             suggestions = None
+            clarify = None
             thinking: list[dict] = []
             async for ev in stream_agent(question, history=history, skills_block=skills_block):
                 if ev["type"] == "done":
@@ -215,6 +254,10 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 elif ev["type"] == "suggestions":
                     # Drill-down follow-up questions — same pass-through + persist.
                     suggestions = ev["suggestions"]
+                elif ev["type"] == "clarify":
+                    # Disambiguation turn — the model asked a clarifying question
+                    # instead of answering. Same pass-through + persist pattern.
+                    clarify = ev["clarify"]
                 item = _trace_item(ev)
                 if item:
                     thinking.append(item)
@@ -241,23 +284,53 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 cost=effective_cost(result.cost, result.prompt_tokens,
                                     result.completion_tokens),
                 thinking=thinking, figure=figure,
-                suggestions=suggestions, delete_from_id=edit_from)
+                suggestions=suggestions, clarify=clarify, delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
-            if not history and result.error is None and answer and result.sql_log:
+            # A clarify turn is NEVER cached — it has no data claim to reuse, and
+            # caching it would replay a stale disambiguation question verbatim.
+            if (not history and result.error is None and answer and result.sql_log
+                    and clarify is None):
                 await run_in_threadpool(skills.cache_store, question, result.sql_log[-1],
                                         answer, result.figure, result.suggestions)
 
             # 4b) If the critic caught a real mistake and forced a correction, capture
             # its finding as an unverified lesson (self-learning from actual errors).
             # First-turn only (like the cache above): a follow-up's bare question
-            # ("and for Ohio?") is a context-less, useless retrieval key.
+            # ("and for Ohio?") is a context-less, useless retrieval key. A clarify
+            # turn never reaches here as a critic-revised turn (the critic never runs
+            # on one — see app/llm.py), but the guard is explicit for clarity/safety.
             if (not history and result.critic_revised
                     and (result.critic_headline or result.critic_description)
-                    and result.error is None and result.sql_log):
+                    and result.error is None and result.sql_log
+                    and clarify is None):
                 await run_in_threadpool(
                     skills.record_lesson_from_critic, question,
                     result.sql_log[-1], result.critic_headline, result.critic_description)
+
+            # 4c) Mine corrective feedback on a follow-up turn into a candidate
+            # lesson (symmetric to the critic above, but from the USER's own
+            # correction rather than the model's mistake). Never on a clarify turn
+            # (nothing to correct yet) or a refusal (result.error is not None).
+            # Fire-and-forget (_record_feedback_lesson): distill_feedback is a
+            # separate LLM call bounded by PROBE_TIMEOUT (30s) — awaiting it here
+            # would hold the SSE response body open (and the composer disabled)
+            # for that whole extra round-trip AFTER the answer has already fully
+            # rendered, since the client finalizes the turn on body-close, not on
+            # the `done` event alone. Scheduling it instead lets `done` + the
+            # response close immediately while the lesson still gets recorded.
+            #
+            # Only SCHEDULE it when the distiller could actually record something —
+            # it needs skills enabled AND a configured LLM key (distill_feedback
+            # returns None otherwise). Gating HERE, not just inside the task, keeps
+            # a key-free environment (CI/tests) from ever spawning a detached task:
+            # a background task still pending when a test event loop tears down
+            # stops this async generator finalizing cleanly, non-deterministically
+            # dropping its coverage. No key → no task → deterministic.
+            cfg = get_settings()
+            if (history and clarify is None and result.error is None
+                    and cfg.skills_enabled and cfg.llm_api_key):
+                _fire_and_forget(_record_feedback_lesson(history, question))
 
             done = {"type": "done", "escalated": result.escalated,
                     "model": result.model_used, "tokens": result.total_tokens,
@@ -320,7 +393,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
              cached_prompt_tokens=0, first_call_prompt_tokens=0,
              first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
-             suggestions=None, delete_from_id=None):
+             suggestions=None, clarify=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -342,12 +415,13 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         user_msg_id = ucur.lastrowid
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
-            "thinking, figure, suggestions, model_used, tokens, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "thinking, figure, suggestions, clarify, model_used, tokens, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
-             json.dumps(suggestions) if suggestions else None, model, tokens, now))
+             json.dumps(suggestions) if suggestions else None,
+             json.dumps(clarify) if clarify else None, model, tokens, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -395,7 +469,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         if not owns:
             raise HTTPException(404, "Not found.")
         rows = con.execute(
-            "SELECT id, role, content, sql_log, thinking, figure, suggestions, "
+            "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
             "model_used, created_at "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
@@ -462,7 +536,6 @@ def download_csv(message_id: int, request: Request, user: sqlite3.Row = Depends(
     Re-running is intentional: it guarantees the download reflects current data
     and avoids relying on any per-request in-memory result.
     """
-    from app.config import get_settings
     con = connect()
     try:
         row = con.execute(

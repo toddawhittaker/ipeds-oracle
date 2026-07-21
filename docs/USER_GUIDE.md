@@ -168,9 +168,19 @@ You don't have to get the question perfect the first time.
 - **Follow-up chips** — the *"You might also ask…"* suggestions under an answer
   drill deeper (by state, program, year, or a comparison). Click one and it's
   asked as a follow-up, keeping the thread's context.
+- **"Did you mean" chips** — if your question could reasonably be answered two
+  different ways that would change the headline number (e.g. bachelor's-only vs.
+  every award level), the assistant asks a short clarifying question instead of
+  guessing, with a couple of short answer-phrase chips. Click one, or just type
+  your own reply in the box — both work the same way. Once you've answered, that
+  scope carries forward on later follow-ups in the same conversation unless you
+  change it.
 - **Edit** or **Rerun** any of your earlier prompts — hover a question you asked
   and use the controls to reword or re-run it. The new answer **replaces** the old
   one in place, so a conversation stays clean as you refine.
+- Telling the assistant it got something wrong — a scope it should have asked
+  about, an aggregation it should have used — isn't off-topic. It's read as
+  feedback and may quietly improve how it answers similar questions later.
 
 ---
 

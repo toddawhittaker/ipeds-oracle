@@ -289,6 +289,13 @@ MIGRATIONS: list[tuple[int, str]] = [
          "INTEGER NOT NULL DEFAULT 0;\n"
          "ALTER TABLE usage_log ADD COLUMN first_call_cached_prompt_tokens "
          "INTEGER NOT NULL DEFAULT 0;"),
+    # The disambiguation "clarify" turn's structured {question, options[]} payload
+    # (parsed server-side from the model's ```clarify fence), persisted on the
+    # assistant message like figure/suggestions — so a reload shows the same
+    # clarifying question + chips, not just the live in-session turn. Deliberately
+    # NO query_cache.clarify column: a clarify turn is never written to the answer
+    # cache (see app/routers/chat.py).
+    (20, "ALTER TABLE messages ADD COLUMN clarify TEXT;"),
 ]
 
 

@@ -18,6 +18,10 @@ to the implementer.
 The frontend lives in `frontend/` (Vite + React): `Chat.jsx` (SSE streaming answers,
 the hero "figure" statistic above an answer — `Figure.jsx`, `role="img"` + aria-label,
 CSV/chart export, conversation sidebar with delete + focus/aria-live management),
+the drill-down `Suggestions.jsx` and disambiguation `Clarify.jsx` chip rows below
+an answer (both `role="group"` + `aria-label`, `.suggestion-chip` buttons — a
+clarify turn's chips are the only UI for its 2–4 short answer phrases, but the
+free-text composer must stay a fully working escape hatch alongside them),
 `Login.jsx`, `Admin.jsx` (tabbed: allowlist/imports/usage/skills), `Markdown.jsx`
 (react-markdown + gfm, scrollable result tables), `styles.css` (light/dark via
 `prefers-color-scheme`).

@@ -30,6 +30,7 @@ export default defineConfig({
         "src/announce.js",
         "src/attention.js",
         "src/briefdata.js",
+        "src/clarify.js",
         "src/compare.js",
         "src/csvimport.js",
         "src/datatable.js",

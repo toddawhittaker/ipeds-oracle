@@ -6,6 +6,7 @@ import Markdown from "./Markdown.jsx";
 import MarkdownTextarea from "./MarkdownTextarea.jsx";
 import Figure from "./Figure.jsx";
 import Suggestions from "./Suggestions.jsx";
+import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -355,6 +356,7 @@ export default function Chat({ me }) {
           thinking: m.thinking ? JSON.parse(m.thinking) : [],
           figure: m.figure ? JSON.parse(m.figure) : null,
           suggestions: m.suggestions ? JSON.parse(m.suggestions) : null,
+          clarify: m.clarify ? JSON.parse(m.clarify) : null,
         })));
         setLoadingConvo(false);
       })
@@ -658,6 +660,7 @@ export default function Chat({ me }) {
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
+    let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
     let failed = false; // drives the finalized message's inline "Try again"
     try {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
@@ -719,6 +722,7 @@ export default function Chat({ me }) {
         else if (ev.type === "answer") answer = ev.text;
         else if (ev.type === "figure") figure = ev.figure; // structured hero stat, rendered above the prose
         else if (ev.type === "suggestions") suggestions = ev.suggestions; // drill-down chips below the answer
+        else if (ev.type === "clarify") clarify = ev.clarify; // disambiguation chips, no figure/suggestions on this turn
         else if (ev.type === "error") { answer = "⚠️ " + ev.text; failed = true; }
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
@@ -739,7 +743,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, id: msgId ?? c[ai].id, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -1007,6 +1011,15 @@ export default function Chat({ me }) {
                     {/* Drill-down chips — clicking one asks it as a follow-up turn
                         (which gets its own brief), an exploration loop. */}
                     <Suggestions items={m.suggestions} onAsk={(q) => submit(q)} disabled={busy} />
+                    {/* Disambiguation answer-phrase chips — clicking one submits the
+                        short phrase verbatim as a follow-up turn. The composer stays
+                        the free-text escape hatch. showQuestion is a defensive
+                        fallback: if the model emitted the clarify fence with no
+                        surrounding prose, m.content is empty and the chips would
+                        otherwise be unlabeled — Clarify then shows its own
+                        question as the heading instead of "Did you mean". */}
+                    <Clarify spec={m.clarify} onAsk={(q) => submit(q)} disabled={busy}
+                             showQuestion={!m.content || !m.content.trim()} />
                   </>
                 )}
               </div>

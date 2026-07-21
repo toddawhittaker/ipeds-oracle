@@ -70,6 +70,28 @@ def test_classify_fails_open_without_key():
     assert v.allowed is True, "classify must fail open when unconfigured"
 
 
+def test_system_prompt_classifies_corrective_feedback_as_in_scope():
+    """Regression (conversation-12, message 57): a user's corrective meta-critique
+    of a PRIOR answer's method/scope ("you could have asked me a clarifying
+    question... the context of the first question should have set the scope for
+    the second") was refused as OUT_OF_SCOPE — defect #3 of the disambiguation
+    plan. This is load-bearing for two features, not just politeness: the clarify
+    protocol's answer-phrase chips (e.g. "Bachelor's only") AND the
+    feedback-distiller's corrective turns must both pass this gate, or they never
+    reach the agent/distiller at all.
+
+    The suite is key-free (no live LLM call is possible here), so the only thing
+    testable is the classifier's OWN instructions — a real classification call
+    can't be exercised, but if the prompt doesn't explicitly carve out corrective
+    feedback / meta-critique, a real model will keep refusing it exactly like the
+    observed regression."""
+    t = guard._SYSTEM
+    tl = t.lower()
+    assert "corrective feedback" in tl or "meta-critique" in tl or "meta critique" in tl, (
+        f"_SYSTEM must explicitly whitelist corrective feedback / a meta-critique "
+        f"of a prior answer as IN_SCOPE (regression: conversation-12 message 57): {t}")
+
+
 # ---------------------------------------------------------------------------
 # LIVE classify() path — a key IS configured, so classify() must actually
 # build the request and interpret a real HTTP response (or fail open on a
@@ -273,6 +295,9 @@ def run():
           test_reply_parsing)
     check("classify fails open when unconfigured/disabled",
           test_classify_fails_open_without_key)
+    check("_SYSTEM whitelists corrective feedback / a meta-critique as IN_SCOPE "
+          "(conversation-12 msg-57 regression)",
+          test_system_prompt_classifies_corrective_feedback_as_in_scope)
     check("classify (live key): IN_SCOPE reply allows, with history + tokens",
           test_classify_in_scope_reply_with_live_key)
     check("classify (live key): OUT_OF_SCOPE reply refuses",

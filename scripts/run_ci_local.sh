@@ -108,6 +108,7 @@ BACKEND_SUITES=(
   test_mailer.py
   test_guard.py
   test_critic.py
+  test_feedback.py
   test_prompt.py
   test_skills.py
   test_estimate.py
