@@ -136,10 +136,48 @@ def test_smtp_backend_builds_multipart_and_sends():
         assert msg["From"] == "IPEDS <no@school.edu>", msg["From"]
         assert msg["To"] == "u@example.com" and msg["Subject"] == "Sub"
         assert msg.get_content_type() == "multipart/alternative", msg.get_content_type()
-        parts = [p.get_content_type() for p in msg.iter_parts()]
+        # walk(), not iter_parts(): the html part is itself a multipart/related
+        # wrapper around the CID logo, so the text/html leaf is one level deeper.
+        parts = [p.get_content_type() for p in msg.walk()]
         assert "text/plain" in parts and "text/html" in parts, parts
+        # The header's <img src="cid:column-mark"> only resolves if the logo rides
+        # along as a related part with a matching Content-ID.
+        logo = [p for p in msg.walk() if p.get_content_type() == "image/png"]
+        assert len(logo) == 1, f"expected exactly one inline logo part, got {parts}"
+        assert logo[0]["Content-ID"] == f"<{mailer._LOGO_CID}>", logo[0]["Content-ID"]
+        assert logo[0].get_payload(decode=True) == mailer._LOGO_PNG, "logo bytes differ"
     finally:
         mailer.get_settings, smtplib.SMTP = orig_get, orig_smtp
+
+
+def test_resend_backend_attaches_the_inline_logo():
+    """Resend must carry the Column mark as an inline attachment with a content_id —
+    without it the header's cid: <img> renders as a broken image in every client."""
+    orig_get = mailer.get_settings
+    import resend
+    orig_send = resend.Emails.send
+    sent = {}
+    try:
+        mailer.get_settings = lambda: types.SimpleNamespace(
+            mail_backend="resend", resend_api_key="re_test_key",
+            smtp_host="", mail_from="IPEDS <x@example.com>")
+        resend.Emails.send = lambda params: sent.update(params)
+        assert mailer.send_email("u@example.com", "Sub", "<p>hi</p>", "hi") is True
+        att = sent.get("attachments") or []
+        assert len(att) == 1, f"expected one attachment, got {att}"
+        assert att[0]["content_id"] == mailer._LOGO_CID, att[0]
+        assert att[0]["content"] == mailer._LOGO_PNG_B64, "attachment must be base64 PNG"
+        assert att[0]["content_type"] == "image/png", att[0]
+    finally:
+        mailer.get_settings = orig_get
+        resend.Emails.send = orig_send
+
+
+def test_email_document_references_the_logo_by_cid():
+    """The shell's wordmark must point at the same CID the transports attach — a
+    drift between the two silently breaks the logo in every sent email."""
+    html = mailer._email_document("pre", "<p>body</p>")
+    assert f'src="cid:{mailer._LOGO_CID}"' in html, "wordmark lost its cid: image"
 
 
 def test_smtp_backend_swallows_errors():
@@ -306,6 +344,10 @@ def run():
           test_smtp_backend_builds_multipart_and_sends)
     check("smtp backend swallows send failures (returns False)",
           test_smtp_backend_swallows_errors)
+    check("resend backend attaches the inline logo (content_id + base64 png)",
+          test_resend_backend_attaches_the_inline_logo)
+    check("the email shell references the logo by the same cid the transports attach",
+          test_email_document_references_the_logo_by_cid)
     check("admin_recipients gathers all admins + override, deduped",
           test_admin_recipients_includes_all_admins_deduped)
     check("send_access_request fans out to every admin",
