@@ -12,4 +12,4 @@ itsdangerous>=2.2
 resend>=2.0
 fastembed>=0.3
 numpy>=2.5.1
-email-validator>=2.0
+email-validator>=2.3.0
