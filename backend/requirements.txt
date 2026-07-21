@@ -3,7 +3,7 @@
 # regenerate it after editing this file with:
 #   pip-compile --generate-hashes --output-file requirements.lock requirements.txt
 fastapi>=0.139.2
-uvicorn[standard]>=0.30
+uvicorn[standard]>=0.51.0
 pydantic>=2.7
 pydantic-settings>=2.14.2
 httpx>=0.28.1
