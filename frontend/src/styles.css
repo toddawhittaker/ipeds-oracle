@@ -192,8 +192,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg); color: var(--text);
 }
-.login button[type=submit] { background: var(--accent); color: var(--on-fg); border: none; padding: 11px; border-radius: 8px; font-weight: 600; }
-.login button[type=submit]:hover:not(:disabled) { background: var(--accent-d); }
+/* The primary action on a login-family card. Login's lives in a <form> and so
+   carries type=submit; /verify's is a bare click handler outside any form, hence
+   the explicit .btn-primary hook — without it that button renders unstyled. */
+.login button[type=submit], .login .btn-primary { background: var(--accent); color: var(--on-fg); border: none; padding: 11px; border-radius: 8px; font-weight: 600; }
+.login button[type=submit]:hover:not(:disabled), .login .btn-primary:hover:not(:disabled) { background: var(--accent-d); }
+/* Outside a form there's no .login form gap to space it off the prose. */
+.login .btn-primary { width: 100%; margin-top: 14px; }
+.login .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
 .notice { background: var(--user); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
 /* A call-to-action notice (e.g. the fresh-deploy "no dataset loaded yet"
    banner) should stand out from an ordinary status notice -- an accent left

@@ -71,7 +71,8 @@ export default function Verify() {
             <p>
               Sign in to IPEDS Oracle as <strong>{email}</strong>?
             </p>
-            <button onClick={signIn} disabled={state === "signing"}>
+            <button className="btn-primary" onClick={signIn}
+                    disabled={state === "signing"}>
               {state === "signing" ? "Signing in…" : "Sign in"}
             </button>
           </>

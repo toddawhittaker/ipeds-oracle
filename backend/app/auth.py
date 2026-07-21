@@ -113,6 +113,29 @@ def may_request_access(email: str) -> bool:
     return email.rsplit("@", 1)[-1] == domain
 
 
+def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
+    """Delete auth rows the code can never accept again: consumed or expired
+    magic-link tokens, and sessions past their expiry. The caller commits.
+
+    Behaviour-preserving by construction — `peek_login`/`verify_login` already
+    reject a token whose `used_at` is set or whose `expires_at` has passed, and
+    `current_user` already rejects an expired session. Afterwards the lookup
+    simply misses instead of failing the timestamp check: same 400, same message.
+    Nothing else sweeps these two tables (`auth_request_attempts` is swept by
+    `ratelimit`), so without this they grow forever.
+
+    Called at boot (`main.lifespan`) and on each successful sign-in — deliberately
+    NOT from `mint_login_link`. That helper runs on only ONE of `request_login`'s
+    branches, so a DELETE there would make "allowlisted" measurably slower than
+    "pending", opening exactly the timing oracle `request_login`'s docstring
+    promises stays closed. A sign-in has no such exposure: the caller already
+    holds a valid token."""
+    now = time.time()
+    con.execute("DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at < ?",
+                (now,))
+    con.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+
+
 def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     """Insert a single-use login token for `email` and return its verify URL.
     The caller commits. Reused by the login flow and by admin approval."""
@@ -223,6 +246,9 @@ def verify_login(token: str, response: Response) -> dict:
     th = hash_token(token)
     con = connect()
     try:
+        # Sweep dead rows first, before this token is marked used — so the token
+        # being consumed right now survives until the NEXT sign-in.
+        purge_expired_auth_rows(con)
         row = con.execute(
             "SELECT email, expires_at, used_at FROM login_tokens WHERE token_hash=?",
             (th,)).fetchone()

@@ -411,6 +411,16 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   skip the INSERT the allowlisted/pending branches do) is **accepted** — it doesn't
   isolate the sensitive states, and equalizing it would violate "store nothing on
   deny"; see `auth.request_login`'s docstring.
+- **Dead auth rows are swept in-app, not by cron:** `auth.purge_expired_auth_rows`
+  deletes consumed/expired `login_tokens` and past-expiry `sessions` — rows the code
+  can never accept again, so removing them changes no behaviour (the lookup misses
+  instead of failing the timestamp check: same 400, same message). It runs at boot
+  (`main.lifespan`, non-fatal like the seeding steps) and at the top of
+  `verify_login`, before the token is marked used. Deliberately **not** in
+  `mint_login_link`: that runs on only one of `request_login`'s branches, so a DELETE
+  there would make "allowlisted" measurably slower than "pending" — reopening the very
+  timing oracle above. (`auth_request_attempts` has its own sweep in `ratelimit.py`.)
+  Pinned by `test_signing_in_purges_dead_auth_rows_only` in `backend/tests/test_security.py`.
 - **Per-IP rate-limit is spoof-resistant:** `POST /api/auth/request` is capped
   per-email and per-IP (`ratelimit.py`), but `X-Forwarded-For` is client-settable.
   `client_ip` trusts it only `TRUSTED_PROXY_COUNT` hops **from the right** (a
