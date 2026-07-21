@@ -359,6 +359,62 @@ def test_get_verify_does_not_consume_token() -> None:
             f"a consumed token must be rejected, got {again.status_code}: {again.text}")
 
 
+def test_signing_in_purges_dead_auth_rows_only() -> None:
+    """A sign-in sweeps consumed/expired magic-link tokens and expired sessions —
+    and touches nothing that's still live. Regression it catches, both ways: (a)
+    nothing swept these two tables at all, so every token ever minted and every
+    session ever issued accumulated in app.db forever; (b) an over-broad sweep
+    that also took live rows would invalidate un-clicked sign-in links and log
+    every signed-in user out."""
+    from app.config import get_settings
+    from app.security import hash_token
+    now = time.time()
+    con = connect()
+    try:
+        uid = con.execute("INSERT INTO users(email, created_at) VALUES (?,?) "
+                          "ON CONFLICT(email) DO UPDATE SET created_at=excluded.created_at "
+                          "RETURNING id", ("sweep@example.edu", now)).fetchone()["id"]
+        con.executemany(
+            "INSERT INTO login_tokens(token_hash, email, expires_at, used_at) VALUES (?,?,?,?)",
+            [("sweep-used", "sweep@example.edu", now + 900, now - 60),   # consumed
+             ("sweep-expired", "sweep@example.edu", now - 60, None),     # timed out
+             ("sweep-live", "sweep@example.edu", now + 900, None)])      # emailed, unclicked
+        con.executemany(
+            "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+            [("sweep-sess-dead", uid, now - 7200, now - 60),
+             ("sweep-sess-live", uid, now, now + 7200)])
+        con.commit()
+    finally:
+        con.close()
+
+    with TestClient(app) as c:
+        _login(c, "admin@example.edu")
+
+    con = connect()
+    try:
+        tokens = {r["token_hash"] for r in con.execute(
+            "SELECT token_hash FROM login_tokens WHERE token_hash LIKE 'sweep-%'")}
+        sess = {r["token_hash"] for r in con.execute(
+            "SELECT token_hash FROM sessions WHERE token_hash LIKE 'sweep-sess-%'")}
+    finally:
+        con.close()
+    assert tokens == {"sweep-live"}, f"expected only the live token to survive, got {tokens}"
+    assert sess == {"sweep-sess-live"}, f"expected only the live session to survive, got {sess}"
+
+    # The sweep must not have taken the session the sign-in just created, either.
+    with TestClient(app) as c:
+        _login(c, "admin@example.edu")
+        assert c.get("/api/auth/me").status_code == 200, "sign-in session was swept"
+        con = connect()
+        try:
+            assert con.execute(
+                "SELECT 1 FROM sessions WHERE token_hash=?",
+                (hash_token(c.cookies[get_settings().cookie_name]),)).fetchone(), \
+                "live session row missing"
+        finally:
+            con.close()
+
+
 def test_schema_family_with_quote_is_handled() -> None:
     from app.tools import schema as sch
     # A family argument containing a quote must not raise or produce a broken
@@ -395,6 +451,8 @@ def run() -> None:
     print("\n6. import upload size cap")
     check("oversized import upload is rejected with 413 (no lock leak)",
          test_import_rejects_oversized_upload)
+    check("signing in purges dead tokens/sessions, keeps live ones",
+          test_signing_in_purges_dead_auth_rows_only)
     check("schema.get_columns tolerates a quote in family",
           test_schema_family_with_quote_is_handled)
 

@@ -34,6 +34,17 @@ WEB_DIST = ROOT / "frontend" / "dist"
 async def lifespan(app: FastAPI):
     init_db()
     try:
+        from app.auth import purge_expired_auth_rows
+        from app.db import connect
+        con = connect()
+        try:
+            purge_expired_auth_rows(con)
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001 -- a housekeeping sweep must never block boot
+        log.warning("auth row purge skipped: %s", e)
+    try:
         from app.skills import seed_from_schema_examples
         n = seed_from_schema_examples()
         if n:
