@@ -140,7 +140,8 @@ export async function mockConversations(page, initial = []) {
 }
 
 /**
- * GET /api/chat/conversations/:id -> array of {role, content, id?, sql_log?}
+ * GET /api/chat/conversations/:id -> array of {role, content, id?, sql_log?,
+ * clarify?}
  * (or a non-200 `httpStatus`, e.g. 404 for "doesn't exist" / 403 for "not
  * yours" -- see web/e2e/routing-chat.spec.js's bad-:id notice tests, which
  * assert the SAME rendered text for both so the UI isn't an enumeration
@@ -167,6 +168,7 @@ export async function mockConversation(page, id, messages,
     thinking: m.thinking !== undefined ? JSON.stringify(m.thinking) : undefined,
     figure: m.figure !== undefined ? JSON.stringify(m.figure) : undefined,
     suggestions: m.suggestions !== undefined ? JSON.stringify(m.suggestions) : undefined,
+    clarify: m.clarify !== undefined ? JSON.stringify(m.clarify) : undefined,
   }));
   await page.route(`**/api/chat/conversations/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -234,6 +236,7 @@ export async function mockStreamChat(page, {
   answer = "Answer.",
   figure = null,
   suggestions = null,
+  clarify = null,
   messageId = null,
   userMessageId = null,
   title = null,
@@ -252,6 +255,10 @@ export async function mockStreamChat(page, {
       // fence and yields this event). Omitted when `figure` is null.
       ...(figure ? [{ type: "figure", figure }] : []),
       ...(suggestions ? [{ type: "suggestions", suggestions }] : []),
+      // The disambiguation "clarify" event ({question, options[]}), yielded
+      // BEFORE the answer — mirrors figure/suggestions (backend/app/llm.py
+      // _extract_clarify). Omitted when `clarify` is null.
+      ...(clarify ? [{ type: "clarify", clarify }] : []),
       { type: "answer", text: answer },
       { type: "done", message_id: messageId, user_message_id: userMessageId,
         model: "test", tokens: 0, ...(title ? { title } : {}) },

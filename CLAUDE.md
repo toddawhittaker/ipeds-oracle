@@ -203,7 +203,14 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
 LLM = **DeepSeek** via any OpenAI-compatible provider (`LLM_BASE_URL`, **OpenRouter**
 by default, through the shared `backend/app/llmhttp.py` transport; `v4-flash` default →
 escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
-- a topical **guardrail** in front (off-topic questions never reach the DB);
+- a topical **guardrail** in front (off-topic questions never reach the DB) —
+  `guard.py`'s `_SYSTEM` explicitly whitelists **corrective feedback and a
+  meta-critique of a prior answer's method/scope** (e.g. "you should have kept
+  the bachelor's scope") as IN_SCOPE, alongside brief contextual follow-ups and a
+  short answer-phrase reply to the assistant's own clarifying question (e.g.
+  "bachelor's only") — load-bearing for both the clarify chips and the feedback
+  distiller below, and the fix for a real regression where the gate refused a
+  user's own corrective feedback as off-topic (`backend/tests/test_guard.py`);
 - a deterministic SQL **linter** (`backend/app/tools/sqllint.py`) — a pre-flight check that
   flags IPEDS aggregation foot-guns (CIP-rollup / second-major double counts,
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
@@ -215,6 +222,30 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `critic_revised=False`. This closes the observed leak where a *confirm*-by-
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
+- **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
+  step: when a plausible alternate reading would change the HEADLINE result (e.g.
+  "which major produces the most graduates?" — bachelor's-only vs. all award
+  levels can crown a different program), the model does NOT query — it asks ONE
+  short clarifying question and emits a ```clarify `{"question":"...",
+  "options":["<short phrase>",...]}` fence (2–4 SHORT answer phrases, not
+  restated questions). `llm.py`'s `_extract_clarify` parses + ALWAYS strips the
+  fence (mirrors `_extract_figure`), and when a clarify is found `stream_agent`
+  yields `{"type":"clarify",…}` then the answer, sets NO figure/suggestions, and
+  **skips the critic entirely** — a clarify turn has no data claim to
+  sanity-check. Persisted on `messages.clarify` (migration 20) so a reload shows
+  the same question + chips; deliberately **no `query_cache.clarify` column** — a
+  clarify turn is **never cached** and **records no critic lesson**
+  (`chat.py` guards both on `clarify is None`). Frontend: `Clarify.jsx` (pure
+  `clarify.js` normalizer, vitest) renders the answer-phrase chips
+  structurally identical to `Suggestions.jsx`; clicking one — or just typing a
+  free-text reply in the composer, always the escape hatch — submits it as an
+  ordinary follow-up turn. When ambiguity is NOT material, the prompt instead
+  has the model answer under the most reasonable assumption, name it in the
+  method line, and offer the alternate reading as a `followups` chip; a scope
+  established earlier in the thread (award level, year range, institution/state
+  set, program grouping) carries forward on later turns unless the user changes
+  it. Pinned in `frontend/e2e/clarify.spec.js` + `backend/tests/test_agent_loop.py`
+  / `test_chat_router.py` / `test_migrations.py`.
 - The **signature "figure"** — a typeset hero statistic (mono caption · big serif
   number · ochre rule · mono source) rendered ABOVE an answer. Prompt INSTRUCTIONS
   **step 6** leads with a figure on BOTH kinds of answer (the trigger is prompt-only;
@@ -312,12 +343,21 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 ### Self-learning & cache
 - **Lessons** — a short generalized **headline** + a longer generalized
   **description** (collapsible in the admin UI) + a commented SQL worked example.
-  Retrieved as guidance at query time, and **emitted by the critic** — the *sole*
-  lesson source: when it catches a mistake it phrases it as a headline+description
-  in one call, reused as both the revision feedback and the stored lesson. Lessons
-  start **unverified → an admin approves**; deduped on save; the embedding key is
-  **headline+description, never the question**. `SKILLS_ENABLED=0/1` gates the
-  on/off eval A/B.
+  Retrieved as guidance at query time, from **two sources**, both feeding the same
+  unverified pool: the **critic** (`app/critic.py`) mines the MODEL's own mistake
+  — when it catches one it phrases it as a headline+description in one call,
+  reused as both the revision feedback and the stored lesson
+  (`skills.record_lesson_from_critic`); the **feedback distiller**
+  (`app/feedback.py`, `distill_feedback`) mines the USER's own corrective
+  feedback on a follow-up turn ("you should have kept the bachelor's scope") the
+  same shape, via `skills.record_lesson_from_feedback`
+  (`created_by="user-feedback"`) — a cheap separate probe call, fails open exactly
+  like the critic/guard, gated on `skills_enabled`, run only when `history` is
+  non-empty (a first-turn question has no prior answer to correct). Lessons
+  start **unverified → an admin approves**; deduped on save (scoped per-source, so
+  a feedback candidate never collapses into a critic/seed row on the same
+  scenario); the embedding key is **headline+description, never the question**.
+  `SKILLS_ENABLED=0/1` gates the on/off eval A/B.
 - A **semantic answer cache** short-circuits repeat questions.
 
 ### Auth & access control
