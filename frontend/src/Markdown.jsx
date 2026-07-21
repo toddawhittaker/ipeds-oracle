@@ -130,12 +130,17 @@ function DataTable({ node, sideChart, pairChart, ...props }) {
       {!pairChart && showChart && inferred && <Chart spec={inferred} />}
     </div>
   );
-  // Compact table + the answer's trend chart. Side by side when the table is
-  // narrow enough to share the row (few columns); a many-column table would
-  // squeeze the chart, so those STACK — chart below the full-width table. The
-  // side-by-side row also wraps to stacked on a narrow viewport (see .brief-figrow).
+  // Compact table + the answer's trend chart. Side by side ONLY when the table is
+  // small enough to share the row without its cells (long program / institution
+  // names are nowrap) overflowing UNDER the chart — i.e. the brief's intended
+  // recent-years strip: a couple of columns, a handful of rows. A wider (>3 cols)
+  // OR taller (>8 rows) table STACKS instead — chart below the full-width table —
+  // per "if we can't shrink the table, put the graph below it". (The earlier
+  // headers.length > 4 threshold let a 4-column ranking table sit beside the chart,
+  // where its nowrap cells slid under it.) The side-by-side row also wraps to
+  // stacked on a narrow viewport (see .brief-figrow).
   if (sideChart) {
-    const wide = headers.length > 4;
+    const wide = headers.length > 3 || rows.length > 8;
     return (
       <div className={"brief-figrow" + (wide ? " stacked" : "")}>
         {table}<Chart spec={sideChart} />

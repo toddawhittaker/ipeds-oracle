@@ -283,9 +283,12 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   WRAPS its multi-word headers** (`.md th` wrapping; data cells stay nowrap) instead
   of taking full width — a `flex`/max-width-on-cell alone won't force this when the
   row has room. `.brief-figrow` **wraps to stacked on a narrow viewport**, AND a
-  **many-column table (`headers.length > 4`) is forced `.stacked`** — chart BELOW the
-  full-width table, since it can't share a row without squeezing the chart. Pinned in
-  `frontend/e2e/answer-figure.spec.js`. The **chart toolbar is compact** so it fits a
+  **wider or taller table (`headers.length > 3 || rows.length > 8`) is forced
+  `.stacked`** — chart BELOW the full-width table, since a bigger table can't share a
+  row without its nowrap cells sliding UNDER the chart (only the brief's compact
+  recent-years strip — a couple of columns, a handful of rows — sits side-by-side;
+  the earlier `> 4`-columns-only threshold let a 4-column ranking table overlap the
+  chart). Pinned in `frontend/e2e/answer-figure.spec.js`. The **chart toolbar is compact** so it fits a
   narrow side-by-side chart without overflowing: a single **`<select>`** collapses
   Line / Bar / **Line + trend** (trend is a line subtype, offered whenever the data is
   **trend-eligible** — a single numeric time-series with ≥3 points — **independent of
