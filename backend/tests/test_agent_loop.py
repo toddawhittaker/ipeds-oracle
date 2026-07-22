@@ -193,6 +193,54 @@ def test_history_is_included_in_messages():
     assert any(m.get("content") == "prior answer" for m in msgs), msgs
 
 
+def test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix():
+    """Measured regression: figure emission decayed with conversation DEPTH —
+    turns 1-2 emitted, turns 3+ did not, and turn 6 failed on a question
+    structurally identical to turn 1's. The system prompt must stay FIRST to
+    remain the cacheable prefix, so its rules end up buried behind the
+    conversation; this puts a pointer back to them next to the question.
+
+    Placement is asserted, not just presence. A reminder ahead of the system
+    prompt would silently collapse prompt-cache reuse and bill every schema
+    token at full price — a costly regression with no functional symptom."""
+    captured = {}
+
+    async def fake_chat(client, model, messages, tools=None):
+        captured["messages"] = messages
+        return _text_response("ok")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    history = [{"role": "user", "content": "prior question"},
+               {"role": "assistant", "content": "prior answer"}]
+    asyncio.run(llm.run_agent("a follow-up", history=history))
+    msgs = captured["messages"]
+
+    idx = [i for i, m in enumerate(msgs) if m.get("content") == llm._TURN_REMINDER]
+    assert idx, f"no tail reminder on a follow-up turn: {msgs}"
+    at = idx[0]
+    assert at > 0, "the reminder must NEVER precede the cached system prefix"
+    assert msgs[0]["role"] == "system" and "IPEDS" in msgs[0]["content"], msgs[0]
+    # ...and it must sit after the history, immediately before the question, so
+    # the rules are the last thing read before the task.
+    assert msgs[at + 1]["content"] == "a follow-up", msgs[at + 1]
+    assert any(m.get("content") == "prior answer" for m in msgs[:at]), msgs[:at]
+
+
+def test_first_turn_gets_no_tail_reminder():
+    """Follow-ups only. First turns already comply (measured 2/2) because the
+    rules are still adjacent, so spending tokens there buys nothing."""
+    captured = {}
+
+    async def fake_chat(client, model, messages, tools=None):
+        captured["messages"] = messages
+        return _text_response("ok")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    asyncio.run(llm.run_agent("a first question"))
+    msgs = captured["messages"]
+    assert not any(m.get("content") == llm._TURN_REMINDER for m in msgs), msgs
+
+
 def test_reasoning_field_yields_thinking_event():
     async def fake_chat(client, model, messages, tools=None):
         return {"choices": [{"message": {"content": "42",
@@ -461,6 +509,30 @@ def test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships():
     assert "Huge." in res.answer, res.answer
 
 
+def test_an_unparseable_figure_fence_is_malformed_not_no_figure():
+    """These two look identical downstream — _extract_figure returns None for
+    both — but they call for OPPOSITE fixes: 'no_figure' is a prompt-compliance
+    problem (the model didn't emit one), 'malformed' is a format problem (it did,
+    but the JSON was junk). Collapsing them hides which one you have, which is
+    exactly the ambiguity that made the 0/9-follow-ups finding hard to diagnose."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _text_response('Answer.\n\n```figure\n{not valid json\n```')
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([r])
+    res = _run("q")
+    assert res.figure_grounding == "malformed", res.figure_grounding
+    assert res.figure is None, res.figure
+    # The fence is still stripped, so raw JSON never reaches the user.
+    assert "```figure" not in res.answer, res.answer
+
+
 def test_an_answer_with_no_figure_is_not_measured():
     # no_figure must not count toward the grounded rate in either direction.
     async def fake_chat(client, model, messages, tools=None):
@@ -625,6 +697,12 @@ def run():
           test_a_figure_derived_from_an_earlier_query_is_grounded)
     check("an invented figure is flagged ungrounded but still ships (observe-only)",
           test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships)
+    check("a follow-up gets a tail reminder, after the cached prefix",
+          test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix)
+    check("a first turn gets no tail reminder",
+          test_first_turn_gets_no_tail_reminder)
+    check("an unparseable figure fence is 'malformed', not 'no_figure'",
+          test_an_unparseable_figure_fence_is_malformed_not_no_figure)
     check("an answer with no figure is not measured",
           test_an_answer_with_no_figure_is_not_measured)
     check("effective_cost prefers the provider-reported cost over fallback prices",

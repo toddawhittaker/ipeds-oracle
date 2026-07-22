@@ -39,20 +39,49 @@ _REVIEW_LEAK_RE = re.compile(r"\breviewer\b|\b(?:the|this|automated)\s+review\b"
                              re.IGNORECASE)
 
 
+# Injected just before the question on FOLLOW-UP turns only (see stream_agent).
+# Deliberately a POINTER to the rules, not a restatement of them: step 6's
+# (i)/(ii) body is ~35 lines, and duplicating it here would both bloat every
+# follow-up request and risk drifting out of sync with prompt.INSTRUCTIONS, which
+# stays the single source of truth.
+_TURN_REMINDER = (
+    "Reminder — this is a FOLLOW-UP turn, and every rule in your instructions "
+    "still applies to it in full. A follow-up is a complete answer, not a chat "
+    "aside:\n"
+    "- LEAD with the ```figure fence (step 6). It is REQUIRED unless your answer "
+    "contains no number at all, you cannot answer, or you are asking a "
+    "clarifying question. That a number appeared earlier in this conversation, "
+    "or appears in your own table below, is NOT a reason to omit it.\n"
+    "- END with the ```followups fence (step 7).\n"
+    "Answer the question below."
+)
+
+
 def _leaks_review_meta(text: str) -> bool:
     """True if `text` references the critique conversation (reviewer/review) —
     the tell of a leaked rebuttal that must not reach the user."""
     return bool(_REVIEW_LEAK_RE.search(text or ""))
 
 
-def _stamp_grounding(res: AgentResult) -> None:
+def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
     """Record whether the figure's number is reproducible from the turn's own
     query results. Observe-only: it never edits the figure or the answer.
 
     Deliberately not gated on a setting — it is pure local arithmetic over data
     already in memory (no DB, no LLM, no network), so there is nothing to switch
     off, and a status missing from usage_log would silently bias the very rate
-    this exists to measure."""
+    this exists to measure.
+
+    `raw_answer` is the answer BEFORE the fences were stripped, and it splits an
+    otherwise ambiguous outcome: `_extract_figure` returns None both when the
+    model emitted no figure at all AND when it emitted one whose JSON didn't
+    parse. Those look identical downstream but call for opposite fixes — a
+    prompt problem vs. a format problem — so a fence that was present but
+    unusable is recorded as `malformed`, not `no_figure`."""
+    if res.figure is None and raw_answer and _FIGURE_BLOCK_RE.search(raw_answer):
+        res.figure_grounding = grounding.MALFORMED
+        res.figure_derivation = ""
+        return
     check = grounding.check_figure(res.figure, res.results)
     res.figure_grounding = check.status
     res.figure_derivation = check.derivation.describe() if check.derivation else ""
@@ -272,6 +301,28 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     messages: list[dict] = [{"role": "system", "content": build_system_prompt(skills_block)}]
     if history:
         messages.extend(history)
+        # RECENCY, not wording. Measured over a live 10-turn conversation, the
+        # figure appeared on turns 1-2 and then stopped; followups held to turn 7
+        # and then stopped. Turn 6 asked "how many nursing bachelor's degrees
+        # were awarded nationally" — structurally identical to turn 1, the
+        # canonical case step 6(i) most explicitly mandates — and emitted
+        # nothing. Same question shape, deeper position, opposite outcome: the
+        # failure tracks conversation DEPTH, not question type.
+        #
+        # The cause is structural. The system prompt must come FIRST to stay the
+        # cacheable prefix (see build_system_prompt's cache contract), so by turn
+        # 10 its rules sit behind ten turns of conversation. Rewording buried
+        # text does not make it less buried — that was tried, and follow-up
+        # emission moved only 0/9 -> 1/9. This puts a short pointer back to those
+        # rules next to the question being answered.
+        #
+        # Placement is load-bearing twice over: AFTER the prefix (ahead of it
+        # would collapse cache reuse and bill every schema token at full price),
+        # and BEFORE the question (so the rules are the last thing read before
+        # the task). Follow-ups only — first turns already comply, and the rules
+        # are already adjacent there. Built per request and never persisted, so
+        # it cannot accumulate in history.
+        messages.append({"role": "system", "content": _TURN_REMINDER})
     messages.append({"role": "user", "content": question})
 
     res = AgentResult()
@@ -401,13 +452,14 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         answer = draft_answer
                 # Extract the structured blocks from the FINAL answer (after the
                 # critic revert settles it), so they always match the winning prose.
+                raw_answer = answer
                 answer, res.figure = _extract_figure(answer)
                 answer, res.suggestions = _extract_suggestions(answer)
                 res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
                 res.results = last_sql_result["results"]
-                _stamp_grounding(res)
+                _stamp_grounding(res, raw_answer)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -480,10 +532,11 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
+            raw_final = final
             final, res.figure = _extract_figure(final)
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
-            _stamp_grounding(res)
+            _stamp_grounding(res, raw_final)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:

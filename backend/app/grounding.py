@@ -45,6 +45,7 @@ from app.tools.sql import QueryResult
 # Statuses recorded on usage_log.figure_grounding (migration 21). NULL in the DB
 # means the turn was never checked at all.
 NO_FIGURE = "no_figure"      # the answer carried no figure — nothing to check
+MALFORMED = "malformed"      # a figure fence WAS emitted but didn't parse into one
 UNCHECKED = "unchecked"      # a figure, but no retained results to check it against
 EXACT = "exact"              # the value appears verbatim as a cell in a result
 ROUNDED = "rounded"          # matches a cell at the figure's own displayed precision
@@ -52,8 +53,17 @@ DERIVED = "derived"          # matches a computed derivation over a result colum
 UNGROUNDED = "ungrounded"    # no cell and no derivation produced this number
 
 # Ops, matching prompt step 6(ii)'s menu. `share` is a percentage of a column
-# total; `pct_change` is the net change across a column in row order.
-OPS = ("value", "sum", "mean", "pct_change", "share", "max", "min")
+# total; `pct_change` is the net change across a column in row order, and `diff`
+# is that same change in ABSOLUTE terms.
+#
+# `diff` is here because its absence produced the first false `ungrounded` seen
+# in production: the model led a trend with "217 — Net increase since 2021" off a
+# 550→767 table. 767-550=217 is exactly right, but step 6(ii) asks for the net
+# "% change", so nothing in the vocabulary could reproduce the absolute form the
+# model actually chose. A kernel that cannot reproduce a CORRECT number
+# manufactures evidence of model error, which is the most damaging way for this
+# measurement to be wrong.
+OPS = ("value", "sum", "mean", "pct_change", "diff", "share", "max", "min")
 
 # Relative tolerance for "these two numbers are the same". Generous enough to
 # absorb the model's own display rounding (it is told to write thousands
@@ -188,8 +198,9 @@ def _displayed_precision_tol(raw, target: float) -> float:
         if not digits.isdigit():
             return 0.0
         trailing_zeros = len(digits) - len(digits.rstrip("0"))
-        if not trailing_zeros:
-            return 0.0
+        # No trailing zeros still implies rounding to the UNITS place: a model
+        # that writes "39%" for a true 39.45% has rounded, and granting 0
+        # tolerance there would read honest rounding as an invented number.
         tol = 0.5 * (10 ** trailing_zeros)
     return min(tol, abs(target) * _MAX_ROUNDING_SHARE)
 
@@ -267,6 +278,13 @@ def compute(op: str, values: list[float], index: int | None = None) -> float | N
         if len(values) < 2 or values[0] == 0:
             return None
         return (values[-1] - values[0]) / abs(values[0]) * 100.0
+    if op == "diff":
+        # The same net change in ABSOLUTE terms. Deliberately no non-zero
+        # baseline guard (unlike pct_change): starting from 0 makes a ratio
+        # undefined but an absolute change perfectly well defined.
+        if len(values) < 2:
+            return None
+        return values[-1] - values[0]
     if op == "share":
         total = math.fsum(values)
         if total == 0 or not (-len(values) <= i < len(values)):
@@ -295,14 +313,22 @@ def _match_in_column(target: float, raw_value, column: str,
     # Aggregations only make sense over a MEASURE. See _DIMENSION_COL_RE.
     if is_dimension(column):
         return None
-    for op in ("sum", "pct_change", "mean", "max", "min"):
-        got = compute(op, values)
-        if got is not None and _close(target, got):
+
+    def reproduces(got: float | None) -> bool:
+        """Did this op land on the target, allowing for how the figure was
+        WRITTEN? The display tolerance has to apply to derivations too, not just
+        to raw cells — a derived headline is usually a percentage, which is
+        precisely where a model rounds ("39%" for a true 39.45%). Checking
+        derivations at full precision while forgiving cells would flag the
+        rounding the prompt itself asks for."""
+        return got is not None and (_close(target, got) or abs(target - got) <= tol)
+
+    for op in ("sum", "pct_change", "diff", "mean", "max", "min"):
+        if reproduces(compute(op, values)):
             return DERIVED, op
     # `share` is row-scoped: any row's share of the column total.
     for i in range(len(values)):
-        got = compute("share", values, index=i)
-        if got is not None and _close(target, got):
+        if reproduces(compute("share", values, index=i)):
             return DERIVED, "share"
     return None
 

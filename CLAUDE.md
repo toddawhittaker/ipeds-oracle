@@ -301,8 +301,38 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
   `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
   (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
-  some models emit the latter.) The brief applies on **follow-up turns too** (never
-  code-gated; a prompt line makes the model reliably do it). A brief's
+  some models emit the latter.) The brief applies on **follow-up turns too** — never
+  code-gated, but **the prompt wording carries the whole load, and the first version
+  of it did not work**: measured over a 10-turn conversation, the figure appeared on
+  1/1 first turns and **0/9 follow-ups**. `suggestions` survived the same
+  strip-before-persist treatment on 11/13 turns, so the cause was not the stripped
+  history — it was that step 6 was *conditional* ("whenever a single number can
+  honestly capture…", plus a judgment-call SKIP clause) while step 7 was flatly
+  REQUIRED. The model read a follow-up as a lighter conversational reply and took the
+  hatch every time (one answer literally opened "I already have this at hand from the
+  first query"). Step 6 now mirrors step 7's grammar — REQUIRED on every answered
+  turn, with the skip narrowed to three enumerable cases (no number anywhere /
+  couldn't answer / clarify turn) and the "already shown above" excuses named and
+  refused. **That reword alone moved follow-up emission only 0/9 → 1/9.** A second
+  measurement isolated the real driver: emission decays with conversation **DEPTH**,
+  not question type — turn 6 ("how many nursing bachelor's nationally", structurally
+  identical to turn 1) emitted nothing where turn 1 did. The system prompt must stay
+  FIRST to remain the cacheable prefix, so by turn 10 its rules sit behind ten turns
+  of conversation, and *rewording buried text does not make it less buried*. Hence
+  `llm.py`'s **`_TURN_REMINDER`** — a short pointer back to steps 6/7 injected as a
+  `system` message **after the history and immediately before the question**, on
+  follow-up turns only (first turns already comply; the rules are still adjacent
+  there). It is built per request and never persisted, so it cannot accumulate in
+  history; and it must never move ahead of the system prefix, which would collapse
+  cache reuse — pinned by
+  `test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix`. That took
+  follow-up emission to **3/9 — a real improvement but NOT a fix**; the remaining
+  suspect is step 6's bulk (~35 lines with (i)/(ii) branching vs step 7's flat 7),
+  and compressing it is the next distinct experiment, deliberately not bundled so
+  the next measurement stays attributable. **If you touch step 6 or the reminder,
+  re-measure `figure_grounding` before and after** — this is prompt-compliance
+  behaviour with no code gate to protect it, and two plausible-sounding fixes have
+  already under-delivered. A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
   the standalone fence; drops the redundant "Chart this"). To hand the chart room,

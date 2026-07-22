@@ -176,6 +176,31 @@ def test_schema_md_still_has_ipeds_history_facts():
     )
 
 
+def test_figure_step_is_unconditionally_required_like_followups():
+    """The measured regression: with step 6 phrased CONDITIONALLY ("whenever a
+    single number can honestly capture…") plus a judgment-call SKIP clause, the
+    figure appeared on 1/1 first turns and 0/9 follow-ups over a 10-turn
+    conversation — while step 7's flatly-REQUIRED followups fence survived on
+    11/13. The model read a follow-up as a lighter conversational reply and took
+    the hatch every time.
+
+    This pins the SHAPE of the fix, not prose: step 6 must state the requirement
+    unconditionally, must name follow-ups explicitly, and must NOT reintroduce an
+    open-ended "skip if no single number is interesting" escape. Nothing in code
+    enforces figure emission, so this wording is the only thing holding it."""
+    step6 = prompt.INSTRUCTIONS.split("\n6.", 1)[1].split("\n7.", 1)[0]
+
+    assert "REQUIRED" in step6, "step 6 must state the figure is required"
+    assert "follow-up" in step6, "step 6 must name follow-up turns explicitly"
+    # The open-ended escape hatches that produced 0/9. Their absence IS the fix.
+    for hatch in ("whenever a single number can honestly capture",
+                  "SKIP the figure only when no single number"):
+        assert hatch not in step6, f"step 6 reintroduced the escape hatch: {hatch!r}"
+    # The skip must stay enumerable — an answer with no number, an unanswerable
+    # question, a clarify turn — never a judgment call about interestingness.
+    assert "ONLY in these three" in step6, step6[-600:]
+
+
 def run():
     check("_years_fact() names the actual installed years/count/most-recent",
           test_years_fact_names_actual_years)
@@ -191,6 +216,8 @@ def run():
           test_build_system_prompt_includes_years_section_before_schema_guide)
     check("SCHEMA.md still documents real IPEDS-history facts (e.g. sfa 2024-25 merge)",
           test_schema_md_still_has_ipeds_history_facts)
+    check("step 6 requires the figure unconditionally (0/9-follow-ups regression)",
+          test_figure_step_is_unconditionally_required_like_followups)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} prompt test(s) FAILED: {FAILURES}")
