@@ -114,6 +114,47 @@ def test_compute_matches_the_prompts_derivation_menu():
     assert abs(grounding.compute("share", [400.0, 300.0, 300.0], index=0) - 40.0) < 1e-9
 
 
+def test_a_derived_absolute_change_is_not_flagged():
+    """THE false-positive regression, taken verbatim from production.
+
+    The model led a trend with "217 — Net increase since 2021" off its own
+    550→767 table. 767-550=217 is exactly right, but step 6(ii) asks for the net
+    "% CHANGE" and the vocabulary had only `pct_change` — so the kernel could
+    not reproduce the ABSOLUTE form the model actually chose and recorded
+    `ungrounded`. A kernel that cannot reproduce a correct number manufactures
+    evidence of model error, which is the worst way for this metric to be
+    wrong."""
+    ohio_cs = result(["year", "cs_bachelors"],
+                     [(2021, 550), (2022, 580), (2023, 729), (2024, 841), (2025, 767)])
+    got = grounding.check_figure(
+        {"value": "217", "label": "Net increase since 2021"}, [ohio_cs])
+    assert got.status == grounding.DERIVED, got
+    assert got.derivation.op == "diff", got.derivation
+    assert got.derivation.column == "cs_bachelors", got.derivation
+    # The percentage form of the SAME change must still ground (217/550 ≈ 39%).
+    pct = grounding.check_figure({"value": "+39%", "label": "Growth since 2021"},
+                                 [ohio_cs])
+    assert pct.status == grounding.DERIVED, pct
+    assert pct.derivation.op == "pct_change", pct.derivation
+
+
+def test_diff_needs_two_points_but_tolerates_a_zero_baseline():
+    # No non-zero guard, unlike pct_change: from 0 a ratio is undefined but an
+    # absolute change is not.
+    assert grounding.compute("diff", [550.0, 767.0]) == 217.0
+    assert grounding.compute("diff", [5.0]) is None, "needs >=2 points"
+    assert grounding.compute("diff", [0.0, 42.0]) == 42.0
+    assert grounding.compute("pct_change", [0.0, 42.0]) is None, "ratio undefined"
+
+
+def test_diff_stays_barred_on_a_dimension_column():
+    # Widening the op vocabulary must not widen the collision surface: diff over
+    # a year column (2025-2021=4) is meaningless and must not match a real 4.
+    years_only = result(["year"], [(2021,), (2022,), (2023,), (2024,), (2025,)])
+    got = grounding.check_figure({"value": "4", "label": "Years covered"}, [years_only])
+    assert got.status == grounding.UNGROUNDED, got
+
+
 def test_compute_degrades_instead_of_raising():
     # A bad op or unsupportable data must return None, never raise -- a wrong
     # provenance from the model would otherwise break the whole turn.
@@ -276,6 +317,12 @@ def run():
           test_numeric_columns_skips_nulls_without_dropping_the_column)
     check("compute matches the prompt's derivation menu",
           test_compute_matches_the_prompts_derivation_menu)
+    check("a derived ABSOLUTE change is not flagged (production false positive)",
+          test_a_derived_absolute_change_is_not_flagged)
+    check("diff needs 2 points but tolerates a zero baseline",
+          test_diff_needs_two_points_but_tolerates_a_zero_baseline)
+    check("diff stays barred on a dimension column",
+          test_diff_stays_barred_on_a_dimension_column)
     check("compute degrades instead of raising",
           test_compute_degrades_instead_of_raising)
     check("an invented number is ungrounded", test_an_invented_number_is_ungrounded)
