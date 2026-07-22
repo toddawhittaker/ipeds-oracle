@@ -303,6 +303,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     # so there is nothing to ground against). OBSERVE-ONLY — it feeds the
     # Admin -> Usage rate and gates nothing.
     (21, "ALTER TABLE usage_log ADD COLUMN figure_grounding TEXT;"),
+    # HOW the figure's number was reproduced, e.g. "pct_change(q1.awards)" —
+    # the op, which retained result, which column. The status alone can't
+    # distinguish a real derivation from a lucky collision across the searched
+    # ops, which is the whole question the observe-only period exists to answer;
+    # without this an 'exact' and a coincidental 'derived' look identical in the
+    # data. NULL whenever nothing matched (an 'ungrounded' turn) or the turn was
+    # never checked.
+    (22, "ALTER TABLE usage_log ADD COLUMN figure_derivation TEXT;"),
 ]
 
 

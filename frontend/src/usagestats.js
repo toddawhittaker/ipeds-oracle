@@ -54,3 +54,17 @@ export function groundedFigureRate(totals) {
   const checked = num(t.figures_checked);
   return rate(checked - num(t.figures_ungrounded), checked);
 }
+
+// The stat's sub-label, carrying its own SAMPLE SIZE: "7/7 Grounded figures".
+// A bare percentage hides how much it rests on — "100%" off a single checked
+// figure and "100%" off four hundred are the same string but not the same
+// evidence, and during the observe-only period that difference is the point.
+// With nothing measured yet the counts are dropped rather than shown as "0/0",
+// which reads like a failure instead of an empty window (the rate itself
+// already shows "—" there).
+export function groundedFigureLabel(totals) {
+  const t = totals || {};
+  const checked = num(t.figures_checked);
+  if (checked <= 0) return "Grounded figures";
+  return `${checked - num(t.figures_ungrounded)}/${checked} Grounded figures`;
+}

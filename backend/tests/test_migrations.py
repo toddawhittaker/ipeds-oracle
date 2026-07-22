@@ -220,6 +220,26 @@ def test_migration_21_adds_usage_log_figure_grounding_column():
     assert row[0] is None, row
 
 
+def test_migration_22_adds_usage_log_figure_derivation_column():
+    # HOW the figure was reproduced ("pct_change(q1.awards)"), beside the status
+    # from migration 21. The status alone cannot separate a real derivation from
+    # a lucky collision across the searched ops — the exact question the
+    # observe-only period exists to answer — so an 'exact' and a coincidental
+    # 'derived' would otherwise be indistinguishable in the recorded data.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 21])
+    assert "figure_derivation" not in _cols(con, "usage_log"), _cols(con, "usage_log")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "figure_derivation" in _cols(con, "usage_log"), _cols(con, "usage_log")
+    # Nullable: an 'ungrounded' turn matched no derivation, and an unchecked one
+    # ran no check at all — neither has anything to record.
+    con.execute("INSERT INTO usage_log(user_id, question, figure_grounding, "
+                "created_at) VALUES (1, 'q', 'ungrounded', 0)")
+    row = con.execute("SELECT figure_derivation FROM usage_log").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -604,6 +624,7 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["cost", "REAL", 1, "0", 0],
       ["created_at", "REAL", 1, null, 0],
       ["escalated", "INTEGER", 0, null, 0],
+      ["figure_derivation", "TEXT", 0, null, 0],
       ["figure_grounding", "TEXT", 0, null, 0],
       ["first_call_cached_prompt_tokens", "INTEGER", 1, "0", 0],
       ["first_call_prompt_tokens", "INTEGER", 1, "0", 0],
@@ -701,6 +722,8 @@ def run():
           test_migration_20_adds_clarify_column)
     check("migration 21 adds usage_log.figure_grounding (nullable)",
           test_migration_21_adds_usage_log_figure_grounding_column)
+    check("migration 22 adds usage_log.figure_derivation (nullable)",
+          test_migration_22_adds_usage_log_figure_derivation_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

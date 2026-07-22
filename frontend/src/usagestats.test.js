@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundedFigureRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { groundedFigureLabel, groundedFigureRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Both rates share one guarded ratio helper; the regression each guards is the
 // same: a naive cached/total renders "NaN%"/"Infinity%" on an empty window (0
@@ -78,5 +78,31 @@ describe("groundedFigureRate (data integrity, not cost)", () => {
 
   it("coerces string totals (JSON numbers can arrive as strings)", () => {
     expect(groundedFigureRate({ figures_checked: "10", figures_ungrounded: "2" })).toBe("80%");
+  });
+});
+
+describe("groundedFigureLabel (the stat's sample size)", () => {
+  // A bare "100%" hides what it rests on: one checked figure and four hundred
+  // render identically. During the observe-only period that difference is the
+  // whole point, so the tile carries its own numerator/denominator.
+  it("reads N/N with the counts", () => {
+    expect(groundedFigureLabel({ figures_checked: 7, figures_ungrounded: 0 }))
+      .toBe("7/7 Grounded figures");
+    expect(groundedFigureLabel({ figures_checked: 10, figures_ungrounded: 3 }))
+      .toBe("7/10 Grounded figures");
+  });
+
+  it("drops the counts when nothing was measured", () => {
+    // "0/0 Grounded figures" reads like a failure; an empty window is not one
+    // (the rate itself already shows "—").
+    expect(groundedFigureLabel({ figures_checked: 0, figures_ungrounded: 0 }))
+      .toBe("Grounded figures");
+    expect(groundedFigureLabel({})).toBe("Grounded figures");
+    expect(groundedFigureLabel(undefined)).toBe("Grounded figures");
+  });
+
+  it("coerces string totals", () => {
+    expect(groundedFigureLabel({ figures_checked: "4", figures_ungrounded: "1" }))
+      .toBe("3/4 Grounded figures");
   });
 });
