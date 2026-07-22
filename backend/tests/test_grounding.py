@@ -63,6 +63,13 @@ def test_parse_number_handles_the_formats_the_prompt_asks_for():
         ("~42,000", 42000.0),     # the hedge that sometimes rides along
         (1250, 1250.0),           # already numeric
         (12.5, 12.5),
+        # Magnitude suffixes: not the format the prompt asks for, but models
+        # write them anyway. Unparsed, they'd be filed as `no_figure` and
+        # silently DROPPED from the measurement instead of checked.
+        ("1.2M", 1_200_000.0),
+        ("2.5 million", 2_500_000.0),
+        ("850K", 850_000.0),
+        ("1.1B", 1_100_000_000.0),
     ]
     for raw, want in cases:
         got = grounding.parse_number(raw)
@@ -198,6 +205,29 @@ def test_rounding_tolerance_does_not_swallow_a_real_mismatch():
     assert got.status == grounding.UNGROUNDED, got
 
 
+def test_trailing_zeros_alone_cannot_license_a_huge_rounding_window():
+    """Trailing zeros are an unreliable precision signal: "1,000" has three,
+    which on digit-count alone would license a +/-500 window and let the figure
+    verify against a true 1,400. Rounding is capped in RELATIVE terms."""
+    got = grounding.check_figure({"value": "1,000", "label": "Awards"},
+                                 [result(["n"], [(1400,)])])
+    assert got.status == grounding.UNGROUNDED, got
+    # ...while an honest headline rounding of the same shape still passes.
+    got = grounding.check_figure({"value": "1,000", "label": "Awards"},
+                                 [result(["n"], [(1012,)])])
+    assert got.status == grounding.ROUNDED, got
+
+
+def test_a_magnitude_suffix_figure_is_measured_not_dropped():
+    got = grounding.check_figure({"value": "1.2M", "label": "Bachelor's degrees"},
+                                 [result(["awards"], [(1_200_000,)])])
+    assert got.status == grounding.EXACT, got
+    # ...and an invented one in the same notation is still caught.
+    got = grounding.check_figure({"value": "9.9M", "label": "Bachelor's degrees"},
+                                 [result(["awards"], [(1_200_000,)])])
+    assert got.status == grounding.UNGROUNDED, got
+
+
 # --- check_figure: the non-events ----------------------------------------------
 
 def test_no_figure_and_non_numeric_headline_are_not_measured():
@@ -260,6 +290,10 @@ def run():
     check("display rounding is not flagged", test_display_rounding_is_not_flagged)
     check("rounding tolerance doesn't swallow a real mismatch",
           test_rounding_tolerance_does_not_swallow_a_real_mismatch)
+    check("trailing zeros can't license a huge rounding window",
+          test_trailing_zeros_alone_cannot_license_a_huge_rounding_window)
+    check("a magnitude-suffix figure is measured, not dropped",
+          test_a_magnitude_suffix_figure_is_measured_not_dropped)
     check("no-figure / non-numeric headline are not measured",
           test_no_figure_and_non_numeric_headline_are_not_measured)
     check("no results is 'unchecked', not 'ungrounded'",

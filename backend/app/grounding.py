@@ -68,6 +68,14 @@ _ABS_TOL = 1e-9
 _DECORATION_RE = re.compile(r"[,\s  $£€%]")
 # A leading label like "approx." or "~" occasionally rides along.
 _LEADING_JUNK_RE = re.compile(r"^[~≈>≥<≤+]+")
+# Magnitude suffixes. The prompt asks for thousands separators, but models
+# routinely write a headline as "1.2M" anyway. Without these such a figure fails
+# to parse and is filed as `no_figure` — silently DROPPED from the measurement
+# rather than checked, which biases the very rate this module exists to report.
+_MAGNITUDE_RE = re.compile(
+    r"^(-?[\d.]+)\s*(k|m|b|bn|thousand|million|billion)$", re.IGNORECASE)
+_MAGNITUDES = {"k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6,
+               "b": 1e9, "bn": 1e9, "billion": 1e9}
 
 # Columns that are numeric but are IDENTIFIERS/DIMENSIONS, not measures. Summing
 # them, averaging them, or taking one row's "share" of their total is
@@ -134,6 +142,13 @@ def parse_number(raw) -> float | None:
     s = _DECORATION_RE.sub("", s)
     if not s:
         return None
+    mag = _MAGNITUDE_RE.match(s)
+    if mag:
+        try:
+            v = float(mag.group(1)) * _MAGNITUDES[mag.group(2).lower()]
+        except (ValueError, KeyError):
+            return None
+        return v if math.isfinite(v) else None
     try:
         v = float(s)
     except ValueError:
@@ -145,25 +160,38 @@ def _close(a: float, b: float, rel_tol: float = _REL_TOL) -> bool:
     return math.isclose(a, b, rel_tol=rel_tol, abs_tol=_ABS_TOL)
 
 
-def _displayed_precision_tol(raw) -> float:
+# A display rounding may never move the number by more than this share of it.
+# Trailing zeros alone are an unreliable signal of INTENDED precision: "1,000"
+# has three of them, which would otherwise license a +/-500 window and let the
+# figure "1,000" verify against a true value of 1,400. Honest headline rounding
+# is small in relative terms (42,300 for 42,318 is 0.04%), so capping at 5%
+# keeps every legitimate case while refusing to call a 40% miss a rounding.
+_MAX_ROUNDING_SHARE = 0.05
+
+
+def _displayed_precision_tol(raw, target: float) -> float:
     """An absolute tolerance derived from how precisely the figure was WRITTEN.
 
-    "1.2M"-style rounding is legitimate: a model told to write a readable
-    headline will round 42,318 to "42,300". The number of digits it chose tells
-    us how much rounding it intended, so a value written to the hundreds place
-    tolerates ±50. Without this, honest display rounding would read as
-    ungrounded and swamp the signal.
+    Display rounding is legitimate: a model told to write a readable headline
+    will round 42,318 to "42,300". The digits it chose tell us how much rounding
+    it intended, so a value written to the hundreds place tolerates +/-50.
+    Without this, honest rounding would read as ungrounded and swamp the signal
+    — but see _MAX_ROUNDING_SHARE for why it is also capped.
     """
     s = str(raw or "")
     frac = re.search(r"\.(\d+)", s)
     if frac:
-        return 0.5 * (10 ** -len(frac.group(1)))
-    digits = _DECORATION_RE.sub("", _LEADING_JUNK_RE.sub("", s.strip()))
-    digits = digits.lstrip("-")
-    if not digits.isdigit():
-        return 0.0
-    trailing_zeros = len(digits) - len(digits.rstrip("0"))
-    return 0.5 * (10 ** trailing_zeros) if trailing_zeros else 0.0
+        tol = 0.5 * (10 ** -len(frac.group(1)))
+    else:
+        digits = _DECORATION_RE.sub("", _LEADING_JUNK_RE.sub("", s.strip()))
+        digits = digits.lstrip("-")
+        if not digits.isdigit():
+            return 0.0
+        trailing_zeros = len(digits) - len(digits.rstrip("0"))
+        if not trailing_zeros:
+            return 0.0
+        tol = 0.5 * (10 ** trailing_zeros)
+    return min(tol, abs(target) * _MAX_ROUNDING_SHARE)
 
 
 def _as_number(cell) -> float | None:
@@ -259,7 +287,7 @@ def _match_in_column(target: float, raw_value, column: str,
     for v in values:
         if _close(target, v):
             return EXACT, "value"
-    tol = _displayed_precision_tol(raw_value)
+    tol = _displayed_precision_tol(raw_value, target)
     if tol:
         for v in values:
             if abs(target - v) <= tol:
