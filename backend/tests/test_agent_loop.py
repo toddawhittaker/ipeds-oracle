@@ -461,6 +461,30 @@ def test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships():
     assert "Huge." in res.answer, res.answer
 
 
+def test_an_unparseable_figure_fence_is_malformed_not_no_figure():
+    """These two look identical downstream — _extract_figure returns None for
+    both — but they call for OPPOSITE fixes: 'no_figure' is a prompt-compliance
+    problem (the model didn't emit one), 'malformed' is a format problem (it did,
+    but the JSON was junk). Collapsing them hides which one you have, which is
+    exactly the ambiguity that made the 0/9-follow-ups finding hard to diagnose."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _text_response('Answer.\n\n```figure\n{not valid json\n```')
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([r])
+    res = _run("q")
+    assert res.figure_grounding == "malformed", res.figure_grounding
+    assert res.figure is None, res.figure
+    # The fence is still stripped, so raw JSON never reaches the user.
+    assert "```figure" not in res.answer, res.answer
+
+
 def test_an_answer_with_no_figure_is_not_measured():
     # no_figure must not count toward the grounded rate in either direction.
     async def fake_chat(client, model, messages, tools=None):
@@ -625,6 +649,8 @@ def run():
           test_a_figure_derived_from_an_earlier_query_is_grounded)
     check("an invented figure is flagged ungrounded but still ships (observe-only)",
           test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships)
+    check("an unparseable figure fence is 'malformed', not 'no_figure'",
+          test_an_unparseable_figure_fence_is_malformed_not_no_figure)
     check("an answer with no figure is not measured",
           test_an_answer_with_no_figure_is_not_measured)
     check("effective_cost prefers the provider-reported cost over fallback prices",

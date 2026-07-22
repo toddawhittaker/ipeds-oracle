@@ -45,6 +45,7 @@ from app.tools.sql import QueryResult
 # Statuses recorded on usage_log.figure_grounding (migration 21). NULL in the DB
 # means the turn was never checked at all.
 NO_FIGURE = "no_figure"      # the answer carried no figure — nothing to check
+MALFORMED = "malformed"      # a figure fence WAS emitted but didn't parse into one
 UNCHECKED = "unchecked"      # a figure, but no retained results to check it against
 EXACT = "exact"              # the value appears verbatim as a cell in a result
 ROUNDED = "rounded"          # matches a cell at the figure's own displayed precision

@@ -301,8 +301,20 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
   `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
   (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
-  some models emit the latter.) The brief applies on **follow-up turns too** (never
-  code-gated; a prompt line makes the model reliably do it). A brief's
+  some models emit the latter.) The brief applies on **follow-up turns too** — never
+  code-gated, but **the prompt wording carries the whole load, and the first version
+  of it did not work**: measured over a 10-turn conversation, the figure appeared on
+  1/1 first turns and **0/9 follow-ups**. `suggestions` survived the same
+  strip-before-persist treatment on 11/13 turns, so the cause was not the stripped
+  history — it was that step 6 was *conditional* ("whenever a single number can
+  honestly capture…", plus a judgment-call SKIP clause) while step 7 was flatly
+  REQUIRED. The model read a follow-up as a lighter conversational reply and took the
+  hatch every time (one answer literally opened "I already have this at hand from the
+  first query"). Step 6 now mirrors step 7's grammar — REQUIRED on every answered
+  turn, with the skip narrowed to three enumerable cases (no number anywhere /
+  couldn't answer / clarify turn) and the "already shown above" excuses named and
+  refused. **If you touch step 6, re-measure `figure_grounding` before and after**;
+  this is a prompt-compliance behaviour with no code gate to protect it. A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
   the standalone fence; drops the redundant "Chart this"). To hand the chart room,

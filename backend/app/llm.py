@@ -45,14 +45,25 @@ def _leaks_review_meta(text: str) -> bool:
     return bool(_REVIEW_LEAK_RE.search(text or ""))
 
 
-def _stamp_grounding(res: AgentResult) -> None:
+def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
     """Record whether the figure's number is reproducible from the turn's own
     query results. Observe-only: it never edits the figure or the answer.
 
     Deliberately not gated on a setting — it is pure local arithmetic over data
     already in memory (no DB, no LLM, no network), so there is nothing to switch
     off, and a status missing from usage_log would silently bias the very rate
-    this exists to measure."""
+    this exists to measure.
+
+    `raw_answer` is the answer BEFORE the fences were stripped, and it splits an
+    otherwise ambiguous outcome: `_extract_figure` returns None both when the
+    model emitted no figure at all AND when it emitted one whose JSON didn't
+    parse. Those look identical downstream but call for opposite fixes — a
+    prompt problem vs. a format problem — so a fence that was present but
+    unusable is recorded as `malformed`, not `no_figure`."""
+    if res.figure is None and raw_answer and _FIGURE_BLOCK_RE.search(raw_answer):
+        res.figure_grounding = grounding.MALFORMED
+        res.figure_derivation = ""
+        return
     check = grounding.check_figure(res.figure, res.results)
     res.figure_grounding = check.status
     res.figure_derivation = check.derivation.describe() if check.derivation else ""
@@ -401,13 +412,14 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         answer = draft_answer
                 # Extract the structured blocks from the FINAL answer (after the
                 # critic revert settles it), so they always match the winning prose.
+                raw_answer = answer
                 answer, res.figure = _extract_figure(answer)
                 answer, res.suggestions = _extract_suggestions(answer)
                 res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
                 res.results = last_sql_result["results"]
-                _stamp_grounding(res)
+                _stamp_grounding(res, raw_answer)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -480,10 +492,11 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
+            raw_final = final
             final, res.figure = _extract_figure(final)
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
-            _stamp_grounding(res)
+            _stamp_grounding(res, raw_final)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:
