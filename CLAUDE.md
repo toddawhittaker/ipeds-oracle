@@ -326,13 +326,38 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   history; and it must never move ahead of the system prefix, which would collapse
   cache reuse — pinned by
   `test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix`. That took
-  follow-up emission to **3/9 — a real improvement but NOT a fix**; the remaining
-  suspect is step 6's bulk (~35 lines with (i)/(ii) branching vs step 7's flat 7),
-  and compressing it is the next distinct experiment, deliberately not bundled so
-  the next measurement stays attributable. **If you touch step 6 or the reminder,
-  re-measure `figure_grounding` before and after** — this is prompt-compliance
-  behaviour with no code gate to protect it, and two plausible-sounding fixes have
-  already under-delivered. A brief's
+  follow-up emission to **3/9 — a real improvement but NOT a fix**. Two further
+  PROMPT experiments then FAILED and were abandoned: compressing step 6
+  (42→20 lines, taxonomy moved to a FIGURE SHAPING section) **regressed to 0/10**
+  — the model emitted correct figure JSON but MIS-WRAPPED (`[Figure: 767](767)`
+  + bare object, no fence), so separating the requirement from its worked
+  fence-in-context examples broke the FORMAT; and swapping flash→v4-pro made it
+  *worse* at 3.4× cost. Conclusion (pre-registered): prompt wording is not the
+  lever. **The fix is STRUCTURAL** — two guards in `llm.py`:
+  (1) `_extract_figure` now has a **mis-wrap fallback** — after the fence/tag
+  regex misses, it recovers a bare `{value,label}` object at the answer's HEAD
+  (behind an optional stray `[..](..)` artifact), for zero LLM cost; scoped to
+  the head so a ```chart fence or a mid-prose object is never mistaken for a
+  figure. (2) A **missing-figure retry** (`retry_missing_figure` +
+  `_maybe_retry_figure`, gated `FIGURE_RETRY_ENABLED`, modeled on the critic:
+  own call, fails open): when a data-backed answer that should lead with a figure
+  emits none (`_figure_required` — has SQL, has a digit, no clarify/error), ONE
+  targeted call asks for ONLY the ```figure fence — a far narrower ask than
+  re-obeying step 6, which is why it works. A recovered figure is **grounded
+  before it ships**: reproducible → kept, derivation tagged **`retry:`**;
+  **ungrounded → SUPPRESSED** (`retry:suppressed`) — a figure we FORCED that
+  isn't in the data is an induced hallucination, worse than the honest absence,
+  the ONE place figures are suppressed rather than shipped (first-pass ungrounded
+  figures still ship, observe-only per #163). Measured 4/10→**5–7/10** across two
+  runs, every shipped figure grounded, the suppress path confirmed firing. The
+  RESIDUAL gap is turns that run **no SQL** and recite from conversation context
+  (deep follow-ups): `_figure_required` skips them (no fresh results to ground
+  against) — closing that needs **conversation-scoped retention**, which would
+  both ground context-recited numbers AND make them retry-eligible. **If you
+  touch step 6, the reminder, or the retry, re-measure `figure_grounding` before
+  and after** — emission is prompt-compliance behaviour and three prompt fixes
+  already under-delivered; `retry:`-prefixed derivations in `usage_log` mark what
+  the retry recovered. A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
   the standalone fence; drops the redundant "Chart this"). To hand the chart room,

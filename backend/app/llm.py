@@ -21,7 +21,7 @@ import httpx
 
 from app import critic, grounding
 from app.config import get_settings
-from app.llmhttp import DEFAULT_TIMEOUT, cached_tokens, chat_completion
+from app.llmhttp import DEFAULT_TIMEOUT, PROBE_TIMEOUT, cached_tokens, chat_completion
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
@@ -63,6 +63,80 @@ def _leaks_review_meta(text: str) -> bool:
     return bool(_REVIEW_LEAK_RE.search(text or ""))
 
 
+# The instruction for the missing-figure retry (see retry_missing_figure). Kept
+# deliberately NARROW — it asks for ONLY the figure fence for the number the model
+# already reported, which is a far easier ask than re-obeying all of prompt step 6
+# and is why this succeeds where prompt wording did not. The exact ```figure shape
+# mirrors prompt.INSTRUCTIONS so the two never drift.
+_FIGURE_RETRY_SYSTEM = (
+    "You are finalizing an IPEDS data answer. The assistant's answer below is "
+    "correct and complete but is MISSING its required hero figure — the single "
+    "headline number, typeset above the prose. Your ONLY job: emit that figure.\n"
+    "Reply with a SINGLE fenced ```figure block and NOTHING else — no prose, no "
+    "table, no commentary. Its shape:\n"
+    '```figure\n{"value":"<the headline number, with thousands separators>",'
+    '"unit":"<short unit, optional>","label":"<terse caption, a few words>",'
+    '"source":"<IPEDS survey and year, optional>"}\n```\n'
+    "The value MUST be a number already present in the answer below — never invent "
+    "one. Choose the single most important number the answer is about."
+)
+
+
+@dataclass
+class _FigureRetry:
+    figure: dict | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cost: float = 0.0
+
+
+async def retry_missing_figure(question: str, answer: str) -> _FigureRetry:
+    """One targeted call to recover a figure a data answer should have led with
+    but didn't. Modeled on critic.review: its OWN chat_completion call, and it
+    FAILS OPEN (empty _FigureRetry) when disabled, unconfigured, or on any
+    transport error — a retry outage must never break or delay a finished answer.
+
+    Returns the parsed figure (value+label) or None; the caller grounds it and
+    decides whether to keep or suppress it."""
+    s = get_settings()
+    if not s.figure_retry_enabled or not s.llm_api_key:
+        return _FigureRetry()
+    messages = [
+        {"role": "system", "content": _FIGURE_RETRY_SYSTEM},
+        {"role": "user", "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}"},
+    ]
+    try:
+        async with httpx.AsyncClient() as client:
+            data = await chat_completion(client, model=s.model_default, messages=messages,
+                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+    except (httpx.HTTPError, ValueError):
+        return _FigureRetry()  # fail open — never block a finished answer
+    usage = data.get("usage") or {}
+    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    _, figure = _extract_figure(content)
+    return _FigureRetry(
+        figure=figure,
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
+        cached_prompt_tokens=cached_tokens(usage),
+        cost=usage.get("cost") or 0,
+    )
+
+
+_HAS_DIGIT_RE = re.compile(r"\d")
+
+
+def _figure_required(res: AgentResult, answer: str) -> bool:
+    """True when a data-backed answer SHOULD have led with a hero figure but has
+    none — the trigger for a retry. The digit test IS the enumerable skip: a plain
+    lookup (address/URL/accreditor) or a yes/no carries no number and legitimately
+    needs no figure, matching the SKIP rule in prompt step 6 and _stamp_grounding's
+    no_figure classification."""
+    return (res.figure is None and res.error is None and res.clarify is None
+            and bool(res.sql_log) and bool(_HAS_DIGIT_RE.search(answer or "")))
+
+
 def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
     """Record whether the figure's number is reproducible from the turn's own
     query results. Observe-only: it never edits the figure or the answer.
@@ -85,6 +159,45 @@ def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
     check = grounding.check_figure(res.figure, res.results)
     res.figure_grounding = check.status
     res.figure_derivation = check.derivation.describe() if check.derivation else ""
+
+
+async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> None:
+    """When a data answer that should have led with a figure emitted none, make
+    ONE targeted call to recover it, then decide what to do with the result:
+
+      * grounded (reproducible from the turn's results) → keep it, tagging the
+        derivation `retry:` so recovered figures are greppable and the recovery
+        rate is measurable;
+      * ungrounded → SUPPRESS it. We compelled this figure by demanding one; a
+        number we forced that isn't in the data is a hallucination we induced,
+        worse than the honest absence — so the user sees no figure, but the
+        attempt is recorded (`figure_derivation="retry:suppressed"`) so a flood
+        of these is visible rather than silent.
+
+    Observe-only for FIRST-PASS figures is untouched: this only ever runs when the
+    first pass produced no figure. Mutates `res` (figure, grounding, tokens/cost);
+    the existing `if res.figure:` yield downstream emits the event. Fails open via
+    retry_missing_figure, so a retry outage leaves the answer exactly as it was."""
+    if not _figure_required(res, answer):
+        return
+    r = await retry_missing_figure(question, answer)
+    res.prompt_tokens += r.prompt_tokens
+    res.completion_tokens += r.completion_tokens
+    res.cached_prompt_tokens += r.cached_prompt_tokens
+    res.cost += r.cost
+    if not r.figure:
+        return  # nothing recovered — stays no_figure
+    check = grounding.check_figure(r.figure, res.results)
+    if check.grounded:
+        res.figure = r.figure
+        res.figure_grounding = check.status
+        res.figure_derivation = "retry:" + (check.derivation.describe()
+                                            if check.derivation else "")
+    else:
+        # Forced but unverifiable → suppress, but record that it happened.
+        res.figure = None
+        res.figure_grounding = grounding.UNGROUNDED
+        res.figure_derivation = "retry:suppressed"
 
 
 def effective_cost(reported_cost: float, prompt_tokens: int,
@@ -120,24 +233,21 @@ _FIGURE_BLOCK_RE = re.compile(
 )
 _FIGURE_KEYS = ("value", "unit", "label", "source")
 
+# Fallback for a MIS-WRAPPED figure. Some models (observed under a tightened
+# prompt) emit a correct figure OBJECT but not inside a fence — as a bare object
+# at the answer's head, sometimes preceded by a stray `[Figure: 767](767)`
+# markdown-link artifact. Recovering these costs nothing and salvages a figure
+# that is otherwise dropped. Scoped to the answer's HEAD and gated on value+label
+# so a ```chart fence ({"type":"line",…}, no such keys) or a JSON object buried
+# in prose is NEVER mistaken for a figure.
+_FIGURE_LEADING_ARTIFACT_RE = re.compile(r"^\s*\[[^\]]*\]\([^)]*\)\s*")
 
-def _extract_figure(answer: str) -> tuple[str, dict | None]:
-    """Pull the figure out of `answer` — a ```figure fence OR an HTML <figure> tag.
-    Returns (answer_without_any_figure_block, figure_or_None). ALWAYS strips every
-    such block (so raw JSON never reaches the user, even on a parse failure);
-    returns a figure dict only when the first is valid JSON with value AND label."""
-    matches = list(_FIGURE_BLOCK_RE.finditer(answer or ""))
-    if not matches:
-        return answer, None
-    clean = _FIGURE_BLOCK_RE.sub("", answer).strip()
-    m = matches[0]
-    raw = m.group(1) if m.group(1) is not None else m.group(2)
-    try:
-        data = json.loads((raw or "").strip())
-    except (json.JSONDecodeError, ValueError):
-        return clean, None
+
+def _figure_from_dict(data: object) -> dict | None:
+    """Validate a parsed JSON value into a figure dict (known keys only), or
+    None unless it carries both value AND label."""
     if not isinstance(data, dict):
-        return clean, None
+        return None
     out = {}
     for k in _FIGURE_KEYS:
         v = data.get(k)
@@ -146,7 +256,61 @@ def _extract_figure(answer: str) -> tuple[str, dict | None]:
         s = str(v).strip()
         if s:
             out[k] = s
-    return clean, (out if out.get("value") and out.get("label") else None)
+    return out if out.get("value") and out.get("label") else None
+
+
+def _leading_json_object(text: str) -> tuple[str, object] | None:
+    """If `text`, after an optional stray `[..](..)` artifact, STARTS with a JSON
+    object, return (matched_span_text, parsed) via a brace-balanced scan. Head
+    only — never reaches into prose. None if it doesn't start with `{` or the
+    object doesn't parse."""
+    m = _FIGURE_LEADING_ARTIFACT_RE.match(text or "")
+    start = m.end() if m else 0
+    body = (text or "")[start:]
+    if not body.startswith("{"):
+        return None
+    depth = 0
+    for i, ch in enumerate(body):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                blob = body[:i + 1]
+                try:
+                    return (text[:start] + blob), json.loads(blob)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+    return None
+
+
+def _extract_figure(answer: str) -> tuple[str, dict | None]:
+    """Pull the figure out of `answer` — a ```figure fence, an HTML <figure> tag,
+    or (fallback) a mis-wrapped bare object at the answer's head. Returns
+    (answer_without_the_figure_block, figure_or_None). ALWAYS strips the block it
+    consumes (so raw JSON never reaches the user, even on a parse failure);
+    returns a figure dict only when it is valid JSON with value AND label."""
+    matches = list(_FIGURE_BLOCK_RE.finditer(answer or ""))
+    if matches:
+        clean = _FIGURE_BLOCK_RE.sub("", answer).strip()
+        m = matches[0]
+        raw = m.group(1) if m.group(1) is not None else m.group(2)
+        try:
+            data = json.loads((raw or "").strip())
+        except (json.JSONDecodeError, ValueError):
+            return clean, None
+        return clean, _figure_from_dict(data)
+
+    # No fence/tag: try the mis-wrapped leading-object fallback.
+    lead = _leading_json_object(answer or "")
+    if lead is None:
+        return answer, None
+    span, data = lead
+    fig = _figure_from_dict(data)
+    if fig is None:
+        return answer, None  # a leading object that ISN'T a figure — leave it be
+    clean = (answer or "")[len(span):].strip()
+    return clean, fig
 
 
 # The model MAY end with a ```followups fence — a JSON array of 2-3 drill-down
@@ -460,6 +624,11 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 res.last_result = last_sql_result["result"]
                 res.results = last_sql_result["results"]
                 _stamp_grounding(res, raw_answer)
+                # Structural recovery: if this data answer should have led with a
+                # figure but emitted none, one targeted call tries to recover it
+                # (see _maybe_retry_figure). Runs AFTER the critic has settled the
+                # winning answer, so it never chases a draft that's about to revert.
+                await _maybe_retry_figure(res, question, res.answer)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
