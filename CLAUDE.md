@@ -215,7 +215,35 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   flags IPEDS aggregation foot-guns (CIP-rollup / second-major double counts,
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
   agent self-corrects;
-- a post-answer **critic** that can force one revision round. The revision only
+- a deterministic **figure-grounding check** (`backend/app/grounding.py`) — the
+  answer's hero figure is the most prominent number on screen and used to be the
+  least verified: `_extract_figure` validated only its JSON *shape*, so a number
+  the model mis-typed while transcribing a result table reached the user with
+  nothing comparing it back to the rows. The check reproduces the figure's value
+  from the turn's **retained** `QueryResult`s — verbatim, at the figure's own
+  display rounding, or via the derivation menu prompt step 6(ii) actually asks
+  for (`sum`/`mean`/`pct_change`/`share`/`max`/`min`) — and records
+  `exact`/`rounded`/`derived`/`ungrounded` (plus the non-evidence
+  `no_figure`/`unchecked`). Pure arithmetic: no DB, no LLM, no network, so it
+  runs on every answer and needs no setting. **OBSERVE-ONLY — it alters no
+  answer and blocks nothing**; it lands on `usage_log.figure_grounding`
+  (migration 21) and surfaces as **Grounded figures** on Admin → Usage
+  (`groundedFigureRate`, vitest-pinned), whose denominator counts *only* turns
+  that had both a numeric figure and results to check it against — folding the
+  no-figure majority in would peg the rate near 100% and quietly destroy the
+  signal. Aggregations are barred over **dimension** columns
+  (`year`/`unitid`/`cipcode`/… — `_DIMENSION_COL_RE`): a real collision found in
+  testing had a genuine +25.0% awards trend "verified" as `share(year)`
+  (2021/(2021+…+2024) = 24.98%, inside tolerance), and `year` is in nearly every
+  IPEDS result. Retention is the foundation — `last_result` was overwritten per
+  call, so a multi-query brief discarded the very result its headline came from;
+  `AgentResult.results` now keeps them all, in call order. Pinned in
+  `backend/tests/test_grounding.py` + `test_agent_loop.py`.
+- a post-answer **critic** that can force one revision round. **It is given the
+  actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
+  flag) — without them it saw only the SQL *text* and the prose, so it could
+  judge whether a query looked right but never whether the answer's numbers were
+  in the data. The revision only
   ships if the model **re-queried AND changed the answer AND its prose carries no
   reviewer-directed meta** (`_leaks_review_meta` in `llm.py` matches
   "reviewer"/"the review"); otherwise the clean pre-critique draft is re-emitted,

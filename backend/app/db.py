@@ -296,6 +296,21 @@ MIGRATIONS: list[tuple[int, str]] = [
     # NO query_cache.clarify column: a clarify turn is never written to the answer
     # cache (see app/routers/chat.py).
     (20, "ALTER TABLE messages ADD COLUMN clarify TEXT;"),
+    # Whether the turn's hero figure could be reproduced from the query results
+    # the turn actually ran (app/grounding.py): 'exact' | 'rounded' | 'derived' |
+    # 'ungrounded' | 'no_figure' | 'unchecked'. NULL = a turn that predates this
+    # column, or one that never ran the check (an answer-cache hit runs no query,
+    # so there is nothing to ground against). OBSERVE-ONLY — it feeds the
+    # Admin -> Usage rate and gates nothing.
+    (21, "ALTER TABLE usage_log ADD COLUMN figure_grounding TEXT;"),
+    # HOW the figure's number was reproduced, e.g. "pct_change(q1.awards)" —
+    # the op, which retained result, which column. The status alone can't
+    # distinguish a real derivation from a lucky collision across the searched
+    # ops, which is the whole question the observe-only period exists to answer;
+    # without this an 'exact' and a coincidental 'derived' look identical in the
+    # data. NULL whenever nothing matched (an 'ungrounded' turn) or the turn was
+    # never checked.
+    (22, "ALTER TABLE usage_log ADD COLUMN figure_derivation TEXT;"),
 ]
 
 

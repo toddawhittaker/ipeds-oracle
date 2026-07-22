@@ -167,6 +167,46 @@ def test_build_messages_truncates_long_answer():
     assert user.count("x") <= 2000, user.count("x")
 
 
+def test_build_messages_includes_the_actual_result_rows():
+    """THE regression: the reviewer used to see only the SQL TEXT and the prose,
+    so it could judge whether a query LOOKED right but never whether the
+    answer's numbers were actually in the data — the one check that catches an
+    invented figure. The rows must reach it."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["year", "awards"], rows=[(2024, 1250), (2023, 1200)],
+                    row_count=2)
+    user = critic.build_review_messages(
+        "How many awards?", ["SELECT year, awards FROM c_a"],
+        "There were 9,999 awards.", [r])[1]["content"]
+    assert "RESULT ROWS:" in user, user
+    assert "1250" in user and "awards" in user, user
+    # ...and the draft's (invented) number is still there to compare against.
+    assert "9,999" in user, user
+
+
+def test_build_messages_flags_truncated_rows():
+    """A truncated page summed as a TOTAL is a wrong number whose SQL looks
+    perfect — the reviewer can only catch it if it knows the page was partial."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["n"], rows=[(1,)], truncated=True, row_count=1)
+    user = critic.build_review_messages("q", ["SELECT n FROM t"], "a", [r])[1]["content"]
+    assert "TRUNCATED" in user, user
+
+
+def test_build_messages_without_results_still_works():
+    # Optional by contract: a caller with nothing retained still gets a review.
+    user = critic.build_review_messages("q", ["SELECT 1"], "a")[1]["content"]
+    assert "RESULT ROWS:\n(none)" in user, user
+
+
+def test_build_messages_caps_the_result_rows():
+    from app.tools.sql import QueryResult
+    big = QueryResult(columns=["n"], rows=[(i,) for i in range(500)], row_count=500)
+    user = critic.build_review_messages("q", ["SELECT 1"], "a", [big])[1]["content"]
+    # The rows are the expensive artifact; the critic needs shape, not bulk.
+    assert len(user) < 6000, len(user)
+
+
 def test_revision_instruction_carries_headline_and_description():
     msg = critic.revision_instruction(
         "Magnitude looks 4x too high.", "Because CIP rollups double-count, filter exactly.")
@@ -346,7 +386,7 @@ def test_ok_verdict_returns_draft_unchanged():
         return {"choices": [{"message": {"content": "Final: 1,234."}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=True)
 
@@ -389,7 +429,7 @@ def test_revise_verdict_triggers_one_revision():
         return {"choices": [{"message": {"content": "Corrected: 1,000,000."}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=False, headline="Add majornum=1.",
                         description="missing majornum=1; ~4x overcount")
@@ -435,7 +475,7 @@ def test_rebuttal_without_new_sql_reemits_clean_draft():
         return {"choices": [{"message": {"content": rebuttal}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=False, headline="Verify cstotlt.", description="cstotlt may overcount")
 
@@ -485,7 +525,7 @@ def test_requery_confirming_same_answer_is_not_a_revision():
         return {"choices": [{"message": {"content": draft}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=False, headline="Check magnitude.", description="magnitude looks high")
 
@@ -543,7 +583,7 @@ def test_requery_rebuttal_with_review_meta_reemits_clean_draft():
         return {"choices": [{"message": {"content": rebuttal}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=False, headline="Avoid CIP rollup double count.",
                         description="cipcode='13' may double count across levels")
@@ -580,7 +620,7 @@ def test_revision_message_reaches_the_model():
         return {"choices": [{"message": {"content": "revised"}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         return Critique(ok=False, headline="Use cipcode='99'.",
                         description="use cipcode='99' for the national total")
 
@@ -603,7 +643,7 @@ def test_no_sql_answer_skips_critic():
         return {"choices": [{"message": {"content": "I can only help with IPEDS data."}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=False, headline="should not run", description="should not be called")
 
@@ -638,6 +678,14 @@ def run():
           test_system_prompt_pins_key_substrings)
     check("build_review_messages includes question/SQL/answer",
           test_build_messages_includes_artifacts)
+    check("build_review_messages includes the actual result rows",
+          test_build_messages_includes_the_actual_result_rows)
+    check("build_review_messages flags truncated rows",
+          test_build_messages_flags_truncated_rows)
+    check("build_review_messages works without results",
+          test_build_messages_without_results_still_works)
+    check("build_review_messages caps the result rows",
+          test_build_messages_caps_the_result_rows)
     check("build_review_messages truncates a long answer",
           test_build_messages_truncates_long_answer)
     check("revision_instruction carries the headline and description",

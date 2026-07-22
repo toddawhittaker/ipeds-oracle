@@ -284,7 +284,16 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 cost=effective_cost(result.cost, result.prompt_tokens,
                                     result.completion_tokens),
                 thinking=thinking, figure=figure,
-                suggestions=suggestions, clarify=clarify, delete_from_id=edit_from)
+                suggestions=suggestions, clarify=clarify,
+                # Observe-only figure-grounding status (app/grounding.py). Only a
+                # real agent turn records one: an answer-cache hit and a guard
+                # refusal run no query, so there is nothing to ground against and
+                # the column stays NULL rather than diluting the measured rate.
+                figure_grounding=result.figure_grounding,
+                # ...and HOW it was reproduced ("pct_change(q1.awards)"), so a
+                # real derivation is distinguishable from a lucky collision.
+                figure_derivation=result.figure_derivation,
+                delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
             # A clarify turn is NEVER cached — it has no data claim to reuse, and
@@ -393,7 +402,8 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
              cached_prompt_tokens=0, first_call_prompt_tokens=0,
              first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
-             suggestions=None, clarify=None, delete_from_id=None):
+             suggestions=None, clarify=None, figure_grounding=None,
+             figure_derivation=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -428,11 +438,12 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ok, cached, cost, figure_grounding, figure_derivation, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, int(ok), int(cached),
-             float(cost), now))
+             float(cost), figure_grounding or None, figure_derivation or None, now))
         con.commit()
         return user_msg_id, assistant_id
     finally:

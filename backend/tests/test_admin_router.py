@@ -142,7 +142,8 @@ def _get_or_create_user(email):
 def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-flash",
                      ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
                      cached_prompt_tokens=0, first_call_prompt_tokens=0,
-                     first_call_cached_prompt_tokens=0, escalated=0):
+                     first_call_cached_prompt_tokens=0, escalated=0,
+                     figure_grounding=None):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -155,10 +156,11 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ok, cached, cost, figure_grounding, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
-             first_call_cached_prompt_tokens, ok, cached, cost,
+             first_call_cached_prompt_tokens, ok, cached, cost, figure_grounding,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1263,6 +1265,32 @@ def test_usage_totals_expose_prompt_cache_tokens():
         assert totals["cached_prompt_tokens"] == 800, totals
         assert totals["first_call_prompt_tokens"] == 700, totals
         assert totals["first_call_cached_prompt_tokens"] == 150, totals
+
+
+def test_usage_totals_count_figure_grounding_excluding_non_evidence():
+    """The grounded-figure stat's denominator must count ONLY turns that
+    actually had a figure AND results to check it against.
+
+    The regression: folding 'no_figure'/'unchecked'/NULL turns into the
+    denominator (or, worse, into the grounded numerator) would make the rate
+    read near-100% no matter how many invented figures shipped — most turns
+    carry no figure at all, so they would swamp the signal and the metric would
+    quietly stop meaning anything."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        for status in ("exact", "rounded", "derived", "ungrounded", "ungrounded",
+                       "no_figure", "unchecked", None):
+            _seed_usage_log("ground@x.edu", "q", created_at=now - 50,
+                            figure_grounding=status)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        assert r.status_code == 200, r.text
+        totals = r.json()["totals"]
+        # exact + rounded + derived + 2x ungrounded = 5; the other three are not
+        # evidence either way and must be excluded from BOTH counts.
+        assert totals["figures_checked"] == 5, totals
+        assert totals["figures_ungrounded"] == 2, totals
 
 
 def _clear_usage_log():
@@ -3185,6 +3213,8 @@ def run():
           test_usage_since_after_until_is_swapped)
     check("usage totals expose the four prompt-cache columns, summed independently",
           test_usage_totals_expose_prompt_cache_tokens)
+    check("usage totals count figure grounding, excluding non-evidence turns",
+          test_usage_totals_count_figure_grounding_excluding_non_evidence)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
           test_usage_cost_warning_flags_missing_spend)
     check("usage cost_warning ignores answer-cache-only activity",
