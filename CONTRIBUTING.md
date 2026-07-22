@@ -30,6 +30,9 @@ backend/              the Python side (all Python tooling runs from here)
     llm.py            the tool-calling agent loop
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
+    grounding.py      figure grounding: can the answer's hero number be
+                      reproduced from the turn's retained query results?
+                      (observe-only; feeds Admin -> Usage "Grounded figures")
     tools/            run_sql (sandboxed), schema/discovery, skills
     routers/          auth, chat (stream/history/rename/CSV), admin
     auth.py, security.py, mailer.py, ratelimit.py

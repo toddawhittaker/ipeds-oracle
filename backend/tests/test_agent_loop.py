@@ -7,6 +7,7 @@ Guards two behaviors of stream_agent's loop:
      rather than returning a bare "reached max tool iterations" error.
 """
 import asyncio
+import json
 import os
 import sys
 import types
@@ -346,7 +347,7 @@ def test_clarify_present_skips_critic_and_unsets_figure_and_suggestions():
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
         return _text_response(clarify_fence)
 
-    async def fake_review(question, sql_log, answer):
+    async def fake_review(question, sql_log, answer, *a, **kw):
         calls["critic"] += 1
         return Critique(ok=True)
 
@@ -363,6 +364,110 @@ def test_clarify_present_skips_critic_and_unsets_figure_and_suggestions():
     assert calls["critic"] == 0, "the critic must never run on a clarify turn"
     assert res.figure is None, "a clarify turn must not carry a figure"
     assert res.suggestions is None, "a clarify turn must not carry followup suggestions"
+
+
+# --- result retention + figure grounding ---------------------------------------
+# Retention is the foundation: `last_result` alone was OVERWRITTEN on every
+# run_sql, so a multi-query brief (the recent-years table plus the rank/share
+# query prompt step 6(a) invites) discarded the very result its headline figure
+# came from — leaving the server unable to check that figure against any data.
+
+def _sql_call_response(sql, call_id):
+    return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": call_id, "type": "function",
+                    "function": {"name": "run_sql",
+                                 "arguments": json.dumps({"sql": sql})}}]}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+
+def _sink_dispatch(results):
+    """A dispatch stand-in that fills the sink the way registry._tool_run_sql
+    does — one QueryResult per call, appended in call order."""
+    seq = list(results)
+
+    def dispatch(name, args, result_sink=None):
+        if result_sink is not None and seq:
+            r = seq.pop(0)
+            result_sink["result"] = r
+            result_sink.setdefault("results", []).append(r)
+        return "OK — 1 row(s)"
+    return dispatch
+
+
+def test_every_query_result_of_the_turn_is_retained_in_call_order():
+    from app.tools.sql import QueryResult
+    r1 = QueryResult(columns=["n"], rows=[(1,)], row_count=1)
+    r2 = QueryResult(columns=["n"], rows=[(2,)], row_count=1)
+    r3 = QueryResult(columns=["n"], rows=[(3,)], row_count=1)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            return _sql_call_response(f"SELECT {calls['n']} AS n", f"c{calls['n']}")
+        return _text_response("done")
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([r1, r2, r3])
+    res = _run("q")
+    assert len(res.results) == 3, f"expected 3 retained results, got {len(res.results)}"
+    assert [r.rows[0][0] for r in res.results] == [1, 2, 3], "call order must survive"
+    assert res.last_result is r3, "the last-result contract must still hold"
+
+
+def test_a_figure_derived_from_an_earlier_query_is_grounded():
+    """The multi-query case retention exists for: the headline comes from the
+    FIRST query while a later one fills the recent-years table."""
+    from app.tools.sql import QueryResult
+    ranking = QueryResult(columns=["institution", "awards"],
+                          rows=[("Ohio State", 400), ("Texas A&M", 300)], row_count=2)
+    years = QueryResult(columns=["year", "awards"],
+                        rows=[(2023, 90), (2024, 95)], row_count=2)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return _sql_call_response("SELECT 1", f"c{calls['n']}")
+        return _text_response(
+            'Ohio State led.\n\n```figure\n{"value":"400","label":"Awards"}\n```')
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([ranking, years])
+    res = _run("q")
+    assert res.figure_grounding == "exact", res.figure_grounding
+    assert res.figure_derivation == "value(q1.awards)", res.figure_derivation
+
+
+def test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships():
+    """OBSERVE-ONLY, and that is the point of this test: a number absent from
+    the data is FLAGGED, but the answer and the figure are delivered untouched.
+    If this ever starts suppressing, it is a behavior change that needs its own
+    decision — not something to discover in production."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _text_response(
+            'Huge.\n\n```figure\n{"value":"87,654","label":"Awards"}\n```')
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([r])
+    res = _run("q")
+    assert res.figure_grounding == "ungrounded", res.figure_grounding
+    assert res.figure == {"value": "87,654", "label": "Awards"}, \
+        "observe-only: the figure must reach the user unchanged"
+    assert "Huge." in res.answer, res.answer
+
+
+def test_an_answer_with_no_figure_is_not_measured():
+    # no_figure must not count toward the grounded rate in either direction.
+    async def fake_chat(client, model, messages, tools=None):
+        return _text_response("A plain lookup answer with no hero number.")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    assert _run("q").figure_grounding == "no_figure"
 
 
 def test_clarify_absent_on_a_normal_answer():
@@ -514,6 +619,14 @@ def run():
           test_generate_title_success_strips_quotes_and_period)
     check("generate_title returns '' on a transport error",
           test_generate_title_transport_error_returns_empty)
+    check("every query result of the turn is retained, in call order",
+          test_every_query_result_of_the_turn_is_retained_in_call_order)
+    check("a figure derived from an EARLIER query is grounded",
+          test_a_figure_derived_from_an_earlier_query_is_grounded)
+    check("an invented figure is flagged ungrounded but still ships (observe-only)",
+          test_an_invented_figure_is_recorded_as_ungrounded_but_still_ships)
+    check("an answer with no figure is not measured",
+          test_an_answer_with_no_figure_is_not_measured)
     check("effective_cost prefers the provider-reported cost over fallback prices",
           test_effective_cost_prefers_provider_reported)
     check("effective_cost estimates from list prices when the report is 0",

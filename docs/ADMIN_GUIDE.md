@@ -188,6 +188,23 @@ The dashboard shows **three** cache figures — don't confuse them:
   Prompt cache to gauge spend; use **Schema cache** to judge whether the schema
   prefix itself is being amortized.
 
+- **Grounded figures** — a *percentage*, and the one **data-integrity** stat here
+  rather than a cost one. Every answer that leads with a hero figure (the big
+  typeset number above the prose) gets that number checked against the rows the
+  app's own queries actually returned: it counts as grounded if the value appears
+  in the data verbatim, matches at the rounding the answer displayed, or is
+  correctly derived from a column (a total, an average, a percentage change, a
+  share of the total). Answers with no hero figure — and answers whose figure
+  isn't a number, like a leading institution's *name* — aren't counted either
+  way, so a quiet range reads "—" rather than a falsely perfect 100%.
+
+> **A rate below 100% means figures reached people that the app could not
+> reproduce from its own data.** The underlying number is written by the language
+> model, which transcribes it out of the query results — so a slip is possible,
+> and this is the measurement that makes it visible. A one-off is worth a look; a
+> persistent gap is worth reporting. Note this measures the *figure* only; the
+> prose, tables and charts in an answer aren't checked this way yet.
+
 > **Watch the Schema cache rate.** If it sits low over a range with real traffic,
 > the provider isn't reusing the schema prefix and you're paying close to full price
 > for it on every question. The usual cause is **routing**, explained next.

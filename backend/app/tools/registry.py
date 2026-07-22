@@ -9,10 +9,10 @@ from collections.abc import Callable
 from typing import Any
 
 from app.tools import schema as sch
-from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, run_sql
+from app.tools.sql import SQLTimeoutError, SQLValidationError, run_sql
 
 
-def _tool_run_sql(sql: str, sink: dict[str, QueryResult | None] | None = None) -> str:
+def _tool_run_sql(sql: str, sink: dict[str, Any] | None = None) -> str:
     try:
         r = run_sql(sql)
     except SQLValidationError as e:
@@ -24,8 +24,16 @@ def _tool_run_sql(sql: str, sink: dict[str, QueryResult | None] | None = None) -
     # Hand the exact result back to the caller (per-request), so the API layer
     # can offer a CSV of the data behind the answer. No shared module state — a
     # global here would let concurrent chat turns clobber each other's result.
+    #
+    # "result" is the LAST result (the long-standing contract, pinned by
+    # test_result_isolation.py); "results" ACCUMULATES every result of the turn,
+    # in call order. The list is what app/grounding.py checks a figure against —
+    # a brief runs several queries (the recent-years table plus the rank/share
+    # query prompt step 6(a) invites), and overwriting left the server unable to
+    # verify a headline number against the query that actually produced it.
     if sink is not None:
         sink["result"] = r
+        sink.setdefault("results", []).append(r)
     header = f"OK — {r.row_count} row(s)" + (" (truncated)" if r.truncated else "")
     notes = ("\n" + " ".join(r.notes)) if r.notes else ""
     return f"{header}{notes}\n\n{r.to_markdown(max_rows=200)}"
@@ -136,10 +144,12 @@ def tool_specs() -> list[dict[str, Any]]:
 
 
 def dispatch(name: str, arguments: str | dict,
-             result_sink: dict[str, QueryResult | None] | None = None) -> str:
+             result_sink: dict[str, Any] | None = None) -> str:
     """Run a tool call and return its string result. For run_sql, the caller may
-    pass a per-request `result_sink` dict to receive the QueryResult (used for
-    the CSV download); other tools ignore it."""
+    pass a per-request `result_sink` dict to receive the QueryResult — under
+    "result" (the last one; used for the CSV download) and appended to "results"
+    (every result of the turn; used for figure grounding). Other tools ignore
+    it."""
     entry = _TOOLS.get(name)
     if entry is None:
         return f"ERROR: unknown tool '{name}'."

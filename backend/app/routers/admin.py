@@ -1067,7 +1067,18 @@ def usage(since: float | None = None, until: float | None = None):
             "COALESCE(SUM(cost),0.0) AS spend, "
             "COALESCE(SUM(cached),0) AS cache_hits, "
             "COALESCE(SUM(escalated),0) AS escalations, "
-            "COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0) AS failures "
+            "COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0) AS failures, "
+            # Figure grounding (app/grounding.py), observe-only: of the turns
+            # that led with a hero figure AND had query results to check it
+            # against, how many carried a number reproducible from those
+            # results. 'no_figure'/'unchecked'/NULL turns are excluded from BOTH
+            # counts — they are not evidence either way, and counting them as
+            # grounded would flatter the rate.
+            "COALESCE(SUM(CASE WHEN figure_grounding IN "
+            "('exact','rounded','derived','ungrounded') THEN 1 ELSE 0 END),0) "
+            "AS figures_checked, "
+            "COALESCE(SUM(CASE WHEN figure_grounding='ungrounded' THEN 1 ELSE 0 END),0) "
+            "AS figures_ungrounded "
             f"FROM usage_log {win}", args).fetchone()
         series = con.execute(
             f"SELECT strftime('{bucket_fmt}', created_at,'unixepoch') AS t, "

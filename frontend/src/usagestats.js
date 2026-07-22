@@ -34,3 +34,23 @@ export function schemaCacheRate(totals) {
   const t = totals || {};
   return rate(t.first_call_cached_prompt_tokens, t.first_call_prompt_tokens);
 }
+
+// GROUNDED-FIGURE rate: of the answers that led with a hero figure and had query
+// results to check it against, what share carried a number the server could
+// reproduce from those results — verbatim, at the figure's own rounding, or via
+// a derivation the prompt actually asks for (sum / mean / % change / share /
+// max / min). See backend/app/grounding.py.
+//
+// This is a DATA-INTEGRITY metric, not a cost one: the figure is the most
+// prominent number in an answer and, until this landed, the least verified — it
+// was re-typed by the model out of a Markdown table with nothing comparing it
+// back to the rows. A rate below ~100% means figures are reaching users that the
+// server cannot reproduce from its own data. Turns with no figure, and turns
+// with no retained results, are excluded from the denominator server-side (they
+// are not evidence either way), so an empty window shows "—" rather than a
+// falsely perfect 100%.
+export function groundedFigureRate(totals) {
+  const t = totals || {};
+  const checked = num(t.figures_checked);
+  return rate(checked - num(t.figures_ungrounded), checked);
+}

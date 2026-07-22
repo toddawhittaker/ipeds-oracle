@@ -296,6 +296,13 @@ MIGRATIONS: list[tuple[int, str]] = [
     # NO query_cache.clarify column: a clarify turn is never written to the answer
     # cache (see app/routers/chat.py).
     (20, "ALTER TABLE messages ADD COLUMN clarify TEXT;"),
+    # Whether the turn's hero figure could be reproduced from the query results
+    # the turn actually ran (app/grounding.py): 'exact' | 'rounded' | 'derived' |
+    # 'ungrounded' | 'no_figure' | 'unchecked'. NULL = a turn that predates this
+    # column, or one that never ran the check (an answer-cache hit runs no query,
+    # so there is nothing to ground against). OBSERVE-ONLY — it feeds the
+    # Admin -> Usage rate and gates nothing.
+    (21, "ALTER TABLE usage_log ADD COLUMN figure_grounding TEXT;"),
 ]
 
 

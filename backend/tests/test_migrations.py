@@ -200,6 +200,26 @@ def test_migration_20_adds_clarify_column():
     assert row[0] is None, row
 
 
+def test_migration_21_adds_usage_log_figure_grounding_column():
+    # Observe-only figure-grounding status (app/grounding.py): whether the turn's
+    # hero figure could be reproduced from the query results the turn actually
+    # ran. NULLABLE by design — a turn that ran no query (an answer-cache hit, a
+    # guard refusal) has nothing to ground against, and counting those as either
+    # grounded or ungrounded would bias the rate the admin dashboard reports.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 20])
+    assert "figure_grounding" not in _cols(con, "usage_log"), _cols(con, "usage_log")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "figure_grounding" in _cols(con, "usage_log"), _cols(con, "usage_log")
+    # A pre-migration row is not backfilled, and an INSERT that omits the column
+    # must still succeed (the cache/refusal paths do exactly that).
+    con.execute("INSERT INTO usage_log(user_id, question, created_at) "
+                "VALUES (1, 'q', 0)")
+    row = con.execute("SELECT figure_grounding FROM usage_log").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -584,6 +604,7 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["cost", "REAL", 1, "0", 0],
       ["created_at", "REAL", 1, null, 0],
       ["escalated", "INTEGER", 0, null, 0],
+      ["figure_grounding", "TEXT", 0, null, 0],
       ["first_call_cached_prompt_tokens", "INTEGER", 1, "0", 0],
       ["first_call_prompt_tokens", "INTEGER", 1, "0", 0],
       ["id", "INTEGER", 0, null, 1],
@@ -678,6 +699,8 @@ def run():
           test_migration_15_16_add_suggestions_columns)
     check("migration 20 adds messages.clarify (nullable, no query_cache column)",
           test_migration_20_adds_clarify_column)
+    check("migration 21 adds usage_log.figure_grounding (nullable)",
+          test_migration_21_adds_usage_log_figure_grounding_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

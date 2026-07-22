@@ -17,7 +17,7 @@ import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
-import { promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { groundedFigureRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
 // the prose summary/toast strings selection.js builds — see the architect's
@@ -2003,6 +2003,7 @@ function Usage() {
             <Stat label="Prompt cache" value={promptCacheRate(t)} />
             <Stat label="Escalations" value={t.escalations || 0} />
             <Stat label="Failures" value={t.failures || 0} />
+            <Stat label="Grounded figures" value={groundedFigureRate(t)} />
           </div>
 
           <div className="usage-chart-head">

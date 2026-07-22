@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from app import critic
+from app import critic, grounding
 from app.config import get_settings
 from app.llmhttp import DEFAULT_TIMEOUT, cached_tokens, chat_completion
 from app.prompt import build_system_prompt
@@ -43,6 +43,19 @@ def _leaks_review_meta(text: str) -> bool:
     """True if `text` references the critique conversation (reviewer/review) —
     the tell of a leaked rebuttal that must not reach the user."""
     return bool(_REVIEW_LEAK_RE.search(text or ""))
+
+
+def _stamp_grounding(res: AgentResult) -> None:
+    """Record whether the figure's number is reproducible from the turn's own
+    query results. Observe-only: it never edits the figure or the answer.
+
+    Deliberately not gated on a setting — it is pure local arithmetic over data
+    already in memory (no DB, no LLM, no network), so there is nothing to switch
+    off, and a status missing from usage_log would silently bias the very rate
+    this exists to measure."""
+    check = grounding.check_figure(res.figure, res.results)
+    res.figure_grounding = check.status
+    res.figure_derivation = check.derivation.describe() if check.derivation else ""
 
 
 def effective_cost(reported_cost: float, prompt_tokens: int,
@@ -188,6 +201,11 @@ class AgentResult:
     iterations: int = 0
     sql_log: list[str] = field(default_factory=list)
     last_result: QueryResult | None = None
+    # EVERY run_sql result of the turn, in call order. `last_result` alone was
+    # overwritten per call, so a multi-query brief discarded the very result a
+    # headline figure was derived from — leaving the server unable to check it.
+    # app/grounding.py consumes this.
+    results: list[QueryResult] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_prompt_tokens: int = 0  # prompt tokens the provider served from its prefix cache
@@ -203,6 +221,11 @@ class AgentResult:
     critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
     critic_description: str = ""    # the critic's finding, description (candidate lesson body)
     figure: dict | None = None      # structured hero statistic from the answer's figure fence
+    # Whether the figure's number could be reproduced from the retained results
+    # (app/grounding.py). OBSERVE-ONLY: recorded on usage_log, surfaced on
+    # Admin -> Usage, and blocks/alters nothing. "" means never checked.
+    figure_grounding: str = ""
+    figure_derivation: str = ""     # the derivation that matched, e.g. "sum(q2.awards)"
     suggestions: list | None = None  # drill-down questions from the followups fence
     clarify: dict | None = None     # {question, options[]} from a disambiguation fence
     error: str | None = None
@@ -235,9 +258,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         yield {"type": "error", "text": "The LLM provider is not configured."}
         return
 
-    # Per-request sink for the last run_sql result (no shared module state, so
-    # concurrent turns can't clobber each other's data behind the answer).
-    last_sql_result: dict = {"result": None}
+    # Per-request sink for run_sql results (no shared module state, so concurrent
+    # turns can't clobber each other's data behind the answer): "result" is the
+    # last one, "results" accumulates them all. See registry._tool_run_sql.
+    last_sql_result: dict = {"result": None, "results": []}
     tools = registry.tool_specs()
     # Message ORDER preserves the provider prompt cache: the system prompt (the big
     # static schema prefix — see build_system_prompt) goes FIRST so it stays the
@@ -317,6 +341,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     res.clarify = clarify
                     res.model_used = model
                     res.last_result = last_sql_result["result"]
+                    res.results = last_sql_result["results"]
                     yield {"type": "clarify", "clarify": clarify}
                     yield {"type": "answer", "text": res.answer}
                     yield {"type": "done", "result": res}
@@ -328,7 +353,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 # (handled above) always skips this — there is no data claim yet.
                 if s.critic_enabled and not critiqued and res.sql_log and answer.strip():
                     critiqued = True
-                    crit = await critic.review(question, res.sql_log, answer)
+                    crit = await critic.review(question, res.sql_log, answer,
+                                               last_sql_result["results"])
                     res.prompt_tokens += crit.prompt_tokens
                     res.completion_tokens += crit.completion_tokens
                     res.cached_prompt_tokens += crit.cached_prompt_tokens
@@ -380,6 +406,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
+                res.results = last_sql_result["results"]
+                _stamp_grounding(res)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -442,6 +470,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
         res.model_used = model
         res.last_result = last_sql_result["result"]
+        res.results = last_sql_result["results"]
         if final.strip():
             final, clarify = _extract_clarify(final)
             if clarify:
@@ -454,6 +483,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             final, res.figure = _extract_figure(final)
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
+            _stamp_grounding(res)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:
