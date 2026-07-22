@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     # judges the result for likely aggregation/magnitude errors and, if flagged,
     # drives ONE revision round. Adds a call per data answer. Set false to disable.
     critic_enabled: bool = Field(default=True)
+    # Missing-figure retry: when a data-backed answer that should lead with a hero
+    # figure emits none (prompt-compliance decays with conversation depth — every
+    # prompt-level fix was tried and measured insufficient), one targeted call asks
+    # ONLY for the figure fence. A forced figure that can't be grounded against the
+    # turn's results is suppressed, not shipped. Adds at most one cheap call per
+    # figureless data answer. Set false to disable (and for the on/off A/B).
+    figure_retry_enabled: bool = Field(default=True)
     # public URL used both as the magic-link/invite base (app/mailer.py,
     # app/routers/admin.py) and as the LLM provider attribution header
     # (dual-purpose). `llm_app_title` is the attribution title only; it

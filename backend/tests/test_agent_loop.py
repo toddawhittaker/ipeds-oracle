@@ -542,6 +542,183 @@ def test_an_answer_with_no_figure_is_not_measured():
     assert _run("q").figure_grounding == "no_figure"
 
 
+# --- parser leniency: recover a MIS-WRAPPED figure (_extract_figure) -----------
+# The 0/10 compression run showed the model emitting a CORRECT figure object but
+# not inside a ```figure fence — as a bare object at the answer's head, sometimes
+# behind a stray `[Figure: 767](767)` markdown-link artifact — so _extract_figure
+# caught nothing. Recovering these costs no LLM call.
+
+def test_extract_figure_recovers_the_observed_broken_wrapper():
+    ans = '[Figure: 767](767)\n\n{"value":"767","label":"CS bachelor\'s, Ohio 2025"}\n\nrest'
+    clean, fig = llm._extract_figure(ans)
+    assert fig == {"value": "767", "label": "CS bachelor's, Ohio 2025"}, fig
+    assert clean == "rest", repr(clean)
+
+
+def test_extract_figure_recovers_a_leading_bare_object():
+    clean, fig = llm._extract_figure('{"value":"5","label":"Y"}\n\nthe prose')
+    assert fig == {"value": "5", "label": "Y"}, fig
+    assert clean == "the prose", repr(clean)
+
+
+def test_extract_figure_does_not_mistake_a_chart_fence_for_a_figure():
+    ans = '```chart\n{"type":"line","x":"year","data":[{"year":2024,"n":5}]}\n```'
+    clean, fig = llm._extract_figure(ans)
+    assert fig is None, fig
+    assert clean == ans, "a non-figure answer must be returned untouched"
+
+
+def test_extract_figure_ignores_a_json_object_buried_in_prose():
+    # Head-only: a bare object mid-sentence is NOT a mis-wrapped figure.
+    ans = 'The answer is {"value":"5","label":"Y"} somewhere.'
+    clean, fig = llm._extract_figure(ans)
+    assert fig is None, fig
+    assert clean == ans
+
+
+def test_extract_figure_leaves_a_leading_non_figure_object_in_place():
+    # A leading object lacking value/label is not a figure; don't strip it.
+    ans = '{"note":"hi"}\n\nbody'
+    clean, fig = llm._extract_figure(ans)
+    assert fig is None, fig
+    assert clean == ans
+
+
+# --- missing-figure retry (_maybe_retry_figure / retry_missing_figure) ----------
+# Structural recovery when a data answer that should lead with a figure emits none.
+# Tests monkeypatch llm.retry_missing_figure (like the critic tests patch
+# llm.critic.review), so they don't depend on FIGURE_RETRY_ENABLED or a live call.
+
+def _numeric_answer_no_figure_chat(answer):
+    """A fake_chat: one SQL round, then a numeric answer carrying NO figure."""
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _text_response(answer)
+    return fake_chat
+
+
+def test_retry_recovers_a_grounded_figure():
+    """The point of the whole change: a data answer with a number but no figure
+    gets one back, and a retry figure the data supports is KEPT — tagged `retry:`
+    so recovered figures are distinguishable from first-pass ones."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    llm._chat = _numeric_answer_no_figure_chat("Ohio awarded 400 degrees.")
+    registry.dispatch = _sink_dispatch([r])
+
+    async def fake_retry(question, answer, *a, **k):
+        return llm._FigureRetry(figure={"value": "400", "label": "Awards"})
+    orig = llm.retry_missing_figure
+    llm.retry_missing_figure = fake_retry
+    try:
+        res = _run("how many awards?")
+    finally:
+        llm.retry_missing_figure = orig
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert res.figure_grounding == "exact", res.figure_grounding
+    assert res.figure_derivation.startswith("retry:"), res.figure_derivation
+
+
+def test_retry_figure_that_cannot_be_grounded_is_suppressed():
+    """The 'suppress' decision, pinned: a figure we FORCED that isn't in the data
+    is a hallucination we induced — worse than the honest absence — so the user
+    sees none, but the attempt is recorded so a flood is visible."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    llm._chat = _numeric_answer_no_figure_chat("Ohio awarded 400 degrees.")
+    registry.dispatch = _sink_dispatch([r])
+
+    async def fake_retry(question, answer, *a, **k):
+        return llm._FigureRetry(figure={"value": "87,654", "label": "Awards"})
+    orig = llm.retry_missing_figure
+    llm.retry_missing_figure = fake_retry
+    try:
+        res = _run("how many awards?")
+    finally:
+        llm.retry_missing_figure = orig
+    assert res.figure is None, "a forced, ungrounded figure must be suppressed"
+    assert res.figure_grounding == "ungrounded", res.figure_grounding
+    assert res.figure_derivation == "retry:suppressed", res.figure_derivation
+
+
+def test_retry_does_not_fire_when_the_answer_has_no_number():
+    """A plain lookup (no digit) legitimately needs no figure — the retry must not
+    fire and spend a call on it. _figure_required IS the enumerable skip."""
+    from app.tools.sql import QueryResult
+    called = {"n": 0}
+
+    async def fake_retry(question, answer, *a, **k):
+        called["n"] += 1
+        return llm._FigureRetry()
+    llm._chat = _numeric_answer_no_figure_chat("The address is Main Street.")
+    registry.dispatch = _sink_dispatch(
+        [QueryResult(columns=["x"], rows=[("Main St",)], row_count=1)])
+    orig = llm.retry_missing_figure
+    llm.retry_missing_figure = fake_retry
+    try:
+        res = _run("what's the address?")
+    finally:
+        llm.retry_missing_figure = orig
+    assert called["n"] == 0, "retry fired on a numberless answer"
+    assert res.figure_grounding == "no_figure", res.figure_grounding
+
+
+def test_first_pass_ungrounded_figure_still_ships_retry_not_invoked():
+    """The suppress rule is scoped to RETRY figures only — it must not become a
+    behavior change to #163, where a first-pass ungrounded figure ships
+    (observe-only). And the retry must not run when a figure already exists."""
+    from app.tools.sql import QueryResult
+    r = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    called = {"n": 0}
+
+    async def fake_retry(question, answer, *a, **k):
+        called["n"] += 1
+        return llm._FigureRetry()
+
+    async def fake_chat(client, model, messages, tools=None):
+        if messages[-1]["role"] == "tool" or any(m.get("role") == "tool" for m in messages):
+            return _text_response('Huge.\n\n```figure\n{"value":"87,654","label":"Awards"}\n```')
+        return _sql_call_response("SELECT 1", "c1")
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([r])
+    orig = llm.retry_missing_figure
+    llm.retry_missing_figure = fake_retry
+    try:
+        res = _run("q")
+    finally:
+        llm.retry_missing_figure = orig
+    assert res.figure == {"value": "87,654", "label": "Awards"}, res.figure
+    assert res.figure_grounding == "ungrounded", res.figure_grounding
+    assert called["n"] == 0, "retry must not run when a first-pass figure exists"
+
+
+def test_retry_missing_figure_fails_open_on_transport_error():
+    """Like critic.review, a retry outage must never break a finished answer."""
+    import app.llm as _llm
+
+    async def boom(*a, **k):
+        raise httpx.HTTPError("provider down")
+    orig = _llm.chat_completion
+    _llm.chat_completion = boom
+    # Force the setting on for this one call so we exercise the network path
+    # (ci_env pins FIGURE_RETRY_ENABLED=false, which would otherwise short-circuit
+    # before the transport call we're testing).
+    s = get_settings()
+    prev = s.figure_retry_enabled
+    s.figure_retry_enabled = True
+    try:
+        out = asyncio.run(_llm.retry_missing_figure("q", "Ohio awarded 400 degrees."))
+    finally:
+        _llm.chat_completion = orig
+        s.figure_retry_enabled = prev
+    assert out.figure is None, out
+    assert out.prompt_tokens == 0 and out.cost == 0, out
+
+
 def test_clarify_absent_on_a_normal_answer():
     async def fake_chat(client, model, messages, tools=None):
         return _text_response("California awarded 7,679 CS bachelor's degrees.")
@@ -705,6 +882,26 @@ def run():
           test_an_unparseable_figure_fence_is_malformed_not_no_figure)
     check("an answer with no figure is not measured",
           test_an_answer_with_no_figure_is_not_measured)
+    check("_extract_figure recovers the observed broken wrapper",
+          test_extract_figure_recovers_the_observed_broken_wrapper)
+    check("_extract_figure recovers a leading bare object",
+          test_extract_figure_recovers_a_leading_bare_object)
+    check("_extract_figure does not mistake a chart fence for a figure",
+          test_extract_figure_does_not_mistake_a_chart_fence_for_a_figure)
+    check("_extract_figure ignores a JSON object buried in prose",
+          test_extract_figure_ignores_a_json_object_buried_in_prose)
+    check("_extract_figure leaves a leading non-figure object in place",
+          test_extract_figure_leaves_a_leading_non_figure_object_in_place)
+    check("retry recovers a grounded figure (tagged retry:)",
+          test_retry_recovers_a_grounded_figure)
+    check("a retry figure that can't be grounded is suppressed",
+          test_retry_figure_that_cannot_be_grounded_is_suppressed)
+    check("retry does not fire when the answer has no number",
+          test_retry_does_not_fire_when_the_answer_has_no_number)
+    check("a first-pass ungrounded figure still ships; retry not invoked",
+          test_first_pass_ungrounded_figure_still_ships_retry_not_invoked)
+    check("retry_missing_figure fails open on a transport error",
+          test_retry_missing_figure_fails_open_on_transport_error)
     check("effective_cost prefers the provider-reported cost over fallback prices",
           test_effective_cost_prefers_provider_reported)
     check("effective_cost estimates from list prices when the report is 0",

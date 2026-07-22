@@ -53,3 +53,10 @@ export MAIL_BACKEND=""
 export SMTP_HOST=""
 export LLM_INPUT_COST_PER_MTOK=0
 export LLM_OUTPUT_COST_PER_MTOK=0
+#   * FIGURE_RETRY_ENABLED=false — the missing-figure retry makes a real LLM call
+#     when a data answer emits no figure. test_agent_loop.py sets its own test key,
+#     so with the retry ON its figureless numeric-answer cases would each attempt a
+#     live call (fail-open, but slow + network in CI). Off in the key-free posture;
+#     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
+#     depend on this. Prod default is true.
+export FIGURE_RETRY_ENABLED=false
