@@ -977,16 +977,36 @@ def _emit_call(name, args):
             "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
 
-def _run_structured(question, fake_chat):
+def _emit_tool_call(name, args):
+    """Just the tool_call dict a forced re-emit returns (what llm._forced_emit
+    yields), as opposed to _emit_call's full response envelope."""
+    return {"id": "e1", "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)}}
+
+
+def _run_structured(question, fake_chat, forced_emit="__unset__"):
+    """Run with structured emission ON. `forced_emit` overrides llm._forced_emit
+    (the reasoning-off forced re-emit): pass an async fn, or a plain value the
+    helper wraps in one (e.g. a tool_call dict → forced success, None → fail-open).
+    Left unset, _forced_emit is untouched."""
     s = get_settings()
     prev = s.structured_emission_enabled
+    prev_forced = llm._forced_emit
     s.structured_emission_enabled = True
     llm._chat = fake_chat
+    if forced_emit != "__unset__":
+        if callable(forced_emit) and not isinstance(forced_emit, dict):
+            llm._forced_emit = forced_emit
+        else:
+            async def _fake_forced(client, model, messages, tools, res, _v=forced_emit):
+                return _v
+            llm._forced_emit = _fake_forced
     registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
     try:
         return _run(question)
     finally:
         s.structured_emission_enabled = prev
+        llm._forced_emit = prev_forced
 
 
 def test_reconstruct_answer_builds_well_formed_fences():
@@ -1119,61 +1139,96 @@ def test_fence_path_records_emit_mode_fence():
     assert _run("q").emit_mode == "fence"
 
 
-# --- adoption nudge (0.1): reject-and-reprompt a free-typed answer -------------
+# --- forced re-emit (Phase 1): compel emit_answer on a free-typed answer -------
 
-def test_structured_reprompt_converts_a_free_typer():
-    """THE adoption lever: under structured mode, a plain-text answer is rejected
-    and the model is nudged to call emit_answer — after which the turn is
-    structured. Also checks the _EMIT_REPROMPT message actually reached it."""
-    calls = {"n": 0, "saw_reprompt": False}
+def test_forced_reemit_converts_a_free_typer_and_keeps_the_figure():
+    """THE Phase-1 guarantee: a free-typed answer triggers a reasoning-off forced
+    re-emit that COMPELS emit_answer → the turn is structured (emit_mode 'forced')
+    AND the figure ships (it comes back as a validated arg, not a lost fence)."""
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        return _text_response("Ohio led with 400 degrees.")  # free-typed, no figure
+
+    forced = _emit_tool_call("emit_answer", {"markdown": "Ohio led with **400**.",
+                                             "figure": {"value": "400", "label": "Awards"}})
+    res = _run_structured("q", fake_chat, forced_emit=forced)
+    assert res.emit_mode == "forced", res.emit_mode
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert "Ohio led with **400**." in res.answer, res.answer
+    assert calls["n"] == 1, "the forced re-emit is a separate call, not a _chat loop"
+
+
+def test_forced_reemit_fails_open_to_the_nudge_and_fence_path():
+    """FAIL-OPEN: when the forced re-emit can't compel the tool (provider rejects
+    it → None), fall back to the 0.1 nudge + fence path, bounded to once."""
+    calls = {"n": 0}
 
     async def fake_chat(client, model, messages, tools=None):
         calls["n"] += 1
         if any(m.get("content") == llm._EMIT_REPROMPT for m in messages):
-            calls["saw_reprompt"] = True
-        if calls["n"] == 1:
-            return _text_response("Ohio led with 400 degrees.")  # free-typed
-        return _emit_call("emit_answer", {"markdown": "Ohio led with **400**.",
-                                          "figure": {"value": "400", "label": "Awards"}})
-    res = _run_structured("q", fake_chat)
-    assert calls["saw_reprompt"], "the nudge message must be sent to the model"
-    assert res.emit_mode == "structured", res.emit_mode
-    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
-    assert "Ohio led with **400**." in res.answer, res.answer
-
-
-def test_structured_reprompt_fires_only_once_then_falls_back():
-    """Bounded: a model that ignores the nudge and free-types AGAIN is accepted on
-    the fence path — the reprompt must not loop."""
-    calls = {"n": 0}
-
-    async def fake_chat(client, model, messages, tools=None):
-        calls["n"] += 1
+            calls["saw_nudge"] = True
         return _text_response("Stubborn plain-text answer, 42.")  # always free-types
-    res = _run_structured("q", fake_chat)
-    assert res.emit_mode == "fence", "a second free-type falls back to the fence path"
+
+    res = _run_structured("q", fake_chat, forced_emit=None)  # forced re-emit fails open
+    assert res.emit_mode == "fence", "fail-open → the fence path accepts it"
     assert "Stubborn plain-text answer" in res.answer, res.answer
-    assert calls["n"] == 2, f"exactly one reprompt round (2 calls), got {calls['n']}"
+    assert calls.get("saw_nudge"), "the _EMIT_REPROMPT nudge is the fallback"
+    assert calls["n"] == 2, f"one nudge round then accept (2 _chat calls), got {calls['n']}"
 
 
-def test_structured_reprompt_nudges_a_free_typed_clarify():
-    """The nudge precedes the clarify check, so a free-typed clarify is pushed
-    onto ask_clarification."""
-    calls = {"n": 0}
-
+def test_free_typed_clarify_is_handled_before_the_forced_reemit():
+    """CLARIFY PRECEDENCE: a free-typed clarify terminates as a clarify turn and
+    NEVER triggers the forced emit_answer (which would clobber the question).
+    _forced_emit is set to explode to prove it is not reached."""
     async def fake_chat(client, model, messages, tools=None):
-        calls["n"] += 1
-        if calls["n"] == 1:  # free-typed clarify fence
-            return _text_response('Which level?\n\n```clarify\n'
-                                  '{"question":"Which level?","options":["BA","All"]}\n```')
-        return _emit_call("ask_clarification",
-                          {"question": "Which level?", "options": ["BA", "All"]})
-    res = _run_structured("q", fake_chat)
+        return _text_response('Which level?\n\n```clarify\n'
+                              '{"question":"Which level?","options":["BA","All"]}\n```')
+
+    async def boom(*a, **k):
+        raise AssertionError("forced re-emit must not run on a clarify turn")
+
+    res = _run_structured("q", fake_chat, forced_emit=boom)
     assert res.clarify == {"question": "Which level?", "options": ["BA", "All"]}, res.clarify
+    assert res.figure is None, "a clarify turn carries no figure"
 
 
-def test_no_reprompt_when_structured_off():
-    # The default: a free-typed answer is accepted as-is, no nudge.
+def test_forced_emit_helper_forces_the_tool_accrues_usage_and_fails_open():
+    """The real _forced_emit body (the loop tests monkeypatch it): it must send
+    the FORCED tool_choice + reasoning-off, return the emit tool_call, accrue its
+    usage, and return None on any error / missing tool-call (fail-open)."""
+    seen = {}
+
+    async def ok_cc(client, **kw):
+        seen.update(kw)
+        return _emit_call("emit_answer", {"markdown": "hi"})
+
+    prev = llm.chat_completion
+    llm.chat_completion = ok_cc
+    try:
+        res = llm.AgentResult()
+        call = asyncio.run(llm._forced_emit(None, "m", [], [], res))
+        assert call is not None and call["function"]["name"] == "emit_answer", call
+        assert seen["tool_choice"] == llm._FORCE_EMIT_CHOICE, seen["tool_choice"]
+        assert seen["reasoning"] == {"enabled": False}, seen["reasoning"]
+        assert res.prompt_tokens == 1 and res.completion_tokens == 1, res  # usage accrued
+
+        async def boom_cc(client, **kw):
+            raise httpx.ConnectError("down")
+        llm.chat_completion = boom_cc
+        assert asyncio.run(llm._forced_emit(None, "m", [], [], llm.AgentResult())) is None
+
+        async def notool_cc(client, **kw):
+            return _text_response("plain, no tool call")
+        llm.chat_completion = notool_cc
+        assert asyncio.run(llm._forced_emit(None, "m", [], [], llm.AgentResult())) is None
+    finally:
+        llm.chat_completion = prev
+
+
+def test_no_forced_reemit_when_structured_off():
+    # The fence-only posture: a free-typed answer is accepted as-is, no re-emit.
     calls = {"n": 0}
 
     async def fake_chat(client, model, messages, tools=None):
@@ -1182,7 +1237,7 @@ def test_no_reprompt_when_structured_off():
     llm._chat = fake_chat
     registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
     res = _run("q")
-    assert calls["n"] == 1, "structured OFF → no reprompt round"
+    assert calls["n"] == 1, "structured OFF → no forced re-emit round"
     assert res.emit_mode == "fence"
 
 
@@ -1340,14 +1395,16 @@ def run():
           test_structured_ask_clarification_yields_a_clarify_turn)
     check("the fence path records emit_mode='fence' (telemetry baseline)",
           test_fence_path_records_emit_mode_fence)
-    check("structured reprompt converts a free-typer to emit_answer",
-          test_structured_reprompt_converts_a_free_typer)
-    check("structured reprompt fires only once, then falls back",
-          test_structured_reprompt_fires_only_once_then_falls_back)
-    check("structured reprompt nudges a free-typed clarify",
-          test_structured_reprompt_nudges_a_free_typed_clarify)
-    check("no reprompt when structured emission is off",
-          test_no_reprompt_when_structured_off)
+    check("forced re-emit converts a free-typer and keeps the figure",
+          test_forced_reemit_converts_a_free_typer_and_keeps_the_figure)
+    check("forced re-emit fails open to the nudge + fence path",
+          test_forced_reemit_fails_open_to_the_nudge_and_fence_path)
+    check("free-typed clarify is handled before the forced re-emit",
+          test_free_typed_clarify_is_handled_before_the_forced_reemit)
+    check("_forced_emit forces the tool, accrues usage, and fails open",
+          test_forced_emit_helper_forces_the_tool_accrues_usage_and_fails_open)
+    check("no forced re-emit when structured emission is off",
+          test_no_forced_reemit_when_structured_off)
     check("real _chat: immediate answer over a mocked httpx transport",
           test_real_chat_transport_immediate_answer)
     check("real _chat: an HTTPStatusError surfaces as an agent error",
