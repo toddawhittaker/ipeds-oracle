@@ -7,6 +7,7 @@ Docker secrets. `pydantic-settings` validates and types them at startup.
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -17,6 +18,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 log = logging.getLogger("ipeds.config")
 
 _DEFAULT_TZ = "America/New_York"
+
+# Flatten CR/LF and other C0/DEL control chars in an UNTRUSTED value before it
+# reaches a log call, so a newline can't forge a second log line (CodeQL
+# py/log-injection). logbuffer's handler already scrubs what it persists to
+# logs.db; this covers the value at the CALL SITE too — the non-DB handlers
+# (stderr/console) and CodeQL's static view, which can't see into the handler.
+# config is a leaf module (logbuffer imports IT), so the scrub is duplicated here
+# rather than imported, to avoid a cycle.
+_LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _log_safe(value: object) -> str:
+    """Newline/control-char-stripped string form of an untrusted value, safe to
+    interpolate into a log message."""
+    return _LOG_CTRL_RE.sub(" ", str(value))
 
 # Repo root (…/ipeds). config.py lives in backend/app/, so parents[2] is the
 # root — the runtime DBs, data/, and docs/ all resolve relative to it (prod
@@ -247,7 +263,10 @@ def resolve_tz(name: str | None) -> ZoneInfo:
         if name:
             return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
-        log.warning("unknown timezone %r; falling back to %s", name, _DEFAULT_TZ)
+        # `name` can be the request's `tz` param (user-controlled) — sanitize the
+        # control chars out of it before it reaches any log handler.
+        log.warning("unknown timezone '%s'; falling back to %s",
+                    _log_safe(name), _DEFAULT_TZ)
     return ZoneInfo(_DEFAULT_TZ)
 
 
