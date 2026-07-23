@@ -60,12 +60,11 @@ export LLM_OUTPUT_COST_PER_MTOK=0
 #     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
 #     depend on this. Prod default is true.
 export FIGURE_RETRY_ENABLED=false
-#   * STRUCTURED_EMISSION_ENABLED=false — production now DEFAULTS this ON (0.2),
-#     but the test suites are pinned to the fence path for determinism: most fake
-#     _chat responses are plain-text answers, which under structured mode would
-#     trip the reject-and-reprompt round and shift call counts. The
-#     structured-emission tests flip it True explicitly (get_settings().­
-#     structured_emission_enabled = True). Pinning here also stops a dev .env from
-#     diverging tests from CI. (Same pattern as FIGURE_RETRY_ENABLED: prod-default
-#     True, CI-pinned False.)
-export STRUCTURED_EMISSION_ENABLED=false
+#   * STRUCTURED_EMISSION_ENABLED — deliberately NOT pinned here. It now DEFAULTS
+#     ON in config.py, and ci_env.sh does NOT run in CI (CI has no .env → config
+#     defaults). Pinning it false here would make run_ci_local diverge from CI
+#     (local off, CI on) and MASK failures — which it did once. The fence-path
+#     test suites that need it off pin it themselves at import
+#     (test_agent_loop.py / test_critic.py: os.environ["STRUCTURED_EMISSION_ENABLED"]
+#     = "false"), so they're deterministic on BOTH; the structured tests flip it on
+#     per-test. Leaving it unset here lets run_ci_local reproduce CI's on-default.
