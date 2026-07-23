@@ -9,7 +9,7 @@ import { PENDING_CONFIG, BLOCKED_CONFIG } from "./accesstables.js";
 import DataTable from "./DataTable.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { buildImportPlan } from "./csvimport.js";
-import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload, IconCheck, IconClose, IconUnlock } from "./icons.jsx";
+import { IconShieldPlus, IconShieldMinus, IconTrash, IconUpload, IconCheck, IconClose, IconUnlock, IconInfo } from "./icons.jsx";
 import HelpPopover from "./HelpPopover.jsx";
 import { useToast } from "./Toast.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -18,6 +18,7 @@ import BulkBar from "./BulkBar.jsx";
 import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSelectionAfterBulk } from "./selection.js";
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
+import { STAT_INFO, directionHint } from "./usageinfo.js";
 import {
   exhaustionLabel,
   groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate,
@@ -2002,19 +2003,26 @@ function Usage() {
               appears or those prices are set.
             </p>
           )}
+          <p className="usage-privacy muted small">
+            Every number here is computed locally, on this server, from its own
+            database — and is shown only to signed-in admins. None of it is ever
+            sent to a central server, telemetry service, or any third party; your
+            usage data never leaves this machine. Hover or tap the ⓘ on any stat
+            for what it means and which way is good.
+          </p>
           <div className="stats">
-            <Stat label="Queries" value={(t.queries || 0).toLocaleString()} />
-            <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} />
-            <Stat label="Spend" value={money(t.spend)} />
-            <Stat label="Answer cache" value={t.cache_hits || 0} />
-            <Stat label="Schema cache" value={schemaCacheRate(t)} />
-            <Stat label="Prompt cache" value={promptCacheRate(t)} />
-            <Stat label="Escalations" value={t.escalations || 0} />
-            <Stat label="Failures" value={t.failures || 0} />
-            <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} />
-            <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} />
-            <Stat label={leakLabel(t)} value={leakRate(t)} />
-            <Stat label={exhaustionLabel(t)} value={(t.exhausted_turns || 0).toLocaleString()} />
+            <Stat label="Queries" value={(t.queries || 0).toLocaleString()} info={STAT_INFO.queries} />
+            <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} info={STAT_INFO.tokens} />
+            <Stat label="Spend" value={money(t.spend)} info={STAT_INFO.spend} />
+            <Stat label="Answer cache" value={t.cache_hits || 0} info={STAT_INFO.answerCache} />
+            <Stat label="Schema cache" value={schemaCacheRate(t)} info={STAT_INFO.schemaCache} />
+            <Stat label="Prompt cache" value={promptCacheRate(t)} info={STAT_INFO.promptCache} />
+            <Stat label="Escalations" value={t.escalations || 0} info={STAT_INFO.escalations} />
+            <Stat label="Failures" value={t.failures || 0} info={STAT_INFO.failures} />
+            <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} info={STAT_INFO.groundedFigures} />
+            <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} info={STAT_INFO.groundedCells} />
+            <Stat label={leakLabel(t)} value={leakRate(t)} info={STAT_INFO.answerLeaks} />
+            <Stat label={exhaustionLabel(t)} value={(t.exhausted_turns || 0).toLocaleString()} info={STAT_INFO.exhausted} />
           </div>
 
           <div className="usage-chart-head">
@@ -2047,8 +2055,27 @@ function Usage() {
   );
 }
 
-function Stat({ label, value }) {
-  return <div className="stat"><div className="v">{value}</div><div className="l">{label}</div></div>;
+function Stat({ label, value, info }) {
+  return (
+    <div className="stat">
+      <div className="v">{value}</div>
+      <div className="l">
+        <span>{label}</span>
+        {info && (
+          <HelpPopover label={`What “${info.name}” measures`} icon={IconInfo}
+                       className="help-compact">
+            <div className="help-body statinfo">
+              <p>{info.what}</p>
+              {info.note && <p className="statinfo-note">{info.note}</p>}
+              <p className={"statinfo-dir dir-" + info.direction}>
+                {directionHint(info.direction)}
+              </p>
+            </div>
+          </HelpPopover>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ruleName(s) {

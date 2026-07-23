@@ -9,9 +9,12 @@ import { IconHelp } from "./icons.jsx";
 // never leaves the hover region), and it opens on hover, keyboard focus, and tap.
 //
 // `label` is the trigger's accessible name; `children` is the help content (also
-// exposed to screen readers via the trigger's aria-describedby). State/close
-// behaviour lives here; the visual styling is `.help`/`.help-popover` in styles.css.
-export default function HelpPopover({ label, children }) {
+// exposed to screen readers via the trigger's aria-describedby). `icon` overrides
+// the trigger glyph (defaults to the "?" help mark; the Usage stats pass the "ⓘ"
+// info mark), and `className` adds a wrapper modifier (e.g. "help-compact" for a
+// smaller inline trigger). State/close behaviour lives here; the visual styling is
+// `.help`/`.help-popover` in styles.css.
+export default function HelpPopover({ label, children, icon: Icon = IconHelp, className = "" }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const timer = useRef(null);
@@ -36,7 +39,7 @@ export default function HelpPopover({ label, children }) {
 
   return (
     <span
-      className="help"
+      className={"help" + (className ? " " + className : "")}
       onMouseEnter={() => { hover.current = true; openNow(); }}
       onMouseLeave={() => { hover.current = false; closeSoon(); }}
       onKeyDown={(e) => { if (e.key === "Escape" && open) { setOpen(false); e.stopPropagation(); } }}
@@ -55,7 +58,7 @@ export default function HelpPopover({ label, children }) {
         onFocus={() => { focus.current = true; if (!open) { openedByFocus.current = true; } openNow(); }}
         onBlur={() => { focus.current = false; openedByFocus.current = false; closeSoon(); }}
       >
-        <IconHelp />
+        <Icon />
       </button>
       <div id={id} role="tooltip" className="help-popover" hidden={!open}>
         {children}
