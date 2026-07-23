@@ -259,6 +259,34 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   it). This also relaxes the retry's `_figure_required` gate to fire on a no-SQL
   turn when prior results exist. Pinned in `backend/tests/test_grounding.py` +
   `test_agent_loop.py` + `test_chat_router.py`.
+- a deterministic **table-grounding check** (`grounding.check_table`, same
+  module, also **OBSERVE-ONLY**) — the results **table** is the model re-typing
+  the query rows one-for-one, the densest block of numbers on screen and (like
+  the figure once was) unverified. It parses the answer's GFM tables
+  (`parse_markdown_tables`, header kept, skipping ```` ``` ````-fenced regions so
+  a ```chart block isn't read as a table) and grades the **MEASURE columns only**
+  — `_is_measure_column` excludes a **rank ordinal** (values are a pure 1..N
+  sequence, whatever the header — "#"/"No."/"Rank") and any **dimension** column
+  (header matches `is_dimension`: rank/year/unitid/cipcode/id/…). This keeps the
+  rate a clean transcription-accuracy signal for the DATA rather than dragging it
+  down with a model-added Rank column that was never in the DB (the live-test
+  regression: a perfectly-transcribed top-5 table scored 5/10 because its five
+  rank ordinals can't ground). Each graded cell is reconciled against THIS turn's
+  retained results via the SAME kernel as the figure — extracted into the shared
+  `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
+  intact) — so a legitimately **computed measure** (a share/%-change column) still
+  grounds instead of false-alarming, at the cost of the figure's known
+  coincidental-match bias (acceptable observe-only: `messages.results` is
+  persisted, so an all-columns variant is recomputable offline). Records a
+  per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked`) +
+  numeric-cell counts on
+  `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
+  (**migration 25**; `no_table`/`unchecked` carry 0 counts so they self-exclude
+  from the SUM-based rate), surfaced as a **cell-level** **Grounded cells** stat
+  on Admin → Usage (`groundedTableRate`, vitest-pinned). Stamped in `llm.py`
+  (`_stamp_table_grounding`) right after the figure stamp, on the FINAL settled
+  answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
+  `test_migrations.py`.
 - a post-answer **critic** that can force one revision round. **It is given the
   actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
   flag) — without them it saw only the SQL *text* and the prose, so it could

@@ -359,6 +359,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # Structured-emission telemetry (PR-1): how the turn emitted, and
                 # whether the sentinel found residual leak debris in the prose.
                 emit_mode=result.emit_mode, leaked=result.leaked,
+                # Observe-only table-grounding: how many of the answer table's
+                # numeric cells reproduce from the retained rows (app/grounding.py).
+                # NULL/0 on cache/refusal turns via the defaults, like figure_grounding.
+                table_grounding=result.table_grounding,
+                table_cells_checked=result.table_cells_checked,
+                table_cells_matched=result.table_cells_matched,
                 delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
@@ -470,6 +476,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
              suggestions=None, clarify=None, figure_grounding=None,
              figure_derivation=None, results=None, emit_mode=None, leaked=False,
+             table_grounding=None, table_cells_checked=0, table_cells_matched=0,
              delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
@@ -507,13 +514,15 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
             "ok, cached, cost, figure_grounding, figure_derivation, "
-            "emit_mode, answer_leaked, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "emit_mode, answer_leaked, table_grounding, table_cells_checked, "
+            "table_cells_matched, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, int(ok), int(cached),
              float(cost), figure_grounding or None, figure_derivation or None,
-             emit_mode or None, int(bool(leaked)), now))
+             emit_mode or None, int(bool(leaked)), table_grounding or None,
+             int(table_cells_checked), int(table_cells_matched), now))
         con.commit()
         return user_msg_id, assistant_id
     finally:

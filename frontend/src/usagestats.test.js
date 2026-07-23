@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundedFigureLabel, groundedFigureRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Both rates share one guarded ratio helper; the regression each guards is the
 // same: a naive cached/total renders "NaN%"/"Infinity%" on an empty window (0
@@ -104,6 +104,52 @@ describe("groundedFigureLabel (the stat's sample size)", () => {
   it("coerces string totals", () => {
     expect(groundedFigureLabel({ figures_checked: "4", figures_ungrounded: "1" }))
       .toBe("3/4 Grounded figures");
+  });
+});
+
+describe("groundedTableRate (cell-level transcription accuracy)", () => {
+  // Same misread-dashboard guard as the figure rate: an empty window (no table
+  // cells checked) must read "—", never a falsely reassuring "100%".
+  it("returns — when no table cell was checked in the window", () => {
+    expect(groundedTableRate({ table_cells_checked: 0, table_cells_matched: 0 })).toBe("—");
+    expect(groundedTableRate({})).toBe("—");
+    expect(groundedTableRate(undefined)).toBe("—");
+    expect(groundedTableRate(null)).toBe("—");
+  });
+
+  const cases = [
+    [318, 318, "100%"],  // every cell reproducible — the healthy state
+    [318, 312, "98%"],
+    [20, 15, "75%"],
+    [10, 0, "0%"],       // nothing reproducible → an honest 0%, never "—"
+  ];
+  it.each(cases)("checked=%s matched=%s → %s", (table_cells_checked, table_cells_matched, expected) => {
+    expect(groundedTableRate({ table_cells_checked, table_cells_matched })).toBe(expected);
+  });
+
+  it("coerces string totals", () => {
+    expect(groundedTableRate({ table_cells_checked: "20", table_cells_matched: "18" })).toBe("90%");
+  });
+});
+
+describe("groundedTableLabel (the stat's sample size)", () => {
+  it("reads matched/checked with the counts", () => {
+    expect(groundedTableLabel({ table_cells_checked: 318, table_cells_matched: 318 }))
+      .toBe("318/318 Grounded cells");
+    expect(groundedTableLabel({ table_cells_checked: 20, table_cells_matched: 15 }))
+      .toBe("15/20 Grounded cells");
+  });
+
+  it("drops the counts when nothing was measured", () => {
+    expect(groundedTableLabel({ table_cells_checked: 0, table_cells_matched: 0 }))
+      .toBe("Grounded cells");
+    expect(groundedTableLabel({})).toBe("Grounded cells");
+    expect(groundedTableLabel(undefined)).toBe("Grounded cells");
+  });
+
+  it("coerces string totals", () => {
+    expect(groundedTableLabel({ table_cells_checked: "20", table_cells_matched: "18" }))
+      .toBe("18/20 Grounded cells");
   });
 });
 

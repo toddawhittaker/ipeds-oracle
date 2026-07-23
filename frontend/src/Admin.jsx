@@ -18,7 +18,8 @@ import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSele
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
 import {
-  groundedFigureLabel, groundedFigureRate, leakLabel, leakRate,
+  groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate,
+  leakLabel, leakRate,
   promptCacheRate, schemaCacheRate,
 } from "./usagestats.js";
 
@@ -2007,6 +2008,7 @@ function Usage() {
             <Stat label="Escalations" value={t.escalations || 0} />
             <Stat label="Failures" value={t.failures || 0} />
             <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} />
+            <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} />
             <Stat label={leakLabel(t)} value={leakRate(t)} />
           </div>
 

@@ -1088,7 +1088,15 @@ def usage(since: float | None = None, until: float | None = None):
             "AS emit_turns, "
             "COALESCE(SUM(CASE WHEN emit_mode='structured' THEN 1 ELSE 0 END),0) "
             "AS structured_turns, "
-            "COALESCE(SUM(answer_leaked),0) AS leaked_turns "
+            "COALESCE(SUM(answer_leaked),0) AS leaked_turns, "
+            # Table grounding (app/grounding.py), observe-only: across the answer
+            # tables that had results to check, how many numeric cells reproduced
+            # from those rows. A cell-level transcription-accuracy rate — the
+            # densest block of numbers on screen, previously unverified. no_table/
+            # unchecked turns carry 0 counts, so summing self-excludes them (0/0)
+            # exactly like the figure rate's IN-set filter above.
+            "COALESCE(SUM(table_cells_checked),0) AS table_cells_checked, "
+            "COALESCE(SUM(table_cells_matched),0) AS table_cells_matched "
             f"FROM usage_log {win}", args).fetchone()
         series = con.execute(
             f"SELECT strftime('{bucket_fmt}', created_at,'unixepoch') AS t, "

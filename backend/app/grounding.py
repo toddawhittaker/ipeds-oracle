@@ -1,4 +1,5 @@
-"""Check a hero FIGURE against the query results it claims to summarize.
+"""Check the numbers an answer shows — the hero FIGURE and the results TABLE —
+against the query results they claim to summarize.
 
 The app's execution integrity is strong up to the moment run_sql returns rows
 (app/tools/sql.py: read-only handle, single SELECT/WITH, watchdog timeout, row
@@ -352,8 +353,23 @@ def check_figure(figure: dict | None,
         return GroundingCheck(NO_FIGURE)
     if not results:
         return GroundingCheck(UNCHECKED, value=target)
+    match = _reconcile_value(target, figure.get("value"), results)
+    if match is None:
+        return GroundingCheck(UNGROUNDED, value=target)
+    status, derivation = match
+    return GroundingCheck(status, derivation, target)
 
-    raw_value = figure.get("value")
+
+def _reconcile_value(target: float, raw_value,
+                     results: list[QueryResult]) -> tuple[str, Derivation] | None:
+    """Reproduce `target` from any column of any retained result, returning the
+    STRONGEST route — EXACT short-circuits; otherwise the best of ROUNDED/DERIVED
+    — or None when nothing reproduced it.
+
+    The shared reconciliation kernel behind both check_figure and check_table, so
+    a figure and a table cell are grounded by exactly the same rule. `raw_value`
+    is the number as WRITTEN (its precision drives the display-rounding
+    tolerance)."""
     best: tuple[str, Derivation] | None = None
     for r_idx, result in enumerate(results):
         for column, values in numeric_columns(result).items():
@@ -363,10 +379,145 @@ def check_figure(figure: dict | None,
             status, op = match
             derivation = Derivation(op=op, result_index=r_idx, column=column)
             if status == EXACT:
-                return GroundingCheck(EXACT, derivation, target)
+                return EXACT, derivation
             # Keep looking for an exact match, but remember the weaker one.
             if best is None or (best[0] == DERIVED and status == ROUNDED):
                 best = (status, derivation)
-    if best:
-        return GroundingCheck(best[0], best[1], target)
-    return GroundingCheck(UNGROUNDED, value=target)
+    return best
+
+
+# --- Table grounding -----------------------------------------------------------
+# The results TABLE is the model re-typing the query rows one-for-one — the
+# densest concentration of numbers on screen, and (until this) as unverified as
+# the figure once was. check_table grades the MEASURE columns only (rank ordinals
+# and dimension columns are excluded — see _is_measure_column — so the rate is a
+# clean transcription-accuracy signal for the DATA, not dragged down by a
+# model-added Rank column that was never in the DB). Each graded cell is
+# reconciled with the SAME kernel as the figure (_reconcile_value: full
+# reproduction — verbatim / display-rounded / derivable), so a legitimately
+# computed measure (a share/%-change column) still grounds instead of
+# false-alarming, at the cost of the same coincidental-match bias noted in this
+# module's KNOWN LIMITATION. Observe-only: statuses land on
+# usage_log.table_grounding (migration 25) and drive Admin -> Usage; nothing is
+# altered or blocked. The raw rows stay in messages.results, so an all-columns
+# variant is recomputable offline.
+
+# Statuses recorded on usage_log.table_grounding (migration 25). NO_TABLE and
+# UNCHECKED carry zero cell counts, so they self-exclude from the SUM-based rate.
+TABLE_MATCHED = "matched"      # every checked numeric cell reproduced
+TABLE_PARTIAL = "partial"      # some reproduced, some didn't
+TABLE_UNMATCHED = "unmatched"  # no numeric cell reproduced
+NO_TABLE = "no_table"          # no gradable numeric table cell in the answer
+# UNCHECKED (above) is reused: a table was present but no results to check it against.
+
+# A GFM delimiter row: only dashes/colons/pipes/spaces, e.g. `| --- | :--: |`.
+# It must carry a pipe to be a table separator (a bare `---` is a horizontal rule).
+_TABLE_SEP_RE = re.compile(r"^\s*\|?(\s*:?-{1,}:?\s*\|)+\s*:?-{0,}:?\s*$")
+
+
+@dataclass(frozen=True)
+class TableGroundingCheck:
+    status: str
+    cells_checked: int = 0
+    cells_matched: int = 0
+
+
+def _split_row(line: str) -> list[str]:
+    """A GFM table row → trimmed cell strings, dropping the empty leading/trailing
+    cells the surrounding pipes create."""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def parse_markdown_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
+    """Extract GFM pipe tables from `text` as `(header_cells, body_rows)` tuples.
+    The `---` separator row is dropped; the header is kept so a column can be
+    classified measure-vs-dimension. Fenced code regions (```...```) are skipped
+    so a ```chart JSON block, still present in the shipped answer, is never read
+    as a table."""
+    tables: list[tuple[list[str], list[list[str]]]] = []
+    lines = (text or "").splitlines()
+    in_fence = False
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            i += 1
+            continue
+        # A header is a pipe row immediately followed by a delimiter row.
+        if (not in_fence and "|" in line and i + 1 < n
+                and "|" in lines[i + 1] and _TABLE_SEP_RE.match(lines[i + 1])):
+            header = _split_row(line)
+            i += 2  # consume header + separator
+            body: list[list[str]] = []
+            while (i < n and "|" in lines[i]
+                   and not lines[i].lstrip().startswith("```")):
+                body.append(_split_row(lines[i]))
+                i += 1
+            if body:
+                tables.append((header, body))
+            continue
+        i += 1
+    return tables
+
+
+def _is_measure_column(header: str, values: list[float]) -> bool:
+    """True when a numeric table column carries DATA (a measure), not row identity.
+
+    A rank/ordinal or dimension column is not a measure: its cells aren't data
+    transcribed from the query, so grading them muddies the transcription-accuracy
+    signal — worst of all a model-added Rank column (1,2,3…) is never in the
+    result and reads as a false `unmatched`. Excluded when the header names a
+    dimension (rank/year/unitid/cipcode/id/… — the same `is_dimension` used to bar
+    aggregation) OR the values are a pure 1..N sequence (a rank ordinal whatever
+    the header says — "#", "No.")."""
+    if is_dimension(header):
+        return False
+    if len(values) >= 2 and values == [float(k) for k in range(1, len(values) + 1)]:
+        return False
+    return True
+
+
+def check_table(answer_markdown: str,
+                results: list[QueryResult] | None) -> TableGroundingCheck:
+    """Can the MEASURE cells of the answer's Markdown table(s) be reproduced from
+    the retained query results? Observe-only, like check_figure.
+
+    Grades numeric cells in MEASURE columns only (see _is_measure_column) — rank
+    ordinals and dimension columns are excluded so the rate is a clean
+    transcription-accuracy signal for the data, not dragged down by a model-added
+    Rank column that was never in the DB. Each graded cell is grounded by the SAME
+    rule as a figure (full reproduction via _reconcile_value). NO_TABLE/UNCHECKED
+    carry no counts so they don't move the rate."""
+    cells: list[tuple[float, str]] = []
+    for header, body in parse_markdown_tables(answer_markdown or ""):
+        width = max((len(r) for r in body), default=0)
+        for ci in range(width):
+            col_head = header[ci] if ci < len(header) else ""
+            col = [(raw, parse_number(raw))
+                   for r in body if ci < len(r) for raw in (r[ci],)]
+            nums = [(raw, v) for raw, v in col if v is not None]
+            if not nums:
+                continue  # a label column (states, institutions) — nothing to grade
+            if not _is_measure_column(col_head, [v for _, v in nums]):
+                continue  # a rank ordinal or dimension — not a transcribed measure
+            cells.extend((v, raw) for raw, v in nums)
+    if not cells:
+        return TableGroundingCheck(NO_TABLE)
+    if not results:
+        return TableGroundingCheck(UNCHECKED)
+    matched = sum(1 for v, raw in cells
+                  if _reconcile_value(v, raw, results) is not None)
+    checked = len(cells)
+    if matched == checked:
+        status = TABLE_MATCHED
+    elif matched == 0:
+        status = TABLE_UNMATCHED
+    else:
+        status = TABLE_PARTIAL
+    return TableGroundingCheck(status, cells_checked=checked, cells_matched=matched)

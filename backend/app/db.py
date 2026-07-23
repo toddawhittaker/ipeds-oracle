@@ -324,6 +324,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     # leak rate to 0 before the default is flipped. NULL/0 on turns that predate.
     (24, "ALTER TABLE usage_log ADD COLUMN emit_mode TEXT;\n"
          "ALTER TABLE usage_log ADD COLUMN answer_leaked INTEGER NOT NULL DEFAULT 0;"),
+    # Table grounding (app/grounding.py, observe-only): `table_grounding` = the
+    # per-turn status ('matched'/'partial'/'unmatched'/'no_table'/'unchecked');
+    # `table_cells_checked`/`table_cells_matched` = the numeric-cell counts that
+    # drive Admin -> Usage's cell-level rate. no_table/unchecked carry 0 counts so
+    # they self-exclude from the SUM ratio. NULL/0 on turns that predate.
+    (25, "ALTER TABLE usage_log ADD COLUMN table_grounding TEXT;\n"
+         "ALTER TABLE usage_log ADD COLUMN table_cells_checked INTEGER NOT NULL DEFAULT 0;\n"
+         "ALTER TABLE usage_log ADD COLUMN table_cells_matched INTEGER NOT NULL DEFAULT 0;"),
 ]
 
 

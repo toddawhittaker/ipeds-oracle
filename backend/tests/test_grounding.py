@@ -332,6 +332,148 @@ def test_check_figure_never_raises_on_junk():
     grounding.check_figure({"value": "1"}, [result([], [])])
 
 
+# --- table grounding: the GFM parser ------------------------------------------
+# Regression: the parser must find real result tables while never mistaking a
+# ```chart JSON block (still present in the shipped answer) for one, or a bare
+# `---` horizontal rule for a table separator.
+
+_TABLE_MD = (
+    "Here are the recent years.\n\n"
+    "| Year | Awards |\n"
+    "| --- | --- |\n"
+    "| 2021 | 1,000 |\n"
+    "| 2024 | 1,250 |\n\n"
+    "Trend below.\n"
+)
+
+
+def test_parse_markdown_tables_extracts_header_and_body_rows():
+    tables = grounding.parse_markdown_tables(_TABLE_MD)
+    assert len(tables) == 1, tables
+    # Separator dropped; header kept (for measure/dimension classification), two
+    # body rows of two cells each.
+    header, body = tables[0]
+    assert header == ["Year", "Awards"], header
+    assert body == [["2021", "1,000"], ["2024", "1,250"]], body
+
+
+def test_parse_markdown_tables_skips_a_chart_fence():
+    md = ("| Year | Awards |\n| --- | --- |\n| 2024 | 1,250 |\n\n"
+          "```chart\n"
+          '{"type":"line","data":[{"x":2024,"y":1250}]}\n'
+          "```\n")
+    tables = grounding.parse_markdown_tables(md)
+    # Exactly the one real table — the chart JSON (no pipes, and fenced) is not it.
+    assert tables == [(["Year", "Awards"], [["2024", "1,250"]])], tables
+
+
+def test_parse_markdown_tables_ignores_a_bare_horizontal_rule():
+    # A `---` under a pipe line is an HR, not a separator (no pipe in the rule).
+    md = "Some prose with a | pipe in it\n\n---\n\nMore prose.\n"
+    assert grounding.parse_markdown_tables(md) == []
+
+
+# --- table grounding: check_table ---------------------------------------------
+
+def test_a_verbatim_table_is_matched():
+    # Only the MEASURE column (Awards: 1000, 1250) is graded — Year is a dimension
+    # and is excluded, so 2 cells checked, both verbatim in YEARS.
+    got = grounding.check_table(_TABLE_MD, [YEARS])
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert got.cells_checked == 2 and got.cells_matched == 2, got
+
+
+def test_a_dropped_digit_cell_is_partial():
+    # "1,250" mistyped as "1,240" reproduces from nothing → one Awards cell
+    # unmatched (Year excluded from grading).
+    bad = _TABLE_MD.replace("1,250", "1,240")
+    got = grounding.check_table(bad, [YEARS])
+    assert got.status == grounding.TABLE_PARTIAL, got
+    assert got.cells_checked == 2 and got.cells_matched == 1, got
+
+
+def test_a_rank_ordinal_column_is_excluded_from_grading():
+    # The live-test regression: a model-added Rank column (1,2,3) is never in the
+    # DB result, so grading it would drag a perfectly-transcribed ranking table to
+    # ~partial. Measure-only grading counts the award column ONLY.
+    md = ("| Rank | State | Awards |\n"
+          "| --- | --- | --- |\n"
+          "| 1 | A | 1,250 |\n"
+          "| 2 | B | 1,200 |\n"
+          "| 3 | C | 1,100 |\n")
+    got = grounding.check_table(md, [YEARS])
+    # 3 Awards cells graded (all in YEARS), the 3 rank cells + 3 labels excluded.
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert got.cells_checked == 3 and got.cells_matched == 3, got
+
+
+def test_an_unlabeled_rank_ordinal_is_excluded_by_its_1_to_n_values():
+    # A rank column headed "#" (which is_dimension doesn't name) is still caught
+    # because its values are a pure 1..N sequence.
+    md = ("| # | Awards |\n"
+          "| --- | --- |\n"
+          "| 1 | 1,250 |\n"
+          "| 2 | 1,200 |\n"
+          "| 3 | 1,100 |\n")
+    got = grounding.check_table(md, [YEARS])
+    assert got.cells_checked == 3 and got.cells_matched == 3, got
+
+
+def test_a_wholly_invented_table_is_unmatched():
+    md = "| A | B |\n| --- | --- |\n| 88888 | 77777 |\n"
+    got = grounding.check_table(md, [YEARS])
+    assert got.status == grounding.TABLE_UNMATCHED, got
+    assert got.cells_checked == 2 and got.cells_matched == 0, got
+
+
+def test_a_display_rounded_cell_still_matches():
+    # 1,250 written as "1,300" is honest hundreds-place rounding (0.04 share) —
+    # the same tolerance the figure grants (see _displayed_precision_tol).
+    md = "| Year | Awards |\n| --- | --- |\n| 2024 | 1,300 |\n"
+    got = grounding.check_table(md, [YEARS])
+    assert got.status == grounding.TABLE_MATCHED, got
+
+
+def test_a_legitimately_computed_column_grounds_not_false_alarms():
+    # DECIDED (full reproduction): a share column reproduces via the `share` op, so
+    # a computed column grounds instead of reading as a transcription error.
+    # Ohio State 400 of 1000 total = 40.0%.
+    md = ("| Institution | Awards | Share |\n"
+          "| --- | --- | --- |\n"
+          "| Ohio State | 400 | 40.0% |\n"
+          "| Texas A&M | 300 | 30.0% |\n"
+          "| Arizona State | 300 | 30.0% |\n")
+    got = grounding.check_table(md, [RANKING])
+    assert got.status == grounding.TABLE_MATCHED, got
+
+
+def test_prose_with_no_table_is_no_table():
+    got = grounding.check_table("Ohio State University is in Columbus, OH.", [YEARS])
+    assert got.status == grounding.NO_TABLE, got
+    assert got.cells_checked == 0 and got.cells_matched == 0, got
+
+
+def test_a_table_with_no_results_is_unchecked_with_zero_counts():
+    # A recited table with no query this turn: UNCHECKED, and NO counts — so it
+    # self-excludes from the SUM-based rate rather than reading as 0/N failures.
+    got = grounding.check_table(_TABLE_MD, [])
+    assert got.status == grounding.UNCHECKED, got
+    assert got.cells_checked == 0 and got.cells_matched == 0, got
+
+
+def test_a_label_only_table_is_no_table():
+    # No numeric cells to grade (an address/accreditor lookup rendered as a table).
+    md = "| Field | Value |\n| --- | --- |\n| City | Columbus |\n| State | Ohio |\n"
+    got = grounding.check_table(md, [YEARS])
+    assert got.status == grounding.NO_TABLE, got
+
+
+def test_check_table_never_raises_on_junk():
+    for text in [None, "", "| broken", "|||", "```\nunclosed fence\n"]:
+        grounding.check_table(text, [YEARS])
+    grounding.check_table(_TABLE_MD, None)
+
+
 def run():
     print("Testing figure grounding (app/grounding.py)...")
     check("QueryResult storage round-trip preserves columns/cells",
@@ -381,6 +523,31 @@ def run():
     check("it searches every retained result",
           test_it_searches_every_retained_result_not_just_the_last)
     check("check_figure never raises on junk", test_check_figure_never_raises_on_junk)
+    # --- table grounding ---
+    check("parse_markdown_tables extracts header and body rows",
+          test_parse_markdown_tables_extracts_header_and_body_rows)
+    check("parse_markdown_tables skips a chart fence",
+          test_parse_markdown_tables_skips_a_chart_fence)
+    check("parse_markdown_tables ignores a bare horizontal rule",
+          test_parse_markdown_tables_ignores_a_bare_horizontal_rule)
+    check("a verbatim table is matched (measure column only)",
+          test_a_verbatim_table_is_matched)
+    check("a dropped-digit cell is partial", test_a_dropped_digit_cell_is_partial)
+    check("a rank ordinal column is excluded from grading",
+          test_a_rank_ordinal_column_is_excluded_from_grading)
+    check("an unlabeled rank ordinal is excluded by its 1..N values",
+          test_an_unlabeled_rank_ordinal_is_excluded_by_its_1_to_n_values)
+    check("a wholly invented table is unmatched",
+          test_a_wholly_invented_table_is_unmatched)
+    check("a display-rounded cell still matches",
+          test_a_display_rounded_cell_still_matches)
+    check("a legitimately computed column grounds (full-reproduction rule)",
+          test_a_legitimately_computed_column_grounds_not_false_alarms)
+    check("prose with no table is no_table", test_prose_with_no_table_is_no_table)
+    check("a table with no results is unchecked with zero counts",
+          test_a_table_with_no_results_is_unchecked_with_zero_counts)
+    check("a label-only table is no_table", test_a_label_only_table_is_no_table)
+    check("check_table never raises on junk", test_check_table_never_raises_on_junk)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

@@ -69,6 +69,29 @@ export function groundedFigureLabel(totals) {
   return `${checked - num(t.figures_ungrounded)}/${checked} Grounded figures`;
 }
 
+// TABLE grounding: the cell-level companion to the figure rate. The results table
+// is the model re-typing the query rows one-for-one — the densest block of
+// numbers on screen — so this is the fraction of its numeric CELLS the server can
+// reproduce from the retained rows (verbatim, display-rounded, or via a
+// derivation, same rule as the figure). A transcription-accuracy signal, also a
+// data-integrity metric, not a cost one. Turns with no table and turns with no
+// retained results carry 0 cells server-side, so they self-exclude from the
+// denominator and an empty window shows "—", not a false 100%.
+export function groundedTableRate(totals) {
+  const t = totals || {};
+  return rate(t.table_cells_matched, t.table_cells_checked);
+}
+
+// Sub-label carrying the sample size, mirroring groundedFigureLabel: "312/318
+// Grounded cells". Bare label until anything's been checked (rather than "0/0",
+// which reads as failure instead of an empty window — the rate already shows "—").
+export function groundedTableLabel(totals) {
+  const t = totals || {};
+  const checked = num(t.table_cells_checked);
+  if (checked <= 0) return "Grounded cells";
+  return `${num(t.table_cells_matched)}/${checked} Grounded cells`;
+}
+
 // LEAK rate: of the real agent turns, what share shipped residual fence/JSON
 // debris in the prose (the sentinel). This is the metric that proves structured
 // emission works — it should fall to 0 as `structured_turns` rises. "—" on an

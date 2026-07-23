@@ -174,6 +174,21 @@ def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
     res.figure_derivation = _derivation_label(check, n_current)
 
 
+def _stamp_table_grounding(res: AgentResult) -> None:
+    """Record whether the answer's Markdown result table reproduces from THIS
+    turn's query results (app/grounding.py). Observe-only and ungated, same as
+    _stamp_grounding — pure local arithmetic, nothing to switch off.
+
+    Grounds against `res.results` only (a table is virtually always its own
+    query's output). A recited table with no query this turn stays UNCHECKED with
+    zero cell counts, so it never dilutes the measured rate — prior-turn borrow is
+    a later symmetry if recited tables prove common."""
+    check = grounding.check_table(res.answer, res.results)
+    res.table_grounding = check.status
+    res.table_cells_checked = check.cells_checked
+    res.table_cells_matched = check.cells_matched
+
+
 def _ground_results(res: AgentResult) -> tuple[list, int]:
     """The result list a figure is checked against: THIS turn's results FIRST
     (so a figure from the current query grounds against the current query), then
@@ -678,6 +693,14 @@ class AgentResult:
     # Admin -> Usage, and blocks/alters nothing. "" means never checked.
     figure_grounding: str = ""
     figure_derivation: str = ""     # the derivation that matched, e.g. "sum(q2.awards)"
+    # Whether the answer's Markdown result TABLE reproduces from the retained
+    # results (app/grounding.py, observe-only). The table is the densest block of
+    # numbers on screen; these count its numeric cells and how many grounded, so
+    # Admin -> Usage can show a cell-level transcription-accuracy rate. "" / 0 when
+    # never checked (no table, or no results to check against).
+    table_grounding: str = ""
+    table_cells_checked: int = 0
+    table_cells_matched: int = 0
     suggestions: list | None = None  # drill-down questions from the followups fence
     clarify: dict | None = None     # {question, options[]} from a disambiguation fence
     # Emission mode this turn used (structured-output telemetry): "structured" when
@@ -932,6 +955,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 res.last_result = last_sql_result["result"]
                 res.results = last_sql_result["results"]
                 _stamp_grounding(res, raw_answer)
+                # Observe-only: does the answer's result TABLE reproduce from the
+                # retained rows? (app/grounding.py) Runs on the FINAL settled
+                # answer, same as the figure stamp above.
+                _stamp_table_grounding(res)
                 # Structural recovery: if this data answer should have led with a
                 # figure but emitted none, one targeted call tries to recover it
                 # (see _maybe_retry_figure). Runs AFTER the critic has settled the

@@ -277,6 +277,26 @@ def test_migration_24_adds_usage_log_emit_mode_and_leak_columns():
     assert row[0] is None and row[1] == 0, row
 
 
+def test_migration_25_adds_usage_log_table_grounding_columns():
+    # Table grounding (observe-only): the per-turn status plus the numeric-cell
+    # counts that drive Admin -> Usage's cell-level rate.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 24])
+    assert "table_grounding" not in _cols(con, "usage_log"), _cols(con, "usage_log")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    cols = _cols(con, "usage_log")
+    assert "table_grounding" in cols, cols
+    assert "table_cells_checked" in cols and "table_cells_matched" in cols, cols
+    # status nullable (predating rows / cache hits); the counts default to 0 so a
+    # predating row contributes 0/0 to the SUM-based rate rather than 0/N.
+    con.execute("INSERT INTO usage_log(user_id, question, created_at) VALUES (1,'q',0)")
+    row = con.execute(
+        "SELECT table_grounding, table_cells_checked, table_cells_matched "
+        "FROM usage_log").fetchone()
+    assert row[0] is None and row[1] == 0 and row[2] == 0, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -540,19 +560,6 @@ def _current_fingerprint():
 # structure, so whitespace/formatting of this literal is irrelevant.
 EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
 {
-  "indexes": {
-    "idx_access_requests_canon_email":
-      {"table": "access_requests", "unique": 0, "columns": ["canon_email"]},
-    "idx_access_requests_canon_expr":
-      {"table": "access_requests", "unique": 0, "columns": [null]},
-    "idx_access_requests_email":
-      {"table": "access_requests", "unique": 0, "columns": ["email"]},
-    "idx_auth_attempts_created":
-      {"table": "auth_request_attempts", "unique": 0, "columns": ["created_at"]},
-    "ix_conv_user": {"table": "conversations", "unique": 0, "columns": ["user_id", "updated_at"]},
-    "ix_msg_conv": {"table": "messages", "unique": 0, "columns": ["conversation_id", "id"]},
-    "ix_usage_time": {"table": "usage_log", "unique": 0, "columns": ["created_at"]}
-  },
   "tables": {
     "access_requests": [
       ["canon_email", "TEXT", 0, null, 0],
@@ -673,6 +680,9 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["ok", "INTEGER", 0, null, 0],
       ["prompt_tokens", "INTEGER", 0, null, 0],
       ["question", "TEXT", 0, null, 0],
+      ["table_cells_checked", "INTEGER", 1, "0", 0],
+      ["table_cells_matched", "INTEGER", 1, "0", 0],
+      ["table_grounding", "TEXT", 0, null, 0],
       ["user_id", "INTEGER", 0, null, 0]
     ],
     "users": [
@@ -689,6 +699,17 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["start_year", "INTEGER", 0, null, 1],
       ["updated_at", "REAL", 1, null, 0]
     ]
+  },
+  "indexes": {
+    "idx_access_requests_canon_email":
+      {"columns": ["canon_email"], "table": "access_requests", "unique": 0},
+    "idx_access_requests_canon_expr": {"columns": [null], "table": "access_requests", "unique": 0},
+    "idx_access_requests_email": {"columns": ["email"], "table": "access_requests", "unique": 0},
+    "idx_auth_attempts_created":
+      {"columns": ["created_at"], "table": "auth_request_attempts", "unique": 0},
+    "ix_conv_user": {"columns": ["user_id", "updated_at"], "table": "conversations", "unique": 0},
+    "ix_msg_conv": {"columns": ["conversation_id", "id"], "table": "messages", "unique": 0},
+    "ix_usage_time": {"columns": ["created_at"], "table": "usage_log", "unique": 0}
   }
 }
 """)
@@ -768,6 +789,8 @@ def run():
           test_migration_23_adds_messages_results_column)
     check("migration 24 adds usage_log.emit_mode + answer_leaked",
           test_migration_24_adds_usage_log_emit_mode_and_leak_columns)
+    check("migration 25 adds usage_log.table_grounding + cell counts",
+          test_migration_25_adds_usage_log_table_grounding_columns)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",
