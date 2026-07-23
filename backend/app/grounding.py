@@ -389,15 +389,18 @@ def _reconcile_value(target: float, raw_value,
 # --- Table grounding -----------------------------------------------------------
 # The results TABLE is the model re-typing the query rows one-for-one — the
 # densest concentration of numbers on screen, and (until this) as unverified as
-# the figure once was. check_table reconciles every NUMERIC table cell against
-# the retained results with the SAME kernel as the figure (_reconcile_value:
-# full reproduction — verbatim / display-rounded / derivable). So a legitimately
-# computed column (rank, share, %-change) grounds instead of false-alarming, at
-# the cost of the same coincidental-match bias noted in this module's KNOWN
-# LIMITATION. Observe-only: statuses land on usage_log.table_grounding
-# (migration 25) and drive Admin -> Usage; nothing is altered or blocked. A
-# stricter transcription-only rate stays recomputable offline from the persisted
-# messages.results.
+# the figure once was. check_table grades the MEASURE columns only (rank ordinals
+# and dimension columns are excluded — see _is_measure_column — so the rate is a
+# clean transcription-accuracy signal for the DATA, not dragged down by a
+# model-added Rank column that was never in the DB). Each graded cell is
+# reconciled with the SAME kernel as the figure (_reconcile_value: full
+# reproduction — verbatim / display-rounded / derivable), so a legitimately
+# computed measure (a share/%-change column) still grounds instead of
+# false-alarming, at the cost of the same coincidental-match bias noted in this
+# module's KNOWN LIMITATION. Observe-only: statuses land on
+# usage_log.table_grounding (migration 25) and drive Admin -> Usage; nothing is
+# altered or blocked. The raw rows stay in messages.results, so an all-columns
+# variant is recomputable offline.
 
 # Statuses recorded on usage_log.table_grounding (migration 25). NO_TABLE and
 # UNCHECKED carry zero cell counts, so they self-exclude from the SUM-based rate.
@@ -430,12 +433,13 @@ def _split_row(line: str) -> list[str]:
     return [c.strip() for c in s.split("|")]
 
 
-def parse_markdown_tables(text: str) -> list[list[list[str]]]:
-    """Extract GFM pipe tables from `text` as lists of BODY rows (each a list of
-    cell strings). The header and `---` separator rows are dropped — only data
-    cells are returned. Fenced code regions (```...```) are skipped so a ```chart
-    JSON block, still present in the shipped answer, is never read as a table."""
-    tables: list[list[list[str]]] = []
+def parse_markdown_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
+    """Extract GFM pipe tables from `text` as `(header_cells, body_rows)` tuples.
+    The `---` separator row is dropped; the header is kept so a column can be
+    classified measure-vs-dimension. Fenced code regions (```...```) are skipped
+    so a ```chart JSON block, still present in the shipped answer, is never read
+    as a table."""
+    tables: list[tuple[list[str], list[list[str]]]] = []
     lines = (text or "").splitlines()
     in_fence = False
     i, n = 0, len(lines)
@@ -448,6 +452,7 @@ def parse_markdown_tables(text: str) -> list[list[list[str]]]:
         # A header is a pipe row immediately followed by a delimiter row.
         if (not in_fence and "|" in line and i + 1 < n
                 and "|" in lines[i + 1] and _TABLE_SEP_RE.match(lines[i + 1])):
+            header = _split_row(line)
             i += 2  # consume header + separator
             body: list[list[str]] = []
             while (i < n and "|" in lines[i]
@@ -455,27 +460,53 @@ def parse_markdown_tables(text: str) -> list[list[list[str]]]:
                 body.append(_split_row(lines[i]))
                 i += 1
             if body:
-                tables.append(body)
+                tables.append((header, body))
             continue
         i += 1
     return tables
 
 
+def _is_measure_column(header: str, values: list[float]) -> bool:
+    """True when a numeric table column carries DATA (a measure), not row identity.
+
+    A rank/ordinal or dimension column is not a measure: its cells aren't data
+    transcribed from the query, so grading them muddies the transcription-accuracy
+    signal — worst of all a model-added Rank column (1,2,3…) is never in the
+    result and reads as a false `unmatched`. Excluded when the header names a
+    dimension (rank/year/unitid/cipcode/id/… — the same `is_dimension` used to bar
+    aggregation) OR the values are a pure 1..N sequence (a rank ordinal whatever
+    the header says — "#", "No.")."""
+    if is_dimension(header):
+        return False
+    if len(values) >= 2 and values == [float(k) for k in range(1, len(values) + 1)]:
+        return False
+    return True
+
+
 def check_table(answer_markdown: str,
                 results: list[QueryResult] | None) -> TableGroundingCheck:
-    """Can the NUMERIC cells of the answer's Markdown table(s) be reproduced from
+    """Can the MEASURE cells of the answer's Markdown table(s) be reproduced from
     the retained query results? Observe-only, like check_figure.
 
-    Every numeric cell is grounded by the SAME rule as a figure (full
-    reproduction via _reconcile_value). Non-numeric cells (labels) are not
-    checked. NO_TABLE/UNCHECKED carry no counts so they don't move the rate."""
+    Grades numeric cells in MEASURE columns only (see _is_measure_column) — rank
+    ordinals and dimension columns are excluded so the rate is a clean
+    transcription-accuracy signal for the data, not dragged down by a model-added
+    Rank column that was never in the DB. Each graded cell is grounded by the SAME
+    rule as a figure (full reproduction via _reconcile_value). NO_TABLE/UNCHECKED
+    carry no counts so they don't move the rate."""
     cells: list[tuple[float, str]] = []
-    for body in parse_markdown_tables(answer_markdown or ""):
-        for row in body:
-            for raw in row:
-                v = parse_number(raw)
-                if v is not None:
-                    cells.append((v, raw))
+    for header, body in parse_markdown_tables(answer_markdown or ""):
+        width = max((len(r) for r in body), default=0)
+        for ci in range(width):
+            col_head = header[ci] if ci < len(header) else ""
+            col = [(raw, parse_number(raw))
+                   for r in body if ci < len(r) for raw in (r[ci],)]
+            nums = [(raw, v) for raw, v in col if v is not None]
+            if not nums:
+                continue  # a label column (states, institutions) — nothing to grade
+            if not _is_measure_column(col_head, [v for _, v in nums]):
+                continue  # a rank ordinal or dimension — not a transcribed measure
+            cells.extend((v, raw) for raw, v in nums)
     if not cells:
         return TableGroundingCheck(NO_TABLE)
     if not results:

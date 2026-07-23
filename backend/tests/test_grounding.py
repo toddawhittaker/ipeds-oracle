@@ -347,11 +347,14 @@ _TABLE_MD = (
 )
 
 
-def test_parse_markdown_tables_extracts_body_rows_only():
+def test_parse_markdown_tables_extracts_header_and_body_rows():
     tables = grounding.parse_markdown_tables(_TABLE_MD)
     assert len(tables) == 1, tables
-    # Header + separator dropped; two body rows, two cells each.
-    assert tables[0] == [["2021", "1,000"], ["2024", "1,250"]], tables[0]
+    # Separator dropped; header kept (for measure/dimension classification), two
+    # body rows of two cells each.
+    header, body = tables[0]
+    assert header == ["Year", "Awards"], header
+    assert body == [["2021", "1,000"], ["2024", "1,250"]], body
 
 
 def test_parse_markdown_tables_skips_a_chart_fence():
@@ -361,7 +364,7 @@ def test_parse_markdown_tables_skips_a_chart_fence():
           "```\n")
     tables = grounding.parse_markdown_tables(md)
     # Exactly the one real table — the chart JSON (no pipes, and fenced) is not it.
-    assert tables == [[["2024", "1,250"]]], tables
+    assert tables == [(["Year", "Awards"], [["2024", "1,250"]])], tables
 
 
 def test_parse_markdown_tables_ignores_a_bare_horizontal_rule():
@@ -373,18 +376,47 @@ def test_parse_markdown_tables_ignores_a_bare_horizontal_rule():
 # --- table grounding: check_table ---------------------------------------------
 
 def test_a_verbatim_table_is_matched():
-    # Every numeric cell (2021, 1000, 2024, 1250) is a verbatim cell of YEARS.
+    # Only the MEASURE column (Awards: 1000, 1250) is graded — Year is a dimension
+    # and is excluded, so 2 cells checked, both verbatim in YEARS.
     got = grounding.check_table(_TABLE_MD, [YEARS])
     assert got.status == grounding.TABLE_MATCHED, got
-    assert got.cells_checked == 4 and got.cells_matched == 4, got
+    assert got.cells_checked == 2 and got.cells_matched == 2, got
 
 
 def test_a_dropped_digit_cell_is_partial():
-    # "1,250" mistyped as "1,240" reproduces from nothing → one cell unmatched.
+    # "1,250" mistyped as "1,240" reproduces from nothing → one Awards cell
+    # unmatched (Year excluded from grading).
     bad = _TABLE_MD.replace("1,250", "1,240")
     got = grounding.check_table(bad, [YEARS])
     assert got.status == grounding.TABLE_PARTIAL, got
-    assert got.cells_checked == 4 and got.cells_matched == 3, got
+    assert got.cells_checked == 2 and got.cells_matched == 1, got
+
+
+def test_a_rank_ordinal_column_is_excluded_from_grading():
+    # The live-test regression: a model-added Rank column (1,2,3) is never in the
+    # DB result, so grading it would drag a perfectly-transcribed ranking table to
+    # ~partial. Measure-only grading counts the award column ONLY.
+    md = ("| Rank | State | Awards |\n"
+          "| --- | --- | --- |\n"
+          "| 1 | A | 1,250 |\n"
+          "| 2 | B | 1,200 |\n"
+          "| 3 | C | 1,100 |\n")
+    got = grounding.check_table(md, [YEARS])
+    # 3 Awards cells graded (all in YEARS), the 3 rank cells + 3 labels excluded.
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert got.cells_checked == 3 and got.cells_matched == 3, got
+
+
+def test_an_unlabeled_rank_ordinal_is_excluded_by_its_1_to_n_values():
+    # A rank column headed "#" (which is_dimension doesn't name) is still caught
+    # because its values are a pure 1..N sequence.
+    md = ("| # | Awards |\n"
+          "| --- | --- |\n"
+          "| 1 | 1,250 |\n"
+          "| 2 | 1,200 |\n"
+          "| 3 | 1,100 |\n")
+    got = grounding.check_table(md, [YEARS])
+    assert got.cells_checked == 3 and got.cells_matched == 3, got
 
 
 def test_a_wholly_invented_table_is_unmatched():
@@ -492,14 +524,19 @@ def run():
           test_it_searches_every_retained_result_not_just_the_last)
     check("check_figure never raises on junk", test_check_figure_never_raises_on_junk)
     # --- table grounding ---
-    check("parse_markdown_tables extracts body rows only",
-          test_parse_markdown_tables_extracts_body_rows_only)
+    check("parse_markdown_tables extracts header and body rows",
+          test_parse_markdown_tables_extracts_header_and_body_rows)
     check("parse_markdown_tables skips a chart fence",
           test_parse_markdown_tables_skips_a_chart_fence)
     check("parse_markdown_tables ignores a bare horizontal rule",
           test_parse_markdown_tables_ignores_a_bare_horizontal_rule)
-    check("a verbatim table is matched", test_a_verbatim_table_is_matched)
+    check("a verbatim table is matched (measure column only)",
+          test_a_verbatim_table_is_matched)
     check("a dropped-digit cell is partial", test_a_dropped_digit_cell_is_partial)
+    check("a rank ordinal column is excluded from grading",
+          test_a_rank_ordinal_column_is_excluded_from_grading)
+    check("an unlabeled rank ordinal is excluded by its 1..N values",
+          test_an_unlabeled_rank_ordinal_is_excluded_by_its_1_to_n_values)
     check("a wholly invented table is unmatched",
           test_a_wholly_invented_table_is_unmatched)
     check("a display-rounded cell still matches",

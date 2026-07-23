@@ -263,25 +263,29 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   module, also **OBSERVE-ONLY**) — the results **table** is the model re-typing
   the query rows one-for-one, the densest block of numbers on screen and (like
   the figure once was) unverified. It parses the answer's GFM tables
-  (`parse_markdown_tables`, skipping ```` ``` ````-fenced regions so a ```chart
-  block isn't read as a table) and reconciles every **numeric** cell against
-  THIS turn's retained results via the SAME kernel as the figure — extracted into
-  the shared `_reconcile_value` (verbatim / display-rounded / derivable, dimension
-  bar intact), so a legitimately **computed column** (rank/share/%-change) grounds
-  instead of false-alarming, at the cost of the figure's known coincidental-match
-  bias (acceptable observe-only: `messages.results` is persisted, so a stricter
-  transcription-only rate is recomputable offline). Records a per-turn status
-  (`matched`/`partial`/`unmatched`/`no_table`/`unchecked`) + numeric-cell counts
-  on `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
+  (`parse_markdown_tables`, header kept, skipping ```` ``` ````-fenced regions so
+  a ```chart block isn't read as a table) and grades the **MEASURE columns only**
+  — `_is_measure_column` excludes a **rank ordinal** (values are a pure 1..N
+  sequence, whatever the header — "#"/"No."/"Rank") and any **dimension** column
+  (header matches `is_dimension`: rank/year/unitid/cipcode/id/…). This keeps the
+  rate a clean transcription-accuracy signal for the DATA rather than dragging it
+  down with a model-added Rank column that was never in the DB (the live-test
+  regression: a perfectly-transcribed top-5 table scored 5/10 because its five
+  rank ordinals can't ground). Each graded cell is reconciled against THIS turn's
+  retained results via the SAME kernel as the figure — extracted into the shared
+  `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
+  intact) — so a legitimately **computed measure** (a share/%-change column) still
+  grounds instead of false-alarming, at the cost of the figure's known
+  coincidental-match bias (acceptable observe-only: `messages.results` is
+  persisted, so an all-columns variant is recomputable offline). Records a
+  per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked`) +
+  numeric-cell counts on
+  `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
   (**migration 25**; `no_table`/`unchecked` carry 0 counts so they self-exclude
   from the SUM-based rate), surfaced as a **cell-level** **Grounded cells** stat
   on Admin → Usage (`groundedTableRate`, vitest-pinned). Stamped in `llm.py`
   (`_stamp_table_grounding`) right after the figure stamp, on the FINAL settled
-  answer. **KNOWN observe-only characteristic:** a model-added **Rank/ordinal**
-  column (1,2,3…) isn't in the DB result, so its cells read `unmatched` — a
-  ranking table lands ~`partial` even when every measure cell is correct;
-  whether to exclude ordinal columns from the denominator is a post-observe-only
-  decision. Pinned in `test_grounding.py` + `test_admin_router.py` +
+  answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
   `test_migrations.py`.
 - a post-answer **critic** that can force one revision round. **It is given the
   actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
