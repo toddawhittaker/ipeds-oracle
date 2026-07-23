@@ -474,6 +474,159 @@ def _extract_clarify(answer: str) -> tuple[str, dict | None]:
     return clean, {"question": question, "options": options}
 
 
+# --- Structured emission (config.structured_emission_enabled) ------------------
+# The model FINISHES a turn by calling one of these tools instead of free-typing
+# fences it can mangle. The provider validates the arg shapes. The server then
+# reconstructs WELL-FORMED fences from the validated args (_reconstruct_answer)
+# and runs the SAME extraction/critic/grounding/retry tail — so the model writes
+# no fence, nothing is manglea​ble, and the whole downstream is unchanged. These
+# are NOT registry DB tools; the loop intercepts them before dispatch.
+_EMIT_ANSWER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_answer",
+        "description": "Emit your FINAL answer. Call this to finish the turn (do "
+                       "NOT also call run_sql). Put your full prose answer — "
+                       "including the Markdown results table — in `markdown`; the "
+                       "hero figure, trend chart, and follow-up questions go in "
+                       "their own fields, never as fenced text in `markdown`.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "markdown": {"type": "string",
+                             "description": "The full answer prose in Markdown, "
+                                            "including the results table. No "
+                                            "```figure/```chart/```followups fences."},
+                "figure": {
+                    "type": "object",
+                    "description": "The hero figure (one headline number), or omit.",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "unit": {"type": "string"},
+                        "label": {"type": "string"},
+                        "source": {"type": "string"}},
+                },
+                "chart": {
+                    "type": "object",
+                    "description": "A chart spec (same shape as the chart fence), "
+                                   "or omit.",
+                },
+                "followups": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "2-3 short drill-down questions, or omit."},
+            },
+            "required": ["markdown"],
+        },
+    },
+}
+_ASK_CLARIFICATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_clarification",
+        "description": "Instead of answering, ask ONE short clarifying question "
+                       "when a plausible alternate reading would change the "
+                       "headline result. A clarify turn carries no figure/table/"
+                       "followups.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string",
+                             "description": "One short clarifying question."},
+                "options": {"type": "array", "items": {"type": "string"},
+                            "description": "2-4 SHORT answer phrases (e.g. "
+                                           "'Bachelor's only')."},
+            },
+            "required": ["question", "options"],
+        },
+    },
+}
+_EMIT_TOOL_NAMES = ("emit_answer", "ask_clarification")
+
+
+def emit_tool_specs() -> list[dict]:
+    """The terminal-emission tools, appended to the tool list when structured
+    emission is on."""
+    return [_EMIT_ANSWER_TOOL, _ASK_CLARIFICATION_TOOL]
+
+
+def _find_emit_call(tool_calls: list) -> dict | None:
+    """Return the first emit_answer/ask_clarification tool call, or None."""
+    for tc in tool_calls or []:
+        if ((tc.get("function") or {}).get("name")) in _EMIT_TOOL_NAMES:
+            return tc
+    return None
+
+
+def _fence(name: str, payload) -> str:
+    """A well-formed ```<name> fenced JSON block (SERVER-written, so it always
+    parses back cleanly — the model never writes it)."""
+    return f"```{name}\n{json.dumps(payload)}\n```"
+
+
+def _reconstruct_answer(emit_call: dict) -> str:
+    """Turn a validated emit_answer / ask_clarification tool call into the
+    equivalent WELL-FORMED fenced answer string, which the normal terminator's
+    _extract_* helpers then parse (guaranteed-clean, no mangle). Tolerant of a
+    malformed arg blob — degrades to whatever parsed."""
+    fn = emit_call.get("function") or {}
+    name = fn.get("name", "")
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except (json.JSONDecodeError, ValueError):
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+
+    if name == "ask_clarification":
+        question = str(args.get("question") or "").strip()
+        options = [str(o).strip() for o in (args.get("options") or []) if str(o).strip()]
+        spec = {"question": question, "options": options}
+        return (f"{question}\n\n{_fence('clarify', spec)}" if question else "")
+
+    # emit_answer: figure fence FIRST (leads), then prose, then chart + followups.
+    parts: list[str] = []
+    figure = args.get("figure")
+    if isinstance(figure, dict) and figure.get("value") and figure.get("label"):
+        parts.append(_fence("figure", figure))
+    markdown = str(args.get("markdown") or "").strip()
+    if markdown:
+        parts.append(markdown)
+    chart = args.get("chart")
+    if isinstance(chart, dict) and chart:
+        parts.append(_fence("chart", chart))
+    followups = args.get("followups")
+    if isinstance(followups, list):
+        fu = [str(q).strip() for q in followups if str(q).strip()]
+        if fu:
+            parts.append(_fence("followups", fu))
+    return "\n\n".join(parts)
+
+
+# Residual structured-emission DEBRIS in the SHIPPED prose — a mangle that slipped
+# every guard. The sentinel records it (telemetry only; the normalizer already
+# repairs the known forms). Debris means: a bare figure `"value"`+`"label"` object
+# left inline; a leftover ```figure/```followups/```clarify fence (those are
+# EXTRACTED to structured fields, so a residual one is debris); or a mangled
+# `![figure]`/`![chart]` image form (the observed #167 leak). A plain ```chart
+# fence is deliberately NOT here — a chart is DELIVERED to the frontend as a
+# ```chart fence in the prose by design, so it must never flag. (A bare chart
+# object's nested `data:[{…}]` also defeats a flat brace regex; the realistic
+# chart mangle is `![chart]`, which IS covered.)
+_LEAK_SENTINEL_RE = re.compile(
+    r"\{[^{}]*\"value\"[^{}]*\"label\"[^{}]*\}"
+    r"|```(?:figure|followups|clarify)\b"
+    r"|!\[(?:figure|chart)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _leak_flag(prose: str) -> bool:
+    """True if the shipped prose still carries residual structured-emission
+    debris. A plain ```chart fence (the intended chart delivery) matches none of
+    the patterns, so it is never flagged."""
+    return bool(_LEAK_SENTINEL_RE.search(prose or ""))
+
+
 @dataclass
 class AgentResult:
     answer: str = ""
@@ -514,6 +667,13 @@ class AgentResult:
     figure_derivation: str = ""     # the derivation that matched, e.g. "sum(q2.awards)"
     suggestions: list | None = None  # drill-down questions from the followups fence
     clarify: dict | None = None     # {question, options[]} from a disambiguation fence
+    # Emission mode this turn used (structured-output telemetry): "structured" when
+    # the model finished via the emit_answer/ask_clarification tool, else "fence"
+    # (it free-typed, or structured emission is off). "leaked" is set when the
+    # sentinel found residual fence/JSON in the SHIPPED prose — how a future
+    # model's novel mangle surfaces as a metric, not a user bug.
+    emit_mode: str = "fence"
+    leaked: bool = False
     error: str | None = None
 
     @property
@@ -551,13 +711,18 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     # last one, "results" accumulates them all. See registry._tool_run_sql.
     last_sql_result: dict = {"result": None, "results": []}
     tools = registry.tool_specs()
+    if s.structured_emission_enabled:
+        # The model finishes via emit_answer/ask_clarification instead of fences
+        # (intercepted in the loop below, never dispatched to registry).
+        tools = tools + emit_tool_specs()
     # Message ORDER preserves the provider prompt cache: the system prompt (the big
     # static schema prefix — see build_system_prompt) goes FIRST so it stays the
     # cacheable prefix, then the per-request-dynamic parts (history, the question)
     # follow. Keep it that way — never prepend anything per-request ahead of the
     # system prompt, or the cached prefix collapses and every schema token bills at
     # full price.
-    messages: list[dict] = [{"role": "system", "content": build_system_prompt(skills_block)}]
+    messages: list[dict] = [{"role": "system", "content": build_system_prompt(
+        skills_block, structured=s.structured_emission_enabled)}]
     if history:
         messages.extend(history)
         # RECENCY, not wording. Measured over a live 10-turn conversation, the
@@ -634,6 +799,21 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             reasoning = msg.get("reasoning")
             if reasoning:
                 yield {"type": "thinking", "text": reasoning}
+
+            # Structured emission: if the model FINISHED via emit_answer /
+            # ask_clarification, reconstruct the equivalent WELL-FORMED fenced
+            # answer (server-written → never manglea​ble) and fall into the normal
+            # no-tool-call terminator, reusing the entire critic/ground/retry tail
+            # unchanged. Replacing the tool-call assistant message with plain
+            # content also keeps the message history well-formed (no dangling
+            # tool_call) for the critic's revision round. Intercepted here, so
+            # emit_answer never reaches registry.dispatch.
+            emit_call = _find_emit_call(tool_calls)
+            if emit_call is not None:
+                res.emit_mode = "structured"
+                msg = {"content": _reconstruct_answer(emit_call)}
+                tool_calls = []
+
             messages.append({
                 "role": "assistant", "content": msg.get("content") or "",
                 **({"tool_calls": tool_calls} if tool_calls else {}),
@@ -729,6 +909,9 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 # (see _maybe_retry_figure). Runs AFTER the critic has settled the
                 # winning answer, so it never chases a draft that's about to revert.
                 await _maybe_retry_figure(res, question, res.answer)
+                # Leak sentinel: residual fence/JSON debris in the SHIPPED prose
+                # means a mangle slipped every guard — record it (telemetry).
+                res.leaked = _leak_flag(res.answer)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -899,6 +1082,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
             _stamp_grounding(res, raw_final)
+            res.leaked = _leak_flag(res.answer)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:

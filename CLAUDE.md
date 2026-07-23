@@ -281,6 +281,26 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   meaningful again there — the SAME anti-leak gate applies, so a rebuttal or a
   confirm-only re-query reverts to the clean draft. Pinned by the `S5:` cases in
   `backend/tests/test_agent_loop.py`.
+- **Structured emission** (`config.structured_emission_enabled`, PR-1 of the
+  "structured output, not fenced text" work — **default OFF, dark-shipped**).
+  The durable, model-agnostic fix behind #167's `_normalize_misfenced_blocks`
+  band-aid: instead of free-typing ```figure/```chart/```followups/```clarify
+  fences it can mangle, the model FINISHES a turn by calling an **`emit_answer`**
+  (or **`ask_clarification`**) tool whose fields the *provider* validates.
+  `llm.py` intercepts that call before dispatch and **reconstructs WELL-FORMED
+  fences from the validated args** (`_reconstruct_answer` + `_fence` — the SERVER
+  writes them, so they always parse), then falls into the SAME no-tool-call
+  terminator — so `_extract_*` / critic / grounding / retry / persistence AND the
+  **frontend are all unchanged** (figure/followups/clarify were already
+  structured events; the chart stays a server-written ```chart fence the
+  frontend already renders). A model that ignores the tool falls back to the
+  fence path. A **leak sentinel** (`_leak_flag`) scans the shipped prose for
+  residual fence/JSON debris → `usage_log.answer_leaked`; with `emit_mode`
+  (structured|fence, migration 24) it drives the **Answer-leaks** stat on Admin →
+  Usage (`leakRate`/`leakLabel`) — the metric that must reach 0 before the
+  default flips. The **number stays model-supplied in PR-1** (envelope only);
+  server-computed figures from declared provenance are PR-2. Pinned in
+  `test_agent_loop.py` (structured cases) + `test_admin_router.py` + `test_migrations.py`.
 - **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
   step: when a plausible alternate reading would change the HEADLINE result (e.g.
   "which major produces the most graduates?" — bachelor's-only vs. all award

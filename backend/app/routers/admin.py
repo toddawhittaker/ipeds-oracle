@@ -1078,7 +1078,17 @@ def usage(since: float | None = None, until: float | None = None):
             "('exact','rounded','derived','ungrounded') THEN 1 ELSE 0 END),0) "
             "AS figures_checked, "
             "COALESCE(SUM(CASE WHEN figure_grounding='ungrounded' THEN 1 ELSE 0 END),0) "
-            "AS figures_ungrounded "
+            "AS figures_ungrounded, "
+            # Structured-emission telemetry (PR-1): of the real agent turns (an
+            # emit_mode was recorded — excludes cache hits/refusals/NULL), how
+            # many used the structured tool, and how many LEAKED residual debris
+            # into the shipped prose. The leak rate → 0 under structured emission
+            # is the win that justifies flipping the default.
+            "COALESCE(SUM(CASE WHEN emit_mode IN ('structured','fence') THEN 1 ELSE 0 END),0) "
+            "AS emit_turns, "
+            "COALESCE(SUM(CASE WHEN emit_mode='structured' THEN 1 ELSE 0 END),0) "
+            "AS structured_turns, "
+            "COALESCE(SUM(answer_leaked),0) AS leaked_turns "
             f"FROM usage_log {win}", args).fetchone()
         series = con.execute(
             f"SELECT strftime('{bucket_fmt}', created_at,'unixepoch') AS t, "

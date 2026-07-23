@@ -68,3 +68,23 @@ export function groundedFigureLabel(totals) {
   if (checked <= 0) return "Grounded figures";
   return `${checked - num(t.figures_ungrounded)}/${checked} Grounded figures`;
 }
+
+// LEAK rate: of the real agent turns, what share shipped residual fence/JSON
+// debris in the prose (the sentinel). This is the metric that proves structured
+// emission works — it should fall to 0 as `structured_turns` rises. "—" on an
+// empty window (no real agent turns). See backend/app/llm.py `_leak_flag`.
+export function leakRate(totals) {
+  const t = totals || {};
+  return rate(num(t.leaked_turns), num(t.emit_turns));
+}
+
+// Its sub-label carries the sample + the structured-emission share, so the
+// dark-ship rollout is legible: "2/50 leaked · 100% structured". Drops to a bare
+// label when nothing's been measured yet.
+export function leakLabel(totals) {
+  const t = totals || {};
+  const turns = num(t.emit_turns);
+  if (turns <= 0) return "Answer leaks";
+  const pct = Math.round((num(t.structured_turns) / turns) * 100);
+  return `${num(t.leaked_turns)}/${turns} leaked · ${pct}% structured`;
+}

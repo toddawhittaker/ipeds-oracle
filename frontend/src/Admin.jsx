@@ -18,7 +18,8 @@ import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSele
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
 import {
-  groundedFigureLabel, groundedFigureRate, promptCacheRate, schemaCacheRate,
+  groundedFigureLabel, groundedFigureRate, leakLabel, leakRate,
+  promptCacheRate, schemaCacheRate,
 } from "./usagestats.js";
 
 // Bulk-action button/confirm labels: DIGITS always (never spelled out), unlike
@@ -2006,6 +2007,7 @@ function Usage() {
             <Stat label="Escalations" value={t.escalations || 0} />
             <Stat label="Failures" value={t.failures || 0} />
             <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} />
+            <Stat label={leakLabel(t)} value={leakRate(t)} />
           </div>
 
           <div className="usage-chart-head">

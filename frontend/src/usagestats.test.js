@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundedFigureLabel, groundedFigureRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { groundedFigureLabel, groundedFigureRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Both rates share one guarded ratio helper; the regression each guards is the
 // same: a naive cached/total renders "NaN%"/"Infinity%" on an empty window (0
@@ -104,5 +104,25 @@ describe("groundedFigureLabel (the stat's sample size)", () => {
   it("coerces string totals", () => {
     expect(groundedFigureLabel({ figures_checked: "4", figures_ungrounded: "1" }))
       .toBe("3/4 Grounded figures");
+  });
+});
+
+describe("leakRate / leakLabel (structured-emission telemetry)", () => {
+  it("returns — with no measured agent turns", () => {
+    expect(leakRate({ emit_turns: 0, leaked_turns: 0 })).toBe("—");
+    expect(leakRate({})).toBe("—");
+    expect(leakLabel({})).toBe("Answer leaks");
+  });
+
+  it("computes the leak rate and the structured-share label", () => {
+    const t = { emit_turns: 50, leaked_turns: 1, structured_turns: 50 };
+    expect(leakRate(t)).toBe("2%");
+    expect(leakLabel(t)).toBe("1/50 leaked · 100% structured");
+  });
+
+  it("shows 0% leaks (the healthy structured state)", () => {
+    const t = { emit_turns: 40, leaked_turns: 0, structured_turns: 40 };
+    expect(leakRate(t)).toBe("0%");
+    expect(leakLabel(t)).toBe("0/40 leaked · 100% structured");
   });
 });

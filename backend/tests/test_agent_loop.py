@@ -957,6 +957,122 @@ def test_clarify_absent_on_a_normal_answer():
     assert res.clarify is None, res.clarify
 
 
+# --- structured emission (config.structured_emission_enabled) ------------------
+# The model FINISHES via emit_answer/ask_clarification tools instead of fences;
+# the server reconstructs WELL-FORMED fences from the validated args, so the whole
+# extraction/critic/grounding tail runs unchanged and nothing is manglea​ble.
+
+def _emit_call(name, args):
+    return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "e1", "type": "function",
+                    "function": {"name": name,
+                                 "arguments": json.dumps(args)}}]}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+
+def _run_structured(question, fake_chat):
+    s = get_settings()
+    prev = s.structured_emission_enabled
+    s.structured_emission_enabled = True
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        return _run(question)
+    finally:
+        s.structured_emission_enabled = prev
+
+
+def test_reconstruct_answer_builds_well_formed_fences():
+    call = {"function": {"name": "emit_answer", "arguments": json.dumps({
+        "markdown": "Ohio led with 400.",
+        "figure": {"value": "400", "label": "Awards"},
+        "chart": {"type": "line", "x": "year", "data": [{"year": 2024, "n": 5}]},
+        "followups": ["Compare to Texas?"]})}}
+    out = llm._reconstruct_answer(call)
+    # Server-written fences → the existing extractors parse them cleanly.
+    _, fig = llm._extract_figure(out)
+    assert fig == {"value": "400", "label": "Awards"}, fig
+    assert "```chart" in out and '"data"' in out, out
+    _, sug = llm._extract_suggestions(out)
+    assert sug == ["Compare to Texas?"], sug
+    assert "Ohio led with 400." in out
+
+
+def test_reconstruct_ask_clarification():
+    call = {"function": {"name": "ask_clarification", "arguments": json.dumps({
+        "question": "Which award level?", "options": ["Bachelor's", "All levels"]})}}
+    out = llm._reconstruct_answer(call)
+    _, clar = llm._extract_clarify(out)
+    assert clar == {"question": "Which award level?",
+                    "options": ["Bachelor's", "All levels"]}, clar
+
+
+def test_leak_flag_detects_residual_debris():
+    assert llm._leak_flag('lead\n{"value":"5","label":"x"} trail') is True
+    assert llm._leak_flag("```figure\n{}\n```") is True   # should've been extracted
+    assert llm._leak_flag("![figure] {}") is True          # a mangled image form
+    assert llm._leak_flag("A clean prose answer with a number 511.") is False
+    # A plain ```chart fence is the INTENDED chart delivery — never a leak...
+    assert llm._leak_flag('```chart\n{"type":"line","data":[{"y":1}]}\n```') is False, \
+        "a chart fence is delivered to the frontend by design, not debris"
+    # ...but a mangled ![chart] image form (the observed #167 leak) IS flagged.
+    assert llm._leak_flag('![chart] {"type":"line"}') is True
+
+
+def test_structured_emit_answer_maps_figure_and_followups():
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _emit_call("emit_answer", {
+            "markdown": "Ohio led with **400** degrees.",
+            "figure": {"value": "400", "label": "Awards"},
+            "followups": ["Compare to Texas?", "Which programs?"]})
+    res = _run_structured("q", fake_chat)
+    assert res.emit_mode == "structured", res.emit_mode
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert res.suggestions == ["Compare to Texas?", "Which programs?"], res.suggestions
+    assert "Ohio led with **400** degrees." in res.answer, res.answer
+    # No raw JSON / fence leaked into the shipped prose.
+    assert '"value"' not in res.answer and "```figure" not in res.answer, res.answer
+    assert res.leaked is False, "a clean structured answer must not flag a leak"
+
+
+def test_structured_emit_answer_chart_becomes_a_server_written_fence():
+    async def fake_chat(client, model, messages, tools=None):
+        return _emit_call("emit_answer", {
+            "markdown": "Trend below.",
+            "chart": {"type": "line", "x": "year", "y": "n",
+                      "data": [{"year": 2024, "n": 5}, {"year": 2025, "n": 6}]}})
+    res = _run_structured("q", fake_chat)
+    # Chart passes to the frontend as a normal ```chart fence — server-written,
+    # so always well-formed. Frontend contract unchanged.
+    assert "```chart" in res.answer, res.answer
+    assert '"data"' in res.answer, res.answer
+
+
+def test_structured_ask_clarification_yields_a_clarify_turn():
+    async def fake_chat(client, model, messages, tools=None):
+        return _emit_call("ask_clarification", {
+            "question": "Which award level?", "options": ["Bachelor's", "All"]})
+    res = _run_structured("q", fake_chat)
+    assert res.clarify == {"question": "Which award level?",
+                           "options": ["Bachelor's", "All"]}, res.clarify
+    assert res.figure is None and res.suggestions is None, "clarify carries neither"
+
+
+def test_fence_path_records_emit_mode_fence():
+    # With structured emission OFF (the default), a normal answer stays on the
+    # fence path and is recorded as such — the telemetry's baseline.
+    async def fake_chat(client, model, messages, tools=None):
+        return _text_response("Plain answer, 42.")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    assert _run("q").emit_mode == "fence"
+
+
 # ---------------------------------------------------------------------------
 # Live-transport tests: llm._chat is restored to the REAL implementation, and
 # only httpx.AsyncClient is mocked (returning a real httpx.Response so
@@ -1093,6 +1209,20 @@ def run():
     check("a clarify turn skips the critic and unsets figure/suggestions",
           test_clarify_present_skips_critic_and_unsets_figure_and_suggestions)
     check("a normal answer carries no clarify", test_clarify_absent_on_a_normal_answer)
+    check("_reconstruct_answer builds well-formed fences from emit_answer args",
+          test_reconstruct_answer_builds_well_formed_fences)
+    check("_reconstruct_answer builds a clarify fence from ask_clarification",
+          test_reconstruct_ask_clarification)
+    check("_leak_flag detects residual fence/JSON debris",
+          test_leak_flag_detects_residual_debris)
+    check("structured emit_answer maps figure + followups (no leak)",
+          test_structured_emit_answer_maps_figure_and_followups)
+    check("structured emit_answer chart → a server-written ```chart fence",
+          test_structured_emit_answer_chart_becomes_a_server_written_fence)
+    check("structured ask_clarification yields a clarify turn",
+          test_structured_ask_clarification_yields_a_clarify_turn)
+    check("the fence path records emit_mode='fence' (telemetry baseline)",
+          test_fence_path_records_emit_mode_fence)
     check("real _chat: immediate answer over a mocked httpx transport",
           test_real_chat_transport_immediate_answer)
     check("real _chat: an HTTPStatusError surfaces as an agent error",
