@@ -110,6 +110,151 @@ SEED_EXAMPLES: list[SeedLesson] = [
             "GROUP BY year ORDER BY year;"
         ),
     ),
+    # --- Lessons distilled from live use, then reviewed + verified against the
+    # real ipeds.db schema, and promoted to shipped seeds. Unlike the three above
+    # they never had a terse v1, so they carry NO SEED_LESSON_UPGRADES entry
+    # (migration 6 only rewrites the originals). ---
+    SeedLesson(
+        question="Which states awarded the most Master's degrees in Education?",
+        headline=(
+            "Total a CIP family with its 6-digit leaf codes, never a LIKE-prefix "
+            "(it double-counts the rollup rows)."
+        ),
+        description=(
+            "To total every program within a CIP family (e.g. all of Education = "
+            "family 13), do NOT filter with cipcode LIKE '13%' or "
+            "SUBSTR(cipcode,1,2)='13'. The completions table c_a carries "
+            "pre-aggregated rollup rows at the 2-digit ('13'), 4-digit ('13.01') "
+            "and 6-digit ('13.0101') levels plus a '99' grand total, and a prefix "
+            "match sums those rollups together with the leaf rows — overcounting by "
+            "roughly 4x. Instead match only the 6-digit leaf codes of the family: "
+            "SUBSTR(cipcode,1,3)='13.' AND length(cipcode)=7. Keep majornum=1 so a "
+            "student's second major isn't counted twice. For a single specific "
+            "program, match its exact 6-digit code; for a national all-programs "
+            "total, use the cipcode='99' grand-total row."
+        ),
+        commented_sql=(
+            "SELECT h.stabbr, SUM(c.ctotalt) AS total_masters\n"
+            "FROM c_a c\n"
+            "JOIN hd h ON h.unitid=c.unitid AND h.year=c.year\n"
+            "WHERE SUBSTR(c.cipcode,1,3)='13.'  -- CIP family 13 = Education\n"
+            "  AND length(c.cipcode)=7          -- 6-digit LEAF rows only, no rollups\n"
+            "  AND c.awlevel=7                  -- award level: 7 = Master's\n"
+            "  AND c.majornum=1                 -- first major only\n"
+            "  AND c.year=(SELECT MAX(year) FROM _years)  -- latest loaded collection year\n"
+            "GROUP BY h.stabbr\n"
+            "ORDER BY total_masters DESC\n"
+            "LIMIT 15;"
+        ),
+    ),
+    SeedLesson(
+        question=(
+            "How many Computer Science bachelor's degrees did California public "
+            "universities award last year?"
+        ),
+        headline=(
+            "Filter to the latest year via (SELECT MAX(year) FROM _years), never a "
+            "hardcoded literal year."
+        ),
+        description=(
+            "IPEDS completions data typically lags by two years, so hardcoding a "
+            "literal like year=2025 can return rows from a year that does not exist "
+            "(zero results) or an incorrect future year. Filter with the authoritative "
+            "loaded-year list instead: c.year=(SELECT MAX(year) FROM _years) for the "
+            "most recent year, or year > (SELECT MAX(year)-N FROM _years) for the last "
+            "N years — never a literal, and confirm it matches the question's "
+            "definition of \"last year\"."
+        ),
+        commented_sql=(
+            "SELECT SUM(c.ctotalt) AS cs_bachelors\n"
+            "FROM c_a c\n"
+            "JOIN hd h ON h.unitid=c.unitid AND h.year=c.year\n"
+            "WHERE c.cipcode='11.0701'   -- exact 6-digit leaf CIP (Computer Science)\n"
+            "  AND c.awlevel=5           -- award level: 5 = Bachelor's\n"
+            "  AND c.majornum=1          -- first major only\n"
+            "  AND c.year=(SELECT MAX(year) FROM _years)  -- latest loaded year, not a literal\n"
+            "  AND h.stabbr='CA'         -- state filter\n"
+            "  AND h.control=1;          -- 1 = public"
+        ),
+    ),
+    SeedLesson(
+        question="Is community college undergraduate enrollment rising or falling?",
+        headline=(
+            "IPEDS data does not include future years; verify the latest available "
+            "year and filter appropriately."
+        ),
+        description=(
+            "Do not report figures for a year that is not in the dataset yet (e.g. "
+            "2025 when the latest loaded year is 2023 or 2024). IPEDS does not include "
+            "future years, and a bound like year > (SELECT MAX(year)-6 FROM _years) "
+            "silently returns nothing for the missing years. Always check the latest "
+            "available year in the _years table (the authoritative list of loaded "
+            "collection years) before reporting a trend, and never fabricate or imply "
+            "data for a year the dataset does not contain."
+        ),
+        commented_sql=(
+            "SELECT year FROM _years ORDER BY year;"
+            "  -- authoritative loaded-year list — verify the latest before trending"
+        ),
+    ),
+    SeedLesson(
+        question="Which five states award the most nursing bachelor's degrees?",
+        headline=(
+            "Clarify temporal scope when a user switches topics without specifying a "
+            "year."
+        ),
+        description=(
+            "When a user shifts to a new subject area (e.g. from computer science to "
+            "nursing) and asks a question without explicitly stating a year, ask which "
+            "year or time period they want before answering. Do not assume they mean "
+            "the same year as the previous topic, since the context may have changed "
+            "and their intent may differ."
+        ),
+        commented_sql="",  # a conversational lesson — no worked query
+    ),
+    SeedLesson(
+        question=(
+            "How is enrollment for AS-level allied healthcare fields trending across "
+            "the nation for the last 5 years? Group by public, private, and "
+            "for-profit institutions."
+        ),
+        headline=(
+            "Enrollment by program is in efcp, not completions; where efcp omits a "
+            "field, completions is the proxy."
+        ),
+        description=(
+            "IPEDS keeps enrollment and completions in different tables: completions "
+            "(degrees awarded) in c_a, and enrollment headcounts by program field in "
+            "efcp (Fall Enrollment by CIP) — NOT in c_a, and NOT in the level-only ef "
+            "table. So a program-level enrollment question should use efcp. But efcp "
+            "reports only a limited set of broad CIP families; many 4-/6-digit fields "
+            "(e.g. 51.08 and 51.09, allied health) have no efcp rows at all. When efcp "
+            "does not cover the requested field, completions (c_a) is the best "
+            "available proxy for program activity — use it, and state plainly that the "
+            "figure is degrees awarded, not enrolled headcount. Either way, only "
+            "report numbers that appear in, or derive directly from, the query results."
+        ),
+        commented_sql=(
+            "-- efcp has no 51.08/51.09 rows, so completions (c_a) is the honest proxy:\n"
+            "SELECT\n"
+            "  c.year,\n"
+            "  CASE h.control\n"
+            "    WHEN 1 THEN 'Public'\n"
+            "    WHEN 2 THEN 'Private non-profit'\n"
+            "    WHEN 3 THEN 'Private for-profit'\n"
+            "  END AS sector,\n"
+            "  SUM(c.ctotalt) AS completions\n"
+            "FROM c_a c\n"
+            "JOIN hd h ON h.unitid=c.unitid AND h.year=c.year\n"
+            "WHERE c.awlevel=3                 -- award level: 3 = Associate's\n"
+            "  AND c.majornum=1                -- first major only\n"
+            "  AND length(c.cipcode)=7         -- 6-digit leaf rows only, no rollups\n"
+            "  AND SUBSTR(c.cipcode,1,5) IN ('51.00','51.08','51.09')  -- allied-health families\n"
+            "  AND c.year > (SELECT MAX(year)-5 FROM _years)  -- constant bound, last 5 years\n"
+            "GROUP BY c.year, h.control\n"
+            "ORDER BY c.year, h.control"
+        ),
+    ),
 ]
 
 # The terse original lesson text each seed shipped with, paired with the v1
