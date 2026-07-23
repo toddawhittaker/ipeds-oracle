@@ -18,6 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Must be set before app.config is imported (settings are cached).
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_MAX_TOOL_ITERS"] = "3"
+# Pin the fence-emission baseline HERE, not via ci_env.sh: ci_env doesn't run in
+# CI (CI uses config defaults, and structured_emission_enabled now DEFAULTS ON),
+# so relying on the ambient default would make the bulk of these fence-path tests
+# nondeterministic (a plain-text fake answer trips the reject-and-reprompt round,
+# shifting call/iteration counts). The structured-specific tests flip it True
+# per-test via get_settings().structured_emission_enabled = True.
+os.environ["STRUCTURED_EMISSION_ENABLED"] = "false"
 
 import httpx  # noqa: E402
 

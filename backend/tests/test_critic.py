@@ -30,6 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Set before app.config import (settings are cached).
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_MAX_TOOL_ITERS"] = "6"
+# Fence-emission baseline: structured_emission_enabled now DEFAULTS ON and ci_env
+# doesn't run in CI, so pin it off HERE or these critic-revision tests (which run
+# the real stream_agent loop with plain-text fakes) would trip the emit reprompt
+# and shift the call sequence. See test_agent_loop.py for the same note.
+os.environ["STRUCTURED_EMISSION_ENABLED"] = "false"
 
 import httpx  # noqa: E402
 

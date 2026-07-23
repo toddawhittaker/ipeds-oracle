@@ -305,9 +305,11 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   emission-decay saga). A **leak sentinel** (`_leak_flag`) scans the shipped prose
   for residual fence/JSON debris → `usage_log.answer_leaked`; with `emit_mode`
   (structured|fence, migration 24) it drives the **Answer-leaks** stat on Admin →
-  Usage (`leakRate`/`leakLabel`) — 0-leaks-at-high-adoption is what justifies
-  flipping `structured_emission_enabled` to default ON (still OFF pending Todd's
-  sign-off + multi-model coverage). The sentinel deliberately ignores a plain
+  Usage (`leakRate`/`leakLabel`). **`structured_emission_enabled` DEFAULTS ON
+  (0.2)** — validated 100%-structured / 0-leaks across FOUR vendors
+  (DeepSeek/MiniMax/Anthropic/Moonshot); the fence path is the retained fallback
+  for a tool-incapable model (set the flag false to force it). The sentinel
+  deliberately ignores a plain
   ```chart fence (that's the intended chart delivery — a false-positive caught in
   the PR-1 dark-ship run). The **number stays model-supplied** (envelope only);
   server-computed figures from declared provenance are the next step (PR-2).
