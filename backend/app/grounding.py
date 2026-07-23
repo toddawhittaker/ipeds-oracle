@@ -360,19 +360,26 @@ def check_figure(figure: dict | None,
     return GroundingCheck(status, derivation, target)
 
 
-def _reconcile_value(target: float, raw_value,
-                     results: list[QueryResult]) -> tuple[str, Derivation] | None:
+def _reconcile_value(target: float, raw_value, results: list[QueryResult],
+                     allow_dimension: bool = True) -> tuple[str, Derivation] | None:
     """Reproduce `target` from any column of any retained result, returning the
     STRONGEST route — EXACT short-circuits; otherwise the best of ROUNDED/DERIVED
     — or None when nothing reproduced it.
 
-    The shared reconciliation kernel behind both check_figure and check_table, so
-    a figure and a table cell are grounded by exactly the same rule. `raw_value`
-    is the number as WRITTEN (its precision drives the display-rounding
-    tolerance)."""
+    The shared reconciliation kernel behind check_figure and check_table.
+    `raw_value` is the number as WRITTEN (its precision drives the display-rounding
+    tolerance).
+
+    `allow_dimension` (default True) lets a value match a DIMENSION/code column
+    exactly — right for the hero FIGURE (a headline can legitimately BE a year or
+    a code). check_table passes False: a table MEASURE cell must be verified by a
+    MEASURE column, never by a code column it merely collides with (a small count
+    "3" matching an `awlevel` 3 is a spurious match, not grounding)."""
     best: tuple[str, Derivation] | None = None
     for r_idx, result in enumerate(results):
         for column, values in numeric_columns(result).items():
+            if not allow_dimension and is_dimension(column):
+                continue  # a code/dimension column can't stand in for a data cell
             match = _match_in_column(target, raw_value, column, values)
             if match is None:
                 continue
@@ -393,10 +400,13 @@ def _reconcile_value(target: float, raw_value,
 # and dimension columns are excluded — see _is_measure_column — so the rate is a
 # clean transcription-accuracy signal for the DATA, not dragged down by a
 # model-added Rank column that was never in the DB). Each graded cell is
-# reconciled with the SAME kernel as the figure (_reconcile_value: full
-# reproduction — verbatim / display-rounded / derivable), so a legitimately
-# computed measure (a share/%-change column) still grounds instead of
-# false-alarming, at the cost of the same coincidental-match bias noted in this
+# reconciled with the same kernel as the figure (_reconcile_value: full
+# reproduction — verbatim / display-rounded / derivable) but with
+# `allow_dimension=False` — a measure cell is verified only by a MEASURE
+# result-column, never by a code/dimension column it merely collides with (a
+# small count "3" is not grounded by an `awlevel` 3). A legitimately computed
+# measure (a share/%-change column) still grounds instead of false-alarming, at
+# the cost of the same coincidental-match bias noted in this
 # module's KNOWN LIMITATION. Observe-only: statuses land on
 # usage_log.table_grounding (migration 25) and drive Admin -> Usage; nothing is
 # altered or blocked. The raw rows stay in messages.results, so an all-columns
@@ -491,9 +501,11 @@ def check_table(answer_markdown: str,
     Grades numeric cells in MEASURE columns only (see _is_measure_column) — rank
     ordinals and dimension columns are excluded so the rate is a clean
     transcription-accuracy signal for the data, not dragged down by a model-added
-    Rank column that was never in the DB. Each graded cell is grounded by the SAME
-    rule as a figure (full reproduction via _reconcile_value). NO_TABLE/UNCHECKED
-    carry no counts so they don't move the rate."""
+    Rank column that was never in the DB. Each graded cell is reconciled via
+    _reconcile_value with `allow_dimension=False`: a measure cell must be verified
+    by a MEASURE result-column, never by a code/dimension column it merely
+    collides with (a small count "3" is not grounded by an `awlevel` 3).
+    NO_TABLE/UNCHECKED carry no counts so they don't move the rate."""
     cells: list[tuple[float, str]] = []
     for header, body in parse_markdown_tables(answer_markdown or ""):
         width = max((len(r) for r in body), default=0)
@@ -512,7 +524,7 @@ def check_table(answer_markdown: str,
     if not results:
         return TableGroundingCheck(UNCHECKED)
     matched = sum(1 for v, raw in cells
-                  if _reconcile_value(v, raw, results) is not None)
+                  if _reconcile_value(v, raw, results, allow_dimension=False) is not None)
     checked = len(cells)
     if matched == checked:
         status = TABLE_MATCHED

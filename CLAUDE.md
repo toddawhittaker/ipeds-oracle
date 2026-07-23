@@ -277,9 +277,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   uses), so a follow-up that RESHAPES an earlier table (transpose/regroup, running
   no SQL of its own) is VERIFIED against the borrowed base rows — its values are
   the same, just rearranged — instead of hiding as `unchecked`, and a corrupted
-  reshape is caught. Reconciliation uses the SAME kernel as the figure — the
-  shared `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
-  intact) — so a legitimately **computed measure** (a share/%-change column) still
+  reshape is caught. Reconciliation uses the shared `_reconcile_value` kernel
+  (verbatim / display-rounded / derivable) — but with **`allow_dimension=False`**:
+  a measure cell is verified only by a MEASURE result-column, never by a
+  code/dimension column it merely collides with (the live-observed anomaly: a
+  small count "3" spuriously grounding against an `awlevel` 3 — barred now; the
+  figure path keeps `allow_dimension=True`, since a headline can legitimately BE a
+  year/code). A legitimately **computed measure** (a share/%-change column) still
   grounds instead of false-alarming, at the cost of the figure's known
   coincidental-match bias (acceptable observe-only: `messages.results` is
   persisted, so an all-columns variant is recomputable offline). Records a
