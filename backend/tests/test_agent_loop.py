@@ -170,6 +170,104 @@ def test_hard_error_when_synthesis_is_empty():
     assert res.error and "max tool iter" in res.error.lower(), res.error
 
 
+# --- S5: the critic reviews the tool-budget-exhausted answer too ---------------
+# The exhaustion tail used to ship with ZERO critic review. Now it runs the
+# critic and, on a REVISE, gets ONE bounded correction round with tools
+# RE-ENABLED — same requeried-and-changed anti-leak gate as the normal path.
+
+def _exhaust_then(*, correction, revise=True):
+    """A fake_chat: burn the tool budget (main loop) → a draft synthesis answer →
+    then `correction` drives the critic-triggered correction round. `correction`
+    is called with (calls_dict, requeried_flag) and returns the next response.
+
+    llm.critic.review is patched to REVISE (or OK) by the caller."""
+    mi = get_settings().llm_max_tool_iters
+    state = {"n": 0, "requeried": False}
+
+    async def fake_chat(client, model, messages, tools=None):
+        state["n"] += 1
+        if tools is None:
+            # synthesis draft (and the correction round's forced-answer fallback,
+            # which these tests never reach)
+            return _text_response("Draft best-effort answer: 500 degrees.")
+        if state["n"] <= mi:
+            return _tool_call_response()  # exhaust the main tool budget
+        return correction(state)          # the critic-driven correction round
+    return fake_chat
+
+
+def _patch_review(ok):
+    async def fake_review(question, sql_log, answer, *a, **k):
+        return Critique(ok=ok, headline="H", description="D") if not ok \
+            else Critique(ok=True)
+    return fake_review
+
+
+def _run_with_review(question, fake_chat, review_ok):
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    orig = llm.critic.review
+    llm.critic.review = _patch_review(review_ok)
+    try:
+        return _run(question)
+    finally:
+        llm.critic.review = orig
+
+
+def test_exhaustion_critic_correction_requeries_and_changes():
+    """THE fix: a flagged exhaustion answer gets a real correction — the round
+    re-queries (tools re-enabled) and lands on a different answer, so it ships
+    and the turn is marked revised."""
+    def correction(state):
+        if not state["requeried"]:
+            state["requeried"] = True
+            return _tool_call_response()  # a re-query in the correction round
+        return _text_response("Corrected after re-query: 1,000,000 degrees.")
+    res = _run_with_review("q", _exhaust_then(correction=correction), review_ok=False)
+    assert "1,000,000" in res.answer, res.answer
+    assert res.critic_revised is True, "a genuine re-queried correction must ship"
+    assert len(res.sql_log) > get_settings().llm_max_tool_iters, \
+        "the correction round's re-query must land in sql_log"
+
+
+def test_exhaustion_correction_confirming_same_answer_reverts_to_draft():
+    """A re-query that merely confirms the same number is a critic false alarm —
+    it must not disturb the draft, and records no revision."""
+    def correction(state):
+        if not state["requeried"]:
+            state["requeried"] = True
+            return _tool_call_response()
+        return _text_response("Draft best-effort answer: 500 degrees.")  # unchanged
+    res = _run_with_review("q", _exhaust_then(correction=correction), review_ok=False)
+    assert "500" in res.answer, res.answer
+    assert res.critic_revised is False, "an unchanged re-query is not a revision"
+
+
+def test_exhaustion_correction_rebuttal_without_requery_reverts_to_draft():
+    """The [[critic-revision-leak]] gate holds on this path too: a rebuttal that
+    changes the prose but runs NO new run_sql is discarded — the clean draft
+    ships, unrevised."""
+    def correction(state):
+        # Answers immediately, no re-query — a rebuttal.
+        return _text_response("Actually the draft is right; 500 stands.")
+    res = _run_with_review("q", _exhaust_then(correction=correction), review_ok=False)
+    assert "500 degrees" in res.answer, res.answer  # the ORIGINAL draft
+    assert "Actually" not in res.answer, "a no-requery rebuttal must not ship"
+    assert res.critic_revised is False, res.critic_revised
+
+
+def test_exhaustion_critic_ok_ships_draft_unchanged():
+    """When the critic passes the exhaustion answer, no correction round runs and
+    the draft ships as-is."""
+    def correction(state):  # never reached — critic says OK
+        return _text_response("should not be used")
+    res = _run_with_review("q", _exhaust_then(correction=correction), review_ok=True)
+    assert "500 degrees" in res.answer, res.answer
+    assert res.critic_revised is False, res.critic_revised
+    assert len(res.sql_log) == get_settings().llm_max_tool_iters, \
+        "no correction round → sql_log unchanged from the main loop"
+
+
 async def _collect(agen):
     out = []
     async for e in agen:
@@ -966,6 +1064,14 @@ def run():
     check("plain answer (no tool calls) is returned", test_plain_answer_path)
     check("budget exhaustion synthesizes from gathered data", test_synthesis_on_budget_exhaustion)
     check("empty synthesis falls back to a clear error", test_hard_error_when_synthesis_is_empty)
+    check("S5: exhaustion critic correction re-queries and changes → ships revised",
+          test_exhaustion_critic_correction_requeries_and_changes)
+    check("S5: exhaustion correction confirming same answer reverts to draft",
+          test_exhaustion_correction_confirming_same_answer_reverts_to_draft)
+    check("S5: exhaustion rebuttal without re-query reverts to draft (leak gate)",
+          test_exhaustion_correction_rebuttal_without_requery_reverts_to_draft)
+    check("S5: exhaustion critic OK ships the draft unchanged",
+          test_exhaustion_critic_ok_ships_draft_unchanged)
     check("conversation history is fed into the messages", test_history_is_included_in_messages)
     check("a reasoning field yields a 'thinking' event", test_reasoning_field_yields_thinking_event)
     check("malformed tool-call JSON args don't crash the loop",

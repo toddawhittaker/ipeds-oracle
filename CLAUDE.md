@@ -270,6 +270,17 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `critic_revised=False`. This closes the observed leak where a *confirm*-by-
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
+  **The critic also runs on the TOOL-BUDGET-EXHAUSTED path** (S5): when the agent
+  burns all `llm_max_tool_iters` without answering and falls back to the
+  tools-disabled "best effort" synthesis, that answer used to ship with ZERO
+  review (the highest-risk path, least checking). It now gets the same critic,
+  and on a REVISE a **bounded correction round with tools RE-ENABLED**
+  (`_CRITIC_CORRECTION_ITERS=3` — a deliberate, capped exception to the "no more
+  tools" budget, fired only by a REVISE) so a flagged aggregation error can
+  actually be re-queried and fixed. Re-enabling tools is what makes `requeried`
+  meaningful again there — the SAME anti-leak gate applies, so a rebuttal or a
+  confirm-only re-query reverts to the clean draft. Pinned by the `S5:` cases in
+  `backend/tests/test_agent_loop.py`.
 - **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
   step: when a plausible alternate reading would change the HEADLINE result (e.g.
   "which major produces the most graduates?" — bachelor's-only vs. all award
