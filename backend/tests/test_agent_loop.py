@@ -561,6 +561,56 @@ def test_extract_figure_recovers_a_leading_bare_object():
     assert clean == "the prose", repr(clean)
 
 
+# --- mis-fenced ![figure]/![chart] normalization (a live regression) -----------
+# DeepSeek was observed emitting figures/charts as MARKDOWN IMAGE syntax
+# (`![figure]\n{json}`, `![chart]\n{json}`) instead of ```figure/```chart fences.
+# Nothing recognized that, so the raw JSON leaked into chat (and, where the retry
+# separately recovered the figure, DUPLICATED it). Normalization rewrites the
+# mis-wrap into a real fence before extraction.
+
+def test_normalize_repairs_a_misfenced_figure_image():
+    # The exact observed form: an image label on its own line, then bare JSON.
+    ans = '![figure]\n{"value":"43.8%","label":"Public share"}\n\nProse follows.'
+    fixed = llm._normalize_misfenced_blocks(ans)
+    assert "```figure" in fixed, fixed
+    # ...and it now extracts+strips cleanly, so nothing leaks.
+    clean, fig = llm._extract_figure(fixed)
+    assert fig == {"value": "43.8%", "label": "Public share"}, fig
+    assert "![figure]" not in clean and '"value"' not in clean, repr(clean)
+
+
+def test_normalize_repairs_a_misfenced_chart_with_nested_data():
+    # A chart's JSON has nested arrays/objects — the balanced scan must span them.
+    ans = ('![chart]\n{"type":"line","x":"year","data":[{"year":2024,"n":5},'
+           '{"year":2025,"n":6}]}\n\ndone')
+    fixed = llm._normalize_misfenced_blocks(ans)
+    assert "```chart" in fixed and '"data"' in fixed, fixed
+    assert "![chart]" not in fixed, fixed
+    # The whole object was captured (nested braces balanced), prose preserved.
+    assert fixed.rstrip().endswith("done"), fixed
+
+
+def test_normalize_handles_the_image_link_variant():
+    ans = '![Figure: 767](767)\n\n{"value":"767","label":"CS"}\n\ntail'
+    fixed = llm._normalize_misfenced_blocks(ans)
+    _, fig = llm._extract_figure(fixed)
+    assert fig == {"value": "767", "label": "CS"}, fig
+
+
+def test_normalize_leaves_a_real_image_and_real_fences_alone():
+    # A genuine image (not followed by JSON) must be untouched...
+    img = "See ![a nursing chart](https://x/y.png) above."
+    assert llm._normalize_misfenced_blocks(img) == img
+    # ...and a proper fence is already correct — no double-fencing.
+    good = '```figure\n{"value":"5","label":"Y"}\n```'
+    assert llm._normalize_misfenced_blocks(good) == good
+
+
+def test_normalize_is_a_noop_without_a_figure_or_chart_label():
+    txt = "Just prose with a number 42 and a {json-ish} brace."
+    assert llm._normalize_misfenced_blocks(txt) == txt
+
+
 def test_extract_figure_does_not_mistake_a_chart_fence_for_a_figure():
     ans = '```chart\n{"type":"line","x":"year","data":[{"year":2024,"n":5}]}\n```'
     clean, fig = llm._extract_figure(ans)
@@ -882,6 +932,16 @@ def run():
           test_an_unparseable_figure_fence_is_malformed_not_no_figure)
     check("an answer with no figure is not measured",
           test_an_answer_with_no_figure_is_not_measured)
+    check("normalize repairs a mis-fenced ![figure] image",
+          test_normalize_repairs_a_misfenced_figure_image)
+    check("normalize repairs a mis-fenced ![chart] with nested data",
+          test_normalize_repairs_a_misfenced_chart_with_nested_data)
+    check("normalize handles the ![Figure](url) link variant",
+          test_normalize_handles_the_image_link_variant)
+    check("normalize leaves a real image and real fences alone",
+          test_normalize_leaves_a_real_image_and_real_fences_alone)
+    check("normalize is a no-op without a figure/chart label",
+          test_normalize_is_a_noop_without_a_figure_or_chart_label)
     check("_extract_figure recovers the observed broken wrapper",
           test_extract_figure_recovers_the_observed_broken_wrapper)
     check("_extract_figure recovers a leading bare object",
