@@ -430,7 +430,7 @@ def test_dedup_backfills_empty_headline_and_lesson_without_embeddings():
 # --- seed data (app.seeds) ------------------------------------------------------
 
 def test_seed_lessons_have_headline_and_readable_description():
-    assert len(SEED_EXAMPLES) == 3, len(SEED_EXAMPLES)
+    assert len(SEED_EXAMPLES) == 8, len(SEED_EXAMPLES)
     for ex in SEED_EXAMPLES:
         assert ex.headline, f"seed missing a headline: {ex!r}"
         assert len(ex.headline) <= 110, f"headline should be short: {ex.headline!r}"
@@ -440,15 +440,22 @@ def test_seed_lessons_have_headline_and_readable_description():
             f"description should end with a period: {ex.description!r}"
         assert any(w.islower() and len(w) > 2 for w in ex.description.split()), \
             f"description doesn't read as prose: {ex.description!r}"
-        assert "--" in ex.commented_sql, \
-            f"commented_sql must carry inline comments explaining the fields: {ex.commented_sql!r}"
+        # A worked SQL example must carry inline comments explaining its fields.
+        # A purely conversational lesson (e.g. "clarify the year") legitimately
+        # ships no query, so the comment rule only applies when SQL is present.
+        if ex.commented_sql:
+            assert "--" in ex.commented_sql, \
+                f"commented_sql needs inline comments: {ex.commented_sql!r}"
 
 
 def test_seed_lesson_upgrades_consistent_with_seed_examples():
     # Drift guard: every SEED_LESSON_UPGRADES target must be the SAME SeedLesson
     # object shipped in SEED_EXAMPLES, or a future edit to one without the other
-    # would desync a fresh install's seeds from an upgraded live db.
-    assert len(SEED_LESSON_UPGRADES) == len(SEED_EXAMPLES), len(SEED_LESSON_UPGRADES)
+    # would desync a fresh install's seeds from an upgraded live db. Upgrades
+    # cover ONLY the original migration-6 seeds (which shipped in a terse form);
+    # seeds promoted later never had a v1, so they carry no upgrade entry — hence
+    # <= rather than ==, and the upgrades must align with the FIRST N seeds.
+    assert len(SEED_LESSON_UPGRADES) <= len(SEED_EXAMPLES), len(SEED_LESSON_UPGRADES)
     for i, (_v1_description, v2) in enumerate(SEED_LESSON_UPGRADES):
         assert v2 == SEED_EXAMPLES[i], \
             f"SEED_LESSON_UPGRADES[{i}][1] must equal SEED_EXAMPLES[{i}]"
