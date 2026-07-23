@@ -16,7 +16,7 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 import app.nces as nces
 from app import estimate, importer, skills
 from app.auth import canon_email, require_admin
-from app.config import get_settings
+from app.config import get_settings, resolve_tz
 from app.db import connect
 from app.mailer import send_access_approved
 
@@ -1041,10 +1041,15 @@ def deintegrate(start_year: int, admin: sqlite3.Row = Depends(require_admin)):
 
 # --- Usage dashboard ----------------------------------------------------------
 @router.get("/usage")
-def usage(since: float | None = None, until: float | None = None):
+def usage(since: float | None = None, until: float | None = None,
+          tz: str | None = None):
     """Usage/spend over a time window [since, until] (unix seconds; default: the
     last 7 days). Returns totals, a time-bucketed series (hourly for short
-    windows, else daily) for charting, top users, and recent activity."""
+    windows, else daily) for charting, top users, and recent activity.
+
+    `tz` is the VIEWER's IANA timezone (the browser's resolved zone), used to
+    bucket the series so the graph reads in the viewer's own local time; an
+    absent/unknown zone falls back to the server default (`resolve_tz`)."""
     now = time.time()
     until = float(until) if until else now
     since = float(since) if since else (now - 7 * 86400)
@@ -1052,6 +1057,7 @@ def usage(since: float | None = None, until: float | None = None):
         since, until = until, since
     hourly = (until - since) <= 2 * 86400 + 1
     bucket_fmt = "%Y-%m-%d %H:00" if hourly else "%Y-%m-%d"
+    zone = resolve_tz(tz)
     win = "WHERE created_at BETWEEN ? AND ?"
     args = (since, until)
 
@@ -1100,12 +1106,21 @@ def usage(since: float | None = None, until: float | None = None):
             "COALESCE(SUM(table_cells_checked),0) AS table_cells_checked, "
             "COALESCE(SUM(table_cells_matched),0) AS table_cells_matched "
             f"FROM usage_log {win}", args).fetchone()
-        series = con.execute(
-            f"SELECT strftime('{bucket_fmt}', created_at,'unixepoch') AS t, "
-            "COUNT(*) AS queries, "
-            "COALESCE(SUM(prompt_tokens+completion_tokens),0) AS tokens, "
-            "COALESCE(SUM(cost),0.0) AS spend "
-            f"FROM usage_log {win} GROUP BY t ORDER BY t", args).fetchall()
+        # Bucket the series in the VIEWER's timezone. SQLite's strftime can't do
+        # IANA zones (only UTC / process-local), so aggregate in Python with
+        # zoneinfo: fetch the window's rows and fold each into its local-time
+        # bucket. Keeps totals/top_users in SQL; only the chart needs the zone.
+        rows = con.execute(
+            "SELECT created_at, prompt_tokens+completion_tokens AS tokens, cost "
+            f"FROM usage_log {win}", args).fetchall()
+        buckets: dict[str, dict] = {}
+        for r in rows:
+            key = datetime.fromtimestamp(r["created_at"], zone).strftime(bucket_fmt)
+            b = buckets.setdefault(key, {"t": key, "queries": 0, "tokens": 0, "spend": 0.0})
+            b["queries"] += 1
+            b["tokens"] += r["tokens"] or 0
+            b["spend"] += r["cost"] or 0.0
+        series = [buckets[k] for k in sorted(buckets)]
         top_users = con.execute(
             "SELECT u.email, COUNT(*) AS queries, "
             "COALESCE(SUM(l.prompt_tokens+l.completion_tokens),0) AS tokens, "
@@ -1136,7 +1151,7 @@ def usage(since: float | None = None, until: float | None = None):
                         and not prices_configured)
         return {"since": since, "until": until, "bucket": "hour" if hourly else "day",
                 "totals": dict(totals),
-                "series": [dict(r) for r in series],
+                "series": series,
                 "top_users": [dict(r) for r in top_users],
                 "cost_warning": cost_warning}
     finally:

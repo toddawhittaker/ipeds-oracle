@@ -6,11 +6,17 @@ Docker secrets. `pydantic-settings` validates and types them at startup.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger("ipeds.config")
+
+_DEFAULT_TZ = "America/New_York"
 
 # Repo root (…/ipeds). config.py lives in backend/app/, so parents[2] is the
 # root — the runtime DBs, data/, and docs/ all resolve relative to it (prod
@@ -108,6 +114,12 @@ class Settings(BaseSettings):
     # provider attribution headers are optional in general.
     app_public_url: str = Field(default="http://localhost:8000")
     llm_app_title: str = Field(default=PRODUCT_NAME)
+    # Server-side FALLBACK timezone (IANA name) — used only to bucket the admin
+    # usage graph when a request doesn't carry the viewer's own zone. Display is
+    # otherwise the END-USER's browser timezone everywhere (chat stamps + graphs),
+    # so this is rarely hit. Read via `tzinfo()`, which degrades an invalid zone to
+    # America/New_York rather than 500-ing a request.
+    timezone: str = Field(default=_DEFAULT_TZ)
     # Suppresses the chat privacy warning ("don't enter proprietary/confidential
     # info") ONLY. Off by default so the warning always shows unless a deployment
     # has DELIBERATELY judged its provider/contract/deployment/data-use terms safe
@@ -220,6 +232,23 @@ class Settings(BaseSettings):
         """Where the server-log store lives — LOG_DB_PATH if set, else next to
         app.db (so a temp APP_DB_PATH in tests keeps logs isolated too)."""
         return self.log_db_path or (self.app_db_path.parent / "logs.db")
+
+    def tzinfo(self) -> ZoneInfo:
+        """The configured fallback timezone, degrading an invalid TIMEZONE to
+        America/New_York (with a warning) so a typo never 500s a request."""
+        return resolve_tz(self.timezone)
+
+
+def resolve_tz(name: str | None) -> ZoneInfo:
+    """An IANA zone name → ZoneInfo, falling back to America/New_York on an empty
+    or unknown zone. Used for both the config default and a request's `tz` param,
+    so a bad value anywhere degrades instead of erroring."""
+    try:
+        if name:
+            return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("unknown timezone %r; falling back to %s", name, _DEFAULT_TZ)
+    return ZoneInfo(_DEFAULT_TZ)
 
 
 @lru_cache

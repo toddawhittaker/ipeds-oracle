@@ -1534,6 +1534,32 @@ def test_usage_totals_series_top_users_unaffected_by_recent_removal():
         assert top["queries"] == 2, top
 
 
+def test_usage_series_buckets_in_the_requested_timezone():
+    """The graph buckets in the VIEWER's timezone (a `tz` query param). A fixed
+    instant lands in different LOCAL-hour buckets by zone; an unknown zone falls
+    back to the server default without erroring."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    t = datetime(2021, 6, 15, 14, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
+    # 2 PM EDT == 18:00 UTC.
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("tz@x.edu", "q", created_at=t)
+
+        def bucket(tz):
+            r = c.get("/api/admin/usage",
+                      params={"since": t - 1800, "until": t + 1800, "tz": tz})
+            assert r.status_code == 200, r.text
+            s = r.json()["series"]
+            return s[0]["t"] if s else None
+
+        assert bucket("America/New_York") == "2021-06-15 14:00", bucket("America/New_York")
+        assert bucket("UTC") == "2021-06-15 18:00", bucket("UTC")
+        # An unknown zone degrades to the server default, never a 500.
+        assert bucket("Not/AZone") is not None
+
+
 def test_usage_log_question_column_still_written():
     """Deliberate, and the flip side of the privacy fix: usage_log.question
     KEEPS being written to the database -- only the admin-facing /usage
@@ -3294,6 +3320,8 @@ def run():
           test_usage_dashboard_narrow_window_plus_top_users_still_no_question_text)
     check("usage dashboard: totals/series/top_users unaffected by 'recent' removal",
           test_usage_totals_series_top_users_unaffected_by_recent_removal)
+    check("usage series buckets in the requested (viewer) timezone",
+          test_usage_series_buckets_in_the_requested_timezone)
     check("usage_log.question is still written to the DB (deliberate, not dropped)",
           test_usage_log_question_column_still_written)
     check("skills GET includes the headline field", test_skills_get_includes_headline_field)

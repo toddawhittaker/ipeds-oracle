@@ -58,6 +58,11 @@ export const api = {
     const p = new URLSearchParams();
     if (since) p.set("since", String(Math.floor(since)));
     if (until) p.set("until", String(Math.floor(until)));
+    // The viewer's own timezone, so the graph buckets in local time.
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) p.set("tz", tz);
+    } catch { /* fall back to the server default */ }
     const qs = p.toString();
     return j("GET", "/api/admin/usage" + (qs ? `?${qs}` : ""));
   },

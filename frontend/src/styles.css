@@ -476,6 +476,8 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
 .msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
+/* Per-turn time stamp ("2:47 PM EST") + "Thought for N seconds" — quiet meta. */
+.msg-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 /* Thinking/SQL disclosure toggles: a caret that rotates when their panel is
    open (aria-expanded), so the button reads as the control for the full-width
    panel rendered under the row. */

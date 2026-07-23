@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
 import { api } from "./api.js";
 import Chart from "./Chart.jsx";
+import { shortZone } from "./datetime.js";
 import { estimateIntegrate } from "./estimate.js";
 import { USER_CONFIG } from "./userlist.js";
 import { PENDING_CONFIG, BLOCKED_CONFIG } from "./accesstables.js";
@@ -1958,8 +1959,10 @@ function Usage() {
   const t = u?.totals || {};
   const spec = useMemo(() => {
     const s = u?.series || [];
+    const zone = shortZone();
     return s.length ? {
       type: "line", x: "t", y: [metric], yLabel: metric === "spend" ? "USD" : metric,
+      xLabel: zone ? `Time (${zone})` : "Time",
       data: s.map((r) => ({ t: r.t, queries: r.queries, tokens: r.tokens, spend: Number(r.spend) })),
     } : null;
   }, [u, metric]);

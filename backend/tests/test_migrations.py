@@ -297,6 +297,23 @@ def test_migration_25_adds_usage_log_table_grounding_columns():
     assert row[0] is None and row[1] == 0 and row[2] == 0, row
 
 
+def test_migration_26_adds_messages_duration_ms():
+    # Turn duration (ms) on the assistant message — the "Thought for N seconds"
+    # display. Nullable (NULL on cache/refusal/predating rows).
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 25])
+    assert "duration_ms" not in _cols(con, "messages"), _cols(con, "messages")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "duration_ms" in _cols(con, "messages"), _cols(con, "messages")
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+                "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, created_at) "
+                "VALUES (1, 'user', 'q', 0)")
+    row = con.execute("SELECT duration_ms FROM messages").fetchone()
+    assert row[0] is None, row  # nullable, no backfill
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -614,6 +631,7 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["content", "TEXT", 1, null, 0],
       ["conversation_id", "INTEGER", 1, null, 0],
       ["created_at", "REAL", 1, null, 0],
+      ["duration_ms", "INTEGER", 0, null, 0],
       ["feedback", "INTEGER", 0, null, 0],
       ["figure", "TEXT", 0, null, 0],
       ["id", "INTEGER", 0, null, 1],
@@ -791,6 +809,8 @@ def run():
           test_migration_24_adds_usage_log_emit_mode_and_leak_columns)
     check("migration 25 adds usage_log.table_grounding + cell counts",
           test_migration_25_adds_usage_log_table_grounding_columns)
+    check("migration 26 adds messages.duration_ms (nullable)",
+          test_migration_26_adds_messages_duration_ms)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",
