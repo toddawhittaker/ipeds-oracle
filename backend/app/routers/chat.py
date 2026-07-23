@@ -228,6 +228,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
     async def gen():
         nonlocal conv_id
+        # Turn wall-clock start → the "Thought for N seconds" duration. monotonic
+        # so it's immune to a clock adjustment mid-turn.
+        t0 = time.monotonic()
         # Create the new conversation only now that the turn is actually running
         # (bug (a) fix): the row + its first message either both land (turn
         # persisted) or the row is reversed by _delete_if_empty in `finally`.
@@ -331,6 +334,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 yield _sse({"type": "done"})
                 return
 
+            duration_ms = round((time.monotonic() - t0) * 1000)
             user_msg_id, msg_id = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer or (result.error or ""),
                 sql_log=result.sql_log, model=result.model_used,
@@ -365,6 +369,8 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 table_grounding=result.table_grounding,
                 table_cells_checked=result.table_cells_checked,
                 table_cells_matched=result.table_cells_matched,
+                # Turn wall-clock (ms) → the "Thought for N seconds" display.
+                duration_ms=duration_ms,
                 delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
@@ -415,7 +421,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
 
             done = {"type": "done", "escalated": result.escalated,
                     "model": result.model_used, "tokens": result.total_tokens,
-                    "message_id": msg_id, "user_message_id": user_msg_id}
+                    "message_id": msg_id, "user_message_id": user_msg_id,
+                    # The live turn shows "Thought for N seconds" without a reload.
+                    "duration_ms": duration_ms}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
                 title = await generate_title(question, answer)
@@ -477,7 +485,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              suggestions=None, clarify=None, figure_grounding=None,
              figure_derivation=None, results=None, emit_mode=None, leaked=False,
              table_grounding=None, table_cells_checked=0, table_cells_matched=0,
-             delete_from_id=None):
+             duration_ms=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -500,13 +508,14 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
             "thinking, figure, suggestions, clarify, results, model_used, tokens, "
-            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "duration_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
              json.dumps(clarify) if clarify else None,
-             json.dumps(results) if results else None, model, tokens, now))
+             json.dumps(results) if results else None, model, tokens,
+             duration_ms, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -560,7 +569,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
             raise HTTPException(404, "Not found.")
         rows = con.execute(
             "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
-            "model_used, created_at "
+            "model_used, created_at, duration_ms "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:

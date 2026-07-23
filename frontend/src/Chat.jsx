@@ -9,6 +9,7 @@ import Suggestions from "./Suggestions.jsx";
 import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
+import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
@@ -645,7 +646,9 @@ export default function Chat({ me }) {
     // is now on screen.
     const isMine = () => turnToken.current === myTurn;
     setBusy(true); setStatus("Thinking…");
-    setMessages((m) => [...m, { role: "user", content: q },
+    // Stamp the user turn with the client send time (unix seconds) — displayed in
+    // the viewer's own tz; the server persists a near-identical created_at.
+    setMessages((m) => [...m, { role: "user", content: q, created_at: Math.floor(Date.now() / 1000) },
                               { role: "assistant", content: "", sql_log: [], thinking: [], pending: true }]);
 
     // Immutably patch the in-flight (last) message.
@@ -658,6 +661,7 @@ export default function Chat({ me }) {
       patchLast((last) => ({ ...last, thinking: [...(last.thinking || []), item] }));
 
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
+    let durationMs = null; // turn wall-clock from the done event → "Thought for N seconds"
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -727,6 +731,7 @@ export default function Chat({ me }) {
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
           if (ev.user_message_id) userMsgId = ev.user_message_id;
+          if (ev.duration_ms != null) durationMs = ev.duration_ms;
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -743,7 +748,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -948,12 +953,20 @@ export default function Chat({ me }) {
                               title="Edit this prompt"><IconEdit />Edit</button>
                       <button className="link ico" onClick={() => rerun(i)} disabled={busy}
                               title="Run this prompt again"><IconRerun />Rerun</button>
+                      {formatStamp(m.created_at) && (
+                        <span className="msg-time" title="When you asked">{formatStamp(m.created_at)}</span>
+                      )}
                     </div>
                   </>
                 )}
                 {m.role === "assistant" && !m.pending && (
                   <>
                     <div className="msg-actions">
+                      {thoughtLabel(m.duration_ms) && !m.error && (
+                        <span className="msg-time" title="Time to generate this answer">
+                          {thoughtLabel(m.duration_ms)}
+                        </span>
+                      )}
                       {/* A failed turn's recovery lives ON the failure, not
                           hidden up on the user message's Rerun. */}
                       {m.error && messages[i - 1]?.role === "user" && (

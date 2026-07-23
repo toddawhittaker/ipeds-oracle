@@ -748,6 +748,21 @@ written, but echoing it back would be an attributable privacy leak (the
 caller-controlled `since`/`until` narrows the window; `top_users` names the user).
 A sentinel test in `backend/tests/test_admin_router.py` pins this.
 
+**Timezone + per-turn timing (viewer's browser tz EVERYWHERE — see
+[[date-formatting-preference]]).** The `/usage` **series buckets in the VIEWER's
+timezone**: the browser sends `?tz=<IANA>` (its resolved zone), and the endpoint
+aggregates in Python with `zoneinfo` (SQLite can't do IANA zones), falling back to
+the `TIMEZONE` config default (`config.resolve_tz`) — the chart's x-axis is
+labeled "Time (EST)" (the viewer's short zone). Chat **stamps every user turn**
+("2:47 PM EST") and shows **"Thought for N seconds"** under each answer — pure
+frontend `Intl` (viewer tz) via `frontend/src/datetime.js`
+(`formatStamp`/`shortZone`/`thoughtLabel`, vitest-pinned). The duration is
+**server-measured wall-clock** persisted on `messages.duration_ms` (**migration
+26**) + carried in the `done` SSE event — it can't come from timestamps because
+`_persist` stamps the user AND assistant rows with one `now`. The `TIMEZONE`
+`.env` setting is only the graph's if-not-specified fallback (the browser normally
+provides its own).
+
 **Full details live in `CONTRIBUTING.md` and the README's Self-hosting section — read them, don't guess.**
 
 ## How we work (operating rules — follow these)

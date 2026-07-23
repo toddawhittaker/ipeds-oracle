@@ -303,6 +303,27 @@ def test_cache_hit_serves_cached_answer_and_titles_new_conversation():
         assert done.get("title") == "A Cached Title", done
 
 
+def test_turn_duration_is_measured_persisted_and_in_the_done_event():
+    """The "Thought for N seconds" value: the turn's wall-clock ms is in the done
+    event (live display) AND persisted on the assistant message (survives reload,
+    returned by get_conversation). Can't come from timestamps — the user + the
+    assistant rows share one created_at."""
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "how many institutions?", answer_text="42")
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        assert isinstance(done.get("duration_ms"), int) and done["duration_ms"] >= 0, done
+        conv_id = next(e for e in events if e["type"] == "conversation")["id"]
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = [m for m in msgs if m["role"] == "assistant"][-1]
+        assert assistant["duration_ms"] is not None and assistant["duration_ms"] >= 0, assistant
+        # get_conversation also surfaces the user turn's created_at (the stamp).
+        user = [m for m in msgs if m["role"] == "user"][-1]
+        assert user["created_at"] and user["created_at"] > 0, user
+
+
 def test_normal_flow_titles_a_new_conversation():
     with TestClient(app) as c:
         _login(c)
@@ -1038,6 +1059,8 @@ def run():
           test_interrupted_edit_turn_keeps_the_old_exchange_intact)
     check("a semantic cache hit serves the cached answer + titles the chat",
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
+    check("turn duration is measured, persisted, and in the done event",
+          test_turn_duration_is_measured_persisted_and_in_the_done_event)
     check("a normal (non-cached) successful turn titles a new conversation",
           test_normal_flow_titles_a_new_conversation)
     check("the thinking trace is persisted and returned on reload",

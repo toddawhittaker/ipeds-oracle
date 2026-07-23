@@ -34,6 +34,7 @@ export default defineConfig({
         "src/compare.js",
         "src/csvimport.js",
         "src/datatable.js",
+        "src/datetime.js",
         "src/estimate.js",
         "src/figure.js",
         "src/initials.js",

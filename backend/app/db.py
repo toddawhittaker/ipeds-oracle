@@ -332,6 +332,11 @@ MIGRATIONS: list[tuple[int, str]] = [
     (25, "ALTER TABLE usage_log ADD COLUMN table_grounding TEXT;\n"
          "ALTER TABLE usage_log ADD COLUMN table_cells_checked INTEGER NOT NULL DEFAULT 0;\n"
          "ALTER TABLE usage_log ADD COLUMN table_cells_matched INTEGER NOT NULL DEFAULT 0;"),
+    # Turn duration (ms) on the ASSISTANT message — the "Thought for N seconds"
+    # display. Can't be derived from timestamps: _persist stamps the user + the
+    # assistant row with one `now`. Nullable; NULL on cache-hit/refusal/predating
+    # rows (the UI shows the line only for a real answer).
+    (26, "ALTER TABLE messages ADD COLUMN duration_ms INTEGER;"),
 ]
 
 
