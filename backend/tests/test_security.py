@@ -424,6 +424,21 @@ def test_schema_family_with_quote_is_handled() -> None:
     assert "traceback" not in result.lower(), f"leaked a traceback: {result!r}"
 
 
+def test_resolve_tz_sanitizes_control_chars_before_logging():
+    # Log injection (CodeQL py/log-injection, config.py): the /usage `tz` request
+    # param is user-controlled and, when it's not a real IANA zone, gets logged.
+    # A CR/LF in it must not survive into the log message and forge a second line.
+    from app import config as cfg
+    evil = "Fake/Zone\r\nCRITICAL forged admin line"
+    # The sanitizer strips every control char (CR/LF included) to a space.
+    safe = cfg._log_safe(evil)
+    assert "\n" not in safe and "\r" not in safe, repr(safe)
+    assert "forged admin line" in safe, "content kept; only the newline is neutralized"
+    # ...and the real call path (invalid zone) degrades to the default without
+    # raising and without carrying the raw newline anywhere.
+    assert cfg.resolve_tz(evil).key == "America/New_York"
+
+
 def run() -> None:
     print("Security/correctness contract tests (TDD — RED expected pre-fix)\n")
 
@@ -459,6 +474,10 @@ def run() -> None:
     print("\n7. magic-link verify: GET is non-consuming, POST consumes")
     check("GET verify never burns the token; POST signs in once",
           test_get_verify_does_not_consume_token)
+
+    print("\n8. log injection: user-controlled tz param is scrubbed before logging")
+    check("resolve_tz sanitizes control chars before the warning log",
+          test_resolve_tz_sanitizes_control_chars_before_logging)
 
     print()
     if FAILURES:
