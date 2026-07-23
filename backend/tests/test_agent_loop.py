@@ -32,6 +32,7 @@ from app import critic, llm  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.critic import Critique  # noqa: E402
 from app.tools import registry  # noqa: E402
+from app.tools.sql import QueryResult  # noqa: E402
 
 get_settings.cache_clear()
 # The real transport-level function, captured before any test below reassigns
@@ -1241,6 +1242,59 @@ def test_no_forced_reemit_when_structured_off():
     assert res.emit_mode == "fence"
 
 
+# --- conversation-scoped table grounding (verify reshapes/transposes) ----------
+# A follow-up that reshapes an earlier table (transpose/regroup) reformats from
+# context and runs NO SQL — so it has no results of its own. _stamp_table_grounding
+# borrows the earlier turn's base rows (via _ground_results / prior_results, the
+# same infra the figure uses) so the reshape is VERIFIED, not silently `unchecked`.
+
+# Base rows an earlier turn retained (the chat/24 shape: awards by state).
+_BASE_TABLE = QueryResult(columns=["state", "awards"],
+                          rows=[("OH", 1460), ("MI", 1470), ("IN", 1086)], row_count=3)
+# A reshaped answer table reciting those same values (different layout, same data).
+_RESHAPED_MD = ("| State | Degrees |\n| --- | --- |\n"
+                "| OH | 1,460 |\n| MI | 1,470 |\n| IN | 1,086 |\n")
+
+
+def test_reshaped_table_grounds_against_prior_results_not_unchecked():
+    """THE gap this closes: a reshape/transpose runs no SQL (results=[]), but its
+    cells are members of an EARLIER turn's base rows — borrowing them verifies the
+    reshape (`matched`) instead of hiding it as `unchecked`."""
+    res = llm.AgentResult(answer=_RESHAPED_MD, results=[], prior_results=[_BASE_TABLE])
+    llm._stamp_table_grounding(res)
+    assert res.table_grounding == "matched", res.table_grounding
+    assert res.table_cells_checked == 3 and res.table_cells_matched == 3, res
+
+
+def test_reshaped_table_with_no_prior_is_unchecked():
+    """UNCHECKED now means neither this turn NOR the recent window retained
+    anything — a genuine first-turn lookup, nothing to verify against."""
+    res = llm.AgentResult(answer=_RESHAPED_MD, results=[], prior_results=[])
+    llm._stamp_table_grounding(res)
+    assert res.table_grounding == "unchecked", res.table_grounding
+    assert res.table_cells_checked == 0 and res.table_cells_matched == 0, res
+
+
+def test_normal_turn_table_grounding_unaffected_by_the_borrow():
+    """A turn that queried grounds against its own results as before — the borrow
+    doesn't change a normal turn."""
+    res = llm.AgentResult(answer=_RESHAPED_MD, results=[_BASE_TABLE], prior_results=[])
+    llm._stamp_table_grounding(res)
+    assert res.table_grounding == "matched", res.table_grounding
+    assert res.table_cells_matched == 3, res
+
+
+def test_a_corrupted_reshape_is_caught_against_prior_results():
+    """The borrow VERIFIES, it doesn't rubber-stamp: a reshape with one mistyped
+    cell not in the base rows reads `partial`, not `matched`. (The mistype must
+    exceed the 0.1% match tolerance — 1,470→9,999, not a rounding-sized nudge.)"""
+    bad = _RESHAPED_MD.replace("1,470", "9,999")  # MI mistyped, nowhere in base
+    res = llm.AgentResult(answer=bad, results=[], prior_results=[_BASE_TABLE])
+    llm._stamp_table_grounding(res)
+    assert res.table_grounding == "partial", res.table_grounding
+    assert res.table_cells_matched == 2 and res.table_cells_checked == 3, res
+
+
 # ---------------------------------------------------------------------------
 # Live-transport tests: llm._chat is restored to the REAL implementation, and
 # only httpx.AsyncClient is mocked (returning a real httpx.Response so
@@ -1405,6 +1459,14 @@ def run():
           test_forced_emit_helper_forces_the_tool_accrues_usage_and_fails_open)
     check("no forced re-emit when structured emission is off",
           test_no_forced_reemit_when_structured_off)
+    check("a reshaped table grounds against prior results (not unchecked)",
+          test_reshaped_table_grounds_against_prior_results_not_unchecked)
+    check("a reshaped table with no prior is unchecked",
+          test_reshaped_table_with_no_prior_is_unchecked)
+    check("a normal turn's table grounding is unaffected by the borrow",
+          test_normal_turn_table_grounding_unaffected_by_the_borrow)
+    check("a corrupted reshape is caught against prior results",
+          test_a_corrupted_reshape_is_caught_against_prior_results)
     check("real _chat: immediate answer over a mocked httpx transport",
           test_real_chat_transport_immediate_answer)
     check("real _chat: an HTTPStatusError surfaces as an agent error",
