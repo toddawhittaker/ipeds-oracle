@@ -80,8 +80,20 @@ How to work:
    "title":"<short title>","data":[{...}, ...]}. The `data` rows are objects whose
    keys match `x` and the `y` series, populated from your query results (use plain
    numbers, no thousands separators inside data). Prefer "line" for time series,
-   "bar" for category comparisons. Still include the normal results table too;
-   the chart is in addition to it. Emit valid JSON only inside the block.
+   "bar" for category comparisons.
+   GROUPING — when the chart compares MULTIPLE entities (states, institutions,
+   programs) across MULTIPLE time periods, structure it so EACH ENTITY'S OWN trend
+   over time is legible, i.e. group by the ENTITY: put the entities on the x-axis
+   with one series per period ("x":"state","y":["2021","2022","2023","2024",
+   "2025"], data rows like {"state":"OH","2021":1929,…,"2025":1470}) — NOT the
+   periods on the x-axis with the entities as the bars, which scatters each
+   entity's values across separate clusters and buries its within-group trend. (A
+   multi-line chart with time on the x-axis and one line per entity —
+   "type":"line","x":"year","y":["OH","MI",…] — is an equally good way to keep
+   each entity's trend legible; pick whichever reads cleaner for the entity/period
+   counts.)
+   Still include the normal results table too; the chart is in addition to it.
+   Emit valid JSON only inside the block.
 6. REQUIRED on EVERY answered turn — the first turn AND every follow-up, with no
    exception for a short, quick, or conversational reply: LEAD the answer with a
    hero FIGURE, one typeset headline number, emitted ONCE, first.
