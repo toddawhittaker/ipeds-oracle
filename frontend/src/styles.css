@@ -883,7 +883,12 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 @media (max-width: 620px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
 .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
-.stat .l { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+/* Label row: the text plus its ⓘ info trigger, kept on one baseline; the label
+   may wrap while the trigger stays with the last word. */
+.stat .l { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: flex;
+  align-items: center; gap: 5px; flex-wrap: wrap; }
+/* The privacy reassurance above the stat grid — these numbers stay on this box. */
+.usage-privacy { margin: 0 0 14px; max-width: 70ch; }
 /* An opaque background (not "transparent"/inherit) keeps badge text contrast
    independent of whatever it's sitting on — e.g. a .year-card.selected's
    --selected-tint background, against which the accent/warn badge text
@@ -1033,6 +1038,23 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   padding: 12px 14px; font-size: 12.5px; line-height: 1.5; text-align: left;
 }
 .help-popover[hidden] { display: none; }
+/* Compact inline trigger for the Usage stat labels (smaller than the 24px CSV
+   help button so it sits neatly beside a 12.5px label). */
+.help-compact .help-trigger { width: 18px; height: 18px; }
+.help-compact .help-trigger svg { width: 13px; height: 13px; }
+/* Info-bubble content: the explanation, an optional note, then the "which way is
+   good" line — bold, with a direction glyph and a subtle good/neutral tone. */
+.statinfo p { margin: 0 0 8px; }
+.statinfo p:last-child { margin-bottom: 0; }
+.statinfo-note { color: var(--muted); }
+.statinfo-dir { font-weight: 600; }
+.statinfo-dir::before { margin-right: 5px; font-weight: 700; }
+.statinfo-dir.dir-up { color: var(--ok); }
+.statinfo-dir.dir-up::before { content: "▲"; }
+.statinfo-dir.dir-down { color: var(--ok); }
+.statinfo-dir.dir-down::before { content: "▼"; }
+.statinfo-dir.dir-flat { color: var(--muted); }
+.statinfo-dir.dir-flat::before { content: "•"; }
 .help-body p { margin: 0 0 8px; }
 .help-body ul { margin: 0 0 8px; padding-left: 18px; }
 .help-body li { margin: 3px 0; }
