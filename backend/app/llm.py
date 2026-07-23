@@ -30,6 +30,12 @@ log = logging.getLogger("ipeds.llm")
 
 _FAIL_MARKERS = ("SQL REJECTED", "SQL ERROR", "SQL TIMEOUT", "ERROR")
 
+# When the critic flags the TOOL-BUDGET-EXHAUSTED answer, it gets ONE bounded
+# correction round with tools RE-ENABLED (so a flagged aggregation error can be
+# re-queried + fixed — see stream_agent's exhaustion tail). Capped so the round
+# can't itself run away; a correction usually needs 1 re-query + an answer.
+_CRITIC_CORRECTION_ITERS = 3
+
 # A user-facing answer NEVER addresses "the reviewer" or "this review" — that
 # phrasing only appears when the model's critique-round rebuttal leaks into the
 # answer (see backend/tests/test_critic.py + memory critic-revision-leak). Match
@@ -795,6 +801,98 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
+            # S5: this exhaustion answer would otherwise ship with ZERO critic
+            # review — the highest-risk path (a struggling turn, often partial
+            # data) getting the LEAST checking. Run the critic here too, and on a
+            # REVISE give it ONE bounded correction round with tools RE-ENABLED (a
+            # deliberate, capped exception to the "no more tools" budget) so a
+            # flagged aggregation error can actually be re-queried + fixed. The
+            # SAME anti-leak gate as the normal path applies: keep the correction
+            # only if it re-queried AND changed AND leaked no reviewer-meta — else
+            # the clean draft ships. Re-enabling tools is exactly what makes
+            # `requeried` meaningful again (a tool-less round could never fix an
+            # aggregation error, so it would always revert). critiqued is False
+            # here — the exhaustion path never reached the normal critic.
+            if s.critic_enabled and not critiqued and res.sql_log and final.strip():
+                critiqued = True
+                crit = await critic.review(question, res.sql_log, final,
+                                           last_sql_result["results"])
+                res.prompt_tokens += crit.prompt_tokens
+                res.completion_tokens += crit.completion_tokens
+                res.cached_prompt_tokens += crit.cached_prompt_tokens
+                res.cost += crit.cost
+                if not crit.ok:
+                    res.critic_headline = crit.headline
+                    res.critic_description = crit.description
+                    draft = final
+                    sql_count = len(res.sql_log)
+                    yield {"type": "status", "text": "Double-checking the result…"}
+                    messages.append({"role": "user", "content":
+                        critic.revision_instruction(crit.headline, crit.description)})
+                    corrected = ""
+                    for _ in range(_CRITIC_CORRECTION_ITERS):
+                        try:
+                            data = await _chat(client, model, messages, tools)
+                        except httpx.HTTPError:
+                            break
+                        usage = data.get("usage") or {}
+                        res.prompt_tokens += usage.get("prompt_tokens", 0)
+                        res.completion_tokens += usage.get("completion_tokens", 0)
+                        res.cached_prompt_tokens += cached_tokens(usage)
+                        res.cost += usage.get("cost") or 0
+                        msg = (data.get("choices") or [{}])[0].get("message") or {}
+                        tcs = msg.get("tool_calls") or []
+                        messages.append({"role": "assistant",
+                                         "content": msg.get("content") or "",
+                                         **({"tool_calls": tcs} if tcs else {})})
+                        if not tcs:
+                            corrected = msg.get("content") or ""
+                            break
+                        for tc in tcs:
+                            fn = tc.get("function") or {}
+                            name = fn.get("name", "")
+                            args = fn.get("arguments", "{}")
+                            if name == "run_sql":
+                                try:
+                                    parsed = json.loads(args) if isinstance(args, str) else args
+                                    sql = (parsed or {}).get("sql", "")
+                                    if sql:
+                                        res.sql_log.append(sql)
+                                        yield {"type": "sql", "sql": sql}
+                                except json.JSONDecodeError:
+                                    pass
+                            r_out = registry.dispatch(name, args,
+                                                      result_sink=last_sql_result)
+                            ok = not any(r_out.startswith(m) for m in _FAIL_MARKERS)
+                            yield {"type": "tool", "name": name, "ok": ok}
+                            messages.append({"role": "tool",
+                                             "tool_call_id": tc.get("id"),
+                                             "content": r_out})
+                    else:
+                        # Still calling tools after the cap → force an answer now.
+                        try:
+                            data = await _chat(client, model, messages, tools=None)
+                            usage = data.get("usage") or {}
+                            res.prompt_tokens += usage.get("prompt_tokens", 0)
+                            res.completion_tokens += usage.get("completion_tokens", 0)
+                            res.cached_prompt_tokens += cached_tokens(usage)
+                            res.cost += usage.get("cost") or 0
+                            corrected = ((data.get("choices") or [{}])[0]
+                                         .get("message") or {}).get("content") or ""
+                        except httpx.HTTPError:
+                            corrected = ""
+                    # Same gate as the normal path (see the revert logic above).
+                    requeried = len(res.sql_log) > sql_count
+                    changed = (bool(corrected.strip())
+                               and corrected.strip() != draft.strip())
+                    if requeried and changed and not _leaks_review_meta(corrected):
+                        final = corrected
+                        res.critic_revised = True
+                    else:
+                        final = draft
+                    # Reflect any correction-round queries in the retained results.
+                    res.results = last_sql_result["results"]
+                    res.last_result = last_sql_result["result"]
             final = _normalize_misfenced_blocks(final)
             raw_final = final
             final, res.figure = _extract_figure(final)
