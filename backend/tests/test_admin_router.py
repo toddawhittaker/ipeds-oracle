@@ -143,7 +143,9 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
                      ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
                      cached_prompt_tokens=0, first_call_prompt_tokens=0,
                      first_call_cached_prompt_tokens=0, escalated=0,
-                     figure_grounding=None, emit_mode=None, answer_leaked=0):
+                     figure_grounding=None, emit_mode=None, answer_leaked=0,
+                     table_grounding=None, table_cells_checked=0,
+                     table_cells_matched=0):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -157,11 +159,13 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
             "ok, cached, cost, figure_grounding, emit_mode, answer_leaked, "
-            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "table_grounding, table_cells_checked, table_cells_matched, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, ok, cached, cost, figure_grounding,
-             emit_mode, answer_leaked,
+             emit_mode, answer_leaked, table_grounding, table_cells_checked,
+             table_cells_matched,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1292,6 +1296,38 @@ def test_usage_totals_count_figure_grounding_excluding_non_evidence():
         # evidence either way and must be excluded from BOTH counts.
         assert totals["figures_checked"] == 5, totals
         assert totals["figures_ungrounded"] == 2, totals
+
+
+def test_usage_totals_sum_table_grounding_cells_excluding_non_evidence():
+    """The grounded-table (cell-level) stat sums matched/checked NUMERIC cells,
+    and no_table/unchecked turns must contribute NOTHING to either sum.
+
+    The regression: those turns carry 0 cell counts by construction, so a plain
+    SUM self-excludes them (0/0). If a future change persisted real counts on an
+    UNCHECKED turn, the rate would read 0/N and a recited table would drag the
+    transcription-accuracy number down for something we never actually checked."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        # Two graded tables (18/20 cells matched total) + three non-evidence rows
+        # (no_table / unchecked / NULL) that all carry zero counts.
+        _seed_usage_log("tbl@x.edu", "q", created_at=now - 50,
+                        table_grounding="matched", table_cells_checked=12,
+                        table_cells_matched=12)
+        _seed_usage_log("tbl@x.edu", "q", created_at=now - 50,
+                        table_grounding="partial", table_cells_checked=8,
+                        table_cells_matched=6)
+        _seed_usage_log("tbl@x.edu", "q", created_at=now - 50,
+                        table_grounding="no_table")
+        _seed_usage_log("tbl@x.edu", "q", created_at=now - 50,
+                        table_grounding="unchecked")
+        _seed_usage_log("tbl@x.edu", "q", created_at=now - 50, table_grounding=None)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        assert r.status_code == 200, r.text
+        totals = r.json()["totals"]
+        assert totals["table_cells_checked"] == 20, totals
+        assert totals["table_cells_matched"] == 18, totals
 
 
 def test_usage_totals_count_emit_mode_and_leaks():
@@ -3240,6 +3276,8 @@ def run():
           test_usage_totals_expose_prompt_cache_tokens)
     check("usage totals count figure grounding, excluding non-evidence turns",
           test_usage_totals_count_figure_grounding_excluding_non_evidence)
+    check("usage totals sum table-grounding cells, excluding non-evidence turns",
+          test_usage_totals_sum_table_grounding_cells_excluding_non_evidence)
     check("usage totals count emit_mode + leaks (structured-emission telemetry)",
           test_usage_totals_count_emit_mode_and_leaks)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
