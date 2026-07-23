@@ -91,6 +91,35 @@ jobs:
       - name: Scan git history for secrets
         run: /tmp/gitleaks git --no-banner --redact .
 
+  sast:
+    name: SAST (semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install semgrep
+        run: pip install semgrep==1.171.0
+
+      # Fast pattern-based SAST over the deployed surface (backend/app ·
+      # frontend/src · scripts), COMPLEMENTING CodeQL — it catches high-signal
+      # classes early (command injection, shell=True, insecure deserialization,
+      # unsafe SQL string-building, …) plus the local CWE-117 log-injection rule in
+      # .semgrep/. It is NOT a CodeQL substitute: semgrep OSS does intra-file taint,
+      # so cross-file flows (e.g. a request param logged in another module) remain
+      # CodeQL's job. Tests are excluded (not the attack surface), matching the
+      # CodeQL config. --error makes any finding fail the job (and the merge).
+      - name: Semgrep scan
+        run: |
+          semgrep scan --error --quiet --metrics=off \
+            --config=p/python --config=p/security-audit --config=p/javascript \
+            --config=.semgrep \
+            backend/app frontend/src scripts
+
   backend:
     name: Backend suites (guards · hardening · backend · security)
     runs-on: ubuntu-latest
