@@ -54,6 +54,13 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   numeric codes are numeric (`awlevel=3`, `control=1`).
 - Use the `institutions_current` view for clean current institution names.
 - `year` = **ending** year of the collection (2024-25 → 2025).
+- **A truncated result is an aggregation foot-gun, not just a display cap.**
+  `run_sql` caps at `sql_row_cap_model` (200) and, when it cuts, now raises the
+  same **`⚠ AGGREGATION CHECK (truncated)`** marker the rollup lints use
+  (`tools/sql.py`) — so prompt step 3's "treat as blocking, fix and re-run"
+  covers it: never sum/count/average a cut page as a TOTAL; aggregate in SQL or
+  narrow the query. (Model-facing signal only — the server-side grounding/compute
+  doesn't yet refuse a total over a truncated result; that's backlog #0.)
 
 ### Operational notes
 - Wrap ad-hoc CLI queries in `timeout 30 …` so a bad plan can't hang a shell.

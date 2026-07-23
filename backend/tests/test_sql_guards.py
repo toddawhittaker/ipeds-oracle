@@ -120,4 +120,28 @@ assert isinstance(default_years, list), \
     f"ipeds_years() with no args must return a list, got {type(default_years)}"
 print(f"  ✓ ipeds_years() with no db_path arg returns a list ({len(default_years)} year(s))")
 
+print("\n== truncation raises a ⚠ AGGREGATION CHECK note (S4) ==")
+# A CUT page summed as a TOTAL is a wrong number whose SQL looks perfect, so
+# truncation must carry the SAME blocking marker the rollup lints do — not just
+# the soft "(truncated)" header word. Hermetic temp db (no real ipeds.db):
+# run_sql opens mode=ro&immutable=1, which reads a pre-written file fine.
+_trunc_path = _probe_tmp / "trunc.db"
+_con = sqlite3.connect(str(_trunc_path))
+_con.execute("CREATE TABLE t (n INTEGER)")
+_con.executemany("INSERT INTO t(n) VALUES (?)", [(i,) for i in range(5)])
+_con.commit()
+_con.close()
+
+r_cut = run_sql("SELECT n FROM t", limit=2, db_path=_trunc_path)
+assert r_cut.truncated is True, "5 rows with limit=2 must truncate"
+assert any("⚠ AGGREGATION CHECK (truncated)" in note for note in r_cut.notes), \
+    f"a truncated result must carry the blocking marker; notes={r_cut.notes}"
+print("  ✓ truncated result carries '⚠ AGGREGATION CHECK (truncated)'")
+
+r_full = run_sql("SELECT n FROM t", limit=10, db_path=_trunc_path)
+assert r_full.truncated is False, "5 rows with limit=10 must NOT truncate"
+assert not any("truncated" in note.lower() for note in r_full.notes), \
+    f"a complete result must not carry a truncation note; notes={r_full.notes}"
+print("  ✓ complete result carries no truncation marker")
+
 print("\nALL SQL-GUARD TESTS PASSED")
