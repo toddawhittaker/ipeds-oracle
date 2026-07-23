@@ -60,7 +60,12 @@ export LLM_OUTPUT_COST_PER_MTOK=0
 #     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
 #     depend on this. Prod default is true.
 export FIGURE_RETRY_ENABLED=false
-#   * STRUCTURED_EMISSION_ENABLED=false — pins the fence-emission mode for the
-#     test suites (the default), so a dev .env that flipped it on can't diverge
-#     tests from CI. The structured-emission tests set it True explicitly.
+#   * STRUCTURED_EMISSION_ENABLED=false — production now DEFAULTS this ON (0.2),
+#     but the test suites are pinned to the fence path for determinism: most fake
+#     _chat responses are plain-text answers, which under structured mode would
+#     trip the reject-and-reprompt round and shift call counts. The
+#     structured-emission tests flip it True explicitly (get_settings().­
+#     structured_emission_enabled = True). Pinning here also stops a dev .env from
+#     diverging tests from CI. (Same pattern as FIGURE_RETRY_ENABLED: prod-default
+#     True, CI-pinned False.)
 export STRUCTURED_EMISSION_ENABLED=false

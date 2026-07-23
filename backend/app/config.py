@@ -88,16 +88,19 @@ class Settings(BaseSettings):
     # turn's results is suppressed, not shipped. Adds at most one cheap call per
     # figureless data answer. Set false to disable (and for the on/off A/B).
     figure_retry_enabled: bool = Field(default=True)
-    # Structured emission (PR-1 of the "structured output, not fenced text"
-    # work): when ON, the model FINISHES a turn by calling an `emit_answer` /
-    # `ask_clarification` tool whose fields the provider validates, instead of
-    # free-typing ```figure/```chart/```followups/```clarify fences it can
-    # mangle. The server reconstructs WELL-FORMED fences from those validated
-    # args, so nothing is manglea​ble and the whole downstream (extract/critic/
-    # ground/retry/persist/frontend) is unchanged. A model that ignores the tool
-    # falls back to the fence path + the leak sentinel. DEFAULT FALSE — dark-ship
-    # so it can be measured (Admin → Usage emit-mode / leak rate) before the flip.
-    structured_emission_enabled: bool = Field(default=False)
+    # Structured emission ("structured output, not fenced text"): the model
+    # FINISHES a turn by calling an `emit_answer` / `ask_clarification` tool whose
+    # fields the provider validates, instead of free-typing ```figure/```chart/
+    # ```followups/```clarify fences it can mangle. The server reconstructs
+    # WELL-FORMED fences from those validated args, so nothing is manglea​ble and
+    # the whole downstream (extract/critic/ground/retry/persist/frontend) is
+    # unchanged. **DEFAULT ON** (0.2): dark-shipped in PR-1, adoption tuned in 0.1
+    # (reject-and-reprompt), then validated 100%-structured / 0-leaks across FOUR
+    # vendors (DeepSeek/MiniMax/Anthropic/Moonshot). A model that can't (or won't)
+    # call the tool FALLS BACK to the fence path + the leak sentinel — kept as the
+    # safety net for tool-incapable self-hosted models. Set false to force the
+    # fence path. Watch Admin → Usage "Answer leaks · N% structured".
+    structured_emission_enabled: bool = Field(default=True)
     # public URL used both as the magic-link/invite base (app/mailer.py,
     # app/routers/admin.py) and as the LLM provider attribution header
     # (dual-purpose). `llm_app_title` is the attribution title only; it
