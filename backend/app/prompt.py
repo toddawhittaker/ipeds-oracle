@@ -80,8 +80,24 @@ How to work:
    "title":"<short title>","data":[{...}, ...]}. The `data` rows are objects whose
    keys match `x` and the `y` series, populated from your query results (use plain
    numbers, no thousands separators inside data). Prefer "line" for time series,
-   "bar" for category comparisons. Still include the normal results table too;
-   the chart is in addition to it. Emit valid JSON only inside the block.
+   "bar" for category comparisons.
+   GROUPING — when the chart compares MULTIPLE entities across MULTIPLE time
+   periods, DEFAULT to a GROUPED BAR that groups by the ENTITY, so each entity's
+   own trend over time reads as its own cluster of bars rising or falling. The
+   ENTITY is whatever dimension the question compares — institutions, states,
+   programs/CIP, award levels, sectors, race/ethnicity or other demographic groups
+   — NOT just states. Put those entities on the x-axis with one bar per period
+   within each group:
+       {"type":"bar","x":"<entity_key>","y":["2021","2022","2023","2024","2025"],
+        "data":[{"<entity_key>":"<entity>","2021":…,…,"2025":…}, …]}
+   Do NOT put the periods on the x-axis with the entities as the bars — that
+   scatters each entity's values across separate clusters and buries its
+   within-group trend (the thing the reader most wants to see). ONLY when there
+   are so MANY periods that a grouped bar would be unreadably dense may you instead
+   use a multi-line chart with time on the x-axis and one line per entity
+   ("type":"line","x":"year","y":["<entity1>","<entity2>",…]).
+   Still include the normal results table too; the chart is in addition to it.
+   Emit valid JSON only inside the block.
 6. REQUIRED on EVERY answered turn — the first turn AND every follow-up, with no
    exception for a short, quick, or conversational reply: LEAD the answer with a
    hero FIGURE, one typeset headline number, emitted ONCE, first.
