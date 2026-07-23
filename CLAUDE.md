@@ -842,16 +842,30 @@ escapes a gate. Browser-tested components (`Chat.jsx`, `Admin.jsx`, …) are
 deliberately not in the floor — Playwright covers them.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (a **gitleaks** secret scan when the binary is on `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/` **vitest** unit tests; the
-`backend/tests/` backend suites against a fixture DB; Playwright e2e). A
-`.githooks/pre-push` hook runs it automatically (bypass: `git push --no-verify`;
-skip e2e: `SKIP_E2E=1`). It's a **fast pre-check** so failures surface before CI —
-but since the repo went public the **authoritative gate is GitHub CI**: `main` is
-**branch-protected** (a PR is required; all of secrets · lint · unit · backend · e2e ·
-image must be green AND up to date before merge; force pushes and direct pushes are
+CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on
+`PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
+**vitest** unit tests; the `backend/tests/` backend suites against a fixture DB;
+Playwright e2e). A `.githooks/pre-push` hook runs it automatically (bypass:
+`git push --no-verify`; skip e2e: `SKIP_E2E=1`). It's a **fast pre-check** so failures
+surface before CI — but since the repo went public the **authoritative gate is
+GitHub CI**: `main` is **branch-protected** (a PR is required; the required checks
+must be green AND up to date before merge; force pushes and direct pushes are
 blocked). The **secrets** job runs gitleaks over full history as defense-in-depth
 under GitHub's native secret-scanning + push-protection (both enabled). Admin
 override is left enabled only as a safety valve for a flaky check.
+
+**Static analysis — two layers, complementary.** **CodeQL** (`.github/workflows/codeql.yml`,
+`security-extended`, scoped to non-test code) runs on every PR/push and is the
+authority on **cross-file taint** (its py/log-injection caught a request `tz` param
+logged in another module — CodeQL alerts surface in the Security tab; NB they don't
+block a merge unless code-scanning *merge protection* is enabled in repo settings).
+**Semgrep** (the CI **SAST (semgrep)** job + the local gate) is the fast pattern
+layer — `p/python` · `p/security-audit` · `p/javascript` plus repo-local rules in
+**`.semgrep/`** (a CWE-117 log-injection rule). It runs `--error` (any finding fails
+the job) over `backend/app` · `frontend/src` · `scripts`. It is **NOT** a CodeQL
+substitute — semgrep OSS does INTRA-file taint only, so cross-file flows stay
+CodeQL's job; the two overlap deliberately. Install semgrep isolated from the app
+venv (`pipx install semgrep`) so it never enters the app's runtime deps.
 
 **Ship via branch → PR → merge on green.** You can't commit straight to `main`
 (branch protection blocks it). Branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`),

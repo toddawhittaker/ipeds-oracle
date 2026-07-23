@@ -1,0 +1,38 @@
+rules:
+  - id: python-log-injection-user-value
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A user-controlled value flows into a log call without neutralizing control
+      characters; a CR/LF could forge a log line (CWE-117). Scrub it first (e.g.
+      config._log_safe()) or don't log the raw value. Note: this intra-file rule
+      complements CodeQL's cross-file py/log-injection, which stays the authority.
+    metadata:
+      cwe: "CWE-117: Improper Output Neutralization for Logs"
+      category: security
+      references: ["https://cwe.mitre.org/data/definitions/117.html"]
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query_params.get(...)
+              - pattern: $R.query_params[...]
+              - pattern: $R.path_params.get(...)
+              - pattern: $R.headers.get(...)
+              - pattern: $R.cookies.get(...)
+              - pattern: $R.args.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $LOG.debug(...)
+              - pattern: $LOG.info(...)
+              - pattern: $LOG.warning(...)
+              - pattern: $LOG.error(...)
+              - pattern: $LOG.critical(...)
+              - pattern: $LOG.exception(...)
+              - pattern: logging.$M(...)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: config._log_safe(...)
+          - pattern: _log_safe(...)
+          - pattern: re.sub(...)

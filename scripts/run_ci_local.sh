@@ -51,6 +51,24 @@ else
 fi
 
 # =========================================================================
+# Job 0b — SAST (semgrep) — matches CI's "SAST (semgrep)" job
+# =========================================================================
+# Fast pattern-based SAST complementing CodeQL. Runs only if semgrep is on PATH;
+# CI enforces it unconditionally, so a missing local binary downgrades to a
+# warning rather than a false green. Install (isolated from the app venv):
+#   pipx install semgrep   # or: pip install --user semgrep
+if command -v semgrep >/dev/null 2>&1; then
+  step "SAST: semgrep (backend/app · frontend/src · scripts)"
+  semgrep scan --error --quiet --metrics=off \
+    --config=p/python --config=p/security-audit --config=p/javascript \
+    --config="$REPO_ROOT/.semgrep" \
+    "$REPO_ROOT/backend/app" "$REPO_ROOT/frontend/src" "$REPO_ROOT/scripts" \
+    || fail "semgrep (SAST finding)"
+else
+  printf '%s\n' "${YEL}Skipping SAST — semgrep not on PATH (CI still enforces it). Install: pipx install semgrep${RST}"
+fi
+
+# =========================================================================
 # Job 1 — lint (ruff · eslint)
 # =========================================================================
 step "Lint: ruff check backend/app backend/tests scripts"
