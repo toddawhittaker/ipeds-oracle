@@ -260,6 +260,23 @@ def test_migration_23_adds_messages_results_column():
     assert row[0] is None, row
 
 
+def test_migration_24_adds_usage_log_emit_mode_and_leak_columns():
+    # Structured-emission telemetry (PR-1): emit_mode ('structured'|'fence') and
+    # answer_leaked (the sentinel). Together they prove structured emission drives
+    # the leak rate to 0 before the default flips.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 23])
+    assert "emit_mode" not in _cols(con, "usage_log"), _cols(con, "usage_log")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    cols = _cols(con, "usage_log")
+    assert "emit_mode" in cols and "answer_leaked" in cols, cols
+    # emit_mode nullable (predating rows / cache hits), answer_leaked defaults 0.
+    con.execute("INSERT INTO usage_log(user_id, question, created_at) VALUES (1,'q',0)")
+    row = con.execute("SELECT emit_mode, answer_leaked FROM usage_log").fetchone()
+    assert row[0] is None and row[1] == 0, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -639,11 +656,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["verified", "INTEGER", 1, "0", 0]
     ],
     "usage_log": [
+      ["answer_leaked", "INTEGER", 1, "0", 0],
       ["cached", "INTEGER", 1, "0", 0],
       ["cached_prompt_tokens", "INTEGER", 1, "0", 0],
       ["completion_tokens", "INTEGER", 0, null, 0],
       ["cost", "REAL", 1, "0", 0],
       ["created_at", "REAL", 1, null, 0],
+      ["emit_mode", "TEXT", 0, null, 0],
       ["escalated", "INTEGER", 0, null, 0],
       ["figure_derivation", "TEXT", 0, null, 0],
       ["figure_grounding", "TEXT", 0, null, 0],
@@ -747,6 +766,8 @@ def run():
           test_migration_22_adds_usage_log_figure_derivation_column)
     check("migration 23 adds messages.results (nullable)",
           test_migration_23_adds_messages_results_column)
+    check("migration 24 adds usage_log.emit_mode + answer_leaked",
+          test_migration_24_adds_usage_log_emit_mode_and_leak_columns)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

@@ -60,3 +60,7 @@ export LLM_OUTPUT_COST_PER_MTOK=0
 #     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
 #     depend on this. Prod default is true.
 export FIGURE_RETRY_ENABLED=false
+#   * STRUCTURED_EMISSION_ENABLED=false — pins the fence-emission mode for the
+#     test suites (the default), so a dev .env that flipped it on can't diverge
+#     tests from CI. The structured-emission tests set it True explicitly.
+export STRUCTURED_EMISSION_ENABLED=false

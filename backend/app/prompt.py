@@ -180,7 +180,33 @@ def _years_fact() -> str:
             f"this list exists; per-table coverage can still be narrower (see the guide).")
 
 
-def build_system_prompt(skills_block: str = "") -> str:
+# Emission-mechanism OVERRIDE, appended after INSTRUCTIONS only when structured
+# emission is on (config.structured_emission_enabled). The field GUIDANCE in
+# steps 4-7 still applies — WHAT makes a good figure/brief/followups is unchanged;
+# only HOW you emit it moves from fences to a tool call. Static per deployment, so
+# it stays in the cacheable prefix. Kept as an OVERRIDE (not a rewrite of steps
+# 4-7) so the two modes can't drift.
+_STRUCTURED_EMISSION = """\
+
+===== EMISSION OVERRIDE (structured output) =====
+IMPORTANT — this overrides HOW you emit steps 4-7 (not WHAT they ask for):
+- Do NOT write ```figure, ```chart, ```followups, or ```clarify fences. Never put
+  a JSON block or a fenced figure/chart/followups inside your prose.
+- FINISH the turn by calling the `emit_answer` tool: put the full prose answer
+  (including the Markdown results table) in `markdown`, and the hero figure, the
+  trend chart, and the follow-up questions in the `figure`, `chart`, and
+  `followups` fields. The guidance in steps 4-7 about WHICH figure to lead with,
+  the brief shape, and good drill-down questions all still applies — it just goes
+  into those fields.
+- For a disambiguation turn (the "Before you answer" step), call the
+  `ask_clarification` tool with `question` + `options` INSTEAD of answering.
+- Emit exactly one of emit_answer / ask_clarification to end the turn; call
+  run_sql as many times as you need first, but never alongside emit_answer.
+===== END EMISSION OVERRIDE =====
+"""
+
+
+def build_system_prompt(skills_block: str = "", structured: bool = False) -> str:
     # ORDERING IS A CACHE CONTRACT — keep dynamic content OUT of the prefix.
     # The provider caches the longest IDENTICAL token prefix of each request and
     # bills a hit at a fraction of the input price. This ~5k-token block (mostly
@@ -199,6 +225,7 @@ def build_system_prompt(skills_block: str = "") -> str:
     #     docs/ADMIN_GUIDE.md ("Usage") + the prompt-cache telemetry on the
     #     dashboard for how to tell whether reuse is actually happening.
     parts = [INSTRUCTIONS,
+             (_STRUCTURED_EMISSION if structured else ""),
              "\n\n===== DATASET (this deployment) =====\n",
              _years_fact(),
              "\n\n===== SCHEMA GUIDE (authoritative) =====\n",

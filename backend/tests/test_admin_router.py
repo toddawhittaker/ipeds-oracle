@@ -143,7 +143,7 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
                      ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
                      cached_prompt_tokens=0, first_call_prompt_tokens=0,
                      first_call_cached_prompt_tokens=0, escalated=0,
-                     figure_grounding=None):
+                     figure_grounding=None, emit_mode=None, answer_leaked=0):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -156,11 +156,12 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, figure_grounding, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ok, cached, cost, figure_grounding, emit_mode, answer_leaked, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, ok, cached, cost, figure_grounding,
+             emit_mode, answer_leaked,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1291,6 +1292,30 @@ def test_usage_totals_count_figure_grounding_excluding_non_evidence():
         # evidence either way and must be excluded from BOTH counts.
         assert totals["figures_checked"] == 5, totals
         assert totals["figures_ungrounded"] == 2, totals
+
+
+def test_usage_totals_count_emit_mode_and_leaks():
+    """Structured-emission telemetry (PR-1): the denominator is real agent turns
+    (an emit_mode recorded), and it must segment structured vs fence and count
+    leaks — the numbers that prove structured emission drives leaks to 0."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        # 3 structured (1 leaked), 2 fence (1 leaked), 1 cache-hit (no emit_mode).
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode="structured")
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode="structured")
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode="structured",
+                        answer_leaked=1)
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode="fence")
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode="fence",
+                        answer_leaked=1)
+        _seed_usage_log("emit@x.edu", "q", created_at=now - 50, emit_mode=None)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        totals = r.json()["totals"]
+        assert totals["emit_turns"] == 5, totals        # the NULL cache-hit excluded
+        assert totals["structured_turns"] == 3, totals
+        assert totals["leaked_turns"] == 2, totals
 
 
 def _clear_usage_log():
@@ -3215,6 +3240,8 @@ def run():
           test_usage_totals_expose_prompt_cache_tokens)
     check("usage totals count figure grounding, excluding non-evidence turns",
           test_usage_totals_count_figure_grounding_excluding_non_evidence)
+    check("usage totals count emit_mode + leaks (structured-emission telemetry)",
+          test_usage_totals_count_emit_mode_and_leaks)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
           test_usage_cost_warning_flags_missing_spend)
     check("usage cost_warning ignores answer-cache-only activity",

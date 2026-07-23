@@ -356,6 +356,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # THIS turn's own results (capped), so a LATER turn can ground a
                 # figure against them (app/grounding.py, conversation-scoped).
                 results=_results_for_storage(result.results),
+                # Structured-emission telemetry (PR-1): how the turn emitted, and
+                # whether the sentinel found residual leak debris in the prose.
+                emit_mode=result.emit_mode, leaked=result.leaked,
                 delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
@@ -466,7 +469,8 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached_prompt_tokens=0, first_call_prompt_tokens=0,
              first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
              suggestions=None, clarify=None, figure_grounding=None,
-             figure_derivation=None, results=None, delete_from_id=None):
+             figure_derivation=None, results=None, emit_mode=None, leaked=False,
+             delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -502,12 +506,14 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, figure_grounding, figure_derivation, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ok, cached, cost, figure_grounding, figure_derivation, "
+            "emit_mode, answer_leaked, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, int(ok), int(cached),
-             float(cost), figure_grounding or None, figure_derivation or None, now))
+             float(cost), figure_grounding or None, figure_derivation or None,
+             emit_mode or None, int(bool(leaked)), now))
         con.commit()
         return user_msg_id, assistant_id
     finally:
