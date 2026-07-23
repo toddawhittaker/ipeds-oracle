@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from "react";
+import React, { useId, useLayoutEffect, useRef, useState } from "react";
 import { IconHelp } from "./icons.jsx";
 
 // A small hoverable/focusable help popover (WCAG 1.4.13: content is hoverable,
@@ -20,6 +20,25 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
   const timer = useRef(null);
   const hover = useRef(false);
   const focus = useRef(false);
+  // The popover is anchored right:0 (grows leftward), which runs off-screen for a
+  // trigger near the LEFT edge — e.g. the left-column Usage stats. On open, measure
+  // it and nudge horizontally so it stays inside the viewport, whichever edge it
+  // would have overflowed. This is a pure visual DOM correction, so it writes
+  // transform straight to the node (no state → no cascading render); the transform
+  // is cleared to "" before measuring so each pass reads the natural position.
+  const popRef = useRef(null);
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    if (!el) return;
+    el.style.transform = "";
+    if (!open) return;
+    const rect = el.getBoundingClientRect();
+    const m = 8; // keep this gap from the viewport edge
+    let dx = 0;
+    if (rect.left < m) dx = m - rect.left;
+    else if (rect.right > window.innerWidth - m) dx = window.innerWidth - m - rect.right;
+    if (dx) el.style.transform = `translateX(${Math.round(dx)}px)`;
+  }, [open]);
   // On a touch tap the button fires focus THEN click; without this, focus opens
   // it and the very next click toggles it right back shut, so a tap never opens
   // the help. Track a focus-open so the click that follows it is a no-op.
@@ -60,7 +79,7 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
       >
         <Icon />
       </button>
-      <div id={id} role="tooltip" className="help-popover" hidden={!open}>
+      <div id={id} ref={popRef} role="tooltip" className="help-popover" hidden={!open}>
         {children}
       </div>
     </span>

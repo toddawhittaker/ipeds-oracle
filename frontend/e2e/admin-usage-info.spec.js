@@ -69,3 +69,18 @@ test("a stat's info popover explains it and says which way is good", async ({ pa
   const queries = await focusPopover("What “Queries” measures");
   await expect(queries).toContainText("neither high nor low");
 });
+
+test("a left-column stat's popover is nudged to stay inside the viewport", async ({ page }) => {
+  // Regression: the popover anchors right:0 (grows leftward), so the top-left
+  // "Queries" stat used to flow off the left edge. HelpPopover now nudges it back.
+  await gotoUsage(page);
+  const trigger = page.getByRole("button", { name: "What “Queries” measures" });
+  await trigger.focus();
+  const id = await trigger.getAttribute("aria-describedby");
+  const pop = page.locator(`[id="${id}"]`);
+  await expect(pop).toBeVisible();
+  const box = await pop.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0); // fully inside the left edge
+  const viewport = page.viewportSize();
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width); // ...and the right
+});
