@@ -19,6 +19,7 @@ import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSele
 import { USER_SUBTABS, DEFAULT_SUBTAB, resolveSubTab, subTabKeyForArrow, pendingBadgeTone } from "./usertabs.js";
 import { formatBadge } from "./attention.js";
 import {
+  exhaustionLabel,
   groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate,
   leakLabel, leakRate,
   promptCacheRate, schemaCacheRate,
@@ -2013,6 +2014,7 @@ function Usage() {
             <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} />
             <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} />
             <Stat label={leakLabel(t)} value={leakRate(t)} />
+            <Stat label={exhaustionLabel(t)} value={(t.exhausted_turns || 0).toLocaleString()} />
           </div>
 
           <div className="usage-chart-head">

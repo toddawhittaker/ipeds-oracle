@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { exhaustionLabel, groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
 
 // Both rates share one guarded ratio helper; the regression each guards is the
 // same: a naive cached/total renders "NaN%"/"Infinity%" on an empty window (0
@@ -170,5 +170,19 @@ describe("leakRate / leakLabel (structured-emission telemetry)", () => {
     const t = { emit_turns: 40, leaked_turns: 0, structured_turns: 40 };
     expect(leakRate(t)).toBe("0%");
     expect(leakLabel(t)).toBe("0/40 leaked · 100% structured");
+  });
+});
+
+describe("exhaustionLabel (S5 health stat)", () => {
+  it("is a bare label when nothing was degraded (incl. empty window)", () => {
+    expect(exhaustionLabel({})).toBe("Exhausted");
+    expect(exhaustionLabel(undefined)).toBe("Exhausted");
+    expect(exhaustionLabel({ exhausted_turns: 3, degraded_turns: 0 })).toBe("Exhausted");
+  });
+
+  it("carries the degraded breakdown once any were degraded", () => {
+    expect(exhaustionLabel({ exhausted_turns: 5, degraded_turns: 2 }))
+      .toBe("Exhausted · 2 degraded");
+    expect(exhaustionLabel({ degraded_turns: "1" })).toBe("Exhausted · 1 degraded");
   });
 });

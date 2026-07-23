@@ -765,6 +765,64 @@ def _scrub_leaked_blocks(prose: str) -> tuple[str, bool]:
     return "".join(parts).strip(), True
 
 
+# DeepSeek serializes a tool call in its own pseudo-XML markup (fullwidth vertical
+# bars U+FF5C bracket the DSML sentinel). When the model tries to call a tool on a
+# tools-DISABLED turn (the S5 synthesis pass), or otherwise misbehaves, that markup
+# can leak into the answer text as a `<｜｜DSML｜｜tool_calls>…` block. It is never
+# legitimate prose, so it is always safe to excise. The block may be truncated by a
+# stream cut, so also strip an unclosed trailing block, then sweep any stray tag.
+_DSML = "｜｜DSML｜｜"  # ｜｜DSML｜｜
+_TOOL_MARKUP_BLOCK_RE = re.compile(
+    re.escape(f"<{_DSML}tool_calls>") + r".*?" + re.escape(f"</{_DSML}tool_calls>"),
+    re.DOTALL)
+_TOOL_MARKUP_TRAILING_RE = re.compile(
+    re.escape(f"<{_DSML}tool_calls>") + r".*\Z", re.DOTALL)
+_TOOL_MARKUP_TAG_RE = re.compile(r"</?" + re.escape(_DSML) + r"[^>]*>")
+
+
+def _strip_tool_markup(prose: str) -> tuple[str, bool]:
+    """Excise leaked DeepSeek tool-call markup (`<｜｜DSML｜｜tool_calls>…`) from an
+    answer, WHATEVER its state — a well-formed block, an unclosed one truncated by a
+    stream cut, or a stray residual tag. That sentinel never appears in legitimate
+    answer prose, so removal is unconditional. Returns (clean_prose, removed)."""
+    if not prose or _DSML not in prose:
+        return prose, False
+    out = _TOOL_MARKUP_BLOCK_RE.sub("", prose)
+    out = _TOOL_MARKUP_TRAILING_RE.sub("", out)
+    out = _TOOL_MARKUP_TAG_RE.sub("", out)
+    out = out.strip()
+    return (out, True) if out != prose else (prose, False)
+
+
+def _s5_fabricated(res: AgentResult) -> bool:
+    """Does the tool-budget-exhausted answer present quantitative claims that ground
+    against NOTHING? True only on WHOLLY-unsupported evidence — a result table whose
+    every numeric cell failed to reproduce (`table_grounding == unmatched`), or a
+    hero figure that reproduces from no result (`figure_grounding == ungrounded`)
+    with no grounded table to lean on. Deliberately conservative: a `partial` table
+    (some cells matched — a mostly-correct answer), a `no_table`/`no_figure`
+    already-honest non-answer, and an `unchecked` turn (no results to check against)
+    all return False. This is the deterministic signal the S5 gate suppresses."""
+    tbl = res.table_grounding
+    if tbl == grounding.TABLE_UNMATCHED:
+        return True
+    if (res.figure_grounding == grounding.UNGROUNDED
+            and tbl not in (grounding.TABLE_MATCHED, grounding.TABLE_PARTIAL)):
+        return True
+    return False
+
+
+# Shipped in place of a fabricated tool-budget-exhausted answer (see _s5_fabricated).
+# Honest and actionable — names the failure and how to get a real answer — rather
+# than inventing numbers no query produced.
+_EXHAUSTION_DEGRADE = (
+    "I wasn't able to finish gathering the data for this question within my "
+    "step limit, so I don't have verified numbers to report — and I won't guess. "
+    "This usually means the question spans several survey tables at once. Try "
+    "narrowing it and I'll pull the exact figures — for example: a single program "
+    "(one CIP family), one award level, or a shorter range of years.")
+
+
 @dataclass
 class AgentResult:
     answer: str = ""
@@ -822,6 +880,14 @@ class AgentResult:
     # off). "leaked" is set when the scrubber caught residual fence/JSON debris.
     emit_mode: str = "fence"
     leaked: bool = False
+    # Tool-budget exhaustion (S5 path). `exhausted` = the turn burned its whole
+    # step budget and fell to the tools-disabled synthesis (whatever the outcome —
+    # a health signal for "is the ceiling high enough?"). `exhaustion_degraded` =
+    # that synthesis answer's numbers were wholly ungrounded, so the grounding gate
+    # replaced them with an honest "couldn't finish" message. In-memory only (like
+    # `escalated`); chat.py derives the usage_log `exhaustion` status from the pair.
+    exhausted: bool = False
+    exhaustion_degraded: bool = False
     error: str | None = None
 
     @property
@@ -1092,6 +1158,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 # res.leaked records that debris was caught (and removed) — the
                 # same telemetry, now a scrub rate rather than a ship rate.
                 res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
+                # Also strip any leaked DeepSeek tool-call markup (a mis-emitted
+                # tool call that surfaced as answer text) — same debris class.
+                res.answer, markup_removed = _strip_tool_markup(res.answer)
+                res.leaked = res.leaked or markup_removed
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -1135,7 +1205,9 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
         # Tool budget exhausted. Rather than discard the data already gathered,
         # make one final pass with tools disabled so the model MUST answer from
-        # the query results it has collected.
+        # the query results it has collected. Record that the ceiling was hit (a
+        # health signal for Admin -> Usage, whatever the synthesis outcome).
+        res.exhausted = True
         yield {"type": "status", "text": "Summarizing results…"}
         messages.append({"role": "user", "content":
             "You've reached the tool-call limit — do NOT call any more tools. "
@@ -1264,6 +1336,19 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             _stamp_grounding(res, raw_final)
             _stamp_table_grounding(res)
             res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
+            res.answer, markup_removed = _strip_tool_markup(res.answer)
+            res.leaked = res.leaked or markup_removed
+            # Grounding gate (S5 ONLY). This is the highest-risk path — a struggling
+            # turn, often on partial data, that here produced a confident synthesis.
+            # If its numbers ground against NOTHING it is a fabrication (chat/32's
+            # 0/15-cell invented table); ship an honest "couldn't finish" instead.
+            # The normal path stays observe-only (first-pass ungrounded figures ship,
+            # #163); acting on the verdict is deliberately scoped to exhaustion.
+            if _s5_fabricated(res):
+                res.answer = _EXHAUSTION_DEGRADE
+                res.figure = None
+                res.suggestions = None
+                res.exhaustion_degraded = True
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:

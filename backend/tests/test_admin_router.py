@@ -145,7 +145,7 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
                      first_call_cached_prompt_tokens=0, escalated=0,
                      figure_grounding=None, emit_mode=None, answer_leaked=0,
                      table_grounding=None, table_cells_checked=0,
-                     table_cells_matched=0):
+                     table_cells_matched=0, exhaustion=None):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -160,12 +160,12 @@ def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-fl
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
             "ok, cached, cost, figure_grounding, emit_mode, answer_leaked, "
             "table_grounding, table_cells_checked, table_cells_matched, "
-            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "exhaustion, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, ok, cached, cost, figure_grounding,
              emit_mode, answer_leaked, table_grounding, table_cells_checked,
-             table_cells_matched,
+             table_cells_matched, exhaustion,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1328,6 +1328,28 @@ def test_usage_totals_sum_table_grounding_cells_excluding_non_evidence():
         totals = r.json()["totals"]
         assert totals["table_cells_checked"] == 20, totals
         assert totals["table_cells_matched"] == 18, totals
+
+
+def test_usage_totals_count_exhaustion_turns():
+    """The 'Exhausted' health stat: `exhausted_turns` counts every turn that burned
+    its tool budget (status NOT NULL), and `degraded_turns` counts the subset the
+    grounding gate degraded ('degraded'). A NULL (non-exhausted) turn contributes to
+    neither — that's the majority, so counting it would drown the signal."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        # 3 exhausted (2 answered + 1 degraded) + 2 normal (NULL) turns.
+        _seed_usage_log("ex@x.edu", "q", created_at=now - 50, exhaustion="answered")
+        _seed_usage_log("ex@x.edu", "q", created_at=now - 50, exhaustion="answered")
+        _seed_usage_log("ex@x.edu", "q", created_at=now - 50, exhaustion="degraded")
+        _seed_usage_log("ex@x.edu", "q", created_at=now - 50, exhaustion=None)
+        _seed_usage_log("ex@x.edu", "q", created_at=now - 50, exhaustion=None)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        assert r.status_code == 200, r.text
+        totals = r.json()["totals"]
+        assert totals["exhausted_turns"] == 3, totals
+        assert totals["degraded_turns"] == 1, totals
 
 
 def test_usage_totals_count_emit_mode_and_leaks():
@@ -3306,6 +3328,8 @@ def run():
           test_usage_totals_sum_table_grounding_cells_excluding_non_evidence)
     check("usage totals count emit_mode + leaks (structured-emission telemetry)",
           test_usage_totals_count_emit_mode_and_leaks)
+    check("usage totals count exhausted + degraded turns (S5 health stat)",
+          test_usage_totals_count_exhaustion_turns)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
           test_usage_cost_warning_flags_missing_spend)
     check("usage cost_warning ignores answer-cache-only activity",

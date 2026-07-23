@@ -324,6 +324,45 @@ def test_turn_duration_is_measured_persisted_and_in_the_done_event():
         assert user["created_at"] and user["created_at"] > 0, user
 
 
+def test_exhaustion_status_is_persisted_to_usage_log():
+    """A degraded tool-budget-exhausted turn (S5) records exhaustion='degraded' on
+    usage_log, so Admin -> Usage can count it. Threaded from AgentResult's
+    exhausted/exhaustion_degraded flags through _persist (chat.py)."""
+    def _exhausted_agent(answer_text, *, exhausted, degraded):
+        async def _agent(question, *, history=None, skills_block="", prior_results=None):
+            yield {"type": "answer", "text": answer_text}
+            yield {"type": "done", "result": AgentResult(
+                answer=answer_text, model_used="test-model", sql_log=["SELECT 1"],
+                exhausted=exhausted, exhaustion_degraded=degraded,
+                prompt_tokens=3, completion_tokens=2)}
+        return _agent
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_block, orig_lookup = skills.retrieve_skills_block, skills.cache_lookup
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q: None
+        try:
+            chat_router.stream_agent = _exhausted_agent(
+                "couldn't finish", exhausted=True, degraded=True)
+            c.post("/api/chat/stream", json={"question": "a hard question"})
+            chat_router.stream_agent = _make_agent("a normal answer", sql_log=["SELECT 1"])
+            c.post("/api/chat/stream", json={"question": "an easy question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block, skills.cache_lookup = orig_block, orig_lookup
+        con = connect()
+        try:
+            rows = [r[0] for r in con.execute(
+                "SELECT exhaustion FROM usage_log ORDER BY id").fetchall()]
+        finally:
+            con.close()
+        # The degraded turn records 'degraded'; the normal turn stays NULL.
+        assert "degraded" in rows, rows
+        assert None in rows, rows
+
+
 def test_normal_flow_titles_a_new_conversation():
     with TestClient(app) as c:
         _login(c)
@@ -1061,6 +1100,8 @@ def run():
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
     check("turn duration is measured, persisted, and in the done event",
           test_turn_duration_is_measured_persisted_and_in_the_done_event)
+    check("exhaustion status is persisted to usage_log",
+          test_exhaustion_status_is_persisted_to_usage_log)
     check("a normal (non-cached) successful turn titles a new conversation",
           test_normal_flow_titles_a_new_conversation)
     check("the thinking trace is persisted and returned on reload",

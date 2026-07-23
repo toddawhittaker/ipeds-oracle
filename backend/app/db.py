@@ -337,6 +337,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     # assistant row with one `now`. Nullable; NULL on cache-hit/refusal/predating
     # rows (the UI shows the line only for a real answer).
     (26, "ALTER TABLE messages ADD COLUMN duration_ms INTEGER;"),
+    # Tool-budget exhaustion (app/llm.py, S5 path): the per-turn status of the
+    # tool-budget-exhausted synthesis path. NULL = the turn did NOT exhaust its
+    # step budget; 'answered' = it exhausted and shipped a synthesized answer;
+    # 'degraded' = it exhausted AND its numbers were wholly ungrounded, so the
+    # grounding gate replaced them with an honest "couldn't finish" message. Drives
+    # Admin -> Usage's "Exhausted" count (with a degraded breakdown). NULL on
+    # cache-hit/refusal/predating rows.
+    (27, "ALTER TABLE usage_log ADD COLUMN exhaustion TEXT;"),
 ]
 
 
