@@ -43,6 +43,34 @@ def result(columns, rows, truncated=False):
                        truncated=truncated, row_count=len(rows))
 
 
+# --- QueryResult.to_storage / from_storage (cross-turn grounding persistence) --
+
+def test_storage_round_trip_preserves_columns_and_cells():
+    """A turn's result is persisted (messages.results) so a LATER turn can ground
+    against it. The round-trip must preserve exactly what grounding reads —
+    columns + cell values, including NULLs — or a cross-turn figure would ground
+    against corrupted numbers."""
+    r = result(["year", "awards"], [(2021, 550), (2022, None), (2023, 729)])
+    back = QueryResult.from_storage(r.to_storage())
+    assert back.columns == ["year", "awards"], back.columns
+    assert back.rows == [(2021, 550), (2022, None), (2023, 729)], back.rows
+    # ...and grounding sees the same numeric column it would have live.
+    assert grounding.numeric_columns(back)["awards"] == [550.0, 729.0]
+
+
+def test_to_storage_caps_rows():
+    r = result(["n"], [(i,) for i in range(500)])
+    assert len(r.to_storage(max_rows=200)["rows"]) == 200
+
+
+def test_from_storage_tolerates_a_malformed_blob():
+    # Reads persisted data — a missing/partial blob must degrade to empty, never
+    # raise, or one bad row would break a live follow-up's grounding.
+    assert QueryResult.from_storage({}).columns == []
+    assert QueryResult.from_storage({"columns": ["a"]}).rows == []
+    assert QueryResult.from_storage(None).rows == []
+
+
 # A recent-years completions strip — the exact shape prompt step 6(i)(b) asks for.
 YEARS = result(["year", "awards"],
                [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)])
@@ -306,6 +334,11 @@ def test_check_figure_never_raises_on_junk():
 
 def run():
     print("Testing figure grounding (app/grounding.py)...")
+    check("QueryResult storage round-trip preserves columns/cells",
+          test_storage_round_trip_preserves_columns_and_cells)
+    check("to_storage caps rows", test_to_storage_caps_rows)
+    check("from_storage tolerates a malformed blob",
+          test_from_storage_tolerates_a_malformed_blob)
     check("parse_number handles the prompt's formats",
           test_parse_number_handles_the_formats_the_prompt_asks_for)
     check("parse_number rejects non-numbers", test_parse_number_rejects_non_numbers)

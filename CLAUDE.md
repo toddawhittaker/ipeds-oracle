@@ -237,8 +237,21 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   (2021/(2021+…+2024) = 24.98%, inside tolerance), and `year` is in nearly every
   IPEDS result. Retention is the foundation — `last_result` was overwritten per
   call, so a multi-query brief discarded the very result its headline came from;
-  `AgentResult.results` now keeps them all, in call order. Pinned in
-  `backend/tests/test_grounding.py` + `test_agent_loop.py`.
+  `AgentResult.results` now keeps them all, in call order. **Grounding is
+  CONVERSATION-scoped, not just turn-scoped**: each turn's results are persisted
+  (`messages.results`, migration 23, capped + backend-only) and the recent window
+  is re-hydrated (`_load_prior_results`, same `before_id` semantics as
+  `_load_history`) into `stream_agent(prior_results=…)`. A figure is checked
+  against THIS turn's results FIRST, then the borrowed prior ones
+  (`_ground_results`), so a follow-up that recites a number without re-querying —
+  previously an unverifiable `unchecked` — now grounds against the earlier turn
+  that produced it, tagged **`ctx:`** in `figure_derivation` (composes with
+  `retry:` → `retry:ctx:pct_change(q3.x)`). Prior results are borrowed for
+  grounding only, **never re-persisted** as this turn's own and **never fed to
+  the model** (the prompt is unchanged — we verify recitation, we don't prevent
+  it). This also relaxes the retry's `_figure_required` gate to fire on a no-SQL
+  turn when prior results exist. Pinned in `backend/tests/test_grounding.py` +
+  `test_agent_loop.py` + `test_chat_router.py`.
 - a post-answer **critic** that can force one revision round. **It is given the
   actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
   flag) — without them it saw only the SQL *text* and the prose, so it could

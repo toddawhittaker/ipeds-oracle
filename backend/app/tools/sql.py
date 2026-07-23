@@ -66,6 +66,25 @@ class QueryResult:
             out.append(f"\n_…{len(self.rows) - max_rows} more rows_")
         return "\n".join(out)
 
+    def to_storage(self, max_rows: int = 200) -> dict:
+        """A JSON-able snapshot (columns + up to `max_rows` rows) for persisting a
+        turn's result so a LATER turn can ground a figure against it
+        (app/grounding.py is conversation-scoped). Only what grounding needs —
+        columns + cell values; the SQL text, notes and truncation flag are not
+        reloaded. Tuples become lists (JSON has no tuple)."""
+        return {"columns": list(self.columns),
+                "rows": [list(r) for r in self.rows[:max_rows]]}
+
+    @classmethod
+    def from_storage(cls, data: dict) -> QueryResult:
+        """Rebuild a QueryResult from to_storage() JSON. Rows stay as lists —
+        grounding indexes them positionally, so tuples aren't needed. Tolerant of
+        a malformed/partial blob (missing keys → empty), since it reads
+        persisted data that must never break a live turn."""
+        cols = list((data or {}).get("columns") or [])
+        rows = [tuple(r) for r in ((data or {}).get("rows") or [])]
+        return cls(columns=cols, rows=rows, row_count=len(rows))
+
 
 def _strip_sql(sql: str) -> str:
     """Remove comments and a single trailing semicolon; return trimmed SQL."""

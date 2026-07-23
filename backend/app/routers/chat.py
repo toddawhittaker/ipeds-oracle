@@ -20,13 +20,19 @@ from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
 from app.llm import effective_cost, generate_title, stream_agent
-from app.tools.sql import SQLValidationError, ipeds_years, run_sql
+from app.tools.sql import QueryResult, SQLValidationError, ipeds_years, run_sql
 
 log = logging.getLogger("ipeds.chat")
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 HISTORY_TURNS = 6  # prior messages fed back to the model for context
+# Per-turn caps on the result rows persisted for cross-turn grounding
+# (messages.results). Grounding needs the numbers, not the whole table, and a
+# wide brief could otherwise bloat app.db — so cap rows per result and the total
+# serialized size, dropping the largest results first when over budget.
+RESULT_STORE_MAX_ROWS = 200
+RESULT_STORE_MAX_BYTES = 64_000
 
 # Fire-and-forget async tasks (the feedback distiller below) need a strong
 # reference kept somewhere until they finish, or asyncio can garbage-collect a
@@ -104,6 +110,54 @@ def _trace_item(ev: dict) -> dict | None:
     return None
 
 
+def _results_for_storage(results) -> list | None:
+    """QueryResults → a capped, JSON-able list for messages.results, or None when
+    there's nothing to store. Caps rows per result, then enforces a total-byte
+    ceiling by dropping the LARGEST results first (a headline usually derives from
+    a compact table, so the small recent-years/ranking results are the ones worth
+    keeping). Never raises — a storage-shaping hiccup must not fail a turn."""
+    if not results:
+        return None
+    try:
+        blobs = [r.to_storage(RESULT_STORE_MAX_ROWS) for r in results]
+    except Exception:
+        return None
+    # Drop largest-first until under the byte ceiling (keep original order among
+    # survivors so result_index stays meaningful for grounding provenance).
+    while blobs and len(json.dumps(blobs)) > RESULT_STORE_MAX_BYTES and len(blobs) > 1:
+        widest = max(range(len(blobs)), key=lambda i: len(json.dumps(blobs[i])))
+        blobs.pop(widest)
+    return blobs or None
+
+
+def _load_prior_results(con: sqlite3.Connection, conv_id: int,
+                        before_id: int | None = None) -> list:
+    """Recent turns' persisted run_sql results, flattened, for CONVERSATION-SCOPED
+    figure grounding (app/grounding.py). Mirrors _load_history's before_id window
+    EXACTLY, so an edit/rerun grounds only against results that will survive the
+    pending delete — never against messages about to be dropped. Malformed/empty
+    JSON is skipped, never raised: this reads persisted data and must not break a
+    live turn."""
+    if before_id is not None:
+        rows = con.execute(
+            "SELECT results FROM messages WHERE conversation_id=? AND id<? "
+            "AND results IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (conv_id, before_id, HISTORY_TURNS)).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT results FROM messages WHERE conversation_id=? "
+            "AND results IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (conv_id, HISTORY_TURNS)).fetchall()
+    out = []
+    for r in reversed(rows):  # chronological, matching _load_history
+        try:
+            for blob in json.loads(r["results"]) or []:
+                out.append(QueryResult.from_storage(blob))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+    return out
+
+
 def _load_history(con: sqlite3.Connection, conv_id: int,
                   before_id: int | None = None) -> list[dict]:
     """Recent turns fed back to the model. For an edit/rerun, `before_id` is the
@@ -156,11 +210,15 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             # The DELETE is folded into _persist's transaction (delete_from_id
             # below) so an interrupted edit turn never destroys the old exchange.
             history = _load_history(con, conv_id, before_id=req.edit_message_id)
+            # Recent turns' results, for conversation-scoped figure grounding —
+            # same window/before_id semantics as history above.
+            prior_results = _load_prior_results(con, conv_id, before_id=req.edit_message_id)
         else:
             # A brand-new conversation is created INSIDE gen() (see below), not
             # here, so a client that disconnects before the turn persists never
             # strands a titled, 0-message phantom in the sidebar.
             history = []
+            prior_results = []
     finally:
         con.close()
 
@@ -241,7 +299,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             suggestions = None
             clarify = None
             thinking: list[dict] = []
-            async for ev in stream_agent(question, history=history, skills_block=skills_block):
+            async for ev in stream_agent(question, history=history,
+                                         skills_block=skills_block,
+                                         prior_results=prior_results):
                 if ev["type"] == "done":
                     result = ev["result"]
                     continue
@@ -293,6 +353,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # ...and HOW it was reproduced ("pct_change(q1.awards)"), so a
                 # real derivation is distinguishable from a lucky collision.
                 figure_derivation=result.figure_derivation,
+                # THIS turn's own results (capped), so a LATER turn can ground a
+                # figure against them (app/grounding.py, conversation-scoped).
+                results=_results_for_storage(result.results),
                 delete_from_id=edit_from)
 
             # 4) Cache the successful answer for reuse (first-turn, context-free only).
@@ -403,7 +466,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached_prompt_tokens=0, first_call_prompt_tokens=0,
              first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
              suggestions=None, clarify=None, figure_grounding=None,
-             figure_derivation=None, delete_from_id=None):
+             figure_derivation=None, results=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -425,13 +488,14 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         user_msg_id = ucur.lastrowid
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
-            "thinking, figure, suggestions, clarify, model_used, tokens, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "thinking, figure, suggestions, clarify, results, model_used, tokens, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
-             json.dumps(clarify) if clarify else None, model, tokens, now))
+             json.dumps(clarify) if clarify else None,
+             json.dumps(results) if results else None, model, tokens, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(

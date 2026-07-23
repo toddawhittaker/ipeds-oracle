@@ -240,6 +240,26 @@ def test_migration_22_adds_usage_log_figure_derivation_column():
     assert row[0] is None, row
 
 
+def test_migration_23_adds_messages_results_column():
+    # Each turn's run_sql results (JSON list of {columns, rows}, capped), so a
+    # LATER turn can ground a figure against an EARLIER turn's data
+    # (conversation-scoped grounding, app/grounding.py). Backend-only; NULL on a
+    # turn that ran no query (cache hit / refusal / clarify) or predates it.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 22])
+    assert "results" not in _cols(con, "messages"), _cols(con, "messages")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "results" in _cols(con, "messages"), _cols(con, "messages")
+    # Nullable: a pre-migration row and a no-query turn carry no results.
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+                "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, created_at) "
+                "VALUES (1, 'assistant', 'a', 0)")
+    row = con.execute("SELECT results FROM messages WHERE role='assistant'").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -574,6 +594,7 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ["figure", "TEXT", 0, null, 0],
       ["id", "INTEGER", 0, null, 1],
       ["model_used", "TEXT", 0, null, 0],
+      ["results", "TEXT", 0, null, 0],
       ["role", "TEXT", 1, null, 0],
       ["sql_log", "TEXT", 0, null, 0],
       ["suggestions", "TEXT", 0, null, 0],
@@ -724,6 +745,8 @@ def run():
           test_migration_21_adds_usage_log_figure_grounding_column)
     check("migration 22 adds usage_log.figure_derivation (nullable)",
           test_migration_22_adds_usage_log_figure_derivation_column)
+    check("migration 23 adds messages.results (nullable)",
+          test_migration_23_adds_messages_results_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",
