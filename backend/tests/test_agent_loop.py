@@ -1026,6 +1026,45 @@ def test_leak_flag_detects_residual_debris():
     assert llm._leak_flag('![chart] {"type":"line"}') is True
 
 
+def test_scrub_strips_leaked_figure_json_whatever_the_wrapping():
+    """The observed conv-18 regression: on a fence-fallback turn the model emits
+    the figure as raw JSON the extractor missed — bare, `inline-code`-wrapped, or
+    with a stray `}}` — and it reached the user. The scrubber removes all three,
+    keying off the object SHAPE, so no wrapping variant ships."""
+    bare = '{"value":"767","label":"CS, Ohio","source":"IPEDS"}\n\nOhio awarded **767**.'
+    clean, removed = llm._scrub_leaked_blocks(bare)
+    assert removed and "{" not in clean and clean == "Ohio awarded **767**.", clean
+
+    backtick = '`{"value":"149","label":"Top: Miami"}`\n\n**Miami** led with **149**.'
+    clean, removed = llm._scrub_leaked_blocks(backtick)
+    assert removed and "value" not in clean and clean == "**Miami** led with **149**.", clean
+
+    dbrace = '`{"value":"1,190","label":"Indiana"}}\n\n**Indiana** — **1,190**.'
+    clean, removed = llm._scrub_leaked_blocks(dbrace)
+    assert removed and "}" not in clean and clean == "**Indiana** — **1,190**.", clean
+
+    # A leaked CHART object (no fence) is debris too — charts have no other net.
+    chart = '{"type":"bar","data":[{"x":"OH","y":767}]}\n\nOhio leads.'
+    clean, removed = llm._scrub_leaked_blocks(chart)
+    assert removed and clean == "Ohio leads.", clean
+
+
+def test_scrub_preserves_a_real_chart_fence_and_ordinary_braces():
+    """A ```chart fence is the INTENDED delivery — its {type,data} object must
+    survive. And a `{...}` in prose without the figure/chart key signature is not
+    debris. Over-stripping either would be a worse regression than the leak."""
+    fence = 'Trend below.\n\n```chart\n{"type":"line","data":[{"x":2024,"y":1250}]}\n```\n'
+    clean, removed = llm._scrub_leaked_blocks(fence)
+    assert removed is False and clean == fence, clean
+
+    prose = 'Use `SELECT {col}` — the set {a, b} matters.'
+    clean, removed = llm._scrub_leaked_blocks(prose)
+    assert removed is False and clean == prose, clean
+
+    plain = "A clean prose answer with the number 511 and no debris."
+    assert llm._scrub_leaked_blocks(plain) == (plain, False)
+
+
 def test_structured_emit_answer_maps_figure_and_followups():
     calls = {"n": 0}
 
@@ -1289,6 +1328,10 @@ def run():
           test_reconstruct_ask_clarification)
     check("_leak_flag detects residual fence/JSON debris",
           test_leak_flag_detects_residual_debris)
+    check("scrub strips leaked figure JSON whatever the wrapping",
+          test_scrub_strips_leaked_figure_json_whatever_the_wrapping)
+    check("scrub preserves a real chart fence and ordinary braces",
+          test_scrub_preserves_a_real_chart_fence_and_ordinary_braces)
     check("structured emit_answer maps figure + followups (no leak)",
           test_structured_emit_answer_maps_figure_and_followups)
     check("structured emit_answer chart → a server-written ```chart fence",

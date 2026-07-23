@@ -330,10 +330,23 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   the fence path. **Measured 3/10 → 10/10 structured, 0 leaks over two runs — and
   a bonus: figure emission went to 10/10 too** (the figure is now a tool field
   the model fills, not a fence it forgets — this dissolves the earlier
-  emission-decay saga). A **leak sentinel** (`_leak_flag`) scans the shipped prose
-  for residual fence/JSON debris → `usage_log.answer_leaked`; with `emit_mode`
-  (structured|fence, migration 24) it drives the **Answer-leaks** stat on Admin →
-  Usage (`leakRate`/`leakLabel`). **`structured_emission_enabled` DEFAULTS ON
+  emission-decay saga). A **leak scrubber** (`_scrub_leaked_blocks`, evolved from
+  the observe-only `_leak_flag` sentinel) runs on the FINAL answer of both
+  terminal paths: it STRIPS any residual figure/chart-shaped JSON a mangled fence
+  left in the prose — **whatever the wrapping** (a bare object, an
+  `inline-code`-wrapped one, a stray `}}`) — so raw JSON never reaches the user.
+  It's **model-agnostic**: it keys off the object SHAPE (figure = `value`+`label`,
+  chart = `type`+`data`), not a per-model quirk, so a novel mangle is caught too;
+  a proper ```chart fence is preserved (fenced segments are skipped whole). The
+  fence path FALLBACK is exercised ~30% of the time live on DeepSeek flash (far
+  more than the near-0 the tests suggested), and ~10% of those turns mangled the
+  figure fence into inline-code JSON that the extractor missed (the observed
+  conv-18 leak) — so this net matters in practice, not just for tool-incapable
+  models. `usage_log.answer_leaked` now records that debris was **caught and
+  removed** (never shipped) rather than shipped; with `emit_mode` (structured|
+  fence, migration 24) it drives the **Answer-leaks** stat on Admin → Usage
+  (`leakRate`/`leakLabel`) — now a scrub rate. (The clarify terminal paths are
+  intentionally NOT scrubbed: a clarify turn carries no figure/chart by contract.) **`structured_emission_enabled` DEFAULTS ON
   (0.2)** — validated 100%-structured / 0-leaks across FOUR vendors
   (DeepSeek/MiniMax/Anthropic/Moonshot); the fence path is the retained fallback
   for a tool-incapable model (set the flag false to force it). The sentinel
