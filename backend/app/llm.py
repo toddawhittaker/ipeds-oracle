@@ -630,6 +630,44 @@ def _reconstruct_answer(emit_call: dict) -> str:
     return "\n\n".join(parts)
 
 
+# The forced re-emit's tool_choice: FORCE emit_answer specifically (not "required",
+# which could re-call run_sql). Paired with reasoning OFF because forcing a
+# specific function is rejected while thinking is enabled on DeepSeek/Kimi.
+_FORCE_EMIT_CHOICE = {"type": "function", "function": {"name": "emit_answer"}}
+
+
+async def _forced_emit(client: httpx.AsyncClient, model: str,
+                       messages: list[dict], tools: list[dict],
+                       res: AgentResult) -> dict | None:
+    """One reasoning-OFF call that FORCES `emit_answer`, guaranteeing a
+    well-formed terminal tool call when the model free-typed a plain-text answer
+    instead. Returns the `emit_answer` tool-call dict, or **None** on any
+    HTTPError / ValueError / missing tool-call — it FAILS OPEN, so a provider that
+    rejects forced `tool_choice` (or an outage) never breaks the turn; the caller
+    then falls back to the plain-text nudge + fence path. Accrues its own usage
+    into `res` (the call is real spend even when it fails open).
+
+    Reasoning OFF is REQUIRED (not just cosmetic): forcing a specific function is
+    rejected by DeepSeek/Kimi while thinking is enabled (tested 2026-07-23). The
+    answer's reasoning already happened on the turn that produced the free-typed
+    draft, so this re-emit is pure reformat-into-the-tool and needs none."""
+    s = get_settings()
+    try:
+        data = await chat_completion(
+            client, model=model, messages=messages, temperature=s.llm_temperature,
+            tools=tools, tool_choice=_FORCE_EMIT_CHOICE,
+            reasoning={"enabled": False}, settings=s, timeout=DEFAULT_TIMEOUT)
+    except (httpx.HTTPError, ValueError):
+        return None
+    usage = data.get("usage") or {}
+    res.prompt_tokens += usage.get("prompt_tokens", 0)
+    res.completion_tokens += usage.get("completion_tokens", 0)
+    res.cached_prompt_tokens += cached_tokens(usage)
+    res.cost += usage.get("cost") or 0
+    msg = ((data.get("choices") or [{}])[0].get("message")) or {}
+    return _find_emit_call(msg.get("tool_calls") or [])
+
+
 # Residual structured-emission DEBRIS in the SHIPPED prose — a mangle that slipped
 # every guard. The sentinel records it (telemetry only; the normalizer already
 # repairs the known forms). Debris means: a bare figure `"value"`+`"label"` object
@@ -770,10 +808,12 @@ class AgentResult:
     suggestions: list | None = None  # drill-down questions from the followups fence
     clarify: dict | None = None     # {question, options[]} from a disambiguation fence
     # Emission mode this turn used (structured-output telemetry): "structured" when
-    # the model finished via the emit_answer/ask_clarification tool, else "fence"
-    # (it free-typed, or structured emission is off). "leaked" is set when the
-    # sentinel found residual fence/JSON in the SHIPPED prose — how a future
-    # model's novel mangle surfaces as a metric, not a user bug.
+    # the model finished via the emit_answer/ask_clarification tool voluntarily;
+    # "forced" when it free-typed and a reasoning-off forced re-emit compelled the
+    # tool (still structured output — counted as structured, but the distinct value
+    # measures how often the force was NEEDED, gating the Phase-2 fence-layer
+    # deletion); else "fence" (free-typed and the forced re-emit failed open / was
+    # off). "leaked" is set when the scrubber caught residual fence/JSON debris.
     emit_mode: str = "fence"
     leaked: bool = False
     error: str | None = None
@@ -924,25 +964,13 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
             if not tool_calls:
                 answer = msg.get("content") or ""
-                # Adoption nudge (0.1): under structured emission, if the model
-                # FREE-TYPED a final answer (emit_mode still "fence" — it didn't
-                # call emit_answer, which would have set it "structured" above),
-                # reject it ONCE and demand the tool. The model re-emits via
-                # emit_answer → interception sets emit_mode="structured" → this
-                # condition is false on the next pass. If it free-types again, the
-                # flag is set → accept the fence-path answer (fallback). Placed
-                # BEFORE the clarify check so a free-typed clarify is nudged onto
-                # ask_clarification too.
-                if (s.structured_emission_enabled and res.emit_mode != "structured"
-                        and not emit_reprompted and answer.strip()):
-                    emit_reprompted = True
-                    messages.append({"role": "user", "content": _EMIT_REPROMPT})
-                    continue
-                # Disambiguation: the model may ask ONE clarifying question instead
-                # of answering (prompt INSTRUCTIONS' leading "Before you answer"
-                # step). Extract it FIRST, ahead of the critic — a clarify turn has
-                # no data claim to sanity-check, and must never carry a figure or
-                # followups (those belong to a real answer). Terminates the turn.
+                # Disambiguation FIRST: the model may ask ONE clarifying question
+                # instead of answering (prompt INSTRUCTIONS' leading "Before you
+                # answer" step). It must be handled ahead of the forced re-emit
+                # below — forcing `emit_answer` would clobber a clarification, and a
+                # single-function `tool_choice` can't target "emit_answer OR
+                # ask_clarification". A clarify turn also has no data claim to
+                # sanity-check and must never carry a figure/followups.
                 clarify_answer, clarify = _extract_clarify(answer)
                 if clarify:
                     res.answer = clarify_answer
@@ -954,6 +982,28 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     yield {"type": "answer", "text": res.answer}
                     yield {"type": "done", "result": res}
                     return
+                # Structured-emission GUARANTEE: if the model FREE-TYPED a final
+                # answer (emit_mode still "fence" — it didn't call emit_answer),
+                # COMPEL the tool via a reasoning-off forced re-emit. On success the
+                # figure/chart/followups come back as validated args (no fence to
+                # mangle → no leak, and the figure ships). It FAILS OPEN: if the
+                # provider rejects forced tool_choice (or it errors), fall back to
+                # the plain-text nudge + fence path (the 0.1 behavior). Bounded to
+                # once per turn by `emit_reprompted`.
+                if (s.structured_emission_enabled and res.emit_mode != "structured"
+                        and not emit_reprompted and answer.strip()):
+                    emit_reprompted = True
+                    emit_call = await _forced_emit(client, model, messages, tools, res)
+                    if emit_call is not None:
+                        res.emit_mode = "forced"
+                        answer = _reconstruct_answer(emit_call)
+                        # Replace the free-typed draft with the structured re-emit
+                        # so the critic's revision round sees clean history, then
+                        # fall THROUGH into the terminator (re-extract below).
+                        messages[-1] = {"role": "assistant", "content": answer}
+                    else:
+                        messages.append({"role": "user", "content": _EMIT_REPROMPT})
+                        continue
                 # Post-answer critic: once per turn, and only for answers built
                 # from SQL (a plain refusal has nothing to sanity-check). If it
                 # flags a likely error, feed the critique back for ONE revision

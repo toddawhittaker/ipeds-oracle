@@ -1082,12 +1082,14 @@ def usage(since: float | None = None, until: float | None = None):
             # Structured-emission telemetry (PR-1): of the real agent turns (an
             # emit_mode was recorded — excludes cache hits/refusals/NULL), how
             # many used the structured tool, and how many LEAKED residual debris
-            # into the shipped prose. The leak rate → 0 under structured emission
-            # is the win that justifies flipping the default.
-            "COALESCE(SUM(CASE WHEN emit_mode IN ('structured','fence') THEN 1 ELSE 0 END),0) "
-            "AS emit_turns, "
-            "COALESCE(SUM(CASE WHEN emit_mode='structured' THEN 1 ELSE 0 END),0) "
-            "AS structured_turns, "
+            # into the shipped prose. 'forced' = a reasoning-off forced re-emit
+            # COMPELLED the tool after a free-type — still structured output, so it
+            # counts as structured; the distinct value just measures how often the
+            # force was needed. The leak rate → 0 is the win.
+            "COALESCE(SUM(CASE WHEN emit_mode IN ('structured','fence','forced') "
+            "THEN 1 ELSE 0 END),0) AS emit_turns, "
+            "COALESCE(SUM(CASE WHEN emit_mode IN ('structured','forced') "
+            "THEN 1 ELSE 0 END),0) AS structured_turns, "
             "COALESCE(SUM(answer_leaked),0) AS leaked_turns, "
             # Table grounding (app/grounding.py), observe-only: across the answer
             # tables that had results to check, how many numeric cells reproduced

@@ -232,6 +232,36 @@ def test_empty_tools_list_also_omits_both_keys():
 
 
 # ---------------------------------------------------------------------------
+# 6b. Forced tool_choice + reasoning override (Phase 1: the reasoning-off forced
+#     re-emit). tool_choice defaults to "auto" but an explicit value is sent
+#     verbatim; reasoning is omitted unless passed.
+# ---------------------------------------------------------------------------
+
+def test_explicit_tool_choice_overrides_auto():
+    client = _RecordingClient(_json_response(_OK_BODY))
+    s = _settings()
+    tools = [{"type": "function", "function": {"name": "emit_answer"}}]
+    force = {"type": "function", "function": {"name": "emit_answer"}}
+    _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
+                                 tools=tools, tool_choice=force, settings=s))
+    assert client.last["json"]["tool_choice"] == force, client.last["json"]
+
+
+def test_reasoning_sent_when_passed_and_omitted_otherwise():
+    # Passed → payload carries it (the only knob to turn thinking off for a call).
+    client = _RecordingClient(_json_response(_OK_BODY))
+    s = _settings()
+    _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
+                                 reasoning={"enabled": False}, settings=s))
+    assert client.last["json"]["reasoning"] == {"enabled": False}, client.last["json"]
+    # Not passed → no reasoning key (provider default = thinking on for DeepSeek).
+    client = _RecordingClient(_json_response(_OK_BODY))
+    _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
+                                 settings=s))
+    assert "reasoning" not in client.last["json"], client.last["json"]
+
+
+# ---------------------------------------------------------------------------
 # 7. temperature forwarded verbatim — guard/critic pass a literal 0.0, llm
 #    passes s.llm_temperature; these must NOT be unified into one constant.
 # ---------------------------------------------------------------------------
@@ -387,6 +417,10 @@ def run():
           test_tools_none_omits_both_tools_and_tool_choice_keys)
     check("tools=[] (falsy) -> neither tools nor tool_choice key present",
           test_empty_tools_list_also_omits_both_keys)
+    check("an explicit tool_choice overrides the default auto",
+          test_explicit_tool_choice_overrides_auto)
+    check("reasoning is sent when passed, omitted otherwise",
+          test_reasoning_sent_when_passed_and_omitted_otherwise)
     check("temperature is forwarded verbatim", test_temperature_forwarded_verbatim)
     check("timeout forwarded verbatim (default)", test_timeout_forwarded_verbatim_default)
     check("timeout forwarded verbatim (probe)", test_timeout_forwarded_verbatim_probe)

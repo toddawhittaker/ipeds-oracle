@@ -46,17 +46,31 @@ def provider_headers(s: Any) -> dict[str, str]:
 async def chat_completion(client: httpx.AsyncClient, *, model: str, messages: list[dict],
                           temperature: float, settings: Any,
                           tools: list[dict] | None = None,
+                          tool_choice: str | dict | None = None,
+                          reasoning: dict | None = None,
                           timeout: float = DEFAULT_TIMEOUT) -> dict:
     """POST a /chat/completions request on the caller-supplied client and
     return the parsed JSON body. Raises on any transport or HTTP-status error
-    — callers decide how to handle failure."""
+    — callers decide how to handle failure.
+
+    `tool_choice` defaults to `"auto"` when tools are present (the model
+    decides); pass an explicit value to FORCE a tool — e.g. `{"type":"function",
+    "function":{"name":"emit_answer"}}`. NOTE (tested 2026-07-23): forcing a
+    specific function (or `"required"`) is REJECTED by DeepSeek/Kimi while
+    reasoning is on — pair it with `reasoning={"enabled": False}`.
+
+    `reasoning` (OpenRouter's unified param) is omitted by default → the
+    provider's own default (thinking ON for DeepSeek v4). Pass
+    `{"enabled": False}` to turn thinking off for this call."""
     payload: dict = {"model": model, "messages": messages, "temperature": temperature}
     # Omitting tools entirely (rather than tool_choice="none") forces a plain
     # text answer more portably across OpenAI-compatible providers — used for
     # the agent loop's final synthesis pass.
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+    if reasoning is not None:
+        payload["reasoning"] = reasoning
     url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
     r = await client.post(url, json=payload, headers=provider_headers(settings),
                           timeout=timeout)

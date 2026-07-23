@@ -322,12 +322,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **frontend are all unchanged** (figure/followups/clarify were already
   structured events; the chart stays a server-written ```chart fence the
   frontend already renders). A model that ignores the tool falls back to the
-  fence path. **Adoption nudge (0.1):** a model that free-types a plain-text
-  answer under structured mode is REJECTED once (`_EMIT_REPROMPT`, bounded by
-  `emit_reprompted`) and told to call `emit_answer` — the same targeted-reprompt
-  pattern that fixed missing figures. It fires before the clarify check (a
-  free-typed clarify → `ask_clarification` too); a second free-type falls back to
-  the fence path. **Measured 3/10 → 10/10 structured, 0 leaks over two runs — and
+  fence path. **Forced re-emit (Phase 1) — the structured-emission GUARANTEE:**
+  when a turn free-types the terminal answer under structured mode,
+  `_forced_emit` makes ONE **reasoning-off** follow-up call that FORCES
+  `emit_answer` (`tool_choice:{function:emit_answer}` + `reasoning:{enabled:false}`)
+  — compelling a well-formed tool call, so the figure/chart come back as validated
+  args (no fence to mangle → no leak, and the figure SHIPS, unlike the scrubber
+  which just deletes it). Reasoning-off is REQUIRED, not cosmetic: forcing a
+  specific function is rejected by DeepSeek/Kimi while thinking is enabled (400
+  *"Thinking mode does not support this tool_choice"*, tested 2026-07-23); the
+  answer's reasoning already happened on the draft turn, so the re-emit needs
+  none. It **FAILS OPEN** — a provider that rejects forced choice (or an outage)
+  → `_forced_emit` returns None → fall back to the **`_EMIT_REPROMPT` nudge**
+  (the 0.1 lever) + fence path. Bounded once per turn (`emit_reprompted`).
+  **Clarify is handled FIRST** (ahead of the forced re-emit) — forcing
+  `emit_answer` must never clobber a clarification, and a single-function
+  `tool_choice` can't target "emit_answer OR ask_clarification". A forced re-emit
+  records `emit_mode="forced"` (counts as structured on Admin→Usage; the distinct
+  value measures how often the force was NEEDED — the go/no-go data for **Phase 2**,
+  deleting the whole fence-parsing layer once forced-capable models are required).
+  `chat_completion` gained per-call `tool_choice`/`reasoning` overrides for this.
+  **Measured 3/10 → 10/10 structured, 0 leaks over two runs — and
   a bonus: figure emission went to 10/10 too** (the figure is now a tool field
   the model fills, not a fence it forgets — this dissolves the earlier
   emission-decay saga). A **leak scrubber** (`_scrub_leaked_blocks`, evolved from
@@ -354,7 +369,8 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   ```chart fence (that's the intended chart delivery — a false-positive caught in
   the PR-1 dark-ship run). The **number stays model-supplied** (envelope only);
   server-computed figures from declared provenance are the next step (PR-2).
-  Pinned in `test_agent_loop.py` (structured + reprompt cases) +
+  Pinned in `test_agent_loop.py` (structured + forced-re-emit cases) +
+  `test_llmhttp.py` (tool_choice/reasoning overrides) +
   `test_admin_router.py` + `test_migrations.py`.
 - **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
   step: when a plausible alternate reading would change the HEADLINE result (e.g.
