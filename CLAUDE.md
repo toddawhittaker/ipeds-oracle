@@ -271,20 +271,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   rate a clean transcription-accuracy signal for the DATA rather than dragging it
   down with a model-added Rank column that was never in the DB (the live-test
   regression: a perfectly-transcribed top-5 table scored 5/10 because its five
-  rank ordinals can't ground). Each graded cell is reconciled against THIS turn's
-  retained results via the SAME kernel as the figure — extracted into the shared
-  `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
+  rank ordinals can't ground). Each graded cell is reconciled — **CONVERSATION-
+  scoped, mirroring the figure**: against this turn's results borrowed with the
+  recent window (`_ground_results`/`prior_results`, the same #166 infra the figure
+  uses), so a follow-up that RESHAPES an earlier table (transpose/regroup, running
+  no SQL of its own) is VERIFIED against the borrowed base rows — its values are
+  the same, just rearranged — instead of hiding as `unchecked`, and a corrupted
+  reshape is caught. Reconciliation uses the SAME kernel as the figure — the
+  shared `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
   intact) — so a legitimately **computed measure** (a share/%-change column) still
   grounds instead of false-alarming, at the cost of the figure's known
   coincidental-match bias (acceptable observe-only: `messages.results` is
   persisted, so an all-columns variant is recomputable offline). Records a
-  per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked`) +
+  per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked` — the
+  last now means neither this turn nor the recent window retained anything) +
   numeric-cell counts on
   `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
   (**migration 25**; `no_table`/`unchecked` carry 0 counts so they self-exclude
   from the SUM-based rate), surfaced as a **cell-level** **Grounded cells** stat
   on Admin → Usage (`groundedTableRate`, vitest-pinned). Stamped in `llm.py`
-  (`_stamp_table_grounding`) right after the figure stamp, on the FINAL settled
+  (`_stamp_table_grounding`) right after the figure stamp on BOTH terminators (the
+  normal answer and the budget-exhausted best-effort), on the FINAL settled
   answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
   `test_migrations.py`.
 - a post-answer **critic** that can force one revision round. **It is given the

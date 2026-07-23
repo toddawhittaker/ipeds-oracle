@@ -175,15 +175,21 @@ def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
 
 
 def _stamp_table_grounding(res: AgentResult) -> None:
-    """Record whether the answer's Markdown result table reproduces from THIS
-    turn's query results (app/grounding.py). Observe-only and ungated, same as
+    """Record whether the answer's Markdown result table reproduces from the
+    retained query results (app/grounding.py). Observe-only and ungated, same as
     _stamp_grounding — pure local arithmetic, nothing to switch off.
 
-    Grounds against `res.results` only (a table is virtually always its own
-    query's output). A recited table with no query this turn stays UNCHECKED with
-    zero cell counts, so it never dilutes the measured rate — prior-turn borrow is
-    a later symmetry if recited tables prove common."""
-    check = grounding.check_table(res.answer, res.results)
+    CONVERSATION-scoped, mirroring the figure: grounds against THIS turn's results
+    borrowed with the recent window (`_ground_results` → this turn's first, then
+    prior-turn results). A follow-up that RESHAPES an earlier table — transpose,
+    regroup, "bars per year instead of per state" — reformats from context and runs
+    no SQL, so it has no results of its own; borrowing the earlier turn's base rows
+    lets that reshape be VERIFIED (its values are the same, just rearranged, and
+    check_table does value-membership matching) instead of hiding as UNCHECKED —
+    and a corrupted reshape is caught. UNCHECKED now means neither this turn nor the
+    recent window retained anything (a true first-turn lookup)."""
+    ground_results, _ = _ground_results(res)
+    check = grounding.check_table(res.answer, ground_results)
     res.table_grounding = check.status
     res.table_cells_checked = check.cells_checked
     res.table_cells_matched = check.cells_matched
@@ -1256,6 +1262,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
             _stamp_grounding(res, raw_final)
+            _stamp_table_grounding(res)
             res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
