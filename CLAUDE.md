@@ -351,7 +351,16 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   regex misses, it recovers a bare `{value,label}` object at the answer's HEAD
   (behind an optional stray `[..](..)` artifact), for zero LLM cost; scoped to
   the head so a ```chart fence or a mid-prose object is never mistaken for a
-  figure. (2) A **missing-figure retry** (`retry_missing_figure` +
+  figure. Related, **`_normalize_misfenced_blocks`** runs BEFORE extraction and
+  repairs the model's other observed mis-wrap — a figure/chart emitted as
+  MARKDOWN IMAGE syntax (`![figure]\n{json}`, `![chart]\n{json}`,
+  `![Figure: 767](767) {json}`) — into real ```figure/```chart fences. Without
+  it that raw JSON LEAKS into chat (charts have no other safety net) and, when
+  the retry separately recovers the figure, DUPLICATES it. Balanced-brace scan
+  (so a chart's nested `data:[…]` is captured whole), fires only when the label
+  is actually followed by a JSON object (a genuine `![alt](image.png)` is
+  untouched), scoped to the two block names. Pinned in `test_agent_loop.py`.
+  (2) A **missing-figure retry** (`retry_missing_figure` +
   `_maybe_retry_figure`, gated `FIGURE_RETRY_ENABLED`, modeled on the critic:
   own call, fails open): when a data-backed answer that should lead with a figure
   emits none (`_figure_required` — has SQL, has a digit, no clarify/error), ONE

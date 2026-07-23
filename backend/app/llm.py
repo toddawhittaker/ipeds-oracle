@@ -288,6 +288,24 @@ def _figure_from_dict(data: object) -> dict | None:
     return out if out.get("value") and out.get("label") else None
 
 
+def _balanced_object_end(text: str, start: int) -> int | None:
+    """Index just past the balanced `{...}` object beginning at `text[start]`
+    (which must be `{`), or None if it isn't an object or the braces don't
+    balance. Sufficient for the model's JSON, whose string values carry no
+    braces."""
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
 def _leading_json_object(text: str) -> tuple[str, object] | None:
     """If `text`, after an optional stray `[..](..)` artifact, STARTS with a JSON
     object, return (matched_span_text, parsed) via a brace-balanced scan. Head
@@ -295,22 +313,57 @@ def _leading_json_object(text: str) -> tuple[str, object] | None:
     object doesn't parse."""
     m = _FIGURE_LEADING_ARTIFACT_RE.match(text or "")
     start = m.end() if m else 0
-    body = (text or "")[start:]
-    if not body.startswith("{"):
+    end = _balanced_object_end(text or "", start)
+    if end is None:
         return None
-    depth = 0
-    for i, ch in enumerate(body):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                blob = body[:i + 1]
-                try:
-                    return (text[:start] + blob), json.loads(blob)
-                except (json.JSONDecodeError, ValueError):
-                    return None
-    return None
+    blob = text[start:end]
+    try:
+        return (text[:end]), json.loads(blob)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+# Some models emit a figure/chart as MARKDOWN IMAGE/LINK syntax instead of a
+# fenced block — `![figure]\n{json}`, `![Figure: 767](767)\n\n{json}`,
+# `![chart]\n{json}`. No extractor recognizes that form, so the raw JSON leaks
+# into the answer (and, when the retry separately recovers the figure,
+# DUPLICATES it). This rewrites those mis-wraps back into real ```figure /
+# ```chart fences BEFORE extraction, so the figure is parsed+stripped
+# server-side and the chart reaches the frontend as a normal fence. Same
+# defensive-parsing spirit as _leading_json_object; scoped to the two block
+# names, and only fires when the label is actually followed by a JSON object
+# (so a genuine `![alt](image.png)` is never touched).
+_MISFENCE_LABEL_RE = re.compile(
+    r"!?\[\s*(figure|chart)\b[^\]]*\]"   # ![figure] / [Figure: 767] / ![chart …]
+    r"(?:\([^)]*\))?\s*",                # optional (url) + any whitespace/newlines
+    re.IGNORECASE,
+)
+
+
+def _normalize_misfenced_blocks(answer: str) -> str:
+    """Rewrite mis-wrapped `![figure]`/`![chart]` + {json} artifacts into proper
+    fenced blocks. A no-op unless such a label is present."""
+    low = (answer or "").lower()
+    if "[figure" not in low and "[chart" not in low:
+        return answer
+    out: list[str] = []
+    i = 0
+    for m in _MISFENCE_LABEL_RE.finditer(answer):
+        if m.start() < i:
+            continue  # inside a span we already consumed (a label in a JSON value)
+        end = _balanced_object_end(answer, m.end())
+        if end is None:
+            continue  # label not followed by a JSON object — leave it as prose
+        blob = answer[m.end():end]
+        try:
+            json.loads(blob)
+        except (json.JSONDecodeError, ValueError):
+            continue  # not real JSON — don't fence arbitrary text
+        out.append(answer[i:m.start()])
+        out.append(f"\n```{m.group(1).lower()}\n{blob}\n```\n")
+        i = end
+    out.append(answer[i:])
+    return "".join(out)
 
 
 def _extract_figure(answer: str) -> tuple[str, dict | None]:
@@ -653,6 +706,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         answer = draft_answer
                 # Extract the structured blocks from the FINAL answer (after the
                 # critic revert settles it), so they always match the winning prose.
+                # First repair any mis-wrapped ![figure]/![chart] artifacts into
+                # real fences, so a figure is extracted (not leaked/duplicated) and
+                # a chart reaches the frontend as a normal fence.
+                answer = _normalize_misfenced_blocks(answer)
                 raw_answer = answer
                 answer, res.figure = _extract_figure(answer)
                 answer, res.suggestions = _extract_suggestions(answer)
@@ -738,6 +795,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "answer", "text": res.answer}
                 yield {"type": "done", "result": res}
                 return
+            final = _normalize_misfenced_blocks(final)
             raw_final = final
             final, res.figure = _extract_figure(final)
             final, res.suggestions = _extract_suggestions(final)
