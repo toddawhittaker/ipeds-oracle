@@ -640,6 +640,72 @@ def _leak_flag(prose: str) -> bool:
     return bool(_LEAK_SENTINEL_RE.search(prose or ""))
 
 
+def _is_debris_object(obj: object) -> bool:
+    """A parsed JSON value that is figure-shaped (value+label) or chart-shaped
+    (type+data) — the two block payloads that leak as raw JSON when the model
+    mangles a fence (bare object, `inline-code`-wrapped, a stray `}}`)."""
+    if not isinstance(obj, dict):
+        return False
+    keys = set(obj)
+    return ("value" in keys and "label" in keys) or ("type" in keys and "data" in keys)
+
+
+def _strip_debris_from_segment(text: str) -> str:
+    """Excise every figure/chart-shaped JSON object from a NON-fenced text
+    segment, along with an inline-code backtick wrapper and a stray trailing
+    brace. Conservative: only a brace-balanced object that parses AND carries the
+    figure/chart key signature is removed, so ordinary prose and a `{...}` without
+    those keys are left untouched."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "{":
+            end = _balanced_object_end(text, i)
+            if end is not None:
+                try:
+                    obj = json.loads(text[i:end])
+                except (json.JSONDecodeError, ValueError):
+                    obj = None
+                if _is_debris_object(obj):
+                    while out and out[-1] == "`":   # drop a leading backtick wrapper
+                        out.pop()
+                    i = end
+                    while i < n and text[i] in "}`":  # and a trailing brace/backtick
+                        i += 1
+                    continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+_FENCE_SEGMENT_RE = re.compile(r"(```.*?```)", re.DOTALL)
+
+
+def _scrub_leaked_blocks(prose: str) -> tuple[str, bool]:
+    """Last-resort net for the fence FALLBACK path: strip any figure/chart-shaped
+    JSON that survived extraction, WHATEVER its wrapping (a bare object, an
+    `inline-code`-wrapped one, a stray `}}`). The leak sentinel already DETECTS
+    these; this REMOVES them so no wrapping variant reaches the user. It is
+    model-agnostic — it keys off the object SHAPE (figure = value+label, chart =
+    type+data), not a per-model quirk, so a novel mangle is caught too. A proper
+    ```chart fence (intended delivery) is preserved: fenced segments are skipped
+    whole. Returns (clean_prose, removed_anything)."""
+    if not prose or "{" not in prose:
+        return prose, False
+    parts = _FENCE_SEGMENT_RE.split(prose)
+    removed = False
+    for idx, part in enumerate(parts):
+        if part.startswith("```"):
+            continue  # a fenced block — leave the intended chart delivery intact
+        cleaned = _strip_debris_from_segment(part)
+        if cleaned != part:
+            removed = True
+            parts[idx] = cleaned
+    if not removed:
+        return prose, False
+    return "".join(parts).strip(), True
+
+
 @dataclass
 class AgentResult:
     answer: str = ""
@@ -937,9 +1003,12 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 # (see _maybe_retry_figure). Runs AFTER the critic has settled the
                 # winning answer, so it never chases a draft that's about to revert.
                 await _maybe_retry_figure(res, question, res.answer)
-                # Leak sentinel: residual fence/JSON debris in the SHIPPED prose
-                # means a mangle slipped every guard — record it (telemetry).
-                res.leaked = _leak_flag(res.answer)
+                # Last-resort scrubber (fence-fallback net): strip any residual
+                # figure/chart-shaped JSON that a mangled fence left in the prose,
+                # whatever the wrapping, so raw JSON never reaches the user.
+                # res.leaked records that debris was caught (and removed) — the
+                # same telemetry, now a scrub rate rather than a ship rate.
+                res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
                 if res.figure:
                     yield {"type": "figure", "figure": res.figure}
                 if res.suggestions:
@@ -1110,7 +1179,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             final, res.suggestions = _extract_suggestions(final)
             res.answer = final
             _stamp_grounding(res, raw_final)
-            res.leaked = _leak_flag(res.answer)
+            res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
             if res.figure:
                 yield {"type": "figure", "figure": res.figure}
             if res.suggestions:
