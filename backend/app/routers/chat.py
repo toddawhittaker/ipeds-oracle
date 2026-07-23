@@ -369,6 +369,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 table_grounding=result.table_grounding,
                 table_cells_checked=result.table_cells_checked,
                 table_cells_matched=result.table_cells_matched,
+                # Tool-budget exhaustion status (app/llm.py, S5): 'degraded' when the
+                # grounding gate replaced fabricated numbers, else 'answered' when the
+                # turn exhausted but shipped a synthesis, else NULL. Drives Admin ->
+                # Usage's "Exhausted" count.
+                exhaustion=("degraded" if result.exhaustion_degraded
+                            else "answered" if result.exhausted else None),
                 # Turn wall-clock (ms) → the "Thought for N seconds" display.
                 duration_ms=duration_ms,
                 delete_from_id=edit_from)
@@ -485,7 +491,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              suggestions=None, clarify=None, figure_grounding=None,
              figure_derivation=None, results=None, emit_mode=None, leaked=False,
              table_grounding=None, table_cells_checked=0, table_cells_matched=0,
-             duration_ms=None, delete_from_id=None):
+             duration_ms=None, exhaustion=None, delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -524,14 +530,15 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
             "ok, cached, cost, figure_grounding, figure_derivation, "
             "emit_mode, answer_leaked, table_grounding, table_cells_checked, "
-            "table_cells_matched, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "table_cells_matched, exhaustion, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, int(ok), int(cached),
              float(cost), figure_grounding or None, figure_derivation or None,
              emit_mode or None, int(bool(leaked)), table_grounding or None,
-             int(table_cells_checked), int(table_cells_matched), now))
+             int(table_cells_checked), int(table_cells_matched),
+             exhaustion or None, now))
         con.commit()
         return user_msg_id, assistant_id
     finally:

@@ -314,6 +314,22 @@ def test_migration_26_adds_messages_duration_ms():
     assert row[0] is None, row  # nullable, no backfill
 
 
+def test_migration_27_adds_usage_log_exhaustion_column():
+    # Tool-budget exhaustion status (app/llm.py, S5): NULL = didn't exhaust;
+    # 'answered' = exhausted but shipped a synthesis; 'degraded' = exhausted and the
+    # grounding gate replaced fabricated numbers. Drives Admin -> Usage "Exhausted".
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 26])
+    assert "exhaustion" not in _cols(con, "usage_log"), _cols(con, "usage_log")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "exhaustion" in _cols(con, "usage_log"), _cols(con, "usage_log")
+    # Nullable, no backfill: a predating row (and every non-exhausted turn) is NULL.
+    con.execute("INSERT INTO usage_log(user_id, question, created_at) VALUES (1, 'q', 0)")
+    row = con.execute("SELECT exhaustion FROM usage_log").fetchone()
+    assert row[0] is None, row
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -577,157 +593,860 @@ def _current_fingerprint():
 # structure, so whitespace/formatting of this literal is irrelevant.
 EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
 {
+  "indexes": {
+    "idx_access_requests_canon_email": {
+      "columns": [
+        "canon_email"
+      ],
+      "table": "access_requests",
+      "unique": 0
+    },
+    "idx_access_requests_canon_expr": {
+      "columns": [
+        null
+      ],
+      "table": "access_requests",
+      "unique": 0
+    },
+    "idx_access_requests_email": {
+      "columns": [
+        "email"
+      ],
+      "table": "access_requests",
+      "unique": 0
+    },
+    "idx_auth_attempts_created": {
+      "columns": [
+        "created_at"
+      ],
+      "table": "auth_request_attempts",
+      "unique": 0
+    },
+    "ix_conv_user": {
+      "columns": [
+        "user_id",
+        "updated_at"
+      ],
+      "table": "conversations",
+      "unique": 0
+    },
+    "ix_msg_conv": {
+      "columns": [
+        "conversation_id",
+        "id"
+      ],
+      "table": "messages",
+      "unique": 0
+    },
+    "ix_usage_time": {
+      "columns": [
+        "created_at"
+      ],
+      "table": "usage_log",
+      "unique": 0
+    }
+  },
   "tables": {
     "access_requests": [
-      ["canon_email", "TEXT", 0, null, 0],
-      ["created_at", "REAL", 1, null, 0],
-      ["denied_at", "REAL", 0, null, 0],
-      ["email", "TEXT", 1, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["reason", "TEXT", 0, null, 0],
-      ["status", "TEXT", 1, "'pending'", 0]
+      [
+        "canon_email",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "denied_at",
+        "REAL",
+        0,
+        null,
+        0
+      ],
+      [
+        "email",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "reason",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "status",
+        "TEXT",
+        1,
+        "'pending'",
+        0
+      ]
     ],
     "admin_log_seen": [
-      ["email", "TEXT", 0, null, 1],
-      ["seen_ts", "REAL", 1, null, 0]
+      [
+        "email",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "seen_ts",
+        "REAL",
+        1,
+        null,
+        0
+      ]
     ],
     "allowlist": [
-      ["added_at", "REAL", 1, null, 0],
-      ["added_by", "TEXT", 0, null, 0],
-      ["email", "TEXT", 0, null, 1],
-      ["note", "TEXT", 0, null, 0]
+      [
+        "added_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "added_by",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "email",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "note",
+        "TEXT",
+        0,
+        null,
+        0
+      ]
     ],
     "auth_request_attempts": [
-      ["created_at", "REAL", 1, null, 0],
-      ["email", "TEXT", 1, null, 0],
-      ["ip", "TEXT", 1, null, 0]
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "email",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "ip",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
     ],
     "conversations": [
-      ["created_at", "REAL", 1, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["title", "TEXT", 0, null, 0],
-      ["updated_at", "REAL", 1, null, 0],
-      ["user_id", "INTEGER", 1, null, 0]
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "title",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "updated_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "user_id",
+        "INTEGER",
+        1,
+        null,
+        0
+      ]
     ],
     "import_jobs": [
-      ["created_at", "REAL", 1, null, 0],
-      ["created_by", "TEXT", 0, null, 0],
-      ["filename", "TEXT", 0, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["log", "TEXT", 0, null, 0],
-      ["progress", "TEXT", 0, null, 0],
-      ["report", "TEXT", 0, null, 0],
-      ["status", "TEXT", 1, "'pending'", 0],
-      ["updated_at", "REAL", 1, null, 0]
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_by",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "filename",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "log",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "progress",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "report",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "status",
+        "TEXT",
+        1,
+        "'pending'",
+        0
+      ],
+      [
+        "updated_at",
+        "REAL",
+        1,
+        null,
+        0
+      ]
     ],
     "login_tokens": [
-      ["email", "TEXT", 1, null, 0],
-      ["expires_at", "REAL", 1, null, 0],
-      ["token_hash", "TEXT", 0, null, 1],
-      ["used_at", "REAL", 0, null, 0]
+      [
+        "email",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "expires_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "token_hash",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "used_at",
+        "REAL",
+        0,
+        null,
+        0
+      ]
     ],
     "messages": [
-      ["clarify", "TEXT", 0, null, 0],
-      ["content", "TEXT", 1, null, 0],
-      ["conversation_id", "INTEGER", 1, null, 0],
-      ["created_at", "REAL", 1, null, 0],
-      ["duration_ms", "INTEGER", 0, null, 0],
-      ["feedback", "INTEGER", 0, null, 0],
-      ["figure", "TEXT", 0, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["model_used", "TEXT", 0, null, 0],
-      ["results", "TEXT", 0, null, 0],
-      ["role", "TEXT", 1, null, 0],
-      ["sql_log", "TEXT", 0, null, 0],
-      ["suggestions", "TEXT", 0, null, 0],
-      ["thinking", "TEXT", 0, null, 0],
-      ["tokens", "INTEGER", 0, null, 0]
+      [
+        "clarify",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "content",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "conversation_id",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "duration_ms",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "feedback",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "figure",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "model_used",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "results",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "role",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "sql_log",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "suggestions",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "thinking",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "tokens",
+        "INTEGER",
+        0,
+        null,
+        0
+      ]
     ],
     "meta": [
-      ["key", "TEXT", 0, null, 1],
-      ["value", "TEXT", 0, null, 0]
+      [
+        "key",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "value",
+        "TEXT",
+        0,
+        null,
+        0
+      ]
     ],
     "query_cache": [
-      ["answer_md", "TEXT", 0, null, 0],
-      ["created_at", "REAL", 1, null, 0],
-      ["data_version", "INTEGER", 1, null, 0],
-      ["embedding", "BLOB", 0, null, 0],
-      ["figure", "TEXT", 0, null, 0],
-      ["final_sql", "TEXT", 0, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["question", "TEXT", 1, null, 0],
-      ["suggestions", "TEXT", 0, null, 0]
+      [
+        "answer_md",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "data_version",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "embedding",
+        "BLOB",
+        0,
+        null,
+        0
+      ],
+      [
+        "figure",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "final_sql",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "question",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "suggestions",
+        "TEXT",
+        0,
+        null,
+        0
+      ]
     ],
     "sessions": [
-      ["created_at", "REAL", 1, null, 0],
-      ["expires_at", "REAL", 1, null, 0],
-      ["token_hash", "TEXT", 0, null, 1],
-      ["user_id", "INTEGER", 1, null, 0]
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "expires_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "token_hash",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "user_id",
+        "INTEGER",
+        1,
+        null,
+        0
+      ]
     ],
     "skills": [
-      ["canonical_sql", "TEXT", 1, null, 0],
-      ["created_at", "REAL", 1, null, 0],
-      ["created_by", "TEXT", 0, null, 0],
-      ["downvotes", "INTEGER", 1, "0", 0],
-      ["embedding", "BLOB", 0, null, 0],
-      ["headline", "TEXT", 0, null, 0],
-      ["hits", "INTEGER", 1, "0", 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["lesson", "TEXT", 0, null, 0],
-      ["notes", "TEXT", 0, null, 0],
-      ["question", "TEXT", 1, null, 0],
-      ["tags", "TEXT", 0, null, 0],
-      ["upvotes", "INTEGER", 1, "0", 0],
-      ["verified", "INTEGER", 1, "0", 0]
+      [
+        "canonical_sql",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_by",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "downvotes",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "embedding",
+        "BLOB",
+        0,
+        null,
+        0
+      ],
+      [
+        "headline",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "hits",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "lesson",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "notes",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "question",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "tags",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "upvotes",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "verified",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ]
     ],
     "usage_log": [
-      ["answer_leaked", "INTEGER", 1, "0", 0],
-      ["cached", "INTEGER", 1, "0", 0],
-      ["cached_prompt_tokens", "INTEGER", 1, "0", 0],
-      ["completion_tokens", "INTEGER", 0, null, 0],
-      ["cost", "REAL", 1, "0", 0],
-      ["created_at", "REAL", 1, null, 0],
-      ["emit_mode", "TEXT", 0, null, 0],
-      ["escalated", "INTEGER", 0, null, 0],
-      ["figure_derivation", "TEXT", 0, null, 0],
-      ["figure_grounding", "TEXT", 0, null, 0],
-      ["first_call_cached_prompt_tokens", "INTEGER", 1, "0", 0],
-      ["first_call_prompt_tokens", "INTEGER", 1, "0", 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["model_used", "TEXT", 0, null, 0],
-      ["ok", "INTEGER", 0, null, 0],
-      ["prompt_tokens", "INTEGER", 0, null, 0],
-      ["question", "TEXT", 0, null, 0],
-      ["table_cells_checked", "INTEGER", 1, "0", 0],
-      ["table_cells_matched", "INTEGER", 1, "0", 0],
-      ["table_grounding", "TEXT", 0, null, 0],
-      ["user_id", "INTEGER", 0, null, 0]
+      [
+        "answer_leaked",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "cached",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "cached_prompt_tokens",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "completion_tokens",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "cost",
+        "REAL",
+        1,
+        "0",
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "emit_mode",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "escalated",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "exhaustion",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "figure_derivation",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "figure_grounding",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "first_call_cached_prompt_tokens",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "first_call_prompt_tokens",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "model_used",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "ok",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "prompt_tokens",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "question",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "table_cells_checked",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "table_cells_matched",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "table_grounding",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "user_id",
+        "INTEGER",
+        0,
+        null,
+        0
+      ]
     ],
     "users": [
-      ["created_at", "REAL", 1, null, 0],
-      ["email", "TEXT", 1, null, 0],
-      ["id", "INTEGER", 0, null, 1],
-      ["is_admin", "INTEGER", 1, "0", 0],
-      ["last_login", "REAL", 0, null, 0]
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "email",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "is_admin",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "last_login",
+        "REAL",
+        0,
+        null,
+        0
+      ]
     ],
     "year_provenance": [
-      ["end_year", "INTEGER", 1, null, 0],
-      ["release", "TEXT", 0, null, 0],
-      ["source", "TEXT", 0, null, 0],
-      ["start_year", "INTEGER", 0, null, 1],
-      ["updated_at", "REAL", 1, null, 0]
+      [
+        "end_year",
+        "INTEGER",
+        1,
+        null,
+        0
+      ],
+      [
+        "release",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "source",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "start_year",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "updated_at",
+        "REAL",
+        1,
+        null,
+        0
+      ]
     ]
-  },
-  "indexes": {
-    "idx_access_requests_canon_email":
-      {"columns": ["canon_email"], "table": "access_requests", "unique": 0},
-    "idx_access_requests_canon_expr": {"columns": [null], "table": "access_requests", "unique": 0},
-    "idx_access_requests_email": {"columns": ["email"], "table": "access_requests", "unique": 0},
-    "idx_auth_attempts_created":
-      {"columns": ["created_at"], "table": "auth_request_attempts", "unique": 0},
-    "ix_conv_user": {"columns": ["user_id", "updated_at"], "table": "conversations", "unique": 0},
-    "ix_msg_conv": {"columns": ["conversation_id", "id"], "table": "messages", "unique": 0},
-    "ix_usage_time": {"columns": ["created_at"], "table": "usage_log", "unique": 0}
   }
 }
 """)
@@ -811,6 +1530,8 @@ def run():
           test_migration_25_adds_usage_log_table_grounding_columns)
     check("migration 26 adds messages.duration_ms (nullable)",
           test_migration_26_adds_messages_duration_ms)
+    check("migration 27 adds usage_log.exhaustion (nullable)",
+          test_migration_27_adds_usage_log_exhaustion_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

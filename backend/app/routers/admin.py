@@ -1104,7 +1104,16 @@ def usage(since: float | None = None, until: float | None = None,
             # unchecked turns carry 0 counts, so summing self-excludes them (0/0)
             # exactly like the figure rate's IN-set filter above.
             "COALESCE(SUM(table_cells_checked),0) AS table_cells_checked, "
-            "COALESCE(SUM(table_cells_matched),0) AS table_cells_matched "
+            "COALESCE(SUM(table_cells_matched),0) AS table_cells_matched, "
+            # Tool-budget exhaustion (app/llm.py, S5): how many turns burned the
+            # whole step budget (a health signal for whether the ceiling is high
+            # enough), and of those how many were DEGRADED — their wholly-ungrounded
+            # numbers replaced with an honest "couldn't finish". NULL = didn't
+            # exhaust, so excluded from both counts.
+            "COALESCE(SUM(CASE WHEN exhaustion IS NOT NULL THEN 1 ELSE 0 END),0) "
+            "AS exhausted_turns, "
+            "COALESCE(SUM(CASE WHEN exhaustion='degraded' THEN 1 ELSE 0 END),0) "
+            "AS degraded_turns "
             f"FROM usage_log {win}", args).fetchone()
         # Bucket the series in the VIEWER's timezone. SQLite's strftime can't do
         # IANA zones (only UTC / process-local), so aggregate in Python with

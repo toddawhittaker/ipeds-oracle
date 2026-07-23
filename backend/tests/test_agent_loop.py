@@ -276,6 +276,121 @@ def test_exhaustion_critic_ok_ships_draft_unchanged():
         "no correction round → sql_log unchanged from the main loop"
 
 
+# --- S5 grounding gate + leaked tool-markup scrub ------------------------------
+# chat/32: an exhausted turn fabricated a whole answer table (0/15 cells grounded)
+# and leaked raw DeepSeek tool-call markup into the prose. The gate degrades a
+# WHOLLY-ungrounded exhaustion answer to an honest "couldn't finish"; the scrub
+# strips the markup. Both are deterministic — no LLM.
+
+_DSML_BLOB = (
+    'Here is what I found.\n<｜｜DSML｜｜tool_calls>\n'
+    '<｜｜DSML｜｜invoke name="run_sql">'
+    '<｜｜DSML｜｜parameter name="sql" string="true">SELECT 1</｜｜DSML｜｜parameter>'
+    '</｜｜DSML｜｜invoke>\n</｜｜DSML｜｜tool_calls>')
+
+
+def test_strip_tool_markup_removes_a_wellformed_block():
+    clean, removed = llm._strip_tool_markup(_DSML_BLOB)
+    assert removed is True, "the DSML block must be recognized and removed"
+    assert "DSML" not in clean, clean
+    assert clean == "Here is what I found.", repr(clean)
+
+
+def test_strip_tool_markup_removes_an_unclosed_trailing_block():
+    # A stream cut can truncate the block before its closing tag.
+    truncated = 'Partial answer.\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="run_sql">SELE'
+    clean, removed = llm._strip_tool_markup(truncated)
+    assert removed is True and "DSML" not in clean and clean == "Partial answer.", repr(clean)
+
+
+def test_strip_tool_markup_leaves_clean_prose_untouched():
+    prose = "A normal answer with no tool markup at all."
+    assert llm._strip_tool_markup(prose) == (prose, False)
+
+
+def _res_with(**kw):
+    res = llm.AgentResult()
+    for k, v in kw.items():
+        setattr(res, k, v)
+    return res
+
+
+def test_s5_fabricated_only_on_wholly_ungrounded_evidence():
+    g = llm.grounding
+    # An unmatched table (0 cells grounded) — chat/32's exact signal.
+    assert llm._s5_fabricated(_res_with(table_grounding=g.TABLE_UNMATCHED)) is True
+    # An ungrounded hero figure with no grounded table to lean on.
+    assert llm._s5_fabricated(
+        _res_with(figure_grounding=g.UNGROUNDED, table_grounding=g.NO_TABLE)) is True
+    # ...but NOT when a table DID ground (the figure alone doesn't degrade it).
+    assert llm._s5_fabricated(
+        _res_with(figure_grounding=g.UNGROUNDED, table_grounding=g.TABLE_MATCHED)) is False
+    # A partial table (some cells matched) is a mostly-correct answer — not degraded.
+    assert llm._s5_fabricated(_res_with(table_grounding=g.TABLE_PARTIAL)) is False
+    # An already-honest non-answer (no numbers to ground) is left alone.
+    assert llm._s5_fabricated(
+        _res_with(table_grounding=g.NO_TABLE, figure_grounding=g.NO_FIGURE)) is False
+    # No results to check against → unchecked, not a fabrication.
+    assert llm._s5_fabricated(_res_with(table_grounding=g.UNCHECKED)) is False
+
+
+def _exhaust_then_synthesize(answer_text):
+    """fake_chat: burn the whole tool budget (every tools-present call returns a
+    run_sql tool call), then return `answer_text` on the tools-disabled synthesis."""
+    async def fake_chat(client, model, messages, tools=None):
+        if tools is None:
+            return _text_response(answer_text)
+        return _tool_call_response()
+    return fake_chat
+
+
+def _run_exhausted_with_stamp(answer_text, table_grounding):
+    """Run an exhausting turn whose synthesis is `answer_text`, forcing the table
+    grounding verdict (isolates the gate from real QueryResult reconciliation).
+    The critic is stubbed OK so no correction round runs."""
+    llm._chat = _exhaust_then_synthesize(answer_text)
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+
+    def stamp(res):
+        res.table_grounding = table_grounding
+        res.table_cells_checked = 1
+        res.table_cells_matched = 0 if table_grounding == llm.grounding.TABLE_UNMATCHED else 1
+
+    async def ok_review(question, sql_log, answer, *a, **k):
+        return Critique(ok=True)
+    orig_review, orig_stamp = llm.critic.review, llm._stamp_table_grounding
+    llm.critic.review, llm._stamp_table_grounding = ok_review, stamp
+    try:
+        return _run("a genuinely multi-table question")
+    finally:
+        llm.critic.review, llm._stamp_table_grounding = orig_review, orig_stamp
+
+
+def test_exhaustion_answer_with_ungrounded_table_is_degraded():
+    """THE chat/32 fix: an exhausted turn whose table grounds 0/N is a fabrication;
+    the gate replaces its invented numbers with the honest degrade and drops the
+    figure — rather than shipping numbers no query produced."""
+    res = _run_exhausted_with_stamp(
+        "The trend:\n\n| Year | Awards |\n|---|---|\n| 2024 | 999 |\n",
+        llm.grounding.TABLE_UNMATCHED)
+    assert res.exhausted is True, "the turn burned its budget"
+    assert res.exhaustion_degraded is True, "a 0/N-grounded exhaustion table must degrade"
+    assert res.answer == llm._EXHAUSTION_DEGRADE, res.answer
+    assert res.figure is None and res.suggestions is None, "no fabricated figure/chips ship"
+    assert "999" not in res.answer, "the invented number must not survive"
+
+
+def test_exhaustion_answer_that_grounds_ships_unchanged():
+    """The gate is scoped to fabrication: an exhausted turn whose table DOES ground
+    ships its answer as-is, only flagged `exhausted` for the health count."""
+    res = _run_exhausted_with_stamp(
+        "Grounded:\n\n| Year | Awards |\n|---|---|\n| 2024 | 999 |\n",
+        llm.grounding.TABLE_MATCHED)
+    assert res.exhausted is True, "still records that the budget was hit"
+    assert res.exhaustion_degraded is False, "a grounded exhaustion answer is not degraded"
+    assert "999" in res.answer, res.answer
+
+
 async def _collect(agen):
     out = []
     async for e in agen:
@@ -1410,6 +1525,18 @@ def run():
           test_exhaustion_correction_rebuttal_without_requery_reverts_to_draft)
     check("S5: exhaustion critic OK ships the draft unchanged",
           test_exhaustion_critic_ok_ships_draft_unchanged)
+    check("_strip_tool_markup removes a well-formed DSML block",
+          test_strip_tool_markup_removes_a_wellformed_block)
+    check("_strip_tool_markup removes an unclosed trailing block",
+          test_strip_tool_markup_removes_an_unclosed_trailing_block)
+    check("_strip_tool_markup leaves clean prose untouched",
+          test_strip_tool_markup_leaves_clean_prose_untouched)
+    check("_s5_fabricated fires only on wholly-ungrounded evidence",
+          test_s5_fabricated_only_on_wholly_ungrounded_evidence)
+    check("S5 gate: an ungrounded exhaustion table is degraded",
+          test_exhaustion_answer_with_ungrounded_table_is_degraded)
+    check("S5 gate: a grounded exhaustion answer ships unchanged",
+          test_exhaustion_answer_that_grounds_ships_unchanged)
     check("conversation history is fed into the messages", test_history_is_included_in_messages)
     check("a reasoning field yields a 'thinking' event", test_reasoning_field_yields_thinking_event)
     check("malformed tool-call JSON args don't crash the loop",

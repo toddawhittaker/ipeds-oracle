@@ -111,3 +111,17 @@ export function leakLabel(totals) {
   const pct = Math.round((num(t.structured_turns) / turns) * 100);
   return `${num(t.leaked_turns)}/${turns} leaked · ${pct}% structured`;
 }
+
+// EXHAUSTION label: the sub-label for the "Exhausted" count (a count, not a rate —
+// the value itself is exhausted_turns). Exhaustion = a turn burned its whole
+// tool-call budget and fell to the best-effort synthesis; a health signal for
+// whether the step ceiling is high enough. When any of those were DEGRADED (their
+// wholly-ungrounded numbers replaced with an honest "couldn't finish"), the label
+// carries that breakdown — that's the count that matters most, a fabrication caught.
+// Bare "Exhausted" while none have been degraded (including an empty window).
+export function exhaustionLabel(totals) {
+  const t = totals || {};
+  const degraded = num(t.degraded_turns);
+  if (degraded <= 0) return "Exhausted";
+  return `Exhausted · ${degraded} degraded`;
+}

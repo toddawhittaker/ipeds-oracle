@@ -319,7 +319,29 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   actually be re-queried and fixed. Re-enabling tools is what makes `requeried`
   meaningful again there — the SAME anti-leak gate applies, so a rebuttal or a
   confirm-only re-query reverts to the clean draft. Pinned by the `S5:` cases in
-  `backend/tests/test_agent_loop.py`.
+  `backend/tests/test_agent_loop.py`. **The exhaustion path also carries a
+  deterministic GROUNDING GATE and a raised ceiling** (measured live from a real
+  fabrication — chat/32 invented a whole 0/15-cell answer table at the old cap):
+  **(1)** `llm_max_tool_iters` **defaults to 20** (`LLM_MAX_TOOL_ITERS`, was 12) —
+  a genuine multi-table question needs ~15-17 rounds to converge, and cutting it
+  off mid-progress is what forced the confabulation; higher only costs on the hard
+  turns that use the rounds, each reusing the cached prefix. **(2)** After the
+  synthesis + critic + grounding stamps, `_s5_fabricated(res)` degrades the answer
+  to an honest **`_EXHAUSTION_DEGRADE`** message (dropping any fabricated
+  figure/chips) when its numbers are WHOLLY ungrounded (`table_grounding=unmatched`,
+  or an `ungrounded` figure with no grounded table) — a `partial`/`no_table`/
+  `unchecked` answer is left alone. This is **S5-only** on purpose: the normal path
+  keeps shipping first-pass ungrounded figures observe-only (#163); acting on the
+  verdict is scoped to the highest-risk path (a sibling to `retry:suppressed`).
+  **(3)** `_strip_tool_markup` scrubs leaked DeepSeek tool-call markup
+  (`<｜｜DSML｜｜tool_calls>…`, which the gate can't catch — it parses to `no_table`)
+  from BOTH terminators. Exhaustion is recorded on `usage_log.exhaustion`
+  (**migration 27**: `answered`/`degraded`/NULL) and surfaced as the **Exhausted**
+  stat on Admin → Usage (`exhaustionLabel`, with a `· N degraded` breakdown).
+  Reasoning-off synthesis and forced `emit_answer` were BOTH measured and rejected
+  (reasoning-off makes DeepSeek dump the raw tool markup; forced emit yields an
+  empty answer when there's no data). Pinned by the `S5 gate:` cases in
+  `test_agent_loop.py` + `test_admin_router.py` + `test_migrations.py`.
 - **Structured emission** (`config.structured_emission_enabled`, PR-1 of the
   "structured output, not fenced text" work — **default OFF, dark-shipped**).
   The durable, model-agnostic fix behind #167's `_normalize_misfenced_blocks`
@@ -746,7 +768,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 and **deliberately never verbatim question text**. `usage_log.question` is still
 written, but echoing it back would be an attributable privacy leak (the
 caller-controlled `since`/`until` narrows the window; `top_users` names the user).
-A sentinel test in `backend/tests/test_admin_router.py` pins this.
+A sentinel test in `backend/tests/test_admin_router.py` pins this. The stat cards
+are the totals + the observe-only integrity/telemetry rates: **Grounded figures**,
+**Grounded cells**, **Answer leaks**, and **Exhausted** — a COUNT (not a rate) of
+turns that burned the whole tool budget (`usage_log.exhaustion` NOT NULL), with a
+`· N degraded` sub-label for those the S5 grounding gate degraded (see the agent-loop
+exhaustion bullet above). A rising Exhausted count is the signal to lift
+`LLM_MAX_TOOL_ITERS`.
 
 **Timezone + per-turn timing (viewer's browser tz EVERYWHERE — see
 [[date-formatting-preference]]).** The `/usage` **series buckets in the VIEWER's

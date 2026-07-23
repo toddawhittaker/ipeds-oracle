@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     model_default: str = Field(default="deepseek/deepseek-v4-flash")
     model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
     llm_temperature: float = Field(default=0.0)
-    llm_max_tool_iters: int = Field(default=12)
+    llm_max_tool_iters: int = Field(default=20)
     # Fallback token prices (USD per 1,000,000 tokens) for the Usage spend total.
     # Spend normally uses the provider-reported per-request cost (OpenRouter's
     # usage.cost). A provider that doesn't report it leaves cost at 0 → set these to
