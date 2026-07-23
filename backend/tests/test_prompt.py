@@ -201,6 +201,22 @@ def test_figure_step_is_unconditionally_required_like_followups():
     assert "ONLY in these three" in step6, step6[-600:]
 
 
+def test_aggregation_check_instruction_covers_truncation():
+    """S4 reuses the ⚠ AGGREGATION CHECK marker for a TRUNCATED result (a cut
+    page summed as a total is a wrong number with perfect-looking SQL). The
+    step-3 remediation must name the truncated/incomplete case, or a future
+    prompt edit could silently drop it while run_sql still emits the marker —
+    leaving the model told 'double-count' for a truncation it should fix by
+    aggregating in SQL."""
+    text = prompt.INSTRUCTIONS
+    assert "⚠ AGGREGATION CHECK" in text, "the blocking marker instruction is gone"
+    step3 = text.split("\n3.", 1)[1].split("\n4.", 1)[0]
+    low = step3.lower()
+    assert "⚠ AGGREGATION CHECK" in step3, step3
+    assert "truncat" in low or "incomplete" in low, (
+        "step 3 must name the truncated/incomplete case for the ⚠ marker")
+
+
 def run():
     check("_years_fact() names the actual installed years/count/most-recent",
           test_years_fact_names_actual_years)
@@ -216,6 +232,8 @@ def run():
           test_build_system_prompt_includes_years_section_before_schema_guide)
     check("SCHEMA.md still documents real IPEDS-history facts (e.g. sfa 2024-25 merge)",
           test_schema_md_still_has_ipeds_history_facts)
+    check("step 3's ⚠ AGGREGATION CHECK instruction covers truncation (S4)",
+          test_aggregation_check_instruction_covers_truncation)
     check("step 6 requires the figure unconditionally (0/9-follow-ups regression)",
           test_figure_step_is_unconditionally_required_like_followups)
     print()

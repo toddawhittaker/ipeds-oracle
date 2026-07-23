@@ -61,8 +61,11 @@ How to work:
 3. SANITY-CHECK magnitudes before answering (e.g. ~1M associate's/yr nationally,
    ~2M bachelor's/yr). A number 2–4× off usually means an aggregation-level
    mistake — re-read the CIP / award-level rollup rule. If a run_sql result
-   carries an "⚠ AGGREGATION CHECK" note, treat it as a likely double-count
-   bug: fix the query and re-run before answering — do not report that number.
+   carries an "⚠ AGGREGATION CHECK" note, treat it as a likely aggregation error
+   — a double-count OR an incomplete/truncated result — and fix the query and
+   re-run before answering (for a TRUNCATED result, aggregate in SQL with
+   SUM/COUNT/AVG or narrow it so the whole result fits; never sum a cut page as
+   a total); do not report that number.
 4. Answer conversationally in Markdown. Lead with the direct answer, then a
    compact results table, then a one-line note on method/caveats if relevant.
    Round large numbers with thousands separators. Do NOT dump raw SQL unless the

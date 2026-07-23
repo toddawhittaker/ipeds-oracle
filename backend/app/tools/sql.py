@@ -224,6 +224,22 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
             done.set()
         con.close()
 
+    # Truncation is an AGGREGATION foot-gun, not just a display cap: summing/
+    # counting/averaging a CUT page as a TOTAL yields a wrong number whose SQL
+    # looks perfect (and which grounding would "validate" — the same partial
+    # rows recompute the same wrong total). Raise the SAME ⚠ AGGREGATION CHECK
+    # marker the rollup lints use (sql.py above) so prompt step 3's "treat as
+    # blocking, fix and re-run" instruction fires on it too. Distinct from the
+    # "No LIMIT…" note above, which flags a missing LIMIT whether or not the
+    # result actually overflowed. Appended here, not in the pre-flight block,
+    # because `truncated` is only known after execution.
+    if truncated:
+        notes.append(
+            f"⚠ AGGREGATION CHECK (truncated): this result was CUT to {limit} rows "
+            "— it is NOT the full result set. Do NOT sum/count/average these rows "
+            "as a TOTAL. Aggregate in SQL (SUM/COUNT/AVG), add a tighter filter, "
+            "or bound the query so the whole result fits, then re-run.")
+
     return QueryResult(
         columns=columns, rows=rows, truncated=truncated,
         row_count=len(rows), sql=cleaned, notes=notes,
