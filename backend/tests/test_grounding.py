@@ -447,6 +447,45 @@ def test_a_legitimately_computed_column_grounds_not_false_alarms():
     assert got.status == grounding.TABLE_MATCHED, got
 
 
+def test_a_measure_cell_matching_only_a_dimension_column_is_unmatched():
+    # ANOMALY 1 (observed live: counts "3"/"8" grounded against `awlevel`): a table
+    # MEASURE cell must be verified by a MEASURE column, never by a code/dimension
+    # column it merely collides with. Here 7 appears only in the awlevel DIMENSION
+    # column (not in the `awards` measure), so the cell must read unmatched — NOT
+    # grounded against the code. Without the fix _reconcile_value matched awlevel.
+    awlevel_only = result(["awlevel", "awards"], [(3, 1250), (7, 1100)])
+    md = "| Level | Count |\n| --- | --- |\n| Doctoral | 7 |\n"
+    got = grounding.check_table(md, [awlevel_only])
+    assert got.status == grounding.TABLE_UNMATCHED, got
+    assert got.cells_checked == 1 and got.cells_matched == 0, got
+
+
+def test_a_real_small_count_still_grounds_via_the_measure_column():
+    # The fix must lose no legitimate match: a small count that IS a real measure
+    # still grounds — via the MEASURE column, not the dimension it also equals.
+    # 3 appears in BOTH awlevel (dimension) and grads (measure); measure-only
+    # reconciliation must pick grads, so the cell grounds for the right reason.
+    both = result(["awlevel", "grads"], [(3, 3), (5, 12)])
+    md = "| Level | Grads |\n| --- | --- |\n| Doctoral | 3 |\n"
+    got = grounding.check_table(md, [both])
+    assert got.status == grounding.TABLE_MATCHED, got
+    # Direct kernel assertion: measure-only reconciliation lands on `grads`.
+    match = grounding._reconcile_value(3.0, "3", [both], allow_dimension=False)
+    assert match is not None and match[1].column == "grads", match
+
+
+def test_a_figure_that_is_a_dimension_value_still_grounds_exact():
+    # REGRESSION GUARD for the figure path: `allow_dimension` defaults True, so a
+    # hero figure that legitimately IS a year/code still grounds exact against the
+    # dimension column (unchanged by the table-path fix). Pairs with
+    # test_diff_stays_barred_on_a_dimension_column (which guards the aggregation
+    # bar); this guards the intended EXACT-on-dimension for figures.
+    years_only = result(["year"], [(2021,), (2022,), (2023,), (2024,), (2025,)])
+    got = grounding.check_figure({"value": "2024", "label": "Latest year covered"},
+                                 [years_only])
+    assert got.status == grounding.EXACT, got
+
+
 def test_prose_with_no_table_is_no_table():
     got = grounding.check_table("Ohio State University is in Columbus, OH.", [YEARS])
     assert got.status == grounding.NO_TABLE, got
@@ -543,6 +582,12 @@ def run():
           test_a_display_rounded_cell_still_matches)
     check("a legitimately computed column grounds (full-reproduction rule)",
           test_a_legitimately_computed_column_grounds_not_false_alarms)
+    check("a measure cell matching only a dimension column is unmatched (anomaly 1)",
+          test_a_measure_cell_matching_only_a_dimension_column_is_unmatched)
+    check("a real small count still grounds via the measure column",
+          test_a_real_small_count_still_grounds_via_the_measure_column)
+    check("a figure that IS a dimension value still grounds exact (figure path)",
+          test_a_figure_that_is_a_dimension_value_still_grounds_exact)
     check("prose with no table is no_table", test_prose_with_no_table_is_no_table)
     check("a table with no results is unchecked with zero counts",
           test_a_table_with_no_results_is_unchecked_with_zero_counts)

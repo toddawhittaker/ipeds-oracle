@@ -272,12 +272,16 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   down with a model-added Rank column that was never in the DB (the live-test
   regression: a perfectly-transcribed top-5 table scored 5/10 because its five
   rank ordinals can't ground). Each graded cell is reconciled against THIS turn's
-  retained results via the SAME kernel as the figure — extracted into the shared
-  `_reconcile_value` (verbatim / display-rounded / derivable, dimension bar
-  intact) — so a legitimately **computed measure** (a share/%-change column) still
-  grounds instead of false-alarming, at the cost of the figure's known
-  coincidental-match bias (acceptable observe-only: `messages.results` is
-  persisted, so an all-columns variant is recomputable offline). Records a
+  retained results via the shared `_reconcile_value` kernel (verbatim /
+  display-rounded / derivable) — but with **`allow_dimension=False`**: a measure
+  cell is verified only by a MEASURE result-column, never by a code/dimension
+  column it merely collides with (the live-observed anomaly: a small count "3"
+  spuriously grounding against an `awlevel` 3 — barred now; the figure path keeps
+  `allow_dimension=True`, since a headline can legitimately BE a year/code). A
+  legitimately **computed measure** (a share/%-change column) still grounds
+  instead of false-alarming, at the cost of the figure's known coincidental-match
+  bias (acceptable observe-only: `messages.results` is persisted, so an
+  all-columns variant is recomputable offline). Records a
   per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked`) +
   numeric-cell counts on
   `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
