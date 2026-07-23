@@ -267,7 +267,7 @@ def test_in_scope_reaches_agent():
 
     called = {"hit": False}
 
-    async def fake_agent(question, *, history=None, skills_block=""):
+    async def fake_agent(question, *, history=None, skills_block="", prior_results=None):
         called["hit"] = True
         yield {"type": "answer", "text": "ok"}
         from app.llm import AgentResult

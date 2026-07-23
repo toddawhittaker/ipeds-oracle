@@ -127,14 +127,20 @@ async def retry_missing_figure(question: str, answer: str) -> _FigureRetry:
 _HAS_DIGIT_RE = re.compile(r"\d")
 
 
-def _figure_required(res: AgentResult, answer: str) -> bool:
+def _figure_required(res: AgentResult, answer: str, has_prior: bool = False) -> bool:
     """True when a data-backed answer SHOULD have led with a hero figure but has
     none — the trigger for a retry. The digit test IS the enumerable skip: a plain
     lookup (address/URL/accreditor) or a yes/no carries no number and legitimately
     needs no figure, matching the SKIP rule in prompt step 6 and _stamp_grounding's
-    no_figure classification."""
+    no_figure classification.
+
+    `has_prior` = there are retained results from EARLIER turns to ground against.
+    A follow-up that recites a number without re-querying (`sql_log` empty) is
+    still figure-eligible when prior results exist — that's the whole point of
+    conversation-scoped grounding, and it closes the no-SQL 'no_figure' gap."""
     return (res.figure is None and res.error is None and res.clarify is None
-            and bool(res.sql_log) and bool(_HAS_DIGIT_RE.search(answer or "")))
+            and (bool(res.sql_log) or has_prior)
+            and bool(_HAS_DIGIT_RE.search(answer or "")))
 
 
 def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
@@ -156,9 +162,32 @@ def _stamp_grounding(res: AgentResult, raw_answer: str = "") -> None:
         res.figure_grounding = grounding.MALFORMED
         res.figure_derivation = ""
         return
-    check = grounding.check_figure(res.figure, res.results)
+    ground_results, n_current = _ground_results(res)
+    check = grounding.check_figure(res.figure, ground_results)
     res.figure_grounding = check.status
-    res.figure_derivation = check.derivation.describe() if check.derivation else ""
+    res.figure_derivation = _derivation_label(check, n_current)
+
+
+def _ground_results(res: AgentResult) -> tuple[list, int]:
+    """The result list a figure is checked against: THIS turn's results FIRST
+    (so a figure from the current query grounds against the current query), then
+    the borrowed prior-turn results. Returns (combined, n_current) so the caller
+    can tell which range a match fell in — see _derivation_label."""
+    current = res.results or []
+    return current + (res.prior_results or []), len(current)
+
+
+def _derivation_label(check, n_current: int, retried: bool = False) -> str:
+    """Format the recorded figure_derivation, marking provenance the way the
+    metric consumes it: `retry:` when the figure was recovered by a forced retry,
+    `ctx:` when it was grounded against an EARLIER turn's results (matched index
+    beyond this turn's own). Both compose (`retry:ctx:sum(q3.x)`)."""
+    if check.derivation is None:
+        return ""
+    prefix = ("retry:" if retried else "")
+    if check.derivation.result_index >= n_current:
+        prefix += "ctx:"
+    return prefix + check.derivation.describe()
 
 
 async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> None:
@@ -178,7 +207,8 @@ async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> N
     first pass produced no figure. Mutates `res` (figure, grounding, tokens/cost);
     the existing `if res.figure:` yield downstream emits the event. Fails open via
     retry_missing_figure, so a retry outage leaves the answer exactly as it was."""
-    if not _figure_required(res, answer):
+    ground_results, n_current = _ground_results(res)
+    if not _figure_required(res, answer, has_prior=bool(res.prior_results)):
         return
     r = await retry_missing_figure(question, answer)
     res.prompt_tokens += r.prompt_tokens
@@ -187,12 +217,11 @@ async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> N
     res.cost += r.cost
     if not r.figure:
         return  # nothing recovered — stays no_figure
-    check = grounding.check_figure(r.figure, res.results)
+    check = grounding.check_figure(r.figure, ground_results)
     if check.grounded:
         res.figure = r.figure
         res.figure_grounding = check.status
-        res.figure_derivation = "retry:" + (check.derivation.describe()
-                                            if check.derivation else "")
+        res.figure_derivation = _derivation_label(check, n_current, retried=True)
     else:
         # Forced but unverifiable → suppress, but record that it happened.
         res.figure = None
@@ -452,6 +481,11 @@ class AgentResult:
     # headline figure was derived from — leaving the server unable to check it.
     # app/grounding.py consumes this.
     results: list[QueryResult] = field(default_factory=list)
+    # Results borrowed from EARLIER turns of the same conversation, for
+    # cross-turn figure grounding (a follow-up that recites a number without
+    # re-querying). Set from stream_agent's prior_results arg; grounded against
+    # but never re-persisted as this turn's own results. See _ground_results.
+    prior_results: list[QueryResult] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_prompt_tokens: int = 0  # prompt tokens the provider served from its prefix cache
@@ -490,7 +524,9 @@ async def _chat(client: httpx.AsyncClient, model: str, messages: list[dict],
 
 
 async def stream_agent(question: str, *, history: list[dict] | None = None,
-                       skills_block: str = "") -> AsyncIterator[dict]:
+                       skills_block: str = "",
+                       prior_results: list[QueryResult] | None = None
+                       ) -> AsyncIterator[dict]:
     """Yield event dicts:
       {"type":"status", "text":...}         human-readable progress
       {"type":"sql", "sql":...}             a query about to run
@@ -543,6 +579,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     messages.append({"role": "user", "content": question})
 
     res = AgentResult()
+    res.prior_results = prior_results or []
     model = s.model_default
     consecutive_fails = 0
     critiqued = False  # the post-answer critic runs at most once per turn
@@ -800,10 +837,12 @@ async def generate_title(question: str, answer: str) -> str:
 
 
 async def run_agent(question: str, *, history: list[dict] | None = None,
-                    skills_block: str = "") -> AgentResult:
+                    skills_block: str = "",
+                    prior_results: list[QueryResult] | None = None) -> AgentResult:
     """Drive stream_agent to completion and return the final AgentResult."""
     result = AgentResult(error="no result")
-    async for ev in stream_agent(question, history=history, skills_block=skills_block):
+    async for ev in stream_agent(question, history=history, skills_block=skills_block,
+                                 prior_results=prior_results):
         if ev["type"] == "done":
             result = ev["result"]
     return result

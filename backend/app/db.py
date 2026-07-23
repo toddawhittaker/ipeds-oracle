@@ -311,6 +311,12 @@ MIGRATIONS: list[tuple[int, str]] = [
     # data. NULL whenever nothing matched (an 'ungrounded' turn) or the turn was
     # never checked.
     (22, "ALTER TABLE usage_log ADD COLUMN figure_derivation TEXT;"),
+    # Each turn's run_sql results (JSON list of {columns, rows}, capped), so a
+    # LATER turn can ground a figure against an EARLIER turn's data — the fix for
+    # figures recited from conversation context that turn-scoped grounding could
+    # only mark 'unchecked'. Backend-only (never surfaced to the client), NULL on
+    # a turn that ran no query (cache hit / refusal / clarify) or predates it.
+    (23, "ALTER TABLE messages ADD COLUMN results TEXT;"),
 ]
 
 

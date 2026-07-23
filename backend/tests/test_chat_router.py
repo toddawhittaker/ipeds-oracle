@@ -44,9 +44,11 @@ mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
 from app import guard, skills  # noqa: E402
+from app.db import connect  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import chat as chat_router  # noqa: E402
+from app.tools.sql import QueryResult  # noqa: E402
 
 FAILURES = []
 
@@ -84,7 +86,7 @@ def _parse_sse(text):
 
 def _make_agent(answer_text, *, sql_log=None, error=None, model="test-model"):
     """A canned chat_router.stream_agent replacement yielding one answer + done."""
-    async def _agent(question, *, history=None, skills_block=""):
+    async def _agent(question, *, history=None, skills_block="", prior_results=None):
         if answer_text is not None:
             yield {"type": "answer", "text": answer_text}
         yield {"type": "done", "result": AgentResult(
@@ -99,7 +101,7 @@ def _make_agent_no_result():
     runs. This is the deterministic server-side proxy for a mid-turn client
     disconnect (closed tab / dropped network / Stop-generating abandon): the
     turn produces nothing to persist."""
-    async def _agent(question, *, history=None, skills_block=""):
+    async def _agent(question, *, history=None, skills_block="", prior_results=None):
         yield {"type": "status", "text": "working…"}
     return _agent
 
@@ -342,7 +344,7 @@ def test_thinking_trace_is_persisted_and_returned_on_reload():
     and returned by GET /conversations/{id}, so the 'Thinking' disclosure
     survives a reload — not just the live in-session turn. Regression guard for
     the reopened-chat case where SQL persisted but Thinking vanished."""
-    async def _traced_agent(question, *, history=None, skills_block=""):
+    async def _traced_agent(question, *, history=None, skills_block="", prior_results=None):
         yield {"type": "thinking", "text": "reasoning about the question"}
         yield {"type": "status", "text": "Running query…"}
         yield {"type": "sql", "sql": "SELECT 1"}
@@ -422,7 +424,7 @@ def test_figure_is_persisted_and_returned_on_reload():
     like sql_log/thinking."""
     fig = {"value": "7,679", "unit": "degrees", "label": "CS bachelor's", "source": "IPEDS"}
 
-    async def _figure_agent(question, *, history=None, skills_block=""):
+    async def _figure_agent(question, *, history=None, skills_block="", prior_results=None):
         yield {"type": "figure", "figure": fig}
         yield {"type": "answer", "text": "the answer"}
         yield {"type": "done", "result": AgentResult(
@@ -483,7 +485,7 @@ def test_suggestions_are_persisted_and_returned_on_reload():
     GET /conversations/{id}, so the chips survive a reload like figure/sql_log."""
     sugg = ["How does this compare to Texas?", "Which programs drove it?"]
 
-    async def _suggest_agent(question, *, history=None, skills_block=""):
+    async def _suggest_agent(question, *, history=None, skills_block="", prior_results=None):
         yield {"type": "suggestions", "suggestions": sugg}
         yield {"type": "answer", "text": "the answer"}
         yield {"type": "done", "result": AgentResult(
@@ -532,7 +534,7 @@ def test_clarify_turn_persists_is_never_cached_and_records_no_lesson():
     clarify = {"question": "Do you mean bachelor's degrees only, or all award levels?",
               "options": ["Bachelor's only", "Include all levels"]}
 
-    async def _clarify_agent(question, *, history=None, skills_block=""):
+    async def _clarify_agent(question, *, history=None, skills_block="", prior_results=None):
         yield {"type": "clarify", "clarify": clarify}
         yield {"type": "answer", "text": clarify["question"]}
         yield {"type": "done", "result": AgentResult(
@@ -614,7 +616,7 @@ def test_critic_revision_records_a_lesson():
         _login(c)
         captured = {}
 
-        async def _critic_agent(question, *, history=None, skills_block=""):
+        async def _critic_agent(question, *, history=None, skills_block="", prior_results=None):
             yield {"type": "answer", "text": "corrected answer"}
             yield {"type": "done", "result": AgentResult(
                 answer="corrected answer", model_used="test-model", error=None,
@@ -655,7 +657,7 @@ def test_critic_lesson_not_recorded_on_followup_turn():
         _login(c)
         calls = {"n": 0}
 
-        async def _critic_agent(question, *, history=None, skills_block=""):
+        async def _critic_agent(question, *, history=None, skills_block="", prior_results=None):
             yield {"type": "answer", "text": "ans"}
             yield {"type": "done", "result": AgentResult(
                 answer="ans", model_used="test-model", error=None,
@@ -966,6 +968,61 @@ def test_download_csv_rejected_sql_400():
         assert csv_r.status_code == 400, csv_r.text
 
 
+def test_results_for_storage_caps_and_drops_largest_over_budget():
+    """Persisted result rows are capped so a wide brief can't bloat app.db. Over
+    the byte ceiling, the LARGEST result is dropped first (a headline usually
+    derives from a compact table, so the small recent-years/ranking result is
+    the one worth keeping)."""
+    assert chat_router._results_for_storage([]) is None
+    assert chat_router._results_for_storage(None) is None
+    small = QueryResult(columns=["n"], rows=[(1,), (2,)], row_count=2)
+    # Big enough to exceed the byte ceiling even AFTER the 200-row cap.
+    huge = QueryResult(columns=["a", "b"],
+                       rows=[(i, "x" * 500) for i in range(400)], row_count=400)
+    out = chat_router._results_for_storage([small, huge])
+    # The small result survives; the oversized one is dropped under the ceiling.
+    assert out is not None and len(out) == 1, out
+    assert out[0]["columns"] == ["n"], out
+
+
+def test_load_prior_results_respects_before_id_window():
+    """An edit/rerun grounds only against results that will survive the pending
+    delete — _load_prior_results must exclude messages at/after before_id, exactly
+    like _load_history. Otherwise a re-asked turn could ground against data from
+    the very messages it's about to replace."""
+    con = connect()
+    try:
+        uid = con.execute(
+            "INSERT INTO users(email, created_at) VALUES "
+            "('prior-results@x.edu', 0)").lastrowid
+        cur = con.execute("INSERT INTO conversations(user_id, title, created_at, "
+                          "updated_at) VALUES (?,'t',0,0)", (uid,))
+        conv = cur.lastrowid
+        ids = []
+        for n in (10, 20, 30):  # three assistant turns, each with one result
+            blob = json.dumps([QueryResult(columns=["v"], rows=[(n,)],
+                                           row_count=1).to_storage()])
+            c2 = con.execute(
+                "INSERT INTO messages(conversation_id, role, content, results, "
+                "created_at) VALUES (?,?,?,?,?)", (conv, "assistant", "a", blob, n))
+            ids.append(c2.lastrowid)
+        con.commit()
+
+        # No bound: all three turns' results load, chronologically.
+        vals = [r.rows[0][0] for r in chat_router._load_prior_results(con, conv)]
+        assert vals == [10, 20, 30], vals
+        # before_id = the last message: it and anything after are excluded.
+        vals = [r.rows[0][0]
+                for r in chat_router._load_prior_results(con, conv, before_id=ids[2])]
+        assert vals == [10, 20], vals
+    finally:
+        con.execute("DELETE FROM messages WHERE conversation_id=?", (conv,))
+        con.execute("DELETE FROM conversations WHERE id=?", (conv,))
+        con.execute("DELETE FROM users WHERE email='prior-results@x.edu'")
+        con.commit()
+        con.close()
+
+
 def run():
     print("chat router contract:")
     check("empty question is rejected (400)", test_empty_question_rejected)
@@ -1024,6 +1081,10 @@ def run():
           test_download_csv_no_sql_log_400)
     check("CSV download of a rejected/forbidden SQL 400s",
           test_download_csv_rejected_sql_400)
+    check("_results_for_storage caps and drops largest over budget",
+          test_results_for_storage_caps_and_drops_largest_over_budget)
+    check("_load_prior_results respects the before_id window",
+          test_load_prior_results_respects_before_id_window)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

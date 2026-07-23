@@ -542,6 +542,87 @@ def test_an_answer_with_no_figure_is_not_measured():
     assert _run("q").figure_grounding == "no_figure"
 
 
+# --- conversation-scoped grounding (prior_results) ------------------------------
+# A follow-up that recites a number WITHOUT re-querying used to be 'unchecked'
+# (turn-scoped grounding saw no current results). Prior turns' results now ground
+# it, and the retry can reach it. `ctx:` marks a match against an EARLIER turn.
+
+def _run_with_prior(question, prior_results):
+    return asyncio.run(llm.run_agent(question, history=[{"role": "user", "content": "x"}],
+                                     prior_results=prior_results))
+
+
+def test_a_recited_figure_grounds_against_a_prior_turn():
+    """The `unchecked`→grounded fix: a no-SQL follow-up whose figure value lives
+    in an EARLIER turn's result grounds, tagged `ctx:`."""
+    from app.tools.sql import QueryResult
+    prior = [QueryResult(columns=["awards"], rows=[(400,)], row_count=1)]
+
+    async def fake_chat(client, model, messages, tools=None):
+        # No tool call — answers straight from context (sql_log stays empty).
+        return _text_response('Still 400.\n\n```figure\n{"value":"400","label":"Awards"}\n```')
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run_with_prior("and that top school again?", prior)
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert res.figure_grounding == "exact", res.figure_grounding
+    assert res.figure_derivation == "ctx:value(q1.awards)", res.figure_derivation
+
+
+def test_retry_fires_on_a_no_sql_turn_using_prior_results():
+    """The residual no_figure gap: a no-SQL follow-up that emits no figure but
+    recites a number present in a prior turn now gets one, grounded `retry:ctx:`."""
+    from app.tools.sql import QueryResult
+    prior = [QueryResult(columns=["awards"], rows=[(400,)], row_count=1)]
+
+    async def fake_chat(client, model, messages, tools=None):
+        return _text_response("It was 400, as I said.")  # digit, no figure, no SQL
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+
+    async def fake_retry(question, answer, *a, **k):
+        return llm._FigureRetry(figure={"value": "400", "label": "Awards"})
+    orig = llm.retry_missing_figure
+    llm.retry_missing_figure = fake_retry
+    try:
+        res = _run_with_prior("the top school's count again?", prior)
+    finally:
+        llm.retry_missing_figure = orig
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert res.figure_derivation == "retry:ctx:value(q1.awards)", res.figure_derivation
+
+
+def test_figure_required_relaxes_only_when_prior_results_exist():
+    """The retry-gate relaxation, pinned directly: a no-SQL numeric answer is
+    figure-required ONLY when there are prior results to ground against."""
+    res = llm.AgentResult(sql_log=[])
+    assert llm._figure_required(res, "It was 400.", has_prior=True) is True
+    assert llm._figure_required(res, "It was 400.", has_prior=False) is False
+    # No digit → never required, prior or not (the enumerable skip).
+    assert llm._figure_required(res, "The address is Main St.", has_prior=True) is False
+
+
+def test_current_turn_results_take_precedence_over_prior():
+    """A figure from THIS turn's query must ground against THIS turn's data, not a
+    prior turn's — no spurious `ctx:` when the number is in the current result."""
+    from app.tools.sql import QueryResult
+    prior = [QueryResult(columns=["awards"], rows=[(400,)], row_count=1)]
+    current = QueryResult(columns=["awards"], rows=[(400,)], row_count=1)
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sql_call_response("SELECT 1", "c1")
+        return _text_response('Now 400.\n\n```figure\n{"value":"400","label":"Awards"}\n```')
+    llm._chat = fake_chat
+    registry.dispatch = _sink_dispatch([current])
+    res = _run_with_prior("re-run it", prior)
+    assert res.figure_grounding == "exact", res.figure_grounding
+    assert res.figure_derivation == "value(q1.awards)", \
+        "current-turn match must not be tagged ctx:"
+
+
 # --- parser leniency: recover a MIS-WRAPPED figure (_extract_figure) -----------
 # The 0/10 compression run showed the model emitting a CORRECT figure object but
 # not inside a ```figure fence — as a bare object at the answer's head, sometimes
@@ -932,6 +1013,14 @@ def run():
           test_an_unparseable_figure_fence_is_malformed_not_no_figure)
     check("an answer with no figure is not measured",
           test_an_answer_with_no_figure_is_not_measured)
+    check("a recited figure grounds against a prior turn (ctx:)",
+          test_a_recited_figure_grounds_against_a_prior_turn)
+    check("the retry fires on a no-SQL turn using prior results",
+          test_retry_fires_on_a_no_sql_turn_using_prior_results)
+    check("_figure_required relaxes only when prior results exist",
+          test_figure_required_relaxes_only_when_prior_results_exist)
+    check("current-turn results take precedence over prior",
+          test_current_turn_results_take_precedence_over_prior)
     check("normalize repairs a mis-fenced ![figure] image",
           test_normalize_repairs_a_misfenced_figure_image)
     check("normalize repairs a mis-fenced ![chart] with nested data",
