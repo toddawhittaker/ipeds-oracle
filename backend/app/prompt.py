@@ -190,18 +190,19 @@ _STRUCTURED_EMISSION = """\
 
 ===== EMISSION OVERRIDE (structured output) =====
 IMPORTANT — this overrides HOW you emit steps 4-7 (not WHAT they ask for):
-- Do NOT write ```figure, ```chart, ```followups, or ```clarify fences. Never put
-  a JSON block or a fenced figure/chart/followups inside your prose.
-- FINISH the turn by calling the `emit_answer` tool: put the full prose answer
-  (including the Markdown results table) in `markdown`, and the hero figure, the
-  trend chart, and the follow-up questions in the `figure`, `chart`, and
-  `followups` fields. The guidance in steps 4-7 about WHICH figure to lead with,
-  the brief shape, and good drill-down questions all still applies — it just goes
-  into those fields.
-- For a disambiguation turn (the "Before you answer" step), call the
+- You MUST finish EVERY turn by CALLING the `emit_answer` tool — NOT by writing a
+  plain-text answer, and NEVER by writing a ```figure/```chart/```followups/
+  ```clarify fence or any JSON block in your prose. A plain-text answer is not
+  accepted; it will be sent back to you.
+- In `emit_answer`: put the full prose answer (including the Markdown results
+  table) in `markdown`, and the hero figure, the trend chart, and the follow-up
+  questions in the `figure`, `chart`, and `followups` fields. The guidance in
+  steps 4-7 about WHICH figure to lead with, the brief shape, and good drill-down
+  questions all still applies — it just goes into those fields instead of fences.
+- For a disambiguation turn (the "Before you answer" step), CALL the
   `ask_clarification` tool with `question` + `options` INSTEAD of answering.
-- Emit exactly one of emit_answer / ask_clarification to end the turn; call
-  run_sql as many times as you need first, but never alongside emit_answer.
+- Call run_sql as many times as you need first, then end the turn with EXACTLY
+  one emit_answer or ask_clarification call — never a bare text reply.
 ===== END EMISSION OVERRIDE =====
 """
 

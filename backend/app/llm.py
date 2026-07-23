@@ -542,6 +542,19 @@ _ASK_CLARIFICATION_TOOL = {
 }
 _EMIT_TOOL_NAMES = ("emit_answer", "ask_clarification")
 
+# Adoption nudge (0.1): under structured emission, a model that free-types a
+# plain-text answer instead of CALLING emit_answer gets this ONE reprompt to
+# redo it via the tool (bounded to once per turn — see stream_agent). Same
+# targeted-reprompt pattern that fixed missing figures where prompt wording alone
+# under-delivered; if the model ignores it, the fence path is the fallback.
+_EMIT_REPROMPT = (
+    "You answered in plain text, but you MUST finish by CALLING the emit_answer "
+    "tool — put your prose (including the results table) in `markdown`, and the "
+    "figure, chart, and follow-up questions in their own fields — or call "
+    "ask_clarification for a disambiguation turn. Do that now; do not answer in "
+    "plain text or write any ```figure/```chart/```followups/```clarify fence."
+)
+
 
 def emit_tool_specs() -> list[dict]:
     """The terminal-emission tools, appended to the tool list when structured
@@ -754,6 +767,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
     model = s.model_default
     consecutive_fails = 0
     critiqued = False  # the post-answer critic runs at most once per turn
+    emit_reprompted = False  # the structured-emission adoption nudge fires once
     draft_answer = ""          # the clean pre-critique draft, re-emitted when the
     sql_count_at_critique = 0  # revision round argues instead of re-querying
 
@@ -821,6 +835,20 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
 
             if not tool_calls:
                 answer = msg.get("content") or ""
+                # Adoption nudge (0.1): under structured emission, if the model
+                # FREE-TYPED a final answer (emit_mode still "fence" — it didn't
+                # call emit_answer, which would have set it "structured" above),
+                # reject it ONCE and demand the tool. The model re-emits via
+                # emit_answer → interception sets emit_mode="structured" → this
+                # condition is false on the next pass. If it free-types again, the
+                # flag is set → accept the fence-path answer (fallback). Placed
+                # BEFORE the clarify check so a free-typed clarify is nudged onto
+                # ask_clarification too.
+                if (s.structured_emission_enabled and res.emit_mode != "structured"
+                        and not emit_reprompted and answer.strip()):
+                    emit_reprompted = True
+                    messages.append({"role": "user", "content": _EMIT_REPROMPT})
+                    continue
                 # Disambiguation: the model may ask ONE clarifying question instead
                 # of answering (prompt INSTRUCTIONS' leading "Before you answer"
                 # step). Extract it FIRST, ahead of the critic — a clarify turn has

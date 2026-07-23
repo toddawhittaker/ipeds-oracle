@@ -1073,6 +1073,73 @@ def test_fence_path_records_emit_mode_fence():
     assert _run("q").emit_mode == "fence"
 
 
+# --- adoption nudge (0.1): reject-and-reprompt a free-typed answer -------------
+
+def test_structured_reprompt_converts_a_free_typer():
+    """THE adoption lever: under structured mode, a plain-text answer is rejected
+    and the model is nudged to call emit_answer — after which the turn is
+    structured. Also checks the _EMIT_REPROMPT message actually reached it."""
+    calls = {"n": 0, "saw_reprompt": False}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if any(m.get("content") == llm._EMIT_REPROMPT for m in messages):
+            calls["saw_reprompt"] = True
+        if calls["n"] == 1:
+            return _text_response("Ohio led with 400 degrees.")  # free-typed
+        return _emit_call("emit_answer", {"markdown": "Ohio led with **400**.",
+                                          "figure": {"value": "400", "label": "Awards"}})
+    res = _run_structured("q", fake_chat)
+    assert calls["saw_reprompt"], "the nudge message must be sent to the model"
+    assert res.emit_mode == "structured", res.emit_mode
+    assert res.figure == {"value": "400", "label": "Awards"}, res.figure
+    assert "Ohio led with **400**." in res.answer, res.answer
+
+
+def test_structured_reprompt_fires_only_once_then_falls_back():
+    """Bounded: a model that ignores the nudge and free-types AGAIN is accepted on
+    the fence path — the reprompt must not loop."""
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        return _text_response("Stubborn plain-text answer, 42.")  # always free-types
+    res = _run_structured("q", fake_chat)
+    assert res.emit_mode == "fence", "a second free-type falls back to the fence path"
+    assert "Stubborn plain-text answer" in res.answer, res.answer
+    assert calls["n"] == 2, f"exactly one reprompt round (2 calls), got {calls['n']}"
+
+
+def test_structured_reprompt_nudges_a_free_typed_clarify():
+    """The nudge precedes the clarify check, so a free-typed clarify is pushed
+    onto ask_clarification."""
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:  # free-typed clarify fence
+            return _text_response('Which level?\n\n```clarify\n'
+                                  '{"question":"Which level?","options":["BA","All"]}\n```')
+        return _emit_call("ask_clarification",
+                          {"question": "Which level?", "options": ["BA", "All"]})
+    res = _run_structured("q", fake_chat)
+    assert res.clarify == {"question": "Which level?", "options": ["BA", "All"]}, res.clarify
+
+
+def test_no_reprompt_when_structured_off():
+    # The default: a free-typed answer is accepted as-is, no nudge.
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["n"] += 1
+        return _text_response("Plain answer, 42.")
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run("q")
+    assert calls["n"] == 1, "structured OFF → no reprompt round"
+    assert res.emit_mode == "fence"
+
+
 # ---------------------------------------------------------------------------
 # Live-transport tests: llm._chat is restored to the REAL implementation, and
 # only httpx.AsyncClient is mocked (returning a real httpx.Response so
@@ -1223,6 +1290,14 @@ def run():
           test_structured_ask_clarification_yields_a_clarify_turn)
     check("the fence path records emit_mode='fence' (telemetry baseline)",
           test_fence_path_records_emit_mode_fence)
+    check("structured reprompt converts a free-typer to emit_answer",
+          test_structured_reprompt_converts_a_free_typer)
+    check("structured reprompt fires only once, then falls back",
+          test_structured_reprompt_fires_only_once_then_falls_back)
+    check("structured reprompt nudges a free-typed clarify",
+          test_structured_reprompt_nudges_a_free_typed_clarify)
+    check("no reprompt when structured emission is off",
+          test_no_reprompt_when_structured_off)
     check("real _chat: immediate answer over a mocked httpx transport",
           test_real_chat_transport_immediate_answer)
     check("real _chat: an HTTPStatusError surfaces as an agent error",

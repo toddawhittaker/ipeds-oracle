@@ -294,13 +294,25 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **frontend are all unchanged** (figure/followups/clarify were already
   structured events; the chart stays a server-written ```chart fence the
   frontend already renders). A model that ignores the tool falls back to the
-  fence path. A **leak sentinel** (`_leak_flag`) scans the shipped prose for
-  residual fence/JSON debris → `usage_log.answer_leaked`; with `emit_mode`
+  fence path. **Adoption nudge (0.1):** a model that free-types a plain-text
+  answer under structured mode is REJECTED once (`_EMIT_REPROMPT`, bounded by
+  `emit_reprompted`) and told to call `emit_answer` — the same targeted-reprompt
+  pattern that fixed missing figures. It fires before the clarify check (a
+  free-typed clarify → `ask_clarification` too); a second free-type falls back to
+  the fence path. **Measured 3/10 → 10/10 structured, 0 leaks over two runs — and
+  a bonus: figure emission went to 10/10 too** (the figure is now a tool field
+  the model fills, not a fence it forgets — this dissolves the earlier
+  emission-decay saga). A **leak sentinel** (`_leak_flag`) scans the shipped prose
+  for residual fence/JSON debris → `usage_log.answer_leaked`; with `emit_mode`
   (structured|fence, migration 24) it drives the **Answer-leaks** stat on Admin →
-  Usage (`leakRate`/`leakLabel`) — the metric that must reach 0 before the
-  default flips. The **number stays model-supplied in PR-1** (envelope only);
-  server-computed figures from declared provenance are PR-2. Pinned in
-  `test_agent_loop.py` (structured cases) + `test_admin_router.py` + `test_migrations.py`.
+  Usage (`leakRate`/`leakLabel`) — 0-leaks-at-high-adoption is what justifies
+  flipping `structured_emission_enabled` to default ON (still OFF pending Todd's
+  sign-off + multi-model coverage). The sentinel deliberately ignores a plain
+  ```chart fence (that's the intended chart delivery — a false-positive caught in
+  the PR-1 dark-ship run). The **number stays model-supplied** (envelope only);
+  server-computed figures from declared provenance are the next step (PR-2).
+  Pinned in `test_agent_loop.py` (structured + reprompt cases) +
+  `test_admin_router.py` + `test_migrations.py`.
 - **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
   step: when a plausible alternate reading would change the HEADLINE result (e.g.
   "which major produces the most graduates?" — bachelor's-only vs. all award
