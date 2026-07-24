@@ -174,6 +174,12 @@ class Settings(BaseSettings):
     sql_row_cap_model: int = Field(default=200)   # rows fed back to the model
     sql_row_cap_download: int = Field(default=100_000)  # rows for CSV export
     max_upload_mb: int = Field(default=2048)  # cap on admin .accdb import uploads
+    # Pre-auth cap on the body of EVERY request (app/bodylimit.py), refused with
+    # 413 before any handler or auth dependency runs. 10 MB is far above any JSON
+    # this API takes and far below what it takes to fill a container's disk.
+    # /api/admin/import is exempt up to max_upload_mb, and only for a request
+    # carrying a session cookie. Non-positive disables the cap.
+    max_request_body_mb: int = Field(default=10)
 
     # --- NCES year-catalog fetch (app/nces.py) ------------------------------
     # The NCES base URL + year bounds are fixed constants in app/nces.py (the
