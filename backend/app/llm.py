@@ -913,6 +913,31 @@ async def _chat(client: httpx.AsyncClient, model: str, messages: list[dict],
                                  settings=s, timeout=DEFAULT_TIMEOUT)
 
 
+def _settle_revision(res: AgentResult, answer: str, draft_answer: str,
+                     sql_count_at_critique: int) -> str:
+    """Decide whether to ship a critic-triggered revision or revert to the
+    clean pre-critique draft. Shared by the main loop's post-answer critic
+    (~1100) and the S5 exhaustion-tail's correction round — this gate used to
+    be duplicated at both call sites, which is exactly how the two drifted
+    apart (see [[critic-stranded-revision]]). Mutates `res.critic_revised`;
+    returns the settled answer text.
+
+    A genuine correction both re-queries AND lands on a different answer AND
+    carries no reviewer-directed meta (`_leaks_review_meta`); anything else —
+    a rebuttal, a confirming re-query, an empty revision — reverts to the
+    draft so no meta-commentary leaks to the user and no spurious lesson is
+    recorded.
+    """
+    if not draft_answer:
+        return answer
+    requeried = len(res.sql_log) > sql_count_at_critique
+    changed = bool(answer.strip()) and answer.strip() != draft_answer.strip()
+    if requeried and changed and not _leaks_review_meta(answer):
+        res.critic_revised = True
+        return answer
+    return draft_answer
+
+
 async def stream_agent(question: str, *, history: list[dict] | None = None,
                        skills_block: str = "",
                        prior_results: list[QueryResult] | None = None
@@ -1138,13 +1163,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 #    WITHOUT re-querying isn't distinguishable from a rebuttal, so
                 #    it falls back to the draft too; the hardened
                 #    revision_instruction steers real corrections to re-run run_sql.
-                if draft_answer:
-                    requeried = len(res.sql_log) > sql_count_at_critique
-                    changed = bool(answer.strip()) and answer.strip() != draft_answer.strip()
-                    if requeried and changed and not _leaks_review_meta(answer):
-                        res.critic_revised = True
-                    else:
-                        answer = draft_answer
+                answer = _settle_revision(res, answer, draft_answer, sql_count_at_critique)
                 # Extract the structured blocks from the FINAL answer (after the
                 # critic revert settles it), so they always match the winning prose.
                 # First repair any mis-wrapped ![figure]/![chart] artifacts into
@@ -1219,26 +1238,56 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             else:
                 consecutive_fails = 0
 
-        # Tool budget exhausted. Rather than discard the data already gathered,
-        # make one final pass with tools disabled so the model MUST answer from
-        # the query results it has collected. Record that the ceiling was hit (a
-        # health signal for Admin -> Usage, whatever the synthesis outcome).
-        res.exhausted = True
-        yield {"type": "status", "text": "Summarizing results…"}
-        messages.append({"role": "user", "content":
-            "You've reached the tool-call limit — do NOT call any more tools. "
-            "Give your best final answer now using the query results above, "
-            "noting briefly if anything is incomplete."})
-        try:
-            data = await _chat(client, model, messages, tools=None)
-            usage = data.get("usage") or {}
-            res.prompt_tokens += usage.get("prompt_tokens", 0)
-            res.completion_tokens += usage.get("completion_tokens", 0)
-            res.cached_prompt_tokens += cached_tokens(usage)
-            res.cost += usage.get("cost") or 0
-            final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        except httpx.HTTPError:
-            final = ""
+        # The loop ended without an answer shipping. Two different reasons land
+        # here, and they are NOT the same failure:
+        #  - genuine budget exhaustion: the model spent every iteration on tool
+        #    calls and never produced a tool-call-free reply at all.
+        #  - a STRANDED critic revision ([[critic-stranded-revision]]): the
+        #    critic flagged the answer and `continue`d for a revision round
+        #    (`draft_answer` is set), but that round never got the chance to
+        #    settle — either it fired on the very last iteration (no main-loop
+        #    iteration left to return the reply) or it spent every remaining
+        #    call on tool calls without ever returning a tool-call-free reply.
+        #    We already hold a complete, critic-reviewed answer in
+        #    `draft_answer` — that is not a budget failure, just an unfinished
+        #    revision, so ship the draft rather than stamping `exhausted`.
+        #
+        # A stranded draft skips the tools-disabled synthesis call below
+        # entirely: that call passes tools=None, so a would-be revision round
+        # could never re-query — `requeried` would be False by construction —
+        # so `_settle_revision` could only ever revert to the draft anyway. The
+        # call is guaranteed-wasted, and its only possible novel output is a
+        # leaked reviewer-directed rebuttal (the PR #43 critic-revision-leak
+        # regression, reintroduced through this door). Everything from here on
+        # already does the right thing for a stranded draft: `_extract_clarify`
+        # is a no-op on a clean draft, the S5 critic check below is correctly
+        # skipped (`critiqued` is already True), and the S5 grounding-degrade
+        # gate is scoped to `res.exhausted` so it never touches this path.
+        # Note: a stranded draft skips `_maybe_retry_figure` (only the main
+        # loop's own terminator above calls it) — accepted, the draft's own
+        # figure survives via the shared extraction below.
+        res.exhausted = not draft_answer
+        if draft_answer:
+            final = draft_answer
+        else:
+            # Rather than discard the data already gathered, make one final
+            # pass with tools disabled so the model MUST answer from the query
+            # results it has collected.
+            yield {"type": "status", "text": "Summarizing results…"}
+            messages.append({"role": "user", "content":
+                "You've reached the tool-call limit — do NOT call any more tools. "
+                "Give your best final answer now using the query results above, "
+                "noting briefly if anything is incomplete."})
+            try:
+                data = await _chat(client, model, messages, tools=None)
+                usage = data.get("usage") or {}
+                res.prompt_tokens += usage.get("prompt_tokens", 0)
+                res.completion_tokens += usage.get("completion_tokens", 0)
+                res.cached_prompt_tokens += cached_tokens(usage)
+                res.cost += usage.get("cost") or 0
+                final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            except httpx.HTTPError:
+                final = ""
 
         res.model_used = model
         res.last_result = last_sql_result["result"]
@@ -1349,15 +1398,8 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                                          .get("message") or {}).get("content") or ""
                         except httpx.HTTPError:
                             corrected = ""
-                    # Same gate as the normal path (see the revert logic above).
-                    requeried = len(res.sql_log) > sql_count
-                    changed = (bool(corrected.strip())
-                               and corrected.strip() != draft.strip())
-                    if requeried and changed and not _leaks_review_meta(corrected):
-                        final = corrected
-                        res.critic_revised = True
-                    else:
-                        final = draft
+                    # Same gate as the normal path — shared via _settle_revision.
+                    final = _settle_revision(res, corrected, draft, sql_count)
                     # Reflect any correction-round queries in the retained results.
                     res.results = last_sql_result["results"]
                     res.last_result = last_sql_result["result"]
@@ -1377,7 +1419,10 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             # 0/15-cell invented table); ship an honest "couldn't finish" instead.
             # The normal path stays observe-only (first-pass ungrounded figures ship,
             # #163); acting on the verdict is deliberately scoped to exhaustion.
-            if _s5_fabricated(res):
+            # A stranded draft (res.exhausted False) never reaches this gate —
+            # it was already critic-reviewed with tools enabled, not a
+            # tools-disabled best-effort synthesis.
+            if res.exhausted and _s5_fabricated(res):
                 res.answer = _EXHAUSTION_DEGRADE
                 res.figure = None
                 res.suggestions = None

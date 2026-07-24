@@ -339,6 +339,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `answered`/`degraded`/NULL) → the **Exhausted** stat on Admin → Usage
   (`exhaustionLabel`, `· N degraded` breakdown). Pinned by the `S5:`/`S5 gate:` cases
   in `test_agent_loop.py` + `test_admin_router.py` + `test_migrations.py`.
+- **A STRANDED critic revision is not exhaustion.** Two different failures used to
+  land in that same tail. The critic `continue`s for a revision round; if that round
+  never returns a tool-call-free reply — it fired on the **last** iteration, or it
+  burned every remaining iteration on tool calls — the loop ends with `draft_answer`
+  set and the settle gate (which lives *inside* the terminator) never runs. The tail
+  then skipped its own critic (`not critiqued` is False) and applied
+  **no `_leaks_review_meta`**, shipping the revision round's reviewer-rebuttal prose
+  verbatim: the PR #43 [[critic-revision-leak]] regression, reintroduced through a
+  door that forgot the gate. Now: `res.exhausted = not draft_answer`, and a stranded
+  draft **ships the clean pre-critique answer, skipping the synthesis call entirely**
+  — that call passes `tools=None`, so a revision could never re-query, so `requeried`
+  is False *by construction* and the gate could only ever revert to the draft; the
+  call is guaranteed-wasted and its only novel output is the leak. The `_s5_fabricated`
+  degrade is gated on `res.exhausted` so a reviewed draft is never replaced by
+  `_EXHAUSTION_DEGRADE`. The settle gate itself now lives in ONE place
+  (`_settle_revision`), called by both terminators — it existing twice is how they
+  drifted. Accepted: a stranded draft skips `_maybe_retry_figure`. Note the metric
+  narrowing — a revision round that genuinely burned the budget no longer counts as
+  Exhausted; that's deliberate (overloading the flag is what corrupted it), and a
+  separate `critic_unsettled` counter is the follow-up if the rate matters. Pinned by
+  the `[[critic-stranded-revision]]` cases in `test_agent_loop.py`.
 - **Structured emission** (`config.structured_emission_enabled`, **DEFAULTS ON**;
   validated 100%-structured / 0-leaks across four vendors). The durable,
   model-agnostic fix for mangled fences: instead of free-typing

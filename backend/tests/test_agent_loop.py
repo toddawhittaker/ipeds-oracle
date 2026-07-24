@@ -165,6 +165,10 @@ def test_synthesis_on_budget_exhaustion():
     assert "16,965" in res.answer, res.answer
     # It should have burned the whole tool budget before the synthesis pass.
     assert calls["n"] == get_settings().llm_max_tool_iters, calls["n"]
+    # [[critic-stranded-revision]]: this metric is unprotected in both
+    # directions without an explicit assertion — pin the genuine-exhaustion
+    # case True here (see the false-positive case pinned separately below).
+    assert res.exhausted is True, res.exhausted
 
 
 def test_hard_error_when_synthesis_is_empty():
@@ -236,6 +240,10 @@ def test_exhaustion_critic_correction_requeries_and_changes():
     assert res.critic_revised is True, "a genuine re-queried correction must ship"
     assert len(res.sql_log) > get_settings().llm_max_tool_iters, \
         "the correction round's re-query must land in sql_log"
+    # [[critic-stranded-revision]]: this IS a genuine budget exhaustion (the
+    # main loop truly burned it) — pin the flag here too, alongside the
+    # false-positive/false-negative cases pinned in the dedicated section.
+    assert res.exhausted is True, res.exhausted
 
 
 def test_exhaustion_correction_confirming_same_answer_reverts_to_draft():
@@ -274,6 +282,229 @@ def test_exhaustion_critic_ok_ships_draft_unchanged():
     assert res.critic_revised is False, res.critic_revised
     assert len(res.sql_log) == get_settings().llm_max_tool_iters, \
         "no correction round → sql_log unchanged from the main loop"
+
+
+# --- [[critic-stranded-revision]]: a REVISE that never gets its correction round
+# --- must never ship an ungated answer or a false 'exhausted' stamp ------------
+# The critic block (~line 1100) sets draft_answer + `continue`s on a REVISE, but
+# the anti-leak settle gate (~1141-1147) only runs on a LATER tool-call-free
+# reply INSIDE the main loop. Two ways the loop can end before that ever
+# happens:
+#   HOLE 1 — the critic fires on the LAST main-loop iteration: the `continue`
+#     has nowhere left to go, so control falls to the exhaustion tail. That
+#     tail's own critic check is guarded `not critiqued` (now True) and is
+#     skipped, so the model's reply to the revision instruction ships with NO
+#     `_leaks_review_meta` gate at all — the PR #43 critic-revision-leak
+#     regression, reintroduced via a different door.
+#   HOLE 2 — the critic fires EARLY but the revision round spends every
+#     remaining iteration on tool calls without ever returning a tool-call-free
+#     reply. Same ungated fall-through. A guard scoped to "the last iteration"
+#     alone does NOT close this one.
+# Both also stamp `res.exhausted = True` unconditionally, corrupting the
+# Admin -> Usage "Exhausted" signal used to decide whether to raise
+# LLM_MAX_TOOL_ITERS: a turn that produced a normal-loop draft (just one the
+# critic couldn't get a chance to correct) is not the same failure as one that
+# genuinely burned its whole budget with nothing to show.
+
+def test_last_iteration_critic_never_ships_an_ungated_revision():
+    """HOLE 1: LLM_MAX_TOOL_ITERS=3 (this module's pin). The critic fires on the
+    LAST iteration (call 3), flags REVISE, and `continue`s — but there is no
+    4th main-loop iteration left. On buggy code this falls into the exhaustion
+    tail, which makes an UNGATED extra call (here standing in for the model's
+    reply to the revision instruction) and ships it verbatim, leaking reviewer
+    meta-commentary and replacing a perfectly good draft answer."""
+    calls = {"chat": 0, "critic": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] in (1, 2):
+            return _tool_call_response()
+        if calls["chat"] == 3:
+            return _text_response("Draft: 500 degrees.")
+        # Reached only on buggy code: the exhaustion tail's own synthesis call,
+        # ungated because `critiqued` is already True.
+        return _text_response(
+            "The reviewer's concern does not apply here; 500 stands.")
+
+    async def fake_review(question, sql_log, answer, *a, **k):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="H", description="D")
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    orig = llm.critic.review
+    llm.critic.review = fake_review
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = orig
+    assert "500 degrees" in res.answer, res.answer
+    assert "reviewer" not in res.answer.lower(), res.answer
+    assert "does not apply" not in res.answer.lower(), res.answer
+    assert res.critic_revised is False, res.critic_revised
+    assert res.exhausted is False, \
+        "a stranded last-iteration draft is not a genuine budget exhaustion"
+    assert res.critic_headline == "H", \
+        "the critic's finding should still be reachable even though the " \
+        "revision round couldn't run"
+
+
+def test_critic_does_not_get_a_phantom_budget_for_a_revision_round():
+    """Same 3-call sequence as HOLE 1 above, but the fake `_chat` explodes if it
+    is ever called a 4th time. On buggy code, the exhaustion tail's ungated
+    synthesis call is exactly that 4th call — so this AssertionError (not the
+    asserts below) is what actually fails today, proving the loop reaches for
+    budget it doesn't have rather than settling on the draft in hand.
+
+    NOTE for the implementer: the task text that seeded this test asked for
+    `calls["critic"] == 0`. That directly contradicts the sibling test above,
+    which requires the critic's headline to still be reachable (res.critic_
+    headline == "H") from this exact scenario — the critic must have run once
+    to produce it. I kept the critic-fires-once contract (it matches the
+    sibling test and lets an admin still see what the critic flagged) and
+    fixed the assertion to `calls["critic"] == 1` accordingly. Flagging this
+    explicitly rather than silently shipping two tests that can never both be
+    green under one implementation."""
+    calls = {"chat": 0, "critic": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] in (1, 2):
+            return _tool_call_response()
+        if calls["chat"] == 3:
+            return _text_response("Draft: 500 degrees.")
+        raise AssertionError(
+            f"a 4th LLM call happened (call #{calls['chat']}) — a REVISE on "
+            "the last iteration must settle on the draft, not reach into the "
+            "exhaustion tail for an ungated extra call")
+
+    async def fake_review(question, sql_log, answer, *a, **k):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="H", description="D")
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    orig = llm.critic.review
+    llm.critic.review = fake_review
+    try:
+        _run("q")
+    finally:
+        llm.critic.review = orig
+    assert calls["critic"] == 1, calls["critic"]
+    assert calls["chat"] == 3, calls["chat"]
+
+
+def test_revision_round_that_never_lands_ships_the_clean_draft():
+    """HOLE 2 — no last-iteration guard alone can close this one: the critic
+    fires EARLY (call 2 of 4), but the revision round spends every remaining
+    iteration re-querying (calls 3-4) without ever returning a tool-call-free
+    reply. The loop still ends with a live, unresolved `draft_answer` — same
+    fall-through into the ungated exhaustion tail as HOLE 1."""
+    s = get_settings()
+    prev_mi = s.llm_max_tool_iters
+    s.llm_max_tool_iters = 4
+    calls = {"chat": 0, "critic": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return _tool_call_response()
+        if calls["chat"] == 2:
+            return _text_response("Draft: 500 degrees.")
+        if calls["chat"] in (3, 4):
+            return _tool_call_response()  # re-queries, never answers
+        # Reached only on buggy code: the ungated exhaustion-tail synthesis.
+        return _text_response("The reviewer is wrong; my re-query confirms 500.")
+
+    async def fake_review(question, sql_log, answer, *a, **k):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="H", description="D")
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    orig = llm.critic.review
+    llm.critic.review = fake_review
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = orig
+        s.llm_max_tool_iters = prev_mi
+    assert "500 degrees" in res.answer, res.answer
+    assert "reviewer" not in res.answer.lower(), res.answer
+    assert res.critic_revised is False, res.critic_revised
+    assert res.exhausted is False, \
+        "a stranded draft from an unresolved revision round is not a genuine " \
+        "budget exhaustion"
+    assert calls["chat"] == 4, \
+        f"the exhaustion-tail synthesis must be skipped entirely, got {calls['chat']} calls"
+    assert calls["critic"] == 1, calls["critic"]
+
+
+def test_genuine_exhaustion_without_a_pending_draft_still_stamps_exhausted():
+    """THE CONTROL: a turn that burns its whole tool budget on tool calls alone
+    (no critic ever fired, no stranded draft) must still stamp `exhausted`.
+    Guards against a fix that over-corrects and stops setting the flag at all,
+    which would silently zero out the Admin -> Usage 'Exhausted' health signal."""
+    calls = {"n": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        if tools is None:
+            return _text_response("Best-effort summary from gathered data: 16,965.")
+        calls["n"] += 1
+        return _tool_call_response()
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    res = _run("thorough question")
+    assert res.error is None, f"should have synthesized, got error: {res.error}"
+    assert res.exhausted is True, "a genuine budget exhaustion must still be flagged"
+    assert calls["n"] == get_settings().llm_max_tool_iters, calls["n"]
+
+
+def test_a_stranded_draft_is_not_subject_to_the_s5_fabrication_degrade():
+    """A stranded draft (HOLE 2 shape) must not be funneled through the S5
+    fabrication-degrade gate, which is scoped to the tools-DISABLED exhaustion
+    synthesis pass — not a draft the model produced with tools still enabled.
+    Force the table-grounding verdict to UNMATCHED (the fabrication trigger) on
+    whatever the buggy exhaustion tail ships, so this only stays green once the
+    stranded draft bypasses that tail (and its degrade gate) entirely."""
+    s = get_settings()
+    prev_mi = s.llm_max_tool_iters
+    s.llm_max_tool_iters = 4
+    calls = {"chat": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return _tool_call_response()
+        if calls["chat"] == 2:
+            return _text_response("Draft: 500 degrees.")
+        if calls["chat"] in (3, 4):
+            return _tool_call_response()
+        return _text_response(
+            "The reviewer is wrong. Corrected trend:\n\n"
+            "| Year | Awards |\n|---|---|\n| 2024 | 999 |\n")
+
+    async def fake_review(question, sql_log, answer, *a, **k):
+        return Critique(ok=False, headline="H", description="D")
+
+    def force_unmatched(res):
+        res.table_grounding = llm.grounding.TABLE_UNMATCHED
+        res.table_cells_checked = 1
+        res.table_cells_matched = 0
+
+    llm._chat = fake_chat
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    orig_review, orig_stamp = llm.critic.review, llm._stamp_table_grounding
+    llm.critic.review, llm._stamp_table_grounding = fake_review, force_unmatched
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review, llm._stamp_table_grounding = orig_review, orig_stamp
+        s.llm_max_tool_iters = prev_mi
+    assert res.exhaustion_degraded is False, \
+        "a stranded draft must not be routed through the S5 fabrication-degrade gate"
+    assert res.answer != llm._EXHAUSTION_DEGRADE, res.answer
 
 
 def test_exhaustion_correction_via_emit_answer_is_reconstructed_not_dispatched():
@@ -1552,6 +1783,20 @@ def run():
           test_exhaustion_correction_rebuttal_without_requery_reverts_to_draft)
     check("S5: exhaustion critic OK ships the draft unchanged",
           test_exhaustion_critic_ok_ships_draft_unchanged)
+    check("[[critic-stranded-revision]] HOLE 1: a last-iteration critic revision "
+          "must not ship ungated / stamp a false exhaustion",
+          test_last_iteration_critic_never_ships_an_ungated_revision)
+    check("[[critic-stranded-revision]]: the critic gets no phantom 4th-call budget",
+          test_critic_does_not_get_a_phantom_budget_for_a_revision_round)
+    check("[[critic-stranded-revision]] HOLE 2: a revision round that never lands "
+          "still ships the clean draft",
+          test_revision_round_that_never_lands_ships_the_clean_draft)
+    check("[[critic-stranded-revision]] control: genuine exhaustion (no pending "
+          "draft) still stamps exhausted=True",
+          test_genuine_exhaustion_without_a_pending_draft_still_stamps_exhausted)
+    check("[[critic-stranded-revision]]: a stranded draft is not degraded by the "
+          "S5 fabrication gate",
+          test_a_stranded_draft_is_not_subject_to_the_s5_fabrication_degrade)
     check("S5: a correction-round emit_answer is reconstructed, not dispatched (CODE-1)",
           test_exhaustion_correction_via_emit_answer_is_reconstructed_not_dispatched)
     check("_reconstruct_answer skips a degenerate empty clarify (CODE-4)",
