@@ -351,6 +351,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `answered`/`degraded`/NULL) → the **Exhausted** stat on Admin → Usage
   (`exhaustionLabel`, `· N degraded` breakdown). Pinned by the `S5:`/`S5 gate:` cases
   in `test_agent_loop.py` + `test_admin_router.py` + `test_migrations.py`.
+- **A STRANDED critic revision is not exhaustion.** Two different failures used to
+  land in that same tail. The critic `continue`s for a revision round; if that round
+  never returns a tool-call-free reply — it fired on the **last** iteration, or it
+  burned every remaining iteration on tool calls — the loop ends with `draft_answer`
+  set and the settle gate (which lives *inside* the terminator) never runs. The tail
+  then skipped its own critic (`not critiqued` is False) and applied
+  **no `_leaks_review_meta`**, shipping the revision round's reviewer-rebuttal prose
+  verbatim: the PR #43 [[critic-revision-leak]] regression, reintroduced through a
+  door that forgot the gate. Now: `res.exhausted = not draft_answer`, and a stranded
+  draft **ships the clean pre-critique answer, skipping the synthesis call entirely**
+  — that call passes `tools=None`, so a revision could never re-query, so `requeried`
+  is False *by construction* and the gate could only ever revert to the draft; the
+  call is guaranteed-wasted and its only novel output is the leak. The `_s5_fabricated`
+  degrade is gated on `res.exhausted` so a reviewed draft is never replaced by
+  `_EXHAUSTION_DEGRADE`. The settle gate itself now lives in ONE place
+  (`_settle_revision`), called by both terminators — it existing twice is how they
+  drifted. Accepted: a stranded draft skips `_maybe_retry_figure`. Note the metric
+  narrowing — a revision round that genuinely burned the budget no longer counts as
+  Exhausted; that's deliberate (overloading the flag is what corrupted it), and a
+  separate `critic_unsettled` counter is the follow-up if the rate matters. Pinned by
+  the `[[critic-stranded-revision]]` cases in `test_agent_loop.py`.
 - **Structured emission** (`config.structured_emission_enabled`, **DEFAULTS ON**;
   validated 100%-structured / 0-leaks across four vendors). The durable,
   model-agnostic fix for mangled fences: instead of free-typing
@@ -641,7 +662,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   trusted reverse proxy/tunnel appends the real peer); `0` (dev/CI default) ignores
   XFF and uses the socket peer. Set it to **`1`** in production behind a single
   proxy/tunnel hop (via `.env`); combine with `EMAIL_DOMAIN` to close the
-  access-request-spam surface.
+  access-request-spam surface. **The app must be the ONLY interpreter of XFF:**
+  uvicorn ships `proxy_headers=True` trusting loopback and rewrites
+  `scope["client"]` from the header, which silently defeats
+  `TRUSTED_PROXY_COUNT=0` behind any loopback-adjacent ingress (ssh -L,
+  cloudflared, host-network nginx). `scripts/docker-entrypoint.sh` therefore runs
+  uvicorn with **`--no-proxy-headers`** — keep it there, and pass it in any
+  non-Docker deployment too.
 - **Per-user chat throttle (SEC-3):** `POST /api/chat/stream` is gated only by
   `current_user`, so without a cap an allowlisted user's runaway loop/script could
   burn unbounded provider spend. `ratelimit.enforce_chat_rate_limit(user_id)` — a
@@ -669,6 +696,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **second line of defense** under the LLM-markdown render surface — that surface is
   safe today only because react-markdown emits no raw HTML (**no `rehype-raw`, default
   URL sanitizer intact — keep it that way**; a DOM-XSS review confirmed it clean).
+- **Pre-auth request-body cap:** FastAPI parses a request body while resolving a
+  route's parameters — **before** `solve_dependencies` evaluates
+  `Depends(require_admin)`. So an *unauthenticated* POST to `/api/admin/import`
+  had its whole multipart body parsed and spooled to the temp dir and only then
+  got its 401 (measured: 64 MB in 0.17s; a loop fills a container's writable
+  layer). `max_upload_mb` lives *inside* that handler, which never runs. A third
+  pure-ASGI layer, `BodyLimitMiddleware` (`bodylimit.py`), refuses the body first:
+  **`max_request_body_mb` (10 MB) on every request**, with `/api/admin/import`
+  exempt up to `max_upload_mb` **only when a session cookie is PRESENT** —
+  presence only, no signature check, no DB hit, no second copy of auth. Honest
+  limits, stated in the module docstring: one junk `Cookie:` header, or any
+  signed-in non-admin, still reaches the large tier. The three layers run
+  **SecurityHeaders → CSRF → BodyLimit → router** (last added = outermost), so a
+  cross-origin oversized POST is refused by CSRF having read zero bytes and the
+  413 still gets its security headers — pinned by
+  `test_the_413_carries_the_security_headers`. `MULTIPART_SLACK_MB` (8) keeps the
+  *handler* the authoritative decider for a merely-over-cap upload, so
+  `test_security.py`'s import-lock-leak assertion keeps its meaning; the
+  middleware only catches a grossly oversized body. Pinned in
+  `backend/tests/test_bodylimit.py` (the headline case asserts **413, not 401** —
+  a 401 would prove the parser ran).
 - A denied row records **both** `created_at` (when the request was filed →
   "Requested") **and** `denied_at` (when it was rejected → "Denied", added in
   migration 11) — kept separate so the admin Blocked-users table shows each; a

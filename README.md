@@ -163,6 +163,11 @@ The app listens on **:8000**. Give it TLS one of two ways:
 1. **Behind a reverse proxy or tunnel** (recommended for anything public) — let
    your proxy/tunnel terminate TLS and forward to `:8000`. Set `APP_PUBLIC_URL` to
    your public URL and `TRUSTED_PROXY_COUNT` to the number of proxy hops.
+   `TRUSTED_PROXY_COUNT` is the *only* thing that should interpret
+   `X-Forwarded-For`, so the container runs uvicorn with `--no-proxy-headers`
+   (uvicorn would otherwise trust the header itself whenever the proxy connects
+   over loopback, letting a client spoof its own address past the per-IP limit).
+   If you run the app outside the published image, pass that flag yourself.
 2. **Direct HTTPS with a self‑signed cert** (handy on a LAN) — generate a cert and
    point the app at it:
 
