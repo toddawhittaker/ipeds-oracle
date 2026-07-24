@@ -2010,19 +2010,34 @@ function Usage() {
             usage data never leaves this machine. Hover or tap the ⓘ on any stat
             for what it means and which way is good.
           </p>
-          <div className="stats">
-            <Stat label="Queries" value={(t.queries || 0).toLocaleString()} info={STAT_INFO.queries} />
-            <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} info={STAT_INFO.tokens} />
-            <Stat label="Spend" value={money(t.spend)} info={STAT_INFO.spend} />
-            <Stat label="Answer cache" value={t.cache_hits || 0} info={STAT_INFO.answerCache} />
-            <Stat label="Schema cache" value={schemaCacheRate(t)} info={STAT_INFO.schemaCache} />
-            <Stat label="Prompt cache" value={promptCacheRate(t)} info={STAT_INFO.promptCache} />
-            <Stat label="Escalations" value={t.escalations || 0} info={STAT_INFO.escalations} />
-            <Stat label="Failures" value={t.failures || 0} info={STAT_INFO.failures} />
-            <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} info={STAT_INFO.groundedFigures} />
-            <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} info={STAT_INFO.groundedCells} />
-            <Stat label={leakLabel(t)} value={leakRate(t)} info={STAT_INFO.answerLeaks} />
-            <Stat label={exhaustionLabel(t)} value={(t.exhausted_turns || 0).toLocaleString()} info={STAT_INFO.exhausted} />
+          {/* Grouped into three bands so an admin can tell operational
+              volume/cost from efficiency from answer-quality at a glance. */}
+          <div className="stat-band">
+            <div className="field-label">Activity</div>
+            <div className="stats">
+              <Stat label="Queries" value={(t.queries || 0).toLocaleString()} info={STAT_INFO.queries} />
+              <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} info={STAT_INFO.tokens} />
+              <Stat label="Spend" value={money(t.spend)} info={STAT_INFO.spend} />
+            </div>
+          </div>
+          <div className="stat-band">
+            <div className="field-label">Efficiency</div>
+            <div className="stats">
+              <Stat label="Answer cache" value={t.cache_hits || 0} info={STAT_INFO.answerCache} />
+              <Stat label="Schema cache" value={schemaCacheRate(t)} info={STAT_INFO.schemaCache} />
+              <Stat label="Prompt cache" value={promptCacheRate(t)} info={STAT_INFO.promptCache} />
+              <Stat label="Escalations" value={t.escalations || 0} info={STAT_INFO.escalations} />
+            </div>
+          </div>
+          <div className="stat-band">
+            <div className="field-label">Answer quality</div>
+            <div className="stats">
+              <Stat label={groundedFigureLabel(t)} value={groundedFigureRate(t)} info={STAT_INFO.groundedFigures} />
+              <Stat label={groundedTableLabel(t)} value={groundedTableRate(t)} info={STAT_INFO.groundedCells} />
+              <Stat label={leakLabel(t)} value={leakRate(t)} info={STAT_INFO.answerLeaks} />
+              <Stat label="Failures" value={t.failures || 0} info={STAT_INFO.failures} />
+              <Stat label={exhaustionLabel(t)} value={(t.exhausted_turns || 0).toLocaleString()} info={STAT_INFO.exhausted} />
+            </div>
           </div>
 
           <div className="usage-chart-head">
@@ -2037,7 +2052,7 @@ function Usage() {
           {spec ? <Chart spec={spec} /> : <div className="muted">No activity in this range.</div>}
 
           <h3>Top users</h3>
-          <table className="grid">
+          <table className="grid" aria-label="Top users">
             <thead><tr>
               <th scope="col">User</th><th scope="col">Queries</th>
               <th scope="col">Tokens</th><th scope="col">Spend</th>
@@ -2056,9 +2071,11 @@ function Usage() {
 }
 
 function Stat({ label, value, info }) {
+  // Label BEFORE value in the DOM so a screen reader hears the name then the
+  // number ("Queries … 1,234"), not the reverse; `.stat` is column-reverse so the
+  // big value still sits visually on top.
   return (
     <div className="stat">
-      <div className="v">{value}</div>
       <div className="l">
         <span>{label}</span>
         {info && (
@@ -2074,6 +2091,7 @@ function Stat({ label, value, info }) {
           </HelpPopover>
         )}
       </div>
+      <div className="v">{value}</div>
     </div>
   );
 }
