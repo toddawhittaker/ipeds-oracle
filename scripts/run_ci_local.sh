@@ -115,6 +115,7 @@ BACKEND_SUITES=(
   test_security.py
   test_csrf.py
   test_secheaders.py
+  test_bodylimit.py
   test_rate_limit.py
   test_access_gate.py
   test_migrations.py

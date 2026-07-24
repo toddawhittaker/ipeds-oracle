@@ -663,6 +663,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **second line of defense** under the LLM-markdown render surface — that surface is
   safe today only because react-markdown emits no raw HTML (**no `rehype-raw`, default
   URL sanitizer intact — keep it that way**; a DOM-XSS review confirmed it clean).
+- **Pre-auth request-body cap:** FastAPI parses a request body while resolving a
+  route's parameters — **before** `solve_dependencies` evaluates
+  `Depends(require_admin)`. So an *unauthenticated* POST to `/api/admin/import`
+  had its whole multipart body parsed and spooled to the temp dir and only then
+  got its 401 (measured: 64 MB in 0.17s; a loop fills a container's writable
+  layer). `max_upload_mb` lives *inside* that handler, which never runs. A third
+  pure-ASGI layer, `BodyLimitMiddleware` (`bodylimit.py`), refuses the body first:
+  **`max_request_body_mb` (10 MB) on every request**, with `/api/admin/import`
+  exempt up to `max_upload_mb` **only when a session cookie is PRESENT** —
+  presence only, no signature check, no DB hit, no second copy of auth. Honest
+  limits, stated in the module docstring: one junk `Cookie:` header, or any
+  signed-in non-admin, still reaches the large tier. The three layers run
+  **SecurityHeaders → CSRF → BodyLimit → router** (last added = outermost), so a
+  cross-origin oversized POST is refused by CSRF having read zero bytes and the
+  413 still gets its security headers — pinned by
+  `test_the_413_carries_the_security_headers`. `MULTIPART_SLACK_MB` (8) keeps the
+  *handler* the authoritative decider for a merely-over-cap upload, so
+  `test_security.py`'s import-lock-leak assertion keeps its meaning; the
+  middleware only catches a grossly oversized body. Pinned in
+  `backend/tests/test_bodylimit.py` (the headline case asserts **413, not 401** —
+  a 401 would prove the parser ran).
 - A denied row records **both** `created_at` (when the request was filed →
   "Requested") **and** `denied_at` (when it was rejected → "Denied", added in
   migration 11) — kept separate so the admin Blocked-users table shows each; a

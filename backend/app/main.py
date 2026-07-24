@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import version
 from app.auth import current_user
+from app.bodylimit import BodyLimitMiddleware
 from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
@@ -101,6 +102,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan)
+# Three pure-ASGI layers, none of which buffers the chat SSE stream. Starlette
+# builds the stack so the LAST added is OUTERMOST, so a request travels:
+#   SecurityHeaders -> CSRF -> BodyLimit -> router
+# BodyLimit is innermost on purpose: a cross-origin oversized POST is refused by
+# CSRF having read zero bytes, and BodyLimit's own 413 still flows outward
+# through SecurityHeaders and gets stamped.
+#
+# Pre-auth request-body cap — FastAPI parses the body before it resolves
+# Depends(require_admin), so without this an unauthenticated upload is spooled to
+# disk before its 401. See app/bodylimit.py.
+app.add_middleware(BodyLimitMiddleware)
 # Origin-based CSRF guard (defense in depth over the SameSite=Lax session
 # cookie); pure-ASGI so it never buffers the chat SSE stream. See app/csrf.py.
 app.add_middleware(CSRFMiddleware)
