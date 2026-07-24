@@ -346,6 +346,16 @@ MIGRATIONS: list[tuple[int, str]] = [
     # Admin -> Usage's "Exhausted" count (with a degraded breakdown). NULL on
     # cache-hit/refusal/predating rows.
     (27, "ALTER TABLE usage_log ADD COLUMN exhaustion TEXT;"),
+    # Per-user chat throttle (app/ratelimit.py enforce_chat_rate_limit): one row
+    # per POST /api/chat/stream turn, for sliding-window rate limiting so an
+    # allowlisted user's runaway loop can't burn unbounded provider spend. Mirrors
+    # the auth_request_attempts table above; the index keeps the window sweep cheap.
+    (28, "CREATE TABLE IF NOT EXISTS chat_request_attempts (\n"
+         "    user_id    INTEGER NOT NULL,\n"
+         "    created_at REAL NOT NULL\n"
+         ");\n"
+         "CREATE INDEX IF NOT EXISTS idx_chat_attempts_created "
+         "ON chat_request_attempts(created_at);"),
 ]
 
 

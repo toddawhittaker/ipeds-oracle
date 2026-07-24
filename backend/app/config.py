@@ -193,6 +193,12 @@ class Settings(BaseSettings):
     auth_rate_window_seconds: float = Field(default=900.0)  # 15-minute sliding window
     auth_rate_max_per_email: int = Field(default=5)
     auth_rate_max_per_ip: int = Field(default=20)
+    # Per-user throttle on POST /api/chat/stream (an allowlisted user's runaway
+    # loop/script could otherwise burn unbounded provider spend). Sliding window,
+    # same app.db-backed pattern as the auth limiter. A non-positive
+    # chat_rate_max_per_user DISABLES the limiter (tests + self-hosters can flip).
+    chat_rate_window_seconds: float = Field(default=60.0)
+    chat_rate_max_per_user: int = Field(default=30)
     # How many trusted reverse proxies / tunnels sit in front of the app. The
     # per-IP rate limiter's real client IP comes from X-Forwarded-For, but that
     # header is attacker-controlled — a client can prepend a bogus left-most entry.

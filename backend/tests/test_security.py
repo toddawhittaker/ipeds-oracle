@@ -32,6 +32,8 @@ os.environ["MAX_UPLOAD_MB"] = "1"
 # per-IP auth rate limiter out of the way so it never masks a real assertion.
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
+# Chat throttle (SEC-3) out of the way — its own 429 is covered in test_rate_limit.py.
+os.environ["CHAT_RATE_MAX_PER_USER"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

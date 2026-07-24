@@ -39,6 +39,39 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def enforce_chat_rate_limit(user_id: int) -> None:
+    """Raise 429 if this user has exceeded their chat-turn budget over the rolling
+    window; otherwise record the turn. Mirrors enforce_auth_rate_limit, keyed on
+    the authenticated user id (not email/IP) since the chat path is already gated
+    to an allowlisted user — this caps a single user's runaway loop/script from
+    burning unbounded provider spend. A non-positive `chat_rate_max_per_user`
+    DISABLES the limiter entirely (no table writes), the off-switch for tests and
+    self-hosters who don't want a per-user cap."""
+    s = get_settings()
+    if s.chat_rate_max_per_user <= 0:
+        return
+    now = time.time()
+    cutoff = now - s.chat_rate_window_seconds
+    con = connect()
+    try:
+        # Opportunistic cleanup of rows well past any window.
+        con.execute("DELETE FROM chat_request_attempts WHERE created_at < ?",
+                    (cutoff - s.chat_rate_window_seconds,))
+        recent = con.execute(
+            "SELECT COUNT(*) FROM chat_request_attempts WHERE user_id=? AND created_at>=?",
+            (user_id, cutoff)).fetchone()[0]
+        if recent >= s.chat_rate_max_per_user:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many requests — please slow down and try again in a moment.")
+        con.execute(
+            "INSERT INTO chat_request_attempts(user_id, created_at) VALUES (?,?)",
+            (user_id, now))
+        con.commit()
+    finally:
+        con.close()
+
+
 def enforce_auth_rate_limit(email: str, ip: str) -> None:
     """Raise 429 if this email or IP has exceeded its window budget. Otherwise
     record the attempt. `email` should already be normalized (lower/stripped)."""

@@ -194,6 +194,52 @@ def test_head_release_rejects_redirect_off_nces_host():
                    note="redirect to a non-nces host must raise")
 
 
+def test_head_release_never_requests_offhost_redirect_target():
+    # SEC-6: the off-host redirect must be REFUSED before the request is issued —
+    # not merely detected after the fact (which is already an SSRF). Record every
+    # host the transport is asked for and assert the attacker host is never among
+    # them.
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.host)
+        if request.url.host == "nces.ed.gov":
+            return httpx.Response(302, headers={"location": "https://169.254.169.254/x.zip"})
+        return httpx.Response(200)  # only reached if we WRONGLY followed off-host
+
+    _assert_raises(lambda: nces.head_release(2023, client=_client(handler)),
+                   note="off-host redirect must raise")
+    assert "169.254.169.254" not in seen, \
+        f"the off-host redirect target must never be requested; saw {seen}"
+
+
+def test_head_release_follows_onhost_redirect():
+    # SEC-6: a same-host redirect within the hop cap is followed normally.
+    calls = {"n": 0}
+
+    def handler(request):
+        assert request.url.host == "nces.ed.gov"
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(302, headers={
+                "location": "https://nces.ed.gov/ipeds/tablefiles/zipfiles/moved.zip"})
+        return httpx.Response(200, headers={"content-length": "42"})
+
+    release, url, zip_bytes = nces.head_release(2023, client=_client(handler))
+    assert release == "Final", release
+    assert zip_bytes == 42, zip_bytes
+
+
+def test_head_release_redirect_loop_is_capped():
+    # SEC-6: an endless same-host redirect loop is bounded and raises, never hangs.
+    def handler(request):
+        return httpx.Response(302, headers={
+            "location": "https://nces.ed.gov/ipeds/tablefiles/zipfiles/loop.zip"})
+
+    _assert_raises(lambda: nces.head_release(2023, client=_client(handler)),
+                   note="a same-host redirect loop must be capped and raise")
+
+
 # ---------------------------------------------------------------------------
 # probe_catalog — one entry per start year + TTL cache. Probes run
 # CONCURRENTLY (ThreadPoolExecutor), so fakes below guard their shared call
@@ -323,6 +369,44 @@ def test_download_zip_happy_path_writes_the_file():
                       client=_client(handler))
     assert dest.exists(), "downloaded file must be written"
     assert dest.read_bytes() == content, dest.read_bytes()
+
+
+def test_download_zip_rejects_offhost_redirect():
+    # SEC-6: the streamed download path validates each redirect hop too — an
+    # off-host redirect raises and the off-host target is never requested.
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.host)
+        if request.url.host == "nces.ed.gov":
+            return httpx.Response(302, headers={"location": "https://169.254.169.254/x.zip"})
+        return httpx.Response(200, content=b"should-never-be-read")
+
+    dest = Path(tempfile.mkdtemp()) / "out.zip"
+    _assert_raises(lambda: nces.download_zip(
+        "https://nces.ed.gov/x.zip", dest, max_bytes=1_000_000, client=_client(handler)),
+        note="an off-host redirect during download must raise")
+    assert "169.254.169.254" not in seen, \
+        f"the off-host redirect target must never be requested; saw {seen}"
+    assert not dest.exists(), "no partial file should be left behind"
+
+
+def test_download_zip_follows_onhost_redirect():
+    # SEC-6: a same-host redirect during download is followed to the final file.
+    calls = {"n": 0}
+
+    def handler(request):
+        assert request.url.host == "nces.ed.gov"
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(302, headers={
+                "location": "https://nces.ed.gov/ipeds/tablefiles/zipfiles/moved.zip"})
+        return httpx.Response(200, content=b"final-bytes")
+
+    dest = Path(tempfile.mkdtemp()) / "out.zip"
+    nces.download_zip("https://nces.ed.gov/x.zip", dest, max_bytes=1_000_000,
+                      client=_client(handler))
+    assert dest.read_bytes() == b"final-bytes", dest.read_bytes()
 
 
 def test_download_zip_rejects_oversized_content_length_header():
@@ -721,6 +805,12 @@ def run():
           test_head_release_neither_available_returns_none_triple)
     check("head_release rejects a redirect that resolves off nces.ed.gov",
           test_head_release_rejects_redirect_off_nces_host)
+    check("head_release never REQUESTS an off-host redirect target (SEC-6)",
+          test_head_release_never_requests_offhost_redirect_target)
+    check("head_release follows a same-host redirect within the cap (SEC-6)",
+          test_head_release_follows_onhost_redirect)
+    check("head_release caps a same-host redirect loop (SEC-6)",
+          test_head_release_redirect_loop_is_capped)
     check("probe_catalog covers the full start-year range with the right shape + zip_bytes",
           test_probe_catalog_covers_full_range_and_shape)
     check("probe_catalog probes concurrently by default",
@@ -729,6 +819,10 @@ def run():
           test_probe_catalog_caches_until_refresh)
     check("download_zip writes the file on the happy path",
           test_download_zip_happy_path_writes_the_file)
+    check("download_zip rejects an off-host redirect (SEC-6)",
+          test_download_zip_rejects_offhost_redirect)
+    check("download_zip follows a same-host redirect (SEC-6)",
+          test_download_zip_follows_onhost_redirect)
     check("download_zip rejects an oversized declared Content-Length",
           test_download_zip_rejects_oversized_content_length_header)
     check("download_zip aborts mid-stream with no Content-Length header",

@@ -1,9 +1,11 @@
-"""Rate-limit contract for POST /api/auth/request (written test-first, TDD).
+"""Rate-limit contract for POST /api/auth/request AND POST /api/chat/stream.
 
-Spams the magic-link endpoint and asserts the limiter returns 429 once the
+Auth: spams the magic-link endpoint and asserts the limiter returns 429 once the
 per-email or per-IP window is exceeded, that attempts outside the window don't
-count, and that limiting is allowlist-neutral. Runs against a throwaway app.db
-with tight limits set via env. EXPECTED TO FAIL until the limiter exists.
+count, and that limiting is allowlist-neutral. Chat (SEC-3): asserts the per-user
+chat throttle refuses a user's turns past their window budget, is independent
+per-user, ignores expired rows, disables at max<=0, and is actually wired into the
+stream endpoint. Runs against a throwaway app.db with tight limits set via env.
 """
 import os
 import sys
@@ -15,22 +17,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
+# No dataset → the stream endpoint takes the fast "no data" path (a 200 stream),
+# so the chat-throttle endpoint test never invokes the agent/LLM.
+os.environ["IPEDS_DB_PATH"] = str(Path(tmp) / "missing-ipeds.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 # Tight, deterministic limits for the test.
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "3"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "5"
 os.environ["AUTH_RATE_WINDOW_SECONDS"] = "3600"
+os.environ["CHAT_RATE_MAX_PER_USER"] = "3"
+os.environ["CHAT_RATE_WINDOW_SECONDS"] = "3600"
 
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
 
-# Never send real mail from the test.
-auth_mod.send_magic_link = lambda *a, **k: True
+# Never send real mail; capture the magic link so the chat-endpoint test can sign in.
+captured = {}
+auth_mod.send_magic_link = lambda to, link: captured.__setitem__("link", link) or True
 auth_mod.send_access_request = lambda *a, **k: True
 
 from app.db import connect, init_db
 from app.main import app
+from app.ratelimit import enforce_chat_rate_limit
 
 init_db()  # ensure app.db schema exists before any direct DB setup below
 
@@ -52,6 +61,87 @@ def _clear():
     con.execute("DELETE FROM auth_request_attempts")
     con.commit()
     con.close()
+
+
+def _clear_chat():
+    con = connect()
+    con.execute("DELETE FROM chat_request_attempts")
+    con.commit()
+    con.close()
+
+
+def _login(c, email=ALLOW):
+    c.post("/api/auth/request", json={"email": email})
+    token = captured["link"].split("token=")[1]
+    assert c.post("/api/auth/verify", json={"token": token}).status_code == 200
+
+
+# --- SEC-3: per-user chat throttle -----------------------------------------
+
+def test_chat_limit_per_user():
+    # A single user's turns are capped at chat_rate_max_per_user (3) per window;
+    # the 4th raises 429. Guards the runaway-loop spend risk.
+    from fastapi import HTTPException
+    _clear_chat()
+    for _ in range(3):
+        enforce_chat_rate_limit(7)  # under the cap → records the turn
+    try:
+        enforce_chat_rate_limit(7)
+        raise AssertionError("4th turn should have raised 429")
+    except HTTPException as e:
+        assert e.status_code == 429, f"expected 429, got {e.status_code}"
+
+
+def test_chat_limit_is_per_user():
+    # One user exhausting their budget must not throttle a different user.
+    _clear_chat()
+    for _ in range(3):
+        enforce_chat_rate_limit(1)
+    enforce_chat_rate_limit(2)  # distinct user → still allowed, no raise
+
+
+def test_chat_window_expires_old_attempts():
+    # Rows older than the window don't count toward the cap.
+    _clear_chat()
+    con = connect()
+    old = time.time() - 3600 - 60
+    for _ in range(5):
+        con.execute("INSERT INTO chat_request_attempts(user_id, created_at) VALUES (?,?)",
+                    (9, old))
+    con.commit()
+    con.close()
+    enforce_chat_rate_limit(9)  # only expired rows present → allowed
+
+
+def test_chat_limit_disabled_at_nonpositive_cap():
+    # chat_rate_max_per_user <= 0 disables the limiter entirely (no raise, no rows).
+    from app.config import get_settings
+    _clear_chat()
+    os.environ["CHAT_RATE_MAX_PER_USER"] = "0"
+    get_settings.cache_clear()
+    try:
+        for _ in range(50):
+            enforce_chat_rate_limit(3)
+        con = connect()
+        n = con.execute("SELECT COUNT(*) FROM chat_request_attempts").fetchone()[0]
+        con.close()
+        assert n == 0, f"disabled limiter must not write attempt rows, got {n}"
+    finally:
+        os.environ["CHAT_RATE_MAX_PER_USER"] = "3"
+        get_settings.cache_clear()
+
+
+def test_chat_stream_endpoint_enforces_limit():
+    # The endpoint actually calls the limiter (wiring regression): the 4th
+    # streamed turn from one signed-in user is refused 429, before any agent work.
+    _clear_chat()
+    with TestClient(app) as c:
+        _login(c)
+        for i in range(3):
+            r = c.post("/api/chat/stream", json={"question": f"q{i}"})
+            assert r.status_code == 200, f"turn {i}: {r.status_code} {r.text}"
+        r = c.post("/api/chat/stream", json={"question": "q-over"})
+        assert r.status_code == 429, f"4th turn should be 429, got {r.status_code}"
 
 
 def test_per_email_limit():
@@ -154,6 +244,12 @@ def run():
     check("expired attempts outside window don't count", test_sliding_window_expires_old_attempts)
     check("limiting is allowlist-neutral (non-allowlisted also limited)",
           test_limit_is_allowlist_neutral)
+    check("chat throttle caps a user's turns per window (429)", test_chat_limit_per_user)
+    check("chat throttle is independent per user", test_chat_limit_is_per_user)
+    check("chat throttle ignores expired rows", test_chat_window_expires_old_attempts)
+    check("chat throttle disabled at max<=0", test_chat_limit_disabled_at_nonpositive_cap)
+    check("chat stream endpoint enforces the throttle (429)",
+          test_chat_stream_endpoint_enforces_limit)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

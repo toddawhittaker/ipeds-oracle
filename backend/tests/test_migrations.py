@@ -330,6 +330,25 @@ def test_migration_27_adds_usage_log_exhaustion_column():
     assert row[0] is None, row
 
 
+def test_migration_28_adds_chat_request_attempts_table():
+    # Per-user chat throttle (SEC-3, app/ratelimit.py enforce_chat_rate_limit):
+    # a sliding-window table mirroring auth_request_attempts. New in migration 28.
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 27])
+    tables = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "chat_request_attempts" not in tables, tables
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "user_id" in _cols(con, "chat_request_attempts"), _cols(con, "chat_request_attempts")
+    assert "created_at" in _cols(con, "chat_request_attempts"), \
+        _cols(con, "chat_request_attempts")
+    # The window-sweep index exists.
+    idx = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_chat_attempts_created" in idx, idx
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -338,6 +357,7 @@ def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     tables = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "year_provenance" in tables, tables
+    assert "chat_request_attempts" in tables, tables
     assert "progress" in _cols(con, "import_jobs"), _cols(con, "import_jobs")
 
 
@@ -622,6 +642,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       "table": "auth_request_attempts",
       "unique": 0
     },
+    "idx_chat_attempts_created": {
+      "columns": [
+        "created_at"
+      ],
+      "table": "chat_request_attempts",
+      "unique": 0
+    },
     "ix_conv_user": {
       "columns": [
         "user_id",
@@ -762,6 +789,22 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       [
         "ip",
         "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "chat_request_attempts": [
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "user_id",
+        "INTEGER",
         1,
         null,
         0
@@ -1532,6 +1575,8 @@ def run():
           test_migration_26_adds_messages_duration_ms)
     check("migration 27 adds usage_log.exhaustion (nullable)",
           test_migration_27_adds_usage_log_exhaustion_column)
+    check("migration 28 adds chat_request_attempts (SEC-3 throttle)",
+          test_migration_28_adds_chat_request_attempts_table)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

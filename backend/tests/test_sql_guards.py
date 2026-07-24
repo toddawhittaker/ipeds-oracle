@@ -144,4 +144,44 @@ assert not any("truncated" in note.lower() for note in r_full.notes), \
     f"a complete result must not carry a truncation note; notes={r_full.notes}"
 print("  ✓ complete result carries no truncation marker")
 
+print("\n== SEC-5: string literals survive comment stripping ==")
+# Regression: _strip_sql removed `--`/`/* */` comments from the RAW sql before
+# masking literals, so a literal like '2020--Q1' lost everything after `--` in
+# the EXECUTED query (the WHERE then matched the wrong row or nothing). The fix
+# strips comments literal-awarely; these assert the literals reach SQLite intact
+# while REAL comments are still removed.
+_lit_path = _probe_tmp / "literals.db"
+_con = sqlite3.connect(str(_lit_path))
+_con.execute("CREATE TABLE labels (tag TEXT)")
+_con.executemany("INSERT INTO labels(tag) VALUES (?)",
+                 [("2020--Q1",), ("a /* b */ c",), ("plain",)])
+_con.commit()
+_con.close()
+
+r = run_sql("SELECT tag FROM labels WHERE tag = '2020--Q1'", db_path=_lit_path)
+assert [row[0] for row in r.rows] == ["2020--Q1"], \
+    f"a '--' literal must survive comment stripping; got {r.rows}"
+print("  ✓ literal '2020--Q1' survives (no line-comment truncation)")
+
+r = run_sql("SELECT tag FROM labels WHERE tag = 'a /* b */ c'", db_path=_lit_path)
+assert [row[0] for row in r.rows] == ["a /* b */ c"], \
+    f"a '/* */' literal must survive; got {r.rows}"
+print("  ✓ literal 'a /* b */ c' survives (no block-comment stripping)")
+
+r = run_sql("SELECT tag FROM labels WHERE tag='plain' -- trailing note\n", db_path=_lit_path)
+assert [row[0] for row in r.rows] == ["plain"], \
+    f"a real -- comment must still be stripped cleanly; got {r.rows}"
+print("  ✓ a real -- comment is still stripped")
+
+from app.tools.sql import _strip_sql  # noqa: E402
+
+cleaned = _strip_sql("SELECT '2020--Q1' -- note")
+assert "2020--Q1" in cleaned and "note" not in cleaned, \
+    f"_strip_sql must keep the literal, drop the real comment; got {cleaned!r}"
+cleaned_blk = _strip_sql("SELECT 'a/*x*/b' /* real */ FROM t")
+assert "a/*x*/b" in cleaned_blk and "real" not in cleaned_blk, \
+    f"_strip_sql must keep a /* */ inside a literal, drop the real block; got {cleaned_blk!r}"
+validate_sql("SELECT 'a;b' AS x")  # a ';' inside a literal doesn't trip the single-stmt guard
+print("  ✓ _strip_sql / single-statement guard are literal-aware")
+
 print("\nALL SQL-GUARD TESTS PASSED")

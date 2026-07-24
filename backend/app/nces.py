@@ -21,6 +21,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from urllib.parse import urljoin
 
 import httpx
 
@@ -54,8 +55,43 @@ def _zip_url(start_year: int, release: str) -> str:
     return f"{NCES_BASE}/IPEDS_{start_year}-{end_yy}_{release}.zip"
 
 
+# Manual redirect handling (SEC-6): httpx's own follow_redirects would ISSUE the
+# request to an intermediate redirect target BEFORE we could inspect its host, so
+# a hop off nces.ed.gov is an SSRF the final-host check can't prevent. Instead we
+# follow redirects by hand with follow_redirects=False and validate EACH hop's
+# host+scheme before issuing the next request. Bounded to defuse a redirect loop.
+_MAX_REDIRECTS = 5
+
+
 def _client(timeout: float) -> httpx.Client:
-    return httpx.Client(timeout=timeout, follow_redirects=True)
+    return httpx.Client(timeout=timeout, follow_redirects=False)
+
+
+def _validated_redirect_target(current_url: str, resp: httpx.Response) -> str:
+    """Given a 3xx response to `current_url`, return the absolute URL of the next
+    hop — or raise if it has no Location or resolves off https://NCES_HOST. The
+    caller validates BEFORE issuing the next request, so a request is only ever
+    sent to nces.ed.gov."""
+    location = resp.headers.get("location")
+    if not location:
+        raise ValueError(f"redirect for {current_url} carried no Location header")
+    nxt = httpx.URL(urljoin(current_url, location))
+    if nxt.scheme != "https" or nxt.host != NCES_HOST:
+        raise ValueError(
+            f"redirect for {current_url} points off https://{NCES_HOST} (to {nxt})")
+    return str(nxt)
+
+
+def _head_following_redirects(client: httpx.Client, url: str) -> httpx.Response:
+    """HEAD `url`, manually following up to _MAX_REDIRECTS validated same-host
+    hops. Returns the first non-redirect response; raises on an off-host hop or a
+    redirect loop that exceeds the cap."""
+    for _ in range(_MAX_REDIRECTS + 1):
+        resp = client.head(url, follow_redirects=False)
+        if not resp.is_redirect:
+            return resp
+        url = _validated_redirect_target(url, resp)
+    raise ValueError(f"too many redirects fetching {url}")
 
 
 def head_release(
@@ -77,9 +113,9 @@ def head_release(
                 url = _zip_url(start_year, release)
             except ValueError:
                 return None, None, None
-            resp = c.head(url, follow_redirects=True)
+            resp = _head_following_redirects(c, url)
             resolved_host = resp.url.host
-            if resolved_host != NCES_HOST:
+            if resolved_host != NCES_HOST:  # defense-in-depth; hops already validated
                 raise ValueError(
                     f"redirect for {url} resolved off {NCES_HOST} (to {resolved_host})")
             if resp.status_code == 200:
@@ -168,54 +204,62 @@ def download_zip(url: str, dest: Path, max_bytes: int, client: httpx.Client | No
     c = client or _client(get_settings().nces_http_timeout_seconds)
     try:
         start = time.monotonic() if deadline_seconds is not None else None
-        with c.stream("GET", url) as resp:
-            resp.raise_for_status()
-            resolved_host = resp.url.host
-            if resolved_host != NCES_HOST:
-                raise ValueError(
-                    f"redirect for {url} resolved off {NCES_HOST} (to {resolved_host})")
-            declared = resp.headers.get("content-length")
-            total: int | None
-            if declared is not None:
-                try:
-                    declared_n = int(declared)
-                except ValueError:
-                    declared_n = None
-                if declared_n is not None and declared_n > max_bytes:
+        # Manually follow redirects, validating each hop's host BEFORE the next
+        # request (SEC-6); the stream body is only ever read from a validated
+        # same-host, non-redirect response.
+        for _ in range(_MAX_REDIRECTS + 1):
+            with c.stream("GET", url, follow_redirects=False) as resp:
+                if resp.is_redirect:
+                    url = _validated_redirect_target(url, resp)
+                    continue
+                resp.raise_for_status()
+                resolved_host = resp.url.host
+                if resolved_host != NCES_HOST:  # defense-in-depth; hops validated
                     raise ValueError(
-                        f"declared Content-Length {declared_n} exceeds the "
-                        f"{max_bytes}-byte cap for {url}")
-                total = declared_n
-            else:
-                total = None
-            # For the progress %, fall back to the size learned from the HEAD
-            # probe when the streamed GET omits Content-Length (chunked /
-            # compressed transfer) — otherwise pct is stuck at 0 the whole
-            # download. Display only; the byte caps above/below are unaffected.
-            if total is None:
-                total = known_total
-            written = 0
-            with dest.open("wb") as f:
-                for chunk in resp.iter_bytes():
-                    if deadline_seconds is not None and \
-                            (time.monotonic() - start) > deadline_seconds:
-                        raise TimeoutError(
-                            f"download of {url} exceeded the {deadline_seconds}s deadline")
-                    written += len(chunk)
-                    if on_progress is not None:
-                        on_progress(written, total)
-                    if written > max_bytes:
+                        f"redirect for {url} resolved off {NCES_HOST} (to {resolved_host})")
+                declared = resp.headers.get("content-length")
+                total: int | None
+                if declared is not None:
+                    try:
+                        declared_n = int(declared)
+                    except ValueError:
+                        declared_n = None
+                    if declared_n is not None and declared_n > max_bytes:
                         raise ValueError(
-                            f"download of {url} exceeded the {max_bytes}-byte "
-                            "cap mid-stream")
-                    f.write(chunk)
+                            f"declared Content-Length {declared_n} exceeds the "
+                            f"{max_bytes}-byte cap for {url}")
+                    total = declared_n
+                else:
+                    total = None
+                # For the progress %, fall back to the size learned from the HEAD
+                # probe when the streamed GET omits Content-Length (chunked /
+                # compressed transfer) — otherwise pct is stuck at 0 the whole
+                # download. Display only; the byte caps above/below are unaffected.
+                if total is None:
+                    total = known_total
+                written = 0
+                with dest.open("wb") as f:
+                    for chunk in resp.iter_bytes():
+                        if deadline_seconds is not None and \
+                                (time.monotonic() - start) > deadline_seconds:
+                            raise TimeoutError(
+                                f"download of {url} exceeded the {deadline_seconds}s deadline")
+                        written += len(chunk)
+                        if on_progress is not None:
+                            on_progress(written, total)
+                        if written > max_bytes:
+                            raise ValueError(
+                                f"download of {url} exceeded the {max_bytes}-byte "
+                                "cap mid-stream")
+                        f.write(chunk)
+                return dest
+        raise ValueError(f"too many redirects fetching {url}")
     except Exception:
         dest.unlink(missing_ok=True)
         raise
     finally:
         if own_client:
             c.close()
-    return dest
 
 
 def _unsafe_member_name(name: str, out_dir: Path) -> bool:

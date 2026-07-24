@@ -60,6 +60,14 @@ export LLM_OUTPUT_COST_PER_MTOK=0
 #     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
 #     depend on this. Prod default is true.
 export FIGURE_RETRY_ENABLED=false
+#   * CHAT_RATE_MAX_PER_USER — deliberately NOT pinned here, for the same reason as
+#     STRUCTURED_EMISSION_ENABLED below. It DEFAULTS to 30 (limiter ON) in config.py,
+#     and ci_env.sh does NOT run in CI (CI has no .env → config defaults). The test
+#     modules that fire many stream turns for one user pin CHAT_RATE_MAX_PER_USER=0
+#     themselves at import (test_chat_router / test_guard / test_security), and
+#     test_rate_limit.py sets its own tight cap. Pinning 0 here would let a NEW
+#     stream-heavy module pass run_ci_local (limiter off) while failing CI (default
+#     30) — the exact masking trap. Leave it unset so local reproduces CI's on-default.
 #   * STRUCTURED_EMISSION_ENABLED — deliberately NOT pinned here. It now DEFAULTS
 #     ON in config.py, and ci_env.sh does NOT run in CI (CI has no .env → config
 #     defaults). Pinning it false here would make run_ci_local diverge from CI
