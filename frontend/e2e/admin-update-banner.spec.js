@@ -5,7 +5,8 @@ import {
 } from "./mocks.js";
 
 // The Admin update banner shows ONLY when a newer release is available (nothing
-// when up to date), and is dismissible per-latest-version (sessionStorage).
+// when up to date). NON-dismissible on purpose — like every other attention
+// item, it persists until acted on (the deployment is updated).
 
 async function admin(page, version) {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
@@ -24,7 +25,7 @@ test("no banner when up to date", async ({ page }) => {
   await expect(page.getByText(/is available/)).toHaveCount(0);
 });
 
-test("banner appears when an update exists and dismiss hides it", async ({ page }) => {
+test("banner appears when an update exists, and is not dismissible", async ({ page }) => {
   await admin(page, { current: "0.1.0", latest: "0.2.0", update_available: true });
 
   const banner = page.locator(".update-banner");
@@ -33,7 +34,6 @@ test("banner appears when an update exists and dismiss hides it", async ({ page 
   await expect(banner).toContainText("0.1.0");
   await expect(banner.getByRole("link", { name: "Release notes" }))
     .toHaveAttribute("href", "https://github.com/toddawhittaker/ipeds-oracle/releases");
-
-  await banner.getByRole("button", { name: "Dismiss update notice" }).click();
-  await expect(page.locator(".update-banner")).toHaveCount(0);
+  // No dismiss — it persists until the deployment is updated (attention-item model).
+  await expect(banner.getByRole("button")).toHaveCount(0);
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attentionTotal, formatBadge, badgeTone } from "./attention.js";
+import { attentionTotal, avatarBadgeTotal, formatBadge, badgeTone } from "./attention.js";
 
 describe("formatBadge", () => {
   const cases = [
@@ -38,6 +38,17 @@ describe("attentionTotal", () => {
   });
   it("ignores keys outside the actionable set (imports/usage never badge)", () => {
     expect(attentionTotal({ users: 1, imports: 9, usage: 9 })).toBe(1);
+  });
+});
+
+describe("avatarBadgeTotal", () => {
+  it("adds one for an available update, on top of the section backlog", () => {
+    expect(avatarBadgeTotal({ users: 2, skills: 0, logs: 1 }, true)).toBe(4);
+    expect(avatarBadgeTotal({ users: 2, skills: 0, logs: 1 }, false)).toBe(3);
+  });
+  it("is just the update when there's no other backlog", () => {
+    expect(avatarBadgeTotal({}, true)).toBe(1);
+    expect(avatarBadgeTotal(null, false)).toBe(0);
   });
 });
 

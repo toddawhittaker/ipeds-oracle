@@ -148,9 +148,16 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   the **Admin guide link is gated to `isAdmin`** (passed from `App.jsx`). It also
   shows the **running version + an "update available" note**: `App.jsx` fetches
   `GET /api/version` once signed in (→ `{current, latest, update_available}`) and
-  passes it to About (version line) AND to `Admin.jsx` (a dismissible accent
-  **update banner** shown ONLY when a newer release exists — deliberately NOT the
-  attention badge, which is for "work waiting"). The running version is
+  passes it to About (version line) AND to `Admin.jsx` (a **warn-toned update
+  banner** shown ONLY when a newer release exists). An available update is itself
+  "work waiting" (update the deployment), so it ALSO adds +1 to the admin **avatar
+  attention badge** via `avatarBadgeTotal(attention, isAdmin && update_available)`
+  (`attention.js`, vitest-pinned) — the badge stays accent (the generic
+  "something's waiting" pill); only the yellow banner signals the update. The
+  banner is **NON-dismissible on purpose** — like a pending user or a log problem,
+  it persists until you ACT on it (update the deployment → `update_available` goes
+  false → banner AND badge clear together), so the badge always maps to a visible
+  item in Admin. The running version is
   `config.app_version` (env `APP_VERSION`, baked from the git tag by the Dockerfile
   `ARG`/`ENV` ← CI `build-args`; `"dev"` locally). `backend/app/version.py` does the
   read-only "newer release?" check against GitHub (`config.GITHUB_REPO`), **cached

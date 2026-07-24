@@ -20,6 +20,14 @@ export function attentionTotal(counts) {
   return ATTENTION_KEYS.reduce((sum, k) => sum + num(c[k]), 0);
 }
 
+// The top-bar avatar badge total: the section backlog PLUS one for an available
+// update (admins see the update in the same "something's waiting" cue). Kept a
+// pure add-on so the section-only `attentionTotal` (which must match the backend
+// keys) stays untouched.
+export function avatarBadgeTotal(counts, hasUpdate) {
+  return attentionTotal(counts) + (hasUpdate ? 1 : 0);
+}
+
 // Badge text for a count: "" (no badge) at 0/negative, the plain number up to
 // `cap`, else a capped "99+" form so a big backlog stays one short token.
 export function formatBadge(n, cap = 99) {

@@ -33,10 +33,6 @@ import {
 // Counted labels for the CONFIRM dialog's action button (e.g. "Promote 9
 // users") — the count belongs in the dialog, where the exact breakdown is
 // spelled out, never on the toolbar button itself.
-// sessionStorage key for the dismissed update-banner version (keyed by the
-// latest tag so a newer release re-shows the banner).
-const UPDATE_DISMISS_KEY = "ipeds-update-dismissed";
-
 const BULK_ACTION_LABEL = {
   promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"}`,
   demote: (n) => `Demote ${n} ${n === 1 ? "administrator" : "administrators"}`,
@@ -165,30 +161,21 @@ export default function Admin({ me, tab, sub, onDataChanged, attention, onAttent
   // fallback for the same reason.
   const counts = attention || {};
   const refreshAttention = onAttentionChanged || (() => {});
-  // Update banner: shown only when a newer release exists, dismissible per
-  // latest-version (a NEWER release later re-shows it). Keyed in sessionStorage.
-  const [updDismissed, setUpdDismissed] = useState(
-    () => !!version?.latest && sessionStorage.getItem(UPDATE_DISMISS_KEY) === version.latest);
-  const showUpdate = !!version?.update_available && !updDismissed;
-  const dismissUpdate = () => {
-    if (version?.latest) sessionStorage.setItem(UPDATE_DISMISS_KEY, version.latest);
-    setUpdDismissed(true);
-  };
+  // NON-dismissible on purpose: an available update is an attention item like a
+  // pending user or a log problem — it stays until you ACT on it (update the
+  // deployment → update_available goes false → the banner AND the +1 avatar
+  // badge clear together). So the badge always maps to this visible banner.
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
-      {showUpdate && (
+      {version?.update_available && (
         <div className="update-banner" role="status">
+          <IconInfo size={16} aria-hidden="true" />
           <span>
-            <IconInfo size={16} aria-hidden="true" />{" "}
             <strong>v{version.latest}</strong> is available — you&rsquo;re on {version.current}.{" "}
             <a href="https://github.com/toddawhittaker/ipeds-oracle/releases"
                target="_blank" rel="noreferrer">Release notes</a>
           </span>
-          <button type="button" className="update-banner-close"
-                  aria-label="Dismiss update notice" onClick={dismissUpdate}>
-            <IconClose size={16} />
-          </button>
         </div>
       )}
       <nav className="subtabs" aria-label="Admin sections">

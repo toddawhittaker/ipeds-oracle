@@ -10,7 +10,7 @@ import { ConfirmProvider } from "./ConfirmModal.jsx";
 import Wordmark from "./Wordmark.jsx";
 import UserMenu from "./UserMenu.jsx";
 import AboutModal from "./AboutModal.jsx";
-import { attentionTotal } from "./attention.js";
+import { avatarBadgeTotal } from "./attention.js";
 
 // How often the Shell re-polls the admin attention counts. Long enough to be
 // cheap, short enough that a badge feels live; mutations that clear a backlog
@@ -194,7 +194,7 @@ function Shell() {
         <UserMenu
           email={user.email}
           isAdmin={user.is_admin}
-          attentionTotal={attentionTotal(attention)}
+          attentionTotal={avatarBadgeTotal(attention, isAdmin && !!version?.update_available)}
           theme={theme}
           onToggleTheme={toggleTheme}
           onAbout={() => setAboutOpen(true)}

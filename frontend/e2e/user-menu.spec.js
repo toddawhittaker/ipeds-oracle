@@ -94,6 +94,16 @@ test("admin menu carries an Admin item, and attention shows on the avatar + the 
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 });
 
+test("an available update ticks the avatar attention badge (+1)", async ({ page }) => {
+  await signedIn(page, {
+    admin: true, attention: { users: 0, skills: 0, logs: 0 },
+    version: { current: "0.1.0", latest: "0.2.0", update_available: true },
+  });
+  await page.goto("/");
+  // No section backlog, but the available update alone shows a "1" on the avatar.
+  await expect(page.locator(".avatar-badge")).toHaveText("1");
+});
+
 test("keyboard: opening focuses the first item; Escape closes and restores focus; click-outside closes", async ({ page }) => {
   await signedIn(page);
   await page.goto("/");
