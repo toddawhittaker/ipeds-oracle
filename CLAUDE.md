@@ -629,7 +629,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   trusted reverse proxy/tunnel appends the real peer); `0` (dev/CI default) ignores
   XFF and uses the socket peer. Set it to **`1`** in production behind a single
   proxy/tunnel hop (via `.env`); combine with `EMAIL_DOMAIN` to close the
-  access-request-spam surface.
+  access-request-spam surface. **The app must be the ONLY interpreter of XFF:**
+  uvicorn ships `proxy_headers=True` trusting loopback and rewrites
+  `scope["client"]` from the header, which silently defeats
+  `TRUSTED_PROXY_COUNT=0` behind any loopback-adjacent ingress (ssh -L,
+  cloudflared, host-network nginx). `scripts/docker-entrypoint.sh` therefore runs
+  uvicorn with **`--no-proxy-headers`** — keep it there, and pass it in any
+  non-Docker deployment too.
 - **Per-user chat throttle (SEC-3):** `POST /api/chat/stream` is gated only by
   `current_user`, so without a cap an allowlisted user's runaway loop/script could
   burn unbounded provider spend. `ratelimit.enforce_chat_rate_limit(user_id)` — a
