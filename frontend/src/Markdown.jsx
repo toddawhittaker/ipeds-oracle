@@ -54,6 +54,7 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
   const entityCol = cmp?.entityCol ?? -1;
 
   return (
+    <>
     <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
       <table>
         <thead>
@@ -92,6 +93,16 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
         </tbody>
       </table>
     </div>
+    {/* Sorting is client-side over the rows on screen — which, for a large
+        listing, is only the first page the model transcribed. Say so, so
+        "sort ascending to find the smallest" isn't read as a global answer.
+        The full set is in the CSV (whole-query order). */}
+    {sort.col != null && (
+      <p className="sort-note" role="note">
+        Sorted the {shown.length} rows shown here — download the CSV for the full result.
+      </p>
+    )}
+    </>
   );
 }
 

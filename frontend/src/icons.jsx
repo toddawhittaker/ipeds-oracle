@@ -162,6 +162,14 @@ export const IconChevronRight = (p) => (<Svg {...p}><path d="M9 18l6-6-6-6" /></
 // Plus — the "New chat" affordance (replaces the literal + text glyph).
 export const IconPlus = (p) => (<Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>);
 
+// Pause / play — the persistent stop control on the auto-rotating login gallery.
+export const IconPause = (p) => (
+  <Svg {...p}><path d="M9 5v14M15 5v14" /></Svg>
+);
+export const IconPlay = (p) => (
+  <Svg {...p} fill="currentColor" stroke="none"><path d="M7 5l12 7-12 7z" /></Svg>
+);
+
 // Question mark in a circle for the format-help popover trigger.
 export const IconHelp = (p) => (
   <Svg {...p}>

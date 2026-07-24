@@ -10,12 +10,15 @@ import { pctChange, trendValues } from "./trendstats.js";
 
 // Series colors. Muted/earthy to match the app's archival cream+teal+ochre
 // aesthetic (the old palette read as neon on both themes), but still six
-// clearly-separated hues — teal · ochre · sage · plum · clay · slate-blue — so
-// categories stay differentiable. Two variants: deeper tones for the light
-// cream panel, lighter tints for the dark green-ink panel. The first color is
-// the app teal, so a single-series bar chart is on-brand.
-const PALETTE_LIGHT = ["#2f6f68", "#b07a2e", "#5f7d4f", "#7d5a86", "#b05f50", "#4a6b8a"];
-const PALETTE_DARK = ["#6bb3aa", "#cf9a54", "#8aa878", "#b592c2", "#cf8479", "#7ea3c4"];
+// clearly-separated hues. ORDER matters: teal · ochre · plum · clay · sage ·
+// slate-blue, so the two greens (teal, sage) are never neighbors and a 2–3
+// series chart draws from maximally-separated hues (green/orange/purple) —
+// green-vs-green (which collapses under deuteranopia) only appears at 5+ series.
+// Two variants: deeper tones for the light cream panel, lighter tints for the
+// dark green-ink panel. The first color is the app teal, so a single-series bar
+// chart is on-brand.
+const PALETTE_LIGHT = ["#2f6f68", "#b07a2e", "#7d5a86", "#b05f50", "#5f7d4f", "#4a6b8a"];
+const PALETTE_DARK = ["#6bb3aa", "#cf9a54", "#b592c2", "#cf8479", "#8aa878", "#7ea3c4"];
 
 // Exports are always rendered light so a pasted chart looks right in a document
 // regardless of the app's current theme — so they carry the light palette.
