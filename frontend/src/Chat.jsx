@@ -954,7 +954,7 @@ export default function Chat({ me }) {
                             prose and stays out of the copy surface. Renders
                             null when the message carries no figure. */}
                         <Figure spec={m.figure} />
-                        <Markdown>{m.content || ""}</Markdown>
+                        <Markdown messageId={m.id}>{m.content || ""}</Markdown>
                       </>
                     )}
                   </div>

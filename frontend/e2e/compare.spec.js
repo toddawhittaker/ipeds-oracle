@@ -3,9 +3,10 @@ import { mockMe, mockConversations, mockConversation } from "./mocks.js";
 
 // Compare mode: pick 2+ rows from a categorical result table and instantly chart just
 // those rows from the numbers already in the table (no new query). Browser truth —
-// react-markdown renders the table, a `tr` override injects the checkbox column, and
-// selection drives an inline snapshot <Chart>. The pure gate/spec logic is unit-tested
-// in src/compare.test.js; this pins the DOM flow and the comparability gate.
+// the sortable result table (SortableTable in Markdown.jsx) renders the leading
+// checkbox column inline for a comparable table, and selection drives an inline
+// snapshot <Chart>. The pure gate/spec logic is unit-tested in src/compare.test.js;
+// this pins the DOM flow and the comparability gate.
 
 // A categorical ranking table (one row per university + a numeric metric) — comparable.
 const RANKING = "Largest public universities:\n\n"

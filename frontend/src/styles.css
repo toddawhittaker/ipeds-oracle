@@ -815,14 +815,36 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* markdown */
 .md :first-child { margin-top: 0; }
 .md :last-child { margin-bottom: 0; }
-.md .table-wrap { overflow-x: auto; }
-.md table { border-collapse: collapse; margin: 8px 0; }
-.md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; white-space: nowrap; }
+/* A big result table (e.g. "top 100 …") scrolls inside a capped box instead of
+   running the chat on for a screen — vertically AND horizontally — with the
+   header row pinned so the columns stay labeled while you scroll. */
+.md .table-wrap { overflow: auto; max-height: 460px; }
+/* border-collapse: SEPARATE (not collapse) is what makes the sticky header solid:
+   with collapse, cell borders belong to the table box and scroll away, so the
+   header's top/bottom rules don't stick and a sliver of the first rows peeks
+   ABOVE the pinned header. With separate, each cell owns its borders and they
+   travel with the sticky header. Right+bottom on every cell, plus left on the
+   first column and top on the header row, rebuilds one clean 1px grid. */
+.md table { border-collapse: separate; border-spacing: 0; margin: 8px 0; }
+.md th, .md td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  padding: 6px 10px; text-align: left; white-space: nowrap; }
+.md th:first-child, .md td:first-child { border-left: 1px solid var(--line); }
+.md thead th { border-top: 1px solid var(--line); position: sticky; top: 0; z-index: 1; padding: 0; }
 /* Headers autofit: a multi-word header (e.g. "Undergraduate Enrollment") may wrap
    to keep the column — and the whole table — from forcing an over-wide layout. Data
    cells stay nowrap (a number must not break). A genuinely wide table still scrolls
    inside .table-wrap. */
 .md th { background: var(--bg); white-space: normal; overflow-wrap: break-word; vertical-align: bottom; }
+/* Click-to-sort headers: the button fills the header cell (padding moves onto it),
+   carrying the label + an up/down caret whose active half lights in the accent. */
+.th-sort { display: inline-flex; align-items: center; gap: 6px; width: 100%;
+  padding: 6px 10px; background: none; border: none; font: inherit; color: inherit;
+  text-align: left; cursor: pointer; }
+.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sort-caret { flex: none; display: inline-flex; }
+.sort-caret path { fill: var(--line-strong); }
+.sort-caret path.act { fill: var(--accent); }
+.th-sort:hover .sort-caret path:not(.act) { fill: var(--muted); }
 .md code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 .md pre { background: var(--bg); padding: 12px; border-radius: 8px; overflow: auto; }
 
@@ -833,7 +855,22 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
    that appears once rows are ticked, and the instant snapshot chart panel. */
 .cmp-cell { width: 1%; text-align: center; padding: 6px 8px; }
-.cmp-cell input { cursor: pointer; }
+/* A styled square checkbox (the bare native box looked out of place in the
+   result table). appearance:none + a drawn check, accent-filled when ticked. */
+.cmp-cell input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; vertical-align: middle;
+  width: 16px; height: 16px; border: 1.5px solid var(--line-strong); border-radius: 4px;
+  background: var(--panel); cursor: pointer; position: relative;
+  transition: background .12s ease, border-color .12s ease;
+}
+.cmp-cell input[type="checkbox"]:hover:not(:disabled) { border-color: var(--accent); }
+.cmp-cell input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.cmp-cell input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px;
+  border: solid var(--on-fg); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.cmp-cell input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
+.cmp-cell input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cmp-row.picked > td:not(.cmp-cell), .cmp-row.picked > td.cmp-cell { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .compare-bar { display: flex; align-items: center; gap: 14px; padding: 6px 2px 0; font-size: 13px; }
 .compare-count { font-family: var(--mono); color: var(--muted); }

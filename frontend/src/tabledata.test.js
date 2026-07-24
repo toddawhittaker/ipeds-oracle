@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseNum, toCsv, extractTable, chartSpecFromTable } from "./tabledata.js";
+import { describe, it, expect, vi } from "vitest";
+import { parseNum, toCsv, extractTable, chartSpecFromTable, countMarkdownTables, columnIsNumeric, sortRows, downloadServerCsv } from "./tabledata.js";
 
 // Pure helpers behind per-table CSV export and "Chart this". The DOM side-effect
 // (downloadCsv wiring an <a> and triggering a real browser download) is browser
@@ -118,5 +118,70 @@ describe("chartSpecFromTable", () => {
       [["1", "Columbus", "900"], ["2", "Cleveland", "370"], ["3", "Cincinnati", "300"]],
     );
     expect(seq.y).toEqual(["Pop"]);
+  });
+});
+
+describe("countMarkdownTables", () => {
+  const one = "Intro.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+  const two = one + "\nMore.\n\n| X | Y |\n| :-- | --: |\n| a | b |\n";
+  it("counts a single table", () => expect(countMarkdownTables(one)).toBe(1));
+  it("counts two tables", () => expect(countMarkdownTables(two)).toBe(2));
+  it("is 0 with no table", () => expect(countMarkdownTables("just prose, no pipes")).toBe(0));
+  it("ignores a --- horizontal rule (no pipe)", () =>
+    expect(countMarkdownTables("above\n\n---\n\nbelow")).toBe(0));
+  it("does not count a data row that contains dashes", () =>
+    expect(countMarkdownTables("| Name | Note |\n| --- | --- |\n| A-1 | in-state |")).toBe(1));
+  it("handles non-strings", () => expect(countMarkdownTables(null)).toBe(0));
+});
+
+describe("columnIsNumeric", () => {
+  const rows = [["Ohio State", "1,234"], ["Miami", "567"], ["Kent", "n/a"]];
+  it("true for a mostly-numeric column", () => expect(columnIsNumeric(rows, 1)).toBe(true));
+  it("false for a text column", () => expect(columnIsNumeric(rows, 0)).toBe(false));
+  it("false with no rows", () => expect(columnIsNumeric([], 0)).toBe(false));
+});
+
+describe("sortRows", () => {
+  const rows = [["B", "10"], ["A", "2"], ["C", "100"]];
+  it("numeric asc orders by value, not lexically (100 after 10)", () =>
+    expect(sortRows(rows, 1, "asc", true).map((r) => r[1])).toEqual(["2", "10", "100"]));
+  it("numeric desc reverses", () =>
+    expect(sortRows(rows, 1, "desc", true).map((r) => r[1])).toEqual(["100", "10", "2"]));
+  it("string asc sorts the label column", () =>
+    expect(sortRows(rows, 0, "asc", false).map((r) => r[0])).toEqual(["A", "B", "C"]));
+  it("null column returns original order (a fresh copy)", () => {
+    const out = sortRows(rows, null, null, false);
+    expect(out).toEqual(rows);
+    expect(out).not.toBe(rows);
+  });
+  it("is stable on ties (equal keys keep input order)", () => {
+    const tied = [["x", "5"], ["y", "5"], ["z", "5"]];
+    expect(sortRows(tied, 1, "asc", true).map((r) => r[0])).toEqual(["x", "y", "z"]);
+  });
+  it("sorts blank/non-numeric cells to the end in both directions", () => {
+    const withBlank = [["a", "3"], ["b", ""], ["c", "1"]];
+    expect(sortRows(withBlank, 1, "asc", true).map((r) => r[0])).toEqual(["c", "a", "b"]);
+    expect(sortRows(withBlank, 1, "desc", true).map((r) => r[0])).toEqual(["a", "c", "b"]);
+  });
+});
+
+describe("downloadServerCsv", () => {
+  it("builds the message CSV URL, adding ?cols only for a positive integer", () => {
+    const anchors = [];
+    const make = document.createElement.bind(document);
+    const spy = vi.spyOn(document, "createElement").mockImplementation((tag) => {
+      const el = make(tag);
+      if (tag === "a") { el.click = () => {}; anchors.push(el); }
+      return el;
+    });
+    downloadServerCsv(7, 4);
+    downloadServerCsv(7);        // no column hint
+    downloadServerCsv(7, 0);     // non-positive → no ?cols
+    spy.mockRestore();
+    expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
+      "/api/chat/messages/7/download.csv?cols=4",
+      "/api/chat/messages/7/download.csv",
+      "/api/chat/messages/7/download.csv",
+    ]);
   });
 });

@@ -641,12 +641,40 @@ def delete_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user))
     return {"ok": True}
 
 
+def _select_table_sql(sql_list: list[str], cols: int | None, cap: int):
+    """Pick the SQL whose result IS the displayed table and return its full run.
+
+    NOT simply `sql_list[-1]`: under the "state the full COUNT(*)" listing rule
+    the answer's LAST query is often a scalar count, not the ranking the user
+    sees — re-running it hands back "total: 834" instead of the 834 rows. So run
+    every candidate (read-only, capped) and choose the best match: an exact
+    column-count match with the on-screen table first (the caller passes the
+    table's column count), then the widest result, then the longest. Skips a SQL
+    that fails validation; raises the last error only if NOTHING ran (→ 400)."""
+    results = []
+    last_err: SQLValidationError | None = None
+    for sql in sql_list:
+        try:
+            results.append(run_sql(sql, limit=cap))
+        except SQLValidationError as e:
+            last_err = e
+    if not results:
+        raise last_err or SQLValidationError("No runnable query for this answer.")
+    return max(results, key=lambda r: (
+        cols is not None and len(r.columns) == cols,  # matches the shown table
+        len(r.columns) > 1,                           # a real table, not a scalar
+        len(r.rows)))                                 # the full listing is longest
+
+
 @router.get("/messages/{message_id}/download.csv")
-def download_csv(message_id: int, request: Request, user: sqlite3.Row = Depends(current_user)):
-    """Re-execute the answer's final SQL (higher row cap) and stream a CSV.
+def download_csv(message_id: int, request: Request, cols: int | None = None,
+                 user: sqlite3.Row = Depends(current_user)):
+    """Re-execute the answer's TABLE query (higher row cap) and stream a CSV.
 
     Re-running is intentional: it guarantees the download reflects current data
-    and avoids relying on any per-request in-memory result.
+    and avoids relying on any per-request in-memory result. `cols` (the displayed
+    table's column count, from the client) disambiguates WHICH of the answer's
+    queries produced the table — see `_select_table_sql`.
     """
     con = connect()
     try:
@@ -662,7 +690,7 @@ def download_csv(message_id: int, request: Request, user: sqlite3.Row = Depends(
     if not sql_list:
         raise HTTPException(400, "No query is associated with this answer.")
     try:
-        result = run_sql(sql_list[-1], limit=get_settings().sql_row_cap_download)
+        result = _select_table_sql(sql_list, cols, get_settings().sql_row_cap_download)
     except SQLValidationError as e:
         raise HTTPException(400, str(e)) from e
 
