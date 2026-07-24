@@ -121,14 +121,18 @@ export default function AboutModal({ onClose, isAdmin = false, version = null })
           {version?.current && (
             <p className="about-version muted small">
               Version {version.current}
-              {version.update_available && (
+              {version.update_available ? (
                 <>
                   {" — a newer version ("}
                   <strong>{version.latest}</strong>
                   {") is "}
                   <a href={RELEASES_URL} target="_blank" rel="noreferrer">available</a>
                 </>
-              )}
+              ) : version.latest ? (
+                version.latest === version.current
+                  ? " · up to date"
+                  : <>{" · latest release "}{version.latest}</>
+              ) : null}
             </p>
           )}
         </div>

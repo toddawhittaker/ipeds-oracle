@@ -177,6 +177,17 @@ test("About shows the running version and, when one exists, a newer-release link
     .toHaveAttribute("href", "https://github.com/toddawhittaker/ipeds-oracle/releases");
 });
 
+test("About shows the latest released version even when not updating (dev build)", async ({ page }) => {
+  await signedIn(page, { version: { current: "dev", latest: "0.1.0", update_available: false } });
+  await page.goto("/");
+  await avatar(page).click();
+  await page.getByRole("menuitem", { name: "About IPEDS Oracle" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/Version dev/)).toBeVisible();
+  await expect(dialog.getByText(/latest release 0\.1\.0/)).toBeVisible();
+});
+
 test("About shows the Admin guide link only to an admin", async ({ page }) => {
   await signedIn(page, { admin: true });
   await page.goto("/");
