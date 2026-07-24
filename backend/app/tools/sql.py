@@ -262,8 +262,8 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
             "EXCEPTION — if the user asked for a LISTING or ranking (not an "
             f"aggregate): you MAY present these as the first {limit} rows, but you "
             "MUST state the full row count (run SELECT COUNT(*)) and tell the user "
-            "the complete data is downloadable via the 'Download CSV' button under "
-            "the table.")
+            "the complete data can be downloaded in full below the table (do NOT "
+            "name or quote the download button — a control already sits there).")
 
     return QueryResult(
         columns=columns, rows=rows, truncated=truncated,

@@ -1055,6 +1055,23 @@ def test_download_csv_picks_table_query_not_a_trailing_count():
         assert no_hint.text.strip().splitlines()[0] == "year,a", no_hint.text[:80]
 
 
+def test_download_csv_prefers_the_last_matching_query():
+    # When two queries share the shown table's column count, the LAST one wins
+    # (closest to the answer) — not the one with the most rows.
+    first = ("SELECT year, SUM(ctotalt) a FROM c_a "
+             "WHERE awlevel=3 AND majornum=1 AND cipcode='99' GROUP BY year")
+    last = "SELECT awlevel, COUNT(*) b FROM c_a GROUP BY awlevel"
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "two 2-column queries", answer_text="see table",
+                       sql_log=[first, last])
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv?cols=2")
+        assert csv_r.status_code == 200, csv_r.text
+        assert csv_r.text.strip().splitlines()[0] == "awlevel,b", \
+            f"expected the LAST 2-col query, got: {csv_r.text[:80]}"
+
+
 def test_results_for_storage_caps_and_drops_largest_over_budget():
     """Persisted result rows are capped so a wide brief can't bloat app.db. Over
     the byte ceiling, the LARGEST result is dropped first (a headline usually
@@ -1174,6 +1191,8 @@ def run():
           test_download_csv_rejected_sql_400)
     check("CSV download picks the table query, not a trailing COUNT(*)",
           test_download_csv_picks_table_query_not_a_trailing_count)
+    check("CSV download prefers the LAST column-count match",
+          test_download_csv_prefers_the_last_matching_query)
     check("_results_for_storage caps and drops largest over budget",
           test_results_for_storage_caps_and_drops_largest_over_budget)
     check("_load_prior_results respects the before_id window",
