@@ -332,3 +332,61 @@ test.describe("sidebar rename", () => {
     await expect(page.getByRole("link", { name: "Won't stick" })).toHaveCount(0);
   });
 });
+
+test.describe("copy menu (UX-H3)", () => {
+  // The two "Copy Markdown"/"Copy HTML" text buttons collapse into ONE menu
+  // button. jsdom fakes focus + clipboard, so the menu's focus/keyboard/clipboard
+  // truth lives here, not in vitest.
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  async function openAnswer(page) {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 9, title: "Past chat" }]);
+    await mockConversation(page, 9, [
+      { id: 1, role: "user", content: "an earlier question" },
+      { id: 2, role: "assistant", content: "The copyable answer." },
+    ]);
+    await page.goto("/chat/9");
+    await expect(page.getByText("The copyable answer.")).toBeVisible();
+  }
+
+  test("one Copy menu replaces the two copy buttons; a menuitem copies and closes", async ({ page }) => {
+    await openAnswer(page);
+    // The old two separate text buttons are gone.
+    await expect(page.getByRole("button", { name: "Copy Markdown" })).toHaveCount(0);
+
+    const trigger = page.getByRole("button", { name: "Copy", exact: true });
+    await expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const menu = page.getByRole("menu", { name: "Copy answer" });
+    await expect(menu.getByRole("menuitem", { name: "Copy Markdown" })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Copy rich HTML" })).toBeVisible();
+
+    await menu.getByRole("menuitem", { name: "Copy Markdown" }).click();
+    // Menu closes and the answer text reached the clipboard.
+    await expect(page.getByRole("menu", { name: "Copy answer" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Copied!" })).toBeVisible();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toContain("The copyable answer.");
+  });
+
+  test("Escape closes the menu and restores focus to the trigger; click-outside closes", async ({ page }) => {
+    await openAnswer(page);
+    const trigger = page.getByRole("button", { name: "Copy", exact: true });
+
+    await trigger.click();
+    await expect(page.getByRole("menu", { name: "Copy answer" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu", { name: "Copy answer" })).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    // Reopen, then click outside → closes.
+    await trigger.click();
+    await expect(page.getByRole("menu", { name: "Copy answer" })).toBeVisible();
+    await page.getByText("The copyable answer.").click();
+    await expect(page.getByRole("menu", { name: "Copy answer" })).toHaveCount(0);
+  });
+});

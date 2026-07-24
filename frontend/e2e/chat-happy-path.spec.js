@@ -72,6 +72,7 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   // the chart remounting and snapping back to its default.
   await chartType.selectOption("bar");
   await expect(chartType).toHaveValue("bar");
-  await page.getByRole("button", { name: "Copy Markdown" }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Copy Markdown" }).click();
   await expect(chartType).toHaveValue("bar");
 });

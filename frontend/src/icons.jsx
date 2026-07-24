@@ -151,6 +151,9 @@ export const IconSignOut = (p) => (
   </Svg>
 );
 
+// Small downward caret — the disclosure affordance on a menu button (e.g. Copy ▾).
+export const IconChevronDown = (p) => (<Svg {...p}><path d="M6 9l6 6 6-6" /></Svg>);
+
 // Question mark in a circle for the format-help popover trigger.
 export const IconHelp = (p) => (
   <Svg {...p}>
