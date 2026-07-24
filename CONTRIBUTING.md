@@ -173,7 +173,11 @@ floor (Playwright covers them).
 **Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
 three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
 `git config core.hooksPath .githooks`). Bypass with `git push --no-verify`; skip
-just the slow e2e job with `SKIP_E2E=1`. It's a fast pre-check — the
+just the slow e2e job with `SKIP_E2E=1`. A **deletion-only push**
+(`git push origin --delete <branch>`, e.g. pruning a merged branch) skips the gate
+automatically — it uploads no code, so there is nothing to test; a push that mixes
+a deletion with real commits still runs it in full (`backend/tests/test_pre_push_hook.py`
+pins that split). It's a fast pre-check — the
 **authoritative gate is GitHub CI**: `main` is **branch-protected**, so every
 change lands through a PR with all checks (secrets · lint · unit · backend · e2e ·
 image) green before it can merge; direct and force pushes to `main` are blocked.

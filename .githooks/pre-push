@@ -7,6 +7,11 @@
 # and aborts the push if anything is red, so failures surface here instead of
 # after a round-trip to GitHub.
 #
+# Deletion-only pushes (`git push origin --delete <branch>`) skip the gate:
+# they upload no code, so there is nothing for the suite to check. Without this
+# the hook spends minutes running gitleaks/ruff/vitest/backend/e2e just to
+# remove an already-merged branch.
+#
 # Bypass (use sparingly): git push --no-verify
 # Skip only the slow e2e job:  SKIP_E2E=1 git push
 #
@@ -15,4 +20,29 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-exec "$REPO_ROOT/scripts/run_ci_local.sh"
+# Overridable so the contract test can substitute a marker for the real suite.
+GATE="${PRE_PUSH_GATE:-$REPO_ROOT/scripts/run_ci_local.sh}"
+
+# Git feeds one line per ref being pushed on stdin:
+#     <local ref> <local sha> <remote ref> <remote sha>
+# A deletion carries an all-zero local sha. Skip the gate only when EVERY ref is
+# a deletion — a mixed push still ships code and must be tested. Empty or
+# unreadable stdin falls through to the gate: never skip on doubt.
+refs="$(cat || true)"
+
+if [ -n "${refs//[[:space:]]/}" ]; then
+  pushes_content=0
+  while read -r _local_ref local_sha _rest; do
+    [ -z "${local_sha:-}" ] && continue
+    case "$local_sha" in
+      *[!0]*) pushes_content=1; break ;;  # any non-zero digit => a real update
+    esac
+  done <<<"$refs"
+
+  if [ "$pushes_content" -eq 0 ]; then
+    echo "pre-push: deletion-only push — no new code to test, skipping the CI gate."
+    exit 0
+  fi
+fi
+
+exec "$GATE"

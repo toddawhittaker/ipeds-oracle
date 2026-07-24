@@ -819,7 +819,9 @@ CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary i
 `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
 **vitest** unit tests; the `backend/tests/` backend suites against a fixture DB;
 Playwright e2e). A `.githooks/pre-push` hook runs it automatically (bypass:
-`git push --no-verify`; skip e2e: `SKIP_E2E=1`). It's a **fast pre-check** so failures
+`git push --no-verify`; skip e2e: `SKIP_E2E=1`). A **deletion-only push** skips the
+gate — it ships no code — while a push mixing a deletion with commits still runs it
+(`test_pre_push_hook.py`). It's a **fast pre-check** so failures
 surface before CI — but since the repo went public the **authoritative gate is
 GitHub CI**: `main` is **branch-protected** (a PR is required; the required checks
 must be green AND up to date before merge; force pushes and direct pushes are
