@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 
 import numpy as np
@@ -287,11 +288,19 @@ def record_lesson_from_feedback(question_context: str, headline: str,
 
 # --- Semantic answer cache -----------------------------------------------------
 
-def cache_lookup(question: str) -> dict | None:
+def cache_lookup(question: str, user_id: int) -> dict | None:
     """Return a cached {final_sql, answer_md, figure} for a near-identical question
-    at the current data_version, else None. Gated by skills_enabled (like lesson
-    retrieval) so SKILLS_ENABLED=0 gives a clean, self-learning-off A/B baseline —
-    otherwise a cache hit would short-circuit the 'off' arm."""
+    THIS USER asked at the current data_version, else None. Gated by skills_enabled
+    (like lesson retrieval) so SKILLS_ENABLED=0 gives a clean, self-learning-off
+    A/B baseline — otherwise a cache hit would short-circuit the 'off' arm.
+
+    Scoped per user (migration 29). Without the `user_id` predicate, colleague B
+    asking within `cache_similarity_threshold` of colleague A's question was
+    served A's stored answer PROSE verbatim — an invisible flow of one person's
+    question phrasing to another, and the same attributable leak that
+    /api/admin/usage deliberately prevents by never returning question text.
+    The cost is a lower hit rate: a popular question is now answered once per
+    person rather than once per deployment."""
     s = get_settings()
     if not s.skills_enabled:
         return None
@@ -303,8 +312,9 @@ def cache_lookup(question: str) -> dict | None:
         dv = data_version(con)
         rows = con.execute(
             "SELECT question, final_sql, answer_md, figure, suggestions, embedding "
-            "FROM query_cache WHERE data_version=? AND embedding IS NOT NULL",
-            (dv,)).fetchall()
+            "FROM query_cache WHERE data_version=? AND user_id=? "
+            "AND embedding IS NOT NULL",
+            (dv, user_id)).fetchall()
         if not rows:
             return None
         mat = np.vstack([_from_blob(r["embedding"]) for r in rows])
@@ -323,8 +333,37 @@ def cache_lookup(question: str) -> dict | None:
     return None
 
 
+def _prune_cache(con) -> int:
+    """Drop cache rows past the retention window and past the row ceiling.
+
+    The cache had NO bound of any kind: the only DELETE anywhere was
+    invalidate_cache()'s wholesale wipe on a data import, so a deployment that
+    loads its years once and then runs accumulates a row per distinct first-turn
+    question forever — while cache_lookup vstacks and matmuls the WHOLE table on
+    every first-turn question, synchronously, before the agent starts. Latency
+    and memory grew linearly and permanently.
+
+    Mirrors logbuffer._prune, including its OFFSET-based row cap (id arithmetic
+    drifts once AUTOINCREMENT leaves gaps) and the incremental-vacuum reclaim.
+    A non-positive setting disables that half, matching log_retention_days /
+    log_max_rows."""
+    s = get_settings()
+    deleted = 0
+    if s.cache_retention_days > 0:
+        cutoff = time.time() - s.cache_retention_days * 86400
+        deleted += con.execute(
+            "DELETE FROM query_cache WHERE created_at < ?", (cutoff,)).rowcount
+    if s.cache_max_rows > 0:
+        deleted += con.execute(
+            "DELETE FROM query_cache WHERE id < "
+            "(SELECT id FROM query_cache ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (s.cache_max_rows - 1,)).rowcount
+    return deleted
+
+
 def cache_store(question: str, final_sql: str, answer_md: str,
-                figure: dict | None = None, suggestions: list | None = None) -> None:
+                figure: dict | None = None, suggestions: list | None = None,
+                *, user_id: int) -> None:
     v = embed(question)
     if v is None:
         return
@@ -332,11 +371,19 @@ def cache_store(question: str, final_sql: str, answer_md: str,
     try:
         con.execute(
             "INSERT INTO query_cache(question, embedding, final_sql, answer_md, "
-            "figure, suggestions, data_version, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            "figure, suggestions, data_version, created_at, user_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (question, _to_blob(v), final_sql, answer_md,
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
-             data_version(con), time.time()))
+             data_version(con), time.time(), user_id))
+        # Opportunistic, on the write path only — a read must stay cheap.
+        if _prune_cache(con) > 0:
+            try:
+                # .fetchall() is load-bearing: the pragma frees one page per step.
+                con.execute("PRAGMA incremental_vacuum").fetchall()
+            except sqlite3.Error:
+                pass  # reclaiming space must never break answering
         con.commit()
     finally:
         con.close()

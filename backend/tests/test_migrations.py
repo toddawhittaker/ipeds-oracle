@@ -18,7 +18,7 @@ tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 
-from app.db import MIGRATIONS, _apply_migrations, connect, init_db
+from app.db import MIGRATIONS, SchemaTooNewError, _apply_migrations, connect, init_db
 from app.seeds import SEED_LESSON_REWRITES
 
 FAILURES = []
@@ -649,6 +649,14 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       "table": "chat_request_attempts",
       "unique": 0
     },
+    "idx_query_cache_lookup": {
+      "columns": [
+        "data_version",
+        "user_id"
+      ],
+      "table": "query_cache",
+      "unique": 0
+    },
     "ix_conv_user": {
       "columns": [
         "user_id",
@@ -1128,6 +1136,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0,
         null,
         0
+      ],
+      [
+        "user_id",
+        "INTEGER",
+        0,
+        null,
+        0
       ]
     ],
     "sessions": [
@@ -1539,8 +1554,43 @@ def test_real_init_db_sets_baseline_and_bootstraps():
         con.close()
 
 
+def test_a_db_from_a_newer_build_is_refused():
+    """THE REGRESSION: migrations are forward-only and the runner only ever
+    tested `version > current`, so a user_version PAST our newest matched no
+    branch, the loop did nothing, and the app then ran — and WROTE — against a
+    schema it does not understand. Silently: no log, no exception, no signal.
+    That happens on an ordinary rollback (pinning IPEDS_TAG back after an
+    upgrade) or restoring a newer app.db backup into an older image, and app.db
+    is the one irreplaceable store."""
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, MIGRATIONS)
+    newest = max(m[0] for m in MIGRATIONS)
+    con.execute(f"PRAGMA user_version = {newest + 3}")
+    try:
+        _apply_migrations(con, MIGRATIONS)
+    except SchemaTooNewError as e:
+        msg = str(e)
+        assert str(newest) in msg and str(newest + 3) in msg, \
+            f"the refusal must name both versions so an operator can act: {msg}"
+        return
+    raise AssertionError(
+        "a db newer than this build was accepted — the app would write against "
+        "a schema it does not understand")
+
+
+def test_an_equal_version_is_not_refused():
+    """The control: being exactly up to date is the normal case, not a downgrade."""
+    con = sqlite3.connect(":memory:")
+    v = _apply_migrations(con, MIGRATIONS)
+    assert _apply_migrations(con, MIGRATIONS) == v, "a no-op re-apply must stay a no-op"
+
+
 def run():
     print("app.db migration contract:")
+    check("a db from a NEWER build is refused, not silently accepted",
+          test_a_db_from_a_newer_build_is_refused)
+    check("an up-to-date db is not mistaken for a downgrade",
+          test_an_equal_version_is_not_refused)
     check("fresh db applies all migrations + sets user_version",
           test_fresh_applies_all_and_sets_version)
     check("re-running migrations is idempotent", test_idempotent_rerun)

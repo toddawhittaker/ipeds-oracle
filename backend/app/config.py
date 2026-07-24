@@ -267,7 +267,15 @@ class Settings(BaseSettings):
     skill_retrieve_k: int = Field(default=5)
     skill_similarity_floor: float = Field(default=0.35)  # min cos to inject a lesson
     skill_dedup_threshold: float = Field(default=0.92)  # collapse near-duplicate lessons
-    cache_similarity_threshold: float = Field(default=0.93)  # reuse SQL above this
+    cache_similarity_threshold: float = Field(default=0.93)
+    # Bounds on the answer cache (app/skills.py). It previously had NONE: the only
+    # DELETE was the wholesale wipe on a data import, while every first-turn
+    # question scans and matmuls the whole table before the agent starts, so
+    # latency and memory grew with uptime forever. Swept opportunistically on the
+    # write path. Non-positive disables that half, matching log_retention_days /
+    # log_max_rows.
+    cache_retention_days: int = Field(default=30)
+    cache_max_rows: int = Field(default=5_000)  # reuse SQL above this
 
     @property
     def trust_llm_provider_enabled(self) -> bool:

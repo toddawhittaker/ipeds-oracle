@@ -19,11 +19,24 @@ from app.config import GITHUB_REPO, get_settings
 log = logging.getLogger("ipeds.version")
 
 _CACHE_TTL = 6 * 3600  # seconds; the newest release rarely changes
+# How long a FAILED check is remembered before we try the network again. Short,
+# because an outage should self-heal quickly — but non-zero, because without it
+# every request retries (see `checked_at` below).
+_NEG_CACHE_TTL = 15 * 60
 _HTTP_TIMEOUT = 3.0
-# Process-wide cache: the last-fetched latest tag + when it was fetched. A miss
-# ("" / None never fetched) and a stale entry both trigger a refresh; a fetch
-# error keeps whatever was last known (or None) so we never regress to raising.
-_cache: dict = {"latest": None, "at": 0.0}
+# Process-wide cache.
+#   latest     — last successfully fetched tag (None until one succeeds)
+#   at         — when that success happened, gating the 6h positive TTL
+#   checked_at — when we last ATTEMPTED, success or not, gating the negative TTL
+#
+# `checked_at` exists because `at` alone can't express "we tried and failed":
+# the positive guard requires `latest is not None`, so a cache that has NEVER
+# succeeded can never look fresh. Without a negative TTL, an egress-blocked
+# deployment or a tripped GitHub rate limit (60/hr unauthenticated, and this is
+# fetched per sign-in per worker) re-issued a 3s blocking request on EVERY
+# /api/version call, forever — the opposite of the "cached so N users don't
+# hammer it" the docstring promised.
+_cache: dict = {"latest": None, "at": 0.0, "checked_at": 0.0}
 
 
 def parse_semver(s: str | None) -> tuple[int, int, int] | None:
@@ -53,6 +66,12 @@ def latest_release() -> str | None:
     now = time.time()
     if _cache["latest"] is not None and (now - _cache["at"]) < _CACHE_TTL:
         return _cache["latest"]
+    # A recent attempt that produced nothing (network error, rate limit, or a repo
+    # with no releases yet) holds off the next one. `.get` so a test that rebinds
+    # _cache to the old two-key shape still works.
+    if (now - _cache.get("checked_at", 0.0)) < _NEG_CACHE_TTL:
+        return _cache["latest"]
+    _cache["checked_at"] = now  # set BEFORE the call, so a raise still counts as tried
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     try:
         r = httpx.get(url, timeout=_HTTP_TIMEOUT,

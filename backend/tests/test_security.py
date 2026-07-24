@@ -259,7 +259,10 @@ def test_cache_not_served_when_history_present() -> None:
             con.close()
 
         # Seed a cache entry for the exact question (as if answered before).
-        skills.cache_store(_CACHE_Q, _CACHE_SQL, _CACHE_ANSWER_MARKER)
+        # user_id=uid on purpose: the entry belongs to the very user who then asks,
+        # so if chat.py consulted the cache here it WOULD hit — the test proves the
+        # history guard, not an accidental per-user miss.
+        skills.cache_store(_CACHE_Q, _CACHE_SQL, _CACHE_ANSWER_MARKER, user_id=uid)
 
         # Build an EXISTING conversation that already has prior turns.
         con = connect()
