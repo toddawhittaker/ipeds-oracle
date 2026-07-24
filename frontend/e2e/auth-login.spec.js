@@ -64,6 +64,21 @@ test.describe("auth / login", () => {
     await expect(figure).toHaveText("+5.4%");
   });
 
+  test("the door gallery has a persistent pause/play toggle (WCAG 2.2.2)", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await mockMe(page, null);
+    await mockAuthConfig(page, "example.edu");
+    await page.goto("/");
+
+    const pause = page.getByRole("button", { name: "Pause auto-rotation" });
+    await expect(pause).toBeVisible();
+    await expect(pause).toHaveAttribute("aria-pressed", "false");
+    await pause.click();
+    // It stays a durable stop: the control flips to Resume and reports pressed.
+    await expect(page.getByRole("button", { name: "Resume auto-rotation" }))
+      .toHaveAttribute("aria-pressed", "true");
+  });
+
   test("shows a generic error notice when the request fails", async ({ page }) => {
     await mockMe(page, null);
     await mockAuthConfig(page, "example.edu");

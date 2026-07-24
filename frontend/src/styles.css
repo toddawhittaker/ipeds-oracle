@@ -200,21 +200,26 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 @media (prefers-reduced-motion: reduce) { .door-fig-slide.fwd, .door-fig-slide.back { animation: none; } }
 /* ‹ ··· › gallery controls under the door figure. */
 .door-figure-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+/* A faint resting affordance (hairline + panel-2 fill) so the arrows read as
+   buttons at first glance on the login screen, not static glyphs. */
 .dfn-arrow { display: inline-flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--muted); padding: 4px 6px;
-  border-radius: 6px; cursor: pointer; }
-.dfn-arrow:hover { color: var(--accent); }
+  min-width: 26px; min-height: 26px; background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.dfn-arrow:hover { color: var(--accent); border-color: var(--accent); }
 .dfn-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.dfn-dots { display: inline-flex; align-items: center; gap: 4px; }
-/* A 16px hit target carrying a small 7px dot (drawn as a pseudo-element). */
-.dfn-dot { width: 16px; height: 16px; padding: 0; border: none; background: none;
+.dfn-toggle { margin-left: 6px; }
+.dfn-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.dfn-dots { display: inline-flex; align-items: center; }
+/* A ≥24px hit target (WCAG 2.5.8) carrying a small 8px dot pseudo-element; the
+   boxes abut (24px centers) so the exception spacing also passes. */
+.dfn-dot { width: 24px; height: 24px; padding: 0; border: none; background: none;
   position: relative; cursor: pointer; }
 .dfn-dot::before { content: ""; position: absolute; inset: 0; margin: auto;
-  width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong);
+  width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong);
   transition: background .15s ease, transform .15s ease; }
 .dfn-dot:hover::before { background: var(--muted); }
 .dfn-dot.on::before { background: var(--accent); transform: scale(1.25); }
-.dfn-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 50%; }
+.dfn-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 50%; }
 @media (prefers-reduced-motion: reduce) { .dfn-dot::before { transition: none; } }
 .login { max-width: 440px; width: 100%; }
 .door-right { justify-self: stretch; }
@@ -851,6 +856,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* result tables: per-table toolbar (CSV + chart this) */
 .table-block { margin: 8px 0; }
 .table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
+.sort-note { margin: 5px 2px 0; font-size: 12px; color: var(--muted); }
 
 /* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
    that appears once rows are ticked, and the instant snapshot chart panel. */
@@ -859,7 +865,9 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    result table). appearance:none + a drawn check, accent-filled when ticked. */
 .cmp-cell input[type="checkbox"] {
   appearance: none; -webkit-appearance: none; margin: 0; vertical-align: middle;
-  width: 16px; height: 16px; border: 1.5px solid var(--line-strong); border-radius: 4px;
+  /* --muted (not --line-strong) so the unchecked boundary clears 3:1 non-text
+     contrast against the panel in both themes (WCAG 1.4.11). */
+  width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px;
   background: var(--panel); cursor: pointer; position: relative;
   transition: background .12s ease, border-color .12s ease;
 }
@@ -951,6 +959,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .switch input[type="checkbox"] {
   appearance: none; -webkit-appearance: none; margin: 0; flex: none;
   width: 34px; height: 20px; border-radius: 999px; background: var(--line-strong);
+  /* Inset --muted ring so the OFF track's boundary clears 3:1 non-text contrast
+     against the panel in both themes (WCAG 1.4.11); the light fill keeps the
+     white thumb visible. Dropped when checked — the accent fill is high-contrast. */
+  box-shadow: inset 0 0 0 1px var(--muted);
   position: relative; cursor: pointer; transition: background .15s ease;
 }
 .switch input[type="checkbox"]::before {
@@ -958,7 +970,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
   transition: transform .15s ease;
 }
-.switch input[type="checkbox"]:checked { background: var(--accent); }
+.switch input[type="checkbox"]:checked { background: var(--accent); box-shadow: none; }
 .switch input[type="checkbox"]:checked::before { transform: translateX(14px); }
 .switch input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
