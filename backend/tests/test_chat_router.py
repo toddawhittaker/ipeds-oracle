@@ -116,7 +116,7 @@ def _post_turn_no_result(c, question, *, conversation_id=None, edit_message_id=N
     orig_cache_lookup = skills.cache_lookup
     orig_skills_block = skills.retrieve_skills_block
     chat_router.stream_agent = _make_agent_no_result()
-    skills.cache_lookup = lambda q: None
+    skills.cache_lookup = lambda q, _uid=None: None
     skills.retrieve_skills_block = lambda q: ("", [])
     try:
         body = {"question": question}
@@ -141,7 +141,7 @@ def _post_turn(c, question, *, conversation_id=None, edit_message_id=None,
     chat_router.stream_agent = _make_agent(answer_text, sql_log=sql_log, error=error)
     skills.retrieve_skills_block = lambda q: ("", [])
     skills.bump_hits = lambda ids: None
-    skills.cache_lookup = lambda q: None
+    skills.cache_lookup = lambda q, _uid=None: None
     skills.cache_store = lambda *a, **k: None
     try:
         body = {"question": question}
@@ -286,7 +286,7 @@ def test_cache_hit_serves_cached_answer_and_titles_new_conversation():
             return "A Cached Title"
 
         chat_router.stream_agent = _explode
-        skills.cache_lookup = lambda q: {
+        skills.cache_lookup = lambda q, _uid=None: {
             "answer_md": "cached answer 12,345", "final_sql": "SELECT 1"}
         chat_router.generate_title = _fake_title
         skills.retrieve_skills_block = lambda q: ("", [])
@@ -346,7 +346,7 @@ def test_exhaustion_status_is_persisted_to_usage_log():
         orig_agent = chat_router.stream_agent
         orig_block, orig_lookup = skills.retrieve_skills_block, skills.cache_lookup
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         try:
             chat_router.stream_agent = _exhausted_agent(
                 "couldn't finish", exhausted=True, degraded=True)
@@ -382,7 +382,7 @@ def test_normal_flow_titles_a_new_conversation():
         chat_router.stream_agent = _make_agent("a real answer", sql_log=["SELECT 1"])
         chat_router.generate_title = _fake_title
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         try:
             r = c.post("/api/chat/stream", json={"question": "a fresh question"})
@@ -426,7 +426,7 @@ def test_thinking_trace_is_persisted_and_returned_on_reload():
         orig_cache_store = skills.cache_store
         chat_router.stream_agent = _traced_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         try:
             r = c.post("/api/chat/stream", json={"question": "a traced question"})
@@ -503,7 +503,7 @@ def test_figure_is_persisted_and_returned_on_reload():
         orig_cache_store = skills.cache_store
         chat_router.stream_agent = _figure_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         try:
             r = c.post("/api/chat/stream", json={"question": "a figured question"})
@@ -564,7 +564,7 @@ def test_suggestions_are_persisted_and_returned_on_reload():
         orig_cache_store = skills.cache_store
         chat_router.stream_agent = _suggest_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         try:
             r = c.post("/api/chat/stream", json={"question": "a question with follow-ups"})
@@ -617,7 +617,7 @@ def test_clarify_turn_persists_is_never_cached_and_records_no_lesson():
         lesson_calls = {"n": 0}
         chat_router.stream_agent = _clarify_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: cache_calls.__setitem__("n", cache_calls["n"] + 1)
         skills.record_lesson_from_critic = \
             lambda *a, **k: lesson_calls.__setitem__("n", lesson_calls["n"] + 1)
@@ -660,7 +660,7 @@ def test_retrieved_skills_bump_their_hit_count():
 
         chat_router.stream_agent = _make_agent("answer", sql_log=["SELECT 1"])
         skills.retrieve_skills_block = lambda q: ("some few-shot block", [skill_id])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         try:
             r = c.post("/api/chat/stream", json={"question": "a question using a skill"})
@@ -695,7 +695,7 @@ def test_critic_revision_records_a_lesson():
         orig_record = skills.record_lesson_from_critic
         chat_router.stream_agent = _critic_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         skills.record_lesson_from_critic = \
             lambda q, sql, headline, description: captured.update(
@@ -735,7 +735,7 @@ def test_critic_lesson_not_recorded_on_followup_turn():
         orig_record = skills.record_lesson_from_critic
         chat_router.stream_agent = _critic_agent
         skills.retrieve_skills_block = lambda q: ("", [])
-        skills.cache_lookup = lambda q: None
+        skills.cache_lookup = lambda q, _uid=None: None
         skills.cache_store = lambda *a, **k: None
         skills.record_lesson_from_critic = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
         try:

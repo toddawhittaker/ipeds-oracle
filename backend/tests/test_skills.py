@@ -646,8 +646,123 @@ def test_cache_lookup_disabled_when_skills_off():
     orig = skills.get_settings
     skills.get_settings = lambda: type("S", (), {"skills_enabled": False})()
     try:
-        assert skills.cache_lookup("anything") is None, \
+        assert skills.cache_lookup("anything", 1) is None, \
             "cache must be gated by skills_enabled for a clean A/B baseline"
+    finally:
+        skills.get_settings = orig
+
+
+def _cache_row_count(con) -> int:
+    return con.execute("SELECT COUNT(*) FROM query_cache").fetchone()[0]
+
+
+def test_cache_is_scoped_to_the_user_who_asked():
+    """THE REGRESSION: cache_lookup had no user predicate, so colleague B asking
+    within cache_similarity_threshold of colleague A's question was served A's
+    stored answer PROSE verbatim — an invisible flow of one person's question
+    phrasing and answer to another, and exactly the attributable leak
+    /api/admin/usage refuses to make."""
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — cache scoping test skipped")
+        return
+    q = "how many nursing bachelor's degrees were awarded in 2024"
+    skills.cache_store(q, "SELECT 1", "ALICE-ONLY-ANSWER", user_id=101)
+
+    hit = skills.cache_lookup(q, 101)
+    assert hit and hit["answer_md"] == "ALICE-ONLY-ANSWER", \
+        "the author must still get their own cached answer"
+    assert skills.cache_lookup(q, 202) is None, \
+        "another user was served this user's cached answer text"
+
+
+def test_legacy_rows_without_a_user_are_unreachable():
+    """Rows written before migration 29 have user_id NULL. They must fail CLOSED
+    (reachable by nobody) rather than being treated as shared-by-default."""
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — legacy cache row test skipped")
+        return
+    q = "a question cached before the per-user migration"
+    skills.cache_store(q, "SELECT 1", "LEGACY-ANSWER", user_id=303)
+    con = connect()
+    try:
+        con.execute("UPDATE query_cache SET user_id=NULL WHERE user_id=303")
+        con.commit()
+    finally:
+        con.close()
+    assert skills.cache_lookup(q, 303) is None, "a NULL-user row must match nobody"
+
+
+def test_cache_store_prunes_past_the_row_cap():
+    """THE REGRESSION: the cache had no bound at all — the only DELETE anywhere
+    was the wholesale wipe on a data import — while every first-turn question
+    vstacks and matmuls the WHOLE table before the agent starts. Latency and
+    memory grew with uptime, permanently."""
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — cache prune test skipped")
+        return
+    con = connect()
+    try:
+        con.execute("DELETE FROM query_cache")
+        con.commit()
+    finally:
+        con.close()
+
+    orig = skills.get_settings
+    base = orig()
+
+    class _S:
+        skills_enabled = True
+        cache_similarity_threshold = base.cache_similarity_threshold
+        cache_retention_days = 0      # age sweep off; isolate the row cap
+        cache_max_rows = 3
+
+    skills.get_settings = lambda: _S()
+    try:
+        for i in range(6):
+            skills.cache_store(f"question number {i}", "SELECT 1", f"answer {i}", user_id=7)
+        con = connect()
+        try:
+            n = _cache_row_count(con)
+            newest = con.execute(
+                "SELECT answer_md FROM query_cache ORDER BY id DESC LIMIT 1").fetchone()[0]
+        finally:
+            con.close()
+        assert n == 3, f"row cap not enforced: {n} rows remain"
+        assert newest == "answer 5", "the cap dropped the NEWEST rows instead of the oldest"
+    finally:
+        skills.get_settings = orig
+
+
+def test_a_non_positive_cap_disables_the_sweep():
+    """Matches the log_retention_days / log_max_rows convention."""
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — cache prune-off test skipped")
+        return
+    con = connect()
+    try:
+        con.execute("DELETE FROM query_cache")
+        con.commit()
+    finally:
+        con.close()
+
+    orig = skills.get_settings
+    base = orig()
+
+    class _S:
+        skills_enabled = True
+        cache_similarity_threshold = base.cache_similarity_threshold
+        cache_retention_days = 0
+        cache_max_rows = 0
+
+    skills.get_settings = lambda: _S()
+    try:
+        for i in range(4):
+            skills.cache_store(f"unbounded question {i}", "SELECT 1", f"a{i}", user_id=7)
+        con = connect()
+        try:
+            assert _cache_row_count(con) == 4, "a non-positive cap must disable the sweep"
+        finally:
+            con.close()
     finally:
         skills.get_settings = orig
 
@@ -717,6 +832,10 @@ def run():
     check("reembed_skills_if_needed: embed() unavailable -> no-op, marker unset",
           test_reembed_skills_if_needed_noop_and_marker_unset_when_embed_unavailable)
     check("cache lookup is gated by skills_enabled", test_cache_lookup_disabled_when_skills_off)
+    check("the cache is scoped to the user who asked", test_cache_is_scoped_to_the_user_who_asked)
+    check("legacy NULL-user rows are unreachable", test_legacy_rows_without_a_user_are_unreachable)
+    check("cache_store prunes past the row cap", test_cache_store_prunes_past_the_row_cap)
+    check("a non-positive cap disables the sweep", test_a_non_positive_cap_disables_the_sweep)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} lesson test(s) FAILED: {FAILURES}")

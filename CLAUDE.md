@@ -161,7 +161,12 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `config.app_version` (env `APP_VERSION`, baked from the git tag by the Dockerfile
   `ARG`/`ENV` ← CI `build-args`; `"dev"` locally). `backend/app/version.py` does the
   read-only "newer release?" check against GitHub (`config.GITHUB_REPO`), **cached
-  ~6h + fails open**, off via `UPDATE_CHECK_ENABLED=false`. Pinned in
+  ~6h + fails open**, off via `UPDATE_CHECK_ENABLED=false`. It is **negative-cached
+  too** (`checked_at` + `_NEG_CACHE_TTL`, 15 min): `at` was written only on
+  success and the freshness guard requires `latest is not None`, so a cache that
+  had never succeeded could never look fresh — an egress-blocked deploy or a
+  tripped GitHub limit (60/hr unauthenticated, fetched per sign-in per worker)
+  re-issued a **3s blocking** request on every `/api/version`, forever. Pinned in
   `frontend/e2e/user-menu.spec.js` + `admin-update-banner.spec.js` +
   `backend/tests/test_version.py` + `initials.test.js`.
   Chat interaction contracts (all Playwright-pinned in
@@ -241,6 +246,23 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
 - **Three SQLite DBs, all separate:** `ipeds.db` (read-only query target — the
   dataset above), `app.db` (state, with a `PRAGMA user_version` migration runner),
   `logs.db` (persistent admin logs).
+- **Migrations are forward-only AND refuse to go backwards.** The runner only
+  ever tested `version > current`, so a `user_version` PAST our newest matched no
+  branch, the loop did nothing, and the app then ran — and WROTE — against a
+  schema it doesn't understand, silently. That happens on an ordinary rollback
+  (pinning `IPEDS_TAG` back) or restoring a newer `app.db` into an older image,
+  and `app.db` is the irreplaceable store. `_apply_migrations` now raises
+  **`SchemaTooNewError`** (CRITICAL-logged, naming both versions) and `init_db`
+  is deliberately un-caught in `lifespan`, so the app **refuses to start**.
+  Pending migrations also take a **pre-migration snapshot** first
+  (`_snapshot_before_migrating` → `app.db.pre-v<N>`, sqlite's online backup API,
+  never fatal) so an upgrade is reversible — several shipped migrations are
+  multi-statement `executescript` blocks that are not atomic, and a part-way
+  failure otherwise bricks every later boot on "duplicate column name". **The
+  RECURRING backup gap is still open:** `scripts/backup_app_db.py` is tested and
+  nothing calls it, so a self-hoster following `compose.yaml` gets no scheduled
+  backups; that needs the first background task in `lifespan` (every step there
+  is one-shot today).
 
 ### The agent loop
 LLM = **DeepSeek** via any OpenAI-compatible provider (`LLM_BASE_URL`, **OpenRouter**
@@ -585,7 +607,22 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   a feedback candidate never collapses into a critic/seed row on the same
   scenario); the embedding key is **headline+description, never the question**.
   `SKILLS_ENABLED=0/1` gates the on/off eval A/B.
-- A **semantic answer cache** short-circuits repeat questions.
+- A **semantic answer cache** short-circuits repeat questions — **scoped to the
+  user who asked** (migration 29's `query_cache.user_id`) and **bounded**.
+  `cache_lookup` had no user predicate, so a colleague asking within
+  `cache_similarity_threshold` (0.93) of your question was served *your* stored
+  answer prose verbatim — the same attributable leak `/api/admin/usage` refuses
+  to make by never returning question text. Rows written before the migration
+  have `user_id` NULL and are reachable by **nobody** (fail closed, not
+  shared-by-default); the sweep clears them. Accepted cost: a popular question is
+  now answered once *per person*, not once per deployment. It also had **no bound
+  of any kind** — the only DELETE anywhere was `invalidate_cache`'s wholesale wipe
+  on a data import, while every first-turn question `vstack`s and matmuls the
+  WHOLE table before the agent starts, so latency and memory grew with uptime
+  forever. `_prune_cache` mirrors `logbuffer._prune` (`cache_retention_days` /
+  `cache_max_rows`, non-positive disables, OFFSET-based row cap, incremental-vacuum
+  reclaim) and runs opportunistically on the **write** path only — a read must
+  stay cheap. Pinned in `test_skills.py`.
 
 ### Auth & access control
 - Passwordless **magic link**, manual **allowlist**, email via a **pluggable

@@ -6,11 +6,14 @@ created idempotently on startup.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 
 from app.config import get_settings
 from app.seeds import SEED_LESSON_REWRITES
+
+log = logging.getLogger("ipeds.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -356,6 +359,17 @@ MIGRATIONS: list[tuple[int, str]] = [
          ");\n"
          "CREATE INDEX IF NOT EXISTS idx_chat_attempts_created "
          "ON chat_request_attempts(created_at);"),
+    # 29: scope the answer cache to its author, and give it an index.
+    # cache_lookup had NO user predicate, so user B asking within 0.93 cosine of
+    # user A's question was served A's stored answer text verbatim — the same
+    # attributable leak /api/admin/usage goes out of its way to prevent by never
+    # returning question text. Existing rows get user_id NULL and are therefore
+    # unreachable by the new lookup (fail closed, not shared-by-default); the
+    # retention sweep clears them out. The index also gives the per-lookup scan
+    # something to stand on — the table previously had no index at all.
+    (29, "ALTER TABLE query_cache ADD COLUMN user_id INTEGER;\n"
+         "CREATE INDEX IF NOT EXISTS idx_query_cache_lookup "
+         "ON query_cache(data_version, user_id);"),
 ]
 
 
@@ -369,12 +383,33 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+class SchemaTooNewError(RuntimeError):
+    """`app.db` was written by a newer build than this one. Refusing to run."""
+
+
 def _apply_migrations(con: sqlite3.Connection,
                       migrations: list[tuple[int, str]] = MIGRATIONS) -> int:
     """Apply every migration whose version exceeds the db's current
     `user_version`, in order, bumping `user_version` after each. Returns the
-    resulting version. Idempotent: already-applied migrations are skipped."""
+    resulting version. Idempotent: already-applied migrations are skipped.
+
+    Raises SchemaTooNewError when the db is AHEAD of this build. Migrations are
+    forward-only, so a `user_version` past our newest matched no branch and the
+    loop simply did nothing — the app then ran, and WROTE, against a schema it
+    does not understand: silently, with no log line and no exception. That is a
+    routine situation (pinning IPEDS_TAG back after an upgrade, or restoring a
+    newer app.db backup into an older image), and app.db is the irreplaceable
+    store, so it has to be loud and fatal rather than best-effort."""
     current = con.execute("PRAGMA user_version").fetchone()[0]
+    newest = max((v for v, _ in migrations), default=0)
+    if current > newest:
+        msg = (f"app.db is at schema version {current}, but this build only knows "
+               f"up to {newest}. It was written by a NEWER version of the app. "
+               f"Refusing to start rather than write against a schema this build "
+               f"does not understand. Upgrade the image (or restore an app.db "
+               f"backup taken before the upgrade — see app.db.pre-v*).")
+        log.critical(msg)
+        raise SchemaTooNewError(msg)
     for version, ddl in sorted(migrations):
         if version > current:
             con.executescript(ddl)
@@ -385,12 +420,46 @@ def _apply_migrations(con: sqlite3.Connection,
     return current
 
 
+def _snapshot_before_migrating(con: sqlite3.Connection, db_path) -> None:
+    """Copy app.db aside before the first migration of an upgrade.
+
+    `docker compose pull && up -d` runs N migrations against the one
+    irreplaceable database with nothing taken first, and several shipped
+    migrations are multi-statement `executescript` blocks that are not atomic —
+    a failure part-way leaves columns added but `user_version` un-bumped, and
+    every subsequent boot then dies on "duplicate column name" with no way back.
+    This makes an upgrade reversible.
+
+    Uses sqlite3's online backup API (consistent under WAL, no quiesce) — the
+    same mechanism as scripts/backup_app_db.py, inlined rather than imported so
+    `app/` doesn't reach into `scripts/`. Never fatal: a failed snapshot logs
+    and lets the migration proceed, because refusing to boot over a missing
+    backup would be a worse failure than the one it guards against."""
+    current = con.execute("PRAGMA user_version").fetchone()[0]
+    newest = max((v for v, _ in MIGRATIONS), default=0)
+    if current >= newest:
+        return  # nothing pending — no upgrade in progress, nothing to protect
+    dest = db_path.with_name(f"{db_path.name}.pre-v{current}")
+    if dest.exists():
+        return  # already snapshotted at this version (a retried/crashed boot)
+    try:
+        dst = sqlite3.connect(dest)
+        try:
+            con.backup(dst)
+        finally:
+            dst.close()
+        log.info("app.db snapshot before migrating v%d -> v%d: %s", current, newest, dest)
+    except Exception as e:  # noqa: BLE001 — a snapshot must never block an upgrade
+        log.warning("pre-migration snapshot skipped (%s)", e)
+
+
 def init_db() -> None:
     """Run pending migrations (idempotent) and bootstrap admins + data_version."""
     s = get_settings()
     s.app_db_path.parent.mkdir(parents=True, exist_ok=True)
     con = connect()
     try:
+        _snapshot_before_migrating(con, s.app_db_path)
         _apply_migrations(con)
         # data_version starts at 1 (bumped by each successful import swap)
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('data_version', '1')")

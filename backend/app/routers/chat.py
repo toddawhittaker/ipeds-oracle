@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import functools
 import io
 import json
 import logging
@@ -265,7 +266,8 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             # Only a valid shortcut for a fresh, first-turn question — a follow-up
             # inside an existing conversation depends on prior context, so it must
             # never be served a cached answer from a different conversation.
-            cached = await run_in_threadpool(skills.cache_lookup, question) if not history else None
+            cached = (await run_in_threadpool(skills.cache_lookup, question, int(user["id"]))
+                      if not history else None)
             if cached:
                 answer = cached["answer_md"]
                 figure = cached.get("figure")
@@ -390,8 +392,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             # caching it would replay a stale disambiguation question verbatim.
             if (not history and result.error is None and answer and result.sql_log
                     and clarify is None):
-                await run_in_threadpool(skills.cache_store, question, result.sql_log[-1],
-                                        answer, result.figure, result.suggestions)
+                await run_in_threadpool(functools.partial(
+                    skills.cache_store, question, result.sql_log[-1], answer,
+                    result.figure, result.suggestions, user_id=int(user["id"])))
 
             # 4b) If the critic caught a real mistake and forced a correction, capture
             # its finding as an unverified lesson (self-learning from actual errors).
