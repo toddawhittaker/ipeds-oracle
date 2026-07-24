@@ -55,6 +55,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # so importing this constant elsewhere never risks a cycle.
 PRODUCT_NAME = "IPEDS Oracle"
 
+# The GitHub repo the running build was cut from — used only for the read-only
+# "is a newer release available?" check (app/version.py). A fixed slug (no user
+# input) so the outbound URL is never attacker-influenced.
+GITHUB_REPO = "toddawhittaker/ipeds-oracle"
+
 # Values (case-insensitive, whitespace-trimmed) that turn an opt-in string
 # setting ON. Everything else — "false"/"f"/"no"/"n"/"0", blank, and any
 # unrecognized text — is OFF. Kept as a plain string parse (not a pydantic bool
@@ -140,6 +145,15 @@ class Settings(BaseSettings):
     # provider attribution headers are optional in general.
     app_public_url: str = Field(default="http://localhost:8000")
     llm_app_title: str = Field(default=PRODUCT_NAME)
+    # The running release version, injected at image-build time from the git tag
+    # (Dockerfile ARG/ENV APP_VERSION ← CI metadata-action). "dev" for a local /
+    # non-Docker run — About shows it and the update check can't compare it.
+    app_version: str = Field(default="dev")
+    # Whether the app may make the read-only "newer release?" check to GitHub
+    # (app/version.py). On by default; a self-hoster who wants zero outbound
+    # phone-home sets UPDATE_CHECK_ENABLED=false — the check then reports no
+    # latest version and no update banner ever shows.
+    update_check_enabled: bool = Field(default=True)
     # Server-side FALLBACK timezone (IANA name) — used only to bucket the admin
     # usage graph when a request doesn't carry the viewer's own zone. Display is
     # otherwise the END-USER's browser timezone everywhere (chat stamps + graphs),

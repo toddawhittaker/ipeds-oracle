@@ -7,6 +7,7 @@ import {
   mockAllowlist,
   mockAccessRequests,
   mockDeniedRequests,
+  mockVersion,
 } from "./mocks.js";
 
 // The top bar is now just the wordmark (a link home) and a user-badge menu.
@@ -17,9 +18,10 @@ import {
 // here rather than in a jsdom unit test. (initials(email) itself is unit-tested in
 // initials.test.js.)
 
-async function signedIn(page, { admin = false, email, attention } = {}) {
+async function signedIn(page, { admin = false, email, attention, version } = {}) {
   await mockMe(page, { email: email ?? (admin ? "admin@example.edu" : "jane.doe@example.edu"), is_admin: admin });
   await mockConversations(page, []);
+  await mockVersion(page, version ?? { current: "0.1.0", latest: "0.1.0", update_available: false });
   if (admin) {
     await mockAttention(page, attention ?? { users: 0, skills: 0, logs: 0 });
     // AdminRoute fetches these when the Admin item navigates to /admin/users.
@@ -92,6 +94,16 @@ test("admin menu carries an Admin item, and attention shows on the avatar + the 
   await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 });
 
+test("an available update ticks the avatar attention badge (+1)", async ({ page }) => {
+  await signedIn(page, {
+    admin: true, attention: { users: 0, skills: 0, logs: 0 },
+    version: { current: "0.1.0", latest: "0.2.0", update_available: true },
+  });
+  await page.goto("/");
+  // No section backlog, but the available update alone shows a "1" on the avatar.
+  await expect(page.locator(".avatar-badge")).toHaveText("1");
+});
+
 test("keyboard: opening focuses the first item; Escape closes and restores focus; click-outside closes", async ({ page }) => {
   await signedIn(page);
   await page.goto("/");
@@ -150,6 +162,30 @@ test("About opens an informational modal with the GitHub link; Close dismisses a
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // Focus returns to the opener (the avatar).
   await expect(avatar(page)).toBeFocused();
+});
+
+test("About shows the running version and, when one exists, a newer-release link", async ({ page }) => {
+  await signedIn(page, { version: { current: "0.1.0", latest: "0.2.0", update_available: true } });
+  await page.goto("/");
+  await avatar(page).click();
+  await page.getByRole("menuitem", { name: "About IPEDS Oracle" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/Version 0\.1\.0/)).toBeVisible();
+  await expect(dialog.getByText(/newer version \(0\.2\.0\)/)).toBeVisible();
+  await expect(dialog.getByRole("link", { name: "available" }))
+    .toHaveAttribute("href", "https://github.com/toddawhittaker/ipeds-oracle/releases");
+});
+
+test("About shows the latest released version even when not updating (dev build)", async ({ page }) => {
+  await signedIn(page, { version: { current: "dev", latest: "0.1.0", update_available: false } });
+  await page.goto("/");
+  await avatar(page).click();
+  await page.getByRole("menuitem", { name: "About IPEDS Oracle" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/Version dev/)).toBeVisible();
+  await expect(dialog.getByText(/latest release 0\.1\.0/)).toBeVisible();
 });
 
 test("About shows the Admin guide link only to an admin", async ({ page }) => {

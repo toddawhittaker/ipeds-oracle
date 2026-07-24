@@ -371,5 +371,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bake the release version (git tag, leading v stripped) into the image
+          # so the running app reports it. Only tag builds publish, so this is
+          # always the real X.Y.Z here; the smoke build above keeps the "dev"
+          # default.
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

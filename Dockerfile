@@ -46,6 +46,14 @@ COPY --from=frontend /frontend/dist ./frontend/dist
 
 RUN chmod +x scripts/docker-entrypoint.sh
 
+# The running release version, surfaced in-app (About dialog / Admin update
+# banner) and used for the "newer release?" check. CI passes the git tag here on
+# a v* release build (build-args APP_VERSION=<X.Y.Z>); a plain `docker build`
+# leaves it "dev". Placed LAST so bumping it rebuilds only this tiny final layer,
+# never the pip/model layers above.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 EXPOSE 8000
 # The entrypoint serves plain HTTP on :8000, or HTTPS when SSL_CERTFILE and
 # SSL_KEYFILE are set (a self-signed cert — see the README). With neither set it's

@@ -203,6 +203,12 @@ commented list. The essentials:
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
+| `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
+
+The published image reports its own version (the release tag it was built from) on
+the **About** dialog; when a newer release exists on GitHub, admins also see a
+dismissible banner. The check is cached (~6h), fails open (offline is fine), and is
+disabled with `UPDATE_CHECK_ENABLED=false`. (A local/non-Docker run reports `dev`.)
 
 ## How this was built
 

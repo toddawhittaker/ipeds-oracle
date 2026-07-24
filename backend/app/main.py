@@ -8,10 +8,12 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import version
+from app.auth import current_user
 from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
@@ -114,6 +116,14 @@ app.include_router(admin.router)
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/version")
+def get_version(_=Depends(current_user)):
+    """Running version + whether a newer GitHub release is available. Signed-in
+    only (the About dialog and Admin banner that consume it are both authed);
+    the GitHub call is cached + fails open (see app/version.py)."""
+    return version.version_info()
 
 
 # --- Serve the built React app (production) -----------------------------------

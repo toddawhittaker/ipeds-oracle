@@ -1072,6 +1072,26 @@ def test_download_csv_prefers_the_last_matching_query():
             f"expected the LAST 2-col query, got: {csv_r.text[:80]}"
 
 
+def test_version_endpoint_authed_and_shape():
+    # GET /api/version is signed-in only and returns the three-key payload the
+    # About dialog / Admin banner consume. version_info is stubbed so the test
+    # never touches GitHub.
+    from app import version as version_mod
+    orig = version_mod.version_info
+    version_mod.version_info = lambda: {
+        "current": "0.1.0", "latest": "0.2.0", "update_available": True}
+    try:
+        with TestClient(app) as c:
+            assert c.get("/api/version").status_code == 401  # signed-out
+            _login(c)
+            r = c.get("/api/version")
+            assert r.status_code == 200, r.text
+            assert r.json() == {"current": "0.1.0", "latest": "0.2.0",
+                                "update_available": True}
+    finally:
+        version_mod.version_info = orig
+
+
 def test_results_for_storage_caps_and_drops_largest_over_budget():
     """Persisted result rows are capped so a wide brief can't bloat app.db. Over
     the byte ceiling, the LARGEST result is dropped first (a headline usually
@@ -1193,6 +1213,8 @@ def run():
           test_download_csv_picks_table_query_not_a_trailing_count)
     check("CSV download prefers the LAST column-count match",
           test_download_csv_prefers_the_last_matching_query)
+    check("GET /api/version is authed and returns current/latest/update_available",
+          test_version_endpoint_authed_and_shape)
     check("_results_for_storage caps and drops largest over budget",
           test_results_for_storage_caps_and_drops_largest_over_budget)
     check("_load_prior_results respects the before_id window",

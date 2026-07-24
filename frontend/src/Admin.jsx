@@ -133,7 +133,7 @@ function rememberSubTab(sub) {
 // the URL so every view has a distinct, bookmarkable address; a stray :sub on a
 // non-Users tab -> the bare tab. Kept separate from Admin so Admin stays a
 // plain props component.
-export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged }) {
+export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged, version }) {
   const { tab, sub } = useParams();
   if (Object.prototype.hasOwnProperty.call(USERS_TAB_ALIASES, tab)) {
     return <Navigate to={`/admin/users/${USERS_TAB_ALIASES[tab]}`} replace />;
@@ -148,22 +148,36 @@ export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged })
       return <Navigate to={`/admin/users/${sub == null ? rememberedSubTab() : resolved}`} replace />;
     }
     return <Admin me={me} tab={tab} sub={resolved} onDataChanged={onDataChanged}
-                  attention={attention} onAttentionChanged={onAttentionChanged} />;
+                  attention={attention} onAttentionChanged={onAttentionChanged} version={version} />;
   }
   if (sub != null) return <Navigate to={`/admin/${tab}`} replace />;
   return <Admin me={me} tab={tab} onDataChanged={onDataChanged}
-                attention={attention} onAttentionChanged={onAttentionChanged} />;
+                attention={attention} onAttentionChanged={onAttentionChanged} version={version} />;
 }
 
-export default function Admin({ me, tab, sub, onDataChanged, attention, onAttentionChanged }) {
+export default function Admin({ me, tab, sub, onDataChanged, attention, onAttentionChanged, version }) {
   // Attention counts default to empty so the nav renders unbadged if the Shell
   // hasn't fetched yet (or a test mounts Admin directly). refresh is a no-op
   // fallback for the same reason.
   const counts = attention || {};
   const refreshAttention = onAttentionChanged || (() => {});
+  // NON-dismissible on purpose: an available update is an attention item like a
+  // pending user or a log problem — it stays until you ACT on it (update the
+  // deployment → update_available goes false → the banner AND the +1 avatar
+  // badge clear together). So the badge always maps to this visible banner.
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
+      {version?.update_available && (
+        <div className="update-banner" role="status">
+          <IconInfo size={16} aria-hidden="true" />
+          <span>
+            <strong>v{version.latest}</strong> is available — you&rsquo;re on {version.current}.{" "}
+            <a href="https://github.com/toddawhittaker/ipeds-oracle/releases"
+               target="_blank" rel="noreferrer">Release notes</a>
+          </span>
+        </div>
+      )}
       <nav className="subtabs" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => {
           // Only areas with an actionable backlog carry a count (users/skills/
