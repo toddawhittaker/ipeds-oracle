@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, streamChat } from "./api.js";
-import { IconClose, IconEdit, IconRerun, IconSend, IconTrash } from "./icons.jsx";
+import { IconClose, IconEdit, IconRerun, IconSend, IconTrash,
+         IconChevronLeft, IconChevronRight, IconPlus } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 import MarkdownTextarea from "./MarkdownTextarea.jsx";
 import Figure from "./Figure.jsx";
@@ -774,13 +775,17 @@ export default function Chat({ me }) {
                   title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                   aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                   aria-expanded={!collapsed}>
-            {collapsed ? "»" : "«"}
+            {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
           </button>
-          {!collapsed && <Link to="/" className="newchat" onClick={handleNewChat}>+ New chat</Link>}
+          {!collapsed && (
+            <Link to="/" className="newchat" onClick={handleNewChat}>
+              <IconPlus size={15} />New chat
+            </Link>
+          )}
         </div>
         {collapsed ? (
           <Link to="/" className="icon-btn newchat-collapsed" onClick={handleNewChat}
-                title="New chat" aria-label="New chat">+</Link>
+                title="New chat" aria-label="New chat"><IconPlus /></Link>
         ) : (
           <div className="convo-list thin-scroll">
             {convos.map((c) => (
@@ -844,6 +849,20 @@ export default function Chat({ me }) {
               enumerate other users' conversation ids. */}
           {showNotice && <div className="notice">{showNotice}</div>}
           <div className="sr-only" role="status" aria-live="polite">{showNotice}</div>
+          {/* A11Y-6: a non-visual progress announcement. The streaming bubble is
+              aria-busy while pending, and a screen reader skips a busy region's
+              content — so the visible "Thinking…/Running query…" status inside it
+              is never spoken. Mirror it here, OUTSIDE any busy region, so the
+              wait is audible; it clears when the turn settles (the bubble then
+              announces the finished answer as its aria-busy flips to false).
+              A plain aria-live region, NOT role="status" — the Chat page keeps
+              exactly one role=status.sr-only node (the bad-conversation notice,
+              pinned in routing-chat/delete-focus specs); aria-live="polite" +
+              aria-atomic is the same announcement to AT without a second status. */}
+          <div className="sr-only" aria-live="polite" aria-atomic="true"
+               data-testid="generating-status">
+            {busy ? (status || "Generating response…") : ""}
+          </div>
           {/* Switching chats: skeleton bubbles until the fetch settles, so the
               empty-state prompt never flashes over a conversation that's
               merely loading. aria-hidden — the sr experience is the (quiet)
@@ -905,11 +924,22 @@ export default function Chat({ me }) {
                           <span className="spinner" aria-hidden="true" />
                           <span className="muted">{status || "Thinking…"}</span>
                         </div>
+                        {/* Same controlled trace-toggle as the settled answer
+                            below (a <button> + aria-expanded + panel), NOT a
+                            native <details> — one disclosure mechanic app-wide
+                            (P1). Keyed on the pending message's own index. */}
                         {m.thinking?.length > 0 && (
-                          <details className="thoughts">
-                            <summary>Thinking</summary>
-                            <ThinkingTrace items={m.thinking} />
-                          </details>
+                          <>
+                            <button type="button" className="link trace-toggle"
+                                    aria-expanded={openTrace === `${i}:thinking`}
+                                    aria-controls={`trace-${i}`}
+                                    onClick={() => toggleTrace(i, "thinking")}>Thinking</button>
+                            {openTrace === `${i}:thinking` && (
+                              <div className="trace-panel" id={`trace-${i}`}>
+                                <ThinkingTrace items={m.thinking} />
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     ) : m.stopped ? (
@@ -955,7 +985,10 @@ export default function Chat({ me }) {
                       <button className="link ico" onClick={() => rerun(i)} disabled={busy}
                               title="Run this prompt again"><IconRerun />Rerun</button>
                       {formatStamp(m.created_at) && (
-                        <span className="msg-time" title="When you asked">{formatStamp(m.created_at)}</span>
+                        <span className="msg-time" title="When you asked"
+                              aria-label={`Asked at ${formatStamp(m.created_at)}`}>
+                          {formatStamp(m.created_at)}
+                        </span>
                       )}
                     </div>
                   </>
@@ -964,7 +997,8 @@ export default function Chat({ me }) {
                   <>
                     <div className="msg-actions">
                       {thoughtLabel(m.duration_ms) && !m.error && (
-                        <span className="msg-time" title="Time to generate this answer">
+                        <span className="msg-time" title="Time to generate this answer"
+                              aria-label={`Answer generated — ${thoughtLabel(m.duration_ms)}`}>
                           {thoughtLabel(m.duration_ms)}
                         </span>
                       )}

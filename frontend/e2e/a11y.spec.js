@@ -86,6 +86,59 @@ test.describe("streamed answer live region", () => {
     const liveRegion = page.locator(".msg.assistant .bubble > div[aria-live]");
     await expect(liveRegion).toHaveAttribute("aria-live", "polite");
   });
+
+  // A11Y-6: the streaming bubble is aria-busy while pending, and a screen reader
+  // skips a busy region's content — so a separate status region OUTSIDE any busy
+  // region must announce that generation is underway. This region announces the
+  // wait and then clears; regressing it (removing the region, or nesting it in
+  // the aria-busy bubble) fails here.
+  test("a non-visual 'generating' status announces the wait, outside any aria-busy region", async ({ page }) => {
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
+    await mockConversations(page, []);
+    // Hold the turn in-flight so we can observe the mid-stream announcement.
+    await mockStreamChat(page, { conversationId: 42, answer: ANSWER_MD, delayMs: 1500 });
+
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("nursing degrees");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    // While the turn is in-flight this region mirrors the live progress status
+    // ("Thinking…") outside the aria-busy bubble; it falls back to a generic
+    // "Generating response…" only when no status text is set.
+    const status = page.getByTestId("generating-status");
+    await expect(status).toHaveText(/Thinking|Generating response/);
+    await expect(status).toHaveAttribute("aria-live", "polite");
+    // It must NOT live inside the aria-busy assistant bubble (that's the point).
+    await expect(page.locator('.msg.assistant [data-testid="generating-status"]')).toHaveCount(0);
+    // Once the answer settles the announcement clears (busy → false).
+    await expect(page.getByRole("table")).toBeVisible();
+    await expect(status).toHaveText("");
+  });
+});
+
+test.describe("turn timing is accessible text, not title-only (A11Y-7)", () => {
+  test("the question timestamp and the answer duration each carry a descriptive accessible name", async ({ page }) => {
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
+    const convos = await mockConversations(page, []);
+    await mockStreamChat(page, {
+      conversationId: 42, sql: [SQL], answer: ANSWER_MD, messageId: 7, durationMs: 4200,
+    });
+    await mockConversation(page, 42, [
+      { role: "user", content: "nursing degrees" },
+      { role: "assistant", id: 7, content: ANSWER_MD, sql_log: [SQL] },
+    ]);
+
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("nursing degrees");
+    convos.setList([{ id: 42, title: "nursing degrees" }]);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("table")).toBeVisible();
+
+    // The visible text is a bare clock time / "Thought for 4 seconds"; the
+    // accessible name adds the context that used to live only in `title`.
+    await expect(page.getByLabel(/^Asked at /)).toBeVisible();
+    await expect(page.getByLabel(/Answer generated — Thought for/)).toBeVisible();
+  });
 });
 
 test.describe("labeled inputs", () => {

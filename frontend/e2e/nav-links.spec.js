@@ -191,7 +191,7 @@ test.describe("'+ New chat' -- real link, side effects preserved", () => {
     await mockConversations(page, [{ id: 3, title: "A" }]);
     await page.goto("/");
 
-    const link = page.getByRole("link", { name: "+ New chat" });
+    const link = page.getByRole("link", { name: "New chat" });
     await expect(link).toHaveAttribute("href", "/");
   });
 
@@ -236,7 +236,7 @@ test.describe("'+ New chat' -- real link, side effects preserved", () => {
     // native modified-click handling takes over instead.
     await page.waitForTimeout(100);
     const popupPromise = page.context().waitForEvent("page", { timeout: 2000 }).catch(() => null);
-    await page.getByRole("link", { name: "+ New chat" }).click({ modifiers: ["ControlOrMeta"] });
+    await page.getByRole("link", { name: "New chat" }).click({ modifiers: ["ControlOrMeta"] });
     const popup = await popupPromise;
     if (popup) await popup.close();
 

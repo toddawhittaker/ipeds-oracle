@@ -351,7 +351,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 }
 .icon-btn:hover { color: var(--text); }
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
-.newchat { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; text-align: center; }
+.newchat { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
 /* Reveal-trigger states share the row background so the actions' fade (below)
@@ -407,7 +407,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 }
 /* The empty chat state reads left-aligned like a reading-room prompt card:
    a survey-field eyebrow, a serif question, then the "query slips". */
-.empty { max-width: 940px; margin: 40px auto; text-align: left; }
+.empty { max-width: 880px; margin: 40px auto; text-align: left; }
 .empty .field-label { display: block; margin-bottom: 10px; }
 .empty-prompt { font-size: clamp(24px, 3.4vw, 30px); line-height: 1.12; margin: 0 0 8px; max-width: 22ch; }
 .examples-grid { display: grid; gap: 12px; margin: 24px 0 10px; text-align: left; }
@@ -523,8 +523,6 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
 .thinking-head { display: flex; align-items: center; gap: 10px; }
-.thoughts { margin-top: 8px; }
-.thoughts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .thought-list { max-height: 260px; overflow: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .thought-line { font-size: 13px; }
 .thought-reason {
@@ -857,7 +855,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    past the viewport — the whole page (topbar included) scrolls AND .admin
    scrolls (double scrollbars), with phantom blank space below the content. */
 .admin { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
-.subtabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; }
 .panel h3 { margin-top: 0; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }

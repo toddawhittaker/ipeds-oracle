@@ -240,6 +240,7 @@ export async function mockStreamChat(page, {
   messageId = null,
   userMessageId = null,
   title = null,
+  durationMs = null,
   delayMs = 0,
 } = {}) {
   const calls = [];
@@ -260,8 +261,11 @@ export async function mockStreamChat(page, {
       // _extract_clarify). Omitted when `clarify` is null.
       ...(clarify ? [{ type: "clarify", clarify }] : []),
       { type: "answer", text: answer },
+      // `duration_ms`, when set, drives the "Thought for N seconds" label on the
+      // settled answer (server wall-clock in the real done event). Omitted null.
       { type: "done", message_id: messageId, user_message_id: userMessageId,
-        model: "test", tokens: 0, ...(title ? { title } : {}) },
+        model: "test", tokens: 0, ...(title ? { title } : {}),
+        ...(durationMs != null ? { duration_ms: durationMs } : {}) },
     ];
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });
