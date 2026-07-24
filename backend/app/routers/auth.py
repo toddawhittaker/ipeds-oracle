@@ -36,11 +36,14 @@ def public_config():
 def request_link(body: LoginRequest, request: Request, tasks: BackgroundTasks):
     email = str(body.email).strip().lower()
     enforce_auth_rate_limit(email, client_ip(request))
-    base = str(request.base_url)
+    # The sign-in link is built from the canonical `app_public_url` inside
+    # mint_login_link — NOT from `request.base_url`, which follows the attacker-
+    # controllable Host header (link-poisoning → account takeover). `request` is
+    # still needed for the rate-limiter's client IP.
     # tasks is threaded through to request_login so it can schedule its
     # outbound email (fire-and-forget) rather than send it inline — see that
     # function's docstring for why every branch must do this, not just some.
-    return auth.request_login(email, base, tasks)
+    return auth.request_login(email, tasks)
 
 
 @router.get("/verify")
