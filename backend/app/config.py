@@ -31,8 +31,16 @@ _LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 def _log_safe(value: object) -> str:
     """Newline/control-char-stripped string form of an untrusted value, safe to
-    interpolate into a log message."""
-    return _LOG_CTRL_RE.sub(" ", str(value))
+    interpolate into a log message.
+
+    The CR/LF removal is written as explicit ``str.replace`` calls, not left to
+    the ``_LOG_CTRL_RE`` sweep alone: that is the newline-neutralising form
+    CodeQL's ``py/log-injection`` query recognises as a sanitizer, so it clears
+    the taint (a ``re.sub`` character-class scrubs identically but CodeQL does
+    not model it — the alert stayed open). The regex then strips the remaining
+    control chars (``\\x00``-``\\x1f`` minus CR/LF, and ``\\x7f``)."""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return _LOG_CTRL_RE.sub(" ", text)
 
 # Repo root (…/ipeds). config.py lives in backend/app/, so parents[2] is the
 # root — the runtime DBs, data/, and docs/ all resolve relative to it (prod
