@@ -341,11 +341,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    middle so the notice is centered horizontally; the row's align-items:center
    centers it vertically. It's OUTSIDE .modal-body, so its link needs the app's
    accent link styling explicitly (else it falls back to the UA default blue). */
-.about-copyright { margin: 0; flex: 1; text-align: center; }
+.about-copyright { margin: 0; justify-self: center; text-align: center; }
 .about-copyright a, .about-copyright a:visited { color: var(--accent); text-decoration: underline; }
 .about-copyright a:hover { color: var(--accent-d); }
 .about-copyright a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.about-actions { justify-content: space-between; align-items: center; }
+/* 3-column grid with EQUAL side tracks so the copyright is at the dialog's true
+   optical center, not offset by the unequal GitHub-icon / Close-button widths. */
+.about-actions { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+.about-actions .about-gh { justify-self: start; }
+.about-actions .modal-confirm { justify-self: end; }
 /* Sized to match the Close button's footprint (icon + padding ≈ its height). */
 .about-gh {
   display: inline-flex; align-items: center; justify-content: center;
@@ -824,6 +828,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    running the chat on for a screen — vertically AND horizontally — with the
    header row pinned so the columns stay labeled while you scroll. */
 .md .table-wrap { overflow: auto; max-height: 460px; }
+/* A "more below" cue: a soft inner shadow at the bottom edge, shown only when
+   the box is scrolled up from the end (SortableTable toggles .more-below), so a
+   table cut exactly at the 460px boundary doesn't read as complete. */
+.md .table-wrap.more-below { box-shadow: inset 0 -14px 11px -11px rgba(0, 0, 0, .22); }
 /* border-collapse: SEPARATE (not collapse) is what makes the sticky header solid:
    with collapse, cell borders belong to the table box and scroll away, so the
    header's top/bottom rules don't stick and a sliver of the first rows peeks
@@ -877,7 +885,8 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   content: ""; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px;
   border: solid var(--on-fg); border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
-.cmp-cell input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
+.cmp-cell input[type="checkbox"]:disabled,
+.cmp-cell input[type="checkbox"][aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
 .cmp-cell input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cmp-row.picked > td:not(.cmp-cell), .cmp-row.picked > td.cmp-cell { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .compare-bar { display: flex; align-items: center; gap: 14px; padding: 6px 2px 0; font-size: 13px; }

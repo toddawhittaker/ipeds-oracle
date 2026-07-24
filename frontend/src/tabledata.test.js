@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseNum, toCsv, extractTable, chartSpecFromTable, countMarkdownTables, columnIsNumeric, sortRows, downloadServerCsv } from "./tabledata.js";
+import { parseNum, toCsv, extractTable, chartSpecFromTable, countMarkdownTables, columnIsNumeric, sortRows, sortedIndices, downloadServerCsv } from "./tabledata.js";
 
 // Pure helpers behind per-table CSV export and "Chart this". The DOM side-effect
 // (downloadCsv wiring an <a> and triggering a real browser download) is browser
@@ -60,11 +60,31 @@ describe("extractTable", () => {
   };
 
   it("pulls headers from the th row and data from the td rows", () => {
-    expect(extractTable(node)).toEqual({
+    const { headers, rows } = extractTable(node);
+    expect({ headers, rows }).toEqual({
       headers: ["Name", "Count"],
       rows: [["Ohio State", "1,234"], ["Miami", "567"]],
     });
   });
+
+  it("also returns the parallel <td> hast nodes for inline rendering", () => {
+    const { cellNodes } = extractTable(node);
+    // One entry per BODY row (headers excluded), each the row's <td> elements.
+    expect(cellNodes.length).toBe(2);
+    expect(cellNodes[0].map((td) => td.tagName)).toEqual(["td", "td"]);
+    // The first cell keeps its nested <strong>, so the display can render it bold.
+    expect(cellNodes[0][0].children[0].tagName).toBe("strong");
+  });
+});
+
+describe("sortedIndices", () => {
+  const rows = [["B", "10"], ["A", "2"], ["C", "100"]];
+  it("returns identity order for a null column", () =>
+    expect(sortedIndices(rows, null, null, false)).toEqual([0, 1, 2]));
+  it("numeric asc orders by value (a permutation, not the rows)", () =>
+    expect(sortedIndices(rows, 1, "asc", true)).toEqual([1, 0, 2])); // 2,10,100
+  it("string asc orders the label column", () =>
+    expect(sortedIndices(rows, 0, "asc", false)).toEqual([1, 0, 2])); // A,B,C
 });
 
 describe("chartSpecFromTable", () => {

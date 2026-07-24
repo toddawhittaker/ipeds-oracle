@@ -51,3 +51,20 @@ test("a text header sorts alphabetically", async ({ page }) => {
   await page.getByRole("button", { name: "University", exact: true }).click();
   expect(await order(page)).toEqual(["Michigan", "Ohio State", "Penn State"]);
 });
+
+test("cells render inline markdown — a link stays clickable, a total stays bold", async ({ page }) => {
+  // code-#8: SortableTable renders cells from their hast nodes, so inline markup
+  // in a data cell (a website link, a bold total) is preserved, not flattened.
+  const md = "Sites:\n\n| Institution | Note |\n|---|---|\n"
+    + "| [UT Austin](https://utexas.edu) | **flagship** |\n"
+    + "| Rice | private |\n";
+  await mockMe(page, { email: "u@example.edu", is_admin: false });
+  await mockConversations(page, []);
+  await mockConversation(page, 9, [{ role: "assistant", content: md }]);
+  await page.goto("/chat/9");
+  await expect(page.getByRole("table")).toBeVisible();
+
+  const link = page.getByRole("link", { name: "UT Austin" });
+  await expect(link).toHaveAttribute("href", "https://utexas.edu");
+  await expect(page.locator("td strong").filter({ hasText: "flagship" })).toBeVisible();
+});

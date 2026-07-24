@@ -25,8 +25,10 @@ _DEFAULT_TZ = "America/New_York"
 # logs.db; this covers the value at the CALL SITE too — the non-DB handlers
 # (stderr/console) and CodeQL's static view, which can't see into the handler.
 # config is a leaf module (logbuffer imports IT), so the scrub is duplicated here
-# rather than imported, to avoid a cycle.
-_LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# rather than imported, to avoid a cycle. Covers C0 (\x00-\x1f) + DEL, the C1
+# block (\x80-\x9f), and the Unicode line separators U+2028/U+2029 — some log
+# viewers and `str.splitlines()`-based tooling treat the latter two as newlines.
+_LOG_CTRL_RE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def _log_safe(value: object) -> str:

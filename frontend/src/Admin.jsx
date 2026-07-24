@@ -902,7 +902,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
                onChange={(e) => setNote(e.target.value)} />
         <label className="switch">
           <input type="checkbox" role="switch" checked={isAdmin}
-                 onChange={(e) => setIsAdmin(e.target.checked)} /> admin
+                 onChange={(e) => setIsAdmin(e.target.checked)} /> Admin
         </label>
         <button type="submit">Add</button>
       </form>
@@ -2408,7 +2408,7 @@ function Logs({ onAttentionChanged }) {
         <label className="switch">
           <input type="checkbox" role="switch" checked={auto}
             onChange={(e) => setAuto(e.target.checked)} />
-          auto-refresh
+          Auto-refresh
         </label>
         <button onClick={load}>Refresh</button>
         {filtered && <button onClick={clearFilters}>Clear filters</button>}

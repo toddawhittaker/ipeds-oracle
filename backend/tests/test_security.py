@@ -431,10 +431,13 @@ def test_resolve_tz_sanitizes_control_chars_before_logging():
     # param is user-controlled and, when it's not a real IANA zone, gets logged.
     # A CR/LF in it must not survive into the log message and forge a second line.
     from app import config as cfg
-    evil = "Fake/Zone\r\nCRITICAL forged admin line"
-    # The sanitizer strips every control char (CR/LF included) to a space.
+    # CR/LF plus a C1 NEL (\x85) and the Unicode line separators U+2028/U+2029,
+    # which some log viewers / str.splitlines() also treat as newlines.
+    evil = "Fake/Zone\r\n\x85\u2028\u2029CRITICAL forged admin line"
+    # The sanitizer strips every control char / line separator to a space.
     safe = cfg._log_safe(evil)
-    assert "\n" not in safe and "\r" not in safe, repr(safe)
+    for ch in "\r\n\x85\u2028\u2029":
+        assert ch not in safe, repr(safe)
     assert "forged admin line" in safe, "content kept; only the newline is neutralized"
     # ...and the real call path (invalid zone) degrades to the default without
     # raising and without carrying the raw newline anywhere.
