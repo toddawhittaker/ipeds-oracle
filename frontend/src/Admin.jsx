@@ -900,8 +900,8 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         <label htmlFor="allow-note" className="sr-only">Note</label>
         <input id="allow-note" placeholder="note (optional)" value={note}
                onChange={(e) => setNote(e.target.value)} />
-        <label className="chk">
-          <input type="checkbox" checked={isAdmin}
+        <label className="switch">
+          <input type="checkbox" role="switch" checked={isAdmin}
                  onChange={(e) => setIsAdmin(e.target.checked)} /> admin
         </label>
         <button type="submit">Add</button>
@@ -2405,8 +2405,9 @@ function Logs({ onAttentionChanged }) {
           <input type="date" value={to} min={from || undefined}
             onChange={(e) => setTo(e.target.value)} aria-label="To date" />
         </label>
-        <label className="chk">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+        <label className="switch">
+          <input type="checkbox" role="switch" checked={auto}
+            onChange={(e) => setAuto(e.target.checked)} />
           auto-refresh
         </label>
         <button onClick={load}>Refresh</button>

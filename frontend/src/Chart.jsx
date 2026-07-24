@@ -8,10 +8,19 @@ import { IconCopy, IconCheck, IconTag, IconMaximize } from "./icons.jsx";
 import ChartModal from "./ChartModal.jsx";
 import { pctChange, trendValues } from "./trendstats.js";
 
-const PALETTE = ["#3b82c4", "#e0803a", "#38a169", "#a23bc9", "#d64f6b", "#0e9aa7"];
+// Series colors. Muted/earthy to match the app's archival cream+teal+ochre
+// aesthetic (the old palette read as neon on both themes), but still six
+// clearly-separated hues — teal · ochre · sage · plum · clay · slate-blue — so
+// categories stay differentiable. Two variants: deeper tones for the light
+// cream panel, lighter tints for the dark green-ink panel. The first color is
+// the app teal, so a single-series bar chart is on-brand.
+const PALETTE_LIGHT = ["#2f6f68", "#b07a2e", "#5f7d4f", "#7d5a86", "#b05f50", "#4a6b8a"];
+const PALETTE_DARK = ["#6bb3aa", "#cf9a54", "#8aa878", "#b592c2", "#cf8479", "#7ea3c4"];
+
 // Exports are always rendered light so a pasted chart looks right in a document
-// regardless of the app's current theme.
-const LIGHT = { text: "#1a1f26", muted: "#6b7280", line: "#e3e6ea", ochre: "#a66a12" };
+// regardless of the app's current theme — so they carry the light palette.
+const LIGHT = { text: "#1a1f26", muted: "#6b7280", line: "#e3e6ea", ochre: "#a66a12",
+                palette: PALETTE_LIGHT, cursorFill: "rgba(20,26,24,0.06)" };
 const EXPORT_W = 620, EXPORT_H = 320;
 
 const fmtNum = (v) => (typeof v === "number" ? v.toLocaleString() : v);
@@ -20,10 +29,21 @@ function useThemeColors() {
   const read = () => {
     const cs = getComputedStyle(document.documentElement);
     const g = (n, d) => cs.getPropertyValue(n).trim() || d;
+    // Resolve the active theme the same way the app does: an explicit
+    // data-theme wins, else the OS preference. Drives which series palette
+    // (deeper for light, lighter for dark) reads well on the current panel.
+    const attr = document.documentElement.getAttribute("data-theme");
+    const dark = attr === "dark"
+      || (attr == null && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches);
     return {
       text: g("--text", "#1a1f26"), muted: g("--muted", "#6b7280"),
       line: g("--line", "#e3e6ea"), panel: g("--panel", "#ffffff"),
       ochre: g("--ochre", "#a66a12"),
+      palette: dark ? PALETTE_DARK : PALETTE_LIGHT,
+      // The bar-hover cursor highlight — a soft translucent overlay, not
+      // Recharts' default opaque light-gray rect (which reads as a jarring
+      // white block on the dark panel). Tinted per theme.
+      cursorFill: dark ? "rgba(230,236,232,0.08)" : "rgba(20,26,24,0.06)",
     };
   };
   const [colors, setColors] = useState(read);
@@ -107,7 +127,8 @@ function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trend
   const xAxisLabel = longLabels ? undefined
     : { value: xLabel, position: "insideBottom", offset: -6, fill: colors.muted, fontSize: 12 };
   const seriesEl = keys.map((key, i) => {
-    const color = PALETTE[i % PALETTE.length];
+    const palette = colors.palette || PALETTE_LIGHT;
+    const color = palette[i % palette.length];
     const labels = showLabels
       ? <LabelList dataKey={key} position="top" fontSize={11} fill={colors.text} formatter={fmtNum} />
       : null;
@@ -125,6 +146,8 @@ function chartChildren({ colors, isBar, keys, spec, showLabels, forExport, trend
                     fill: colors.muted, fontSize: 12, style: { textAnchor: "middle" } }} />,
     !forExport && (
       <Tooltip key="tip" formatter={fmtNum}
+               cursor={isBar ? { fill: colors.cursorFill }
+                             : { stroke: colors.muted, strokeWidth: 1 }}
                contentStyle={{ background: colors.panel, border: `1px solid ${colors.line}`,
                  borderRadius: 8, color: colors.text }} labelStyle={{ color: colors.text }} />
     ),
