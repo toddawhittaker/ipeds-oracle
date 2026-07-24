@@ -36,9 +36,22 @@ export IPEDS_DB_PATH="$CI_DIR/ipeds.db"
 "$PY" scripts/make_web_dist_stub.py
 
 rm -f "$REPO_ROOT/.coverage"
+# Suite output is captured, not discarded. It used to go to /dev/null, which was
+# fine while every suite ALSO ran as its own named step -- but two suites
+# (test_grounding.py, test_version.py) were in neither hand-maintained list and
+# ran ONLY here, so their failures surfaced as a bare non-zero exit from a step
+# labelled "Coverage gate" with no diagnostic at all. Now the log is replayed on
+# failure. (The suite lists themselves are gone; see scripts/run_backend_suites.sh.)
+SUITE_LOG="$(mktemp)"
+trap 'rm -f "$SUITE_LOG"' EXIT
 for suite in backend/tests/test_*.py; do
   # Each suite gets its own fresh app.db so migration/backup state can't leak.
-  APP_DB_PATH="$(mktemp -d)/app.db" "$COV" run --source=app --append "$suite" >/dev/null
+  if ! APP_DB_PATH="$(mktemp -d)/app.db" "$COV" run --source=app --append "$suite" \
+        >"$SUITE_LOG" 2>&1; then
+    echo "=== $suite FAILED under coverage ==="
+    cat "$SUITE_LOG"
+    exit 1
+  fi
 done
 
 echo "=== backend/app/ coverage (per-module floor ${COVERAGE_MIN}%) ==="

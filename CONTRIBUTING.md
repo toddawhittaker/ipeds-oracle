@@ -90,7 +90,9 @@ For a quick **single‑port build to click around** (the SPA built and served fr
 real email), `make down` to stop. Details in `.claude/skills/interactive-testing`.
 
 Config is env‑driven via `pydantic-settings`; every setting lives in
-[`.env.example`](.env.example). The default model is `deepseek/deepseek-v4-flash`
+[`.env.example`](.env.example) — enforced by `backend/tests/test_env_example.py`,
+which diffs the file against `config.Settings` in both directions, so a new
+setting can't ship undocumented and a removed one can't linger. The default model is `deepseek/deepseek-v4-flash`
 escalating to `deepseek/deepseek-v4-pro`; `LLM_MAX_TOOL_ITERS` caps the agent's
 tool rounds.
 
@@ -161,14 +163,13 @@ scripts/coverage_check.sh                                           # the gate (
 ```
 
 The **JS side** has its own floor: `frontend/vitest.config.js` gates a per-file ≥ 80%
-line coverage over an explicit allowlist of the pure-logic modules under test —
-`npm run test:unit` fails if one dips. The list is the `coverage.include` array in
-`vitest.config.js` (currently `accesstables`, `announce`, `attention`, `briefdata`,
-`clarify`, `compare`, `csvimport`, `datatable`, `datetime`, `estimate`, `figure`,
-`initials`, `mdhighlight`, `mdnorm`, `selection`, `suggestions`, `tabledata`,
-`trendstats`, `typeahead`, `usageinfo`, `usagestats`, `userlist`, `usertabs`). Add a
-module there when it gets real unit tests. Browser-tested components stay out of the
-floor (Playwright covers them).
+line coverage over the pure-logic modules under test — `npm run test:unit` fails if
+one dips. That set is **derived from the filesystem**: any `src/foo.js` with a
+co-located `src/foo.test.js` is gated, so writing the test is the whole opt-in.
+(It used to be a hand-kept array, which drifted the usual way — a module could get
+tests and stay silently ungated, with no failure and no signal.) Browser-tested
+components stay out of the floor: they have no `*.test.js`, and Playwright covers
+them.
 
 **Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
 three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via

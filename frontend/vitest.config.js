@@ -1,4 +1,18 @@
+import { readdirSync } from "node:fs";
+
 import { defineConfig } from "vitest/config";
+
+// Every pure-logic module that HAS a co-located unit test is gated, derived from
+// the filesystem rather than a hand-kept list. The old explicit array drifted in
+// exactly the way every other hand-maintained duplicate list in this repo has:
+// adding src/foo.test.js without also adding src/foo.js left the module silently
+// UNGATED -- no failure, no signal, which is the worst shape a coverage gap can
+// take. Deriving it means the only way to escape the floor is to have no test at
+// all, which is visible.
+const gatedModules = readdirSync("src")
+  .filter((f) => f.endsWith(".test.js"))
+  .map((f) => `src/${f.replace(/\.test\.js$/, ".js")}`)
+  .sort();
 
 // Vitest — the FAST unit tier for pure logic (see CLAUDE.md "How we work" -> the
 // test pyramid). Genuine browser truth (routing, focus, aria-live/AT, back/
@@ -24,33 +38,9 @@ export default defineConfig({
       // deliberately NOT listed -- they're covered by Playwright, and unit-
       // testing them through jsdom would fake the very browser behaviour they
       // exist to guarantee. Add a module here when (and only when) it gets real
-      // unit tests, so JS coverage never silently escapes a gate.
-      include: [
-        "src/accesstables.js",
-        "src/announce.js",
-        "src/attention.js",
-        "src/briefdata.js",
-        "src/clarify.js",
-        "src/compare.js",
-        "src/csvimport.js",
-        "src/datatable.js",
-        "src/datetime.js",
-        "src/estimate.js",
-        "src/figure.js",
-        "src/initials.js",
-        "src/mdhighlight.js",
-        "src/mdnorm.js",
-        "src/selection.js",
-        "src/suggestions.js",
-        "src/tabledata.js",
-        "src/trendstats.js",
-        "src/turns.js",
-        "src/typeahead.js",
-        "src/usageinfo.js",
-        "src/usagestats.js",
-        "src/userlist.js",
-        "src/usertabs.js",
-      ],
+      // unit tests, so JS coverage never silently escapes a gate. The list is
+      // DERIVED above from the co-located *.test.js files -- see that comment.
+      include: gatedModules,
       all: true,
       thresholds: {
         // Per-file so one weak module can't hide behind strong ones -- same
