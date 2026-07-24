@@ -7,6 +7,7 @@ const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
 const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
 const LICENSE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/LICENSE";
+const RELEASES_URL = "https://github.com/toddawhittaker/ipeds-oracle/releases";
 // The guides live in the repo and render on GitHub (with screenshots). The Admin
 // guide link is shown only to admins (see the `isAdmin` gate below).
 const USER_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/USER_GUIDE.md";
@@ -19,7 +20,7 @@ const ADMIN_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/mai
 // in on open and returns to the opener on close, Escape / overlay-click / Close all
 // dismiss, and the background is inert while it's open. Pinned in
 // frontend/e2e/user-menu.spec.js.
-export default function AboutModal({ onClose, isAdmin = false }) {
+export default function AboutModal({ onClose, isAdmin = false, version = null }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
   const openerRef = useRef(null);
@@ -117,6 +118,19 @@ export default function AboutModal({ onClose, isAdmin = false }) {
               </>
             )}
           </p>
+          {version?.current && (
+            <p className="about-version muted small">
+              Version {version.current}
+              {version.update_available && (
+                <>
+                  {" — a newer version ("}
+                  <strong>{version.latest}</strong>
+                  {") is "}
+                  <a href={RELEASES_URL} target="_blank" rel="noreferrer">available</a>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <div className="modal-actions about-actions">
           <a className="about-gh" href={GITHUB_URL} target="_blank" rel="noreferrer"

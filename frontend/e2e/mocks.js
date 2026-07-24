@@ -68,6 +68,21 @@ export async function mockAuthConfig(page, emailDomain = "") {
   });
 }
 
+/**
+ * GET /api/version -> {current, latest, update_available}. The Shell fetches it
+ * once signed in; About shows the version line and Admin shows the update banner
+ * when update_available. Defaults to "up to date" (no banner).
+ */
+export async function mockVersion(page, info = { current: "0.1.0", latest: "0.1.0", update_available: false }) {
+  await page.route("**/api/version", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(info),
+    });
+  });
+}
+
 /** POST /api/auth/request {email} -> 200 {message}. */
 export async function mockRequestLink(page, message = "Check your email for a sign-in link.") {
   await page.route("**/api/auth/request", async (route) => {

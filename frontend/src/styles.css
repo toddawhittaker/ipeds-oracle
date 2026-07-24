@@ -345,6 +345,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .about-copyright a, .about-copyright a:visited { color: var(--accent); text-decoration: underline; }
 .about-copyright a:hover { color: var(--accent-d); }
 .about-copyright a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+/* The running-version line in the About dialog (its link matches the app accent). */
+.about-version { margin: 8px 0 0; }
+.about-version a, .about-version a:visited { color: var(--accent); text-decoration: underline; }
+.about-version a:hover { color: var(--accent-d); }
+.about-version a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 /* 3-column grid with EQUAL side tracks so the copyright is at the dialog's true
    optical center, not offset by the unequal GitHub-icon / Close-button widths. */
 .about-actions { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
@@ -956,6 +961,19 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    auto side-margins so they line up and sit centered in the .admin viewport.
    On a narrow viewport both fall back to full width inside .admin's 20px pad. */
 .subtabs { display: flex; flex-wrap: wrap; gap: 6px; max-width: 1000px; margin: 0 auto 16px; }
+/* Admin "update available" banner — shown only when a newer release exists,
+   aligned with the centered 1000px admin column, dismissible. Accent-tinted
+   (an FYI, not an error). */
+.update-banner { display: flex; align-items: center; gap: 10px; max-width: 1000px;
+  margin: 0 auto 14px; padding: 8px 12px; border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 8px; font-size: 14px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.update-banner > span { flex: 1; }
+.update-banner a { color: var(--accent-d); }
+.update-banner-close { display: inline-flex; padding: 2px; border: none; background: none;
+  color: var(--muted); cursor: pointer; border-radius: 6px; }
+.update-banner-close:hover { color: var(--text); }
+.update-banner-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; margin-inline: auto; }
 .panel h3 { margin-top: 0; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }

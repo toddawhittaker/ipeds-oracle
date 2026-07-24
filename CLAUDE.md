@@ -145,8 +145,18 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   (focus-in, Escape/overlay/Close, return-focus-to-opener, background `inert`) and
   links to the GitHub repo. It also links the **end-user + admin guides**
   (`docs/USER_GUIDE.md`/`docs/ADMIN_GUIDE.md`, hosted on GitHub with screenshots) —
-  the **Admin guide link is gated to `isAdmin`** (passed from `App.jsx`). Pinned in
-  `frontend/e2e/user-menu.spec.js` + `initials.test.js`.
+  the **Admin guide link is gated to `isAdmin`** (passed from `App.jsx`). It also
+  shows the **running version + an "update available" note**: `App.jsx` fetches
+  `GET /api/version` once signed in (→ `{current, latest, update_available}`) and
+  passes it to About (version line) AND to `Admin.jsx` (a dismissible accent
+  **update banner** shown ONLY when a newer release exists — deliberately NOT the
+  attention badge, which is for "work waiting"). The running version is
+  `config.app_version` (env `APP_VERSION`, baked from the git tag by the Dockerfile
+  `ARG`/`ENV` ← CI `build-args`; `"dev"` locally). `backend/app/version.py` does the
+  read-only "newer release?" check against GitHub (`config.GITHUB_REPO`), **cached
+  ~6h + fails open**, off via `UPDATE_CHECK_ENABLED=false`. Pinned in
+  `frontend/e2e/user-menu.spec.js` + `admin-update-banner.spec.js` +
+  `backend/tests/test_version.py` + `initials.test.js`.
   Chat interaction contracts (all Playwright-pinned in
   `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing

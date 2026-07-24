@@ -33,6 +33,10 @@ import {
 // Counted labels for the CONFIRM dialog's action button (e.g. "Promote 9
 // users") — the count belongs in the dialog, where the exact breakdown is
 // spelled out, never on the toolbar button itself.
+// sessionStorage key for the dismissed update-banner version (keyed by the
+// latest tag so a newer release re-shows the banner).
+const UPDATE_DISMISS_KEY = "ipeds-update-dismissed";
+
 const BULK_ACTION_LABEL = {
   promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"}`,
   demote: (n) => `Demote ${n} ${n === 1 ? "administrator" : "administrators"}`,
@@ -133,7 +137,7 @@ function rememberSubTab(sub) {
 // the URL so every view has a distinct, bookmarkable address; a stray :sub on a
 // non-Users tab -> the bare tab. Kept separate from Admin so Admin stays a
 // plain props component.
-export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged }) {
+export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged, version }) {
   const { tab, sub } = useParams();
   if (Object.prototype.hasOwnProperty.call(USERS_TAB_ALIASES, tab)) {
     return <Navigate to={`/admin/users/${USERS_TAB_ALIASES[tab]}`} replace />;
@@ -148,22 +152,45 @@ export function AdminRoute({ me, onDataChanged, attention, onAttentionChanged })
       return <Navigate to={`/admin/users/${sub == null ? rememberedSubTab() : resolved}`} replace />;
     }
     return <Admin me={me} tab={tab} sub={resolved} onDataChanged={onDataChanged}
-                  attention={attention} onAttentionChanged={onAttentionChanged} />;
+                  attention={attention} onAttentionChanged={onAttentionChanged} version={version} />;
   }
   if (sub != null) return <Navigate to={`/admin/${tab}`} replace />;
   return <Admin me={me} tab={tab} onDataChanged={onDataChanged}
-                attention={attention} onAttentionChanged={onAttentionChanged} />;
+                attention={attention} onAttentionChanged={onAttentionChanged} version={version} />;
 }
 
-export default function Admin({ me, tab, sub, onDataChanged, attention, onAttentionChanged }) {
+export default function Admin({ me, tab, sub, onDataChanged, attention, onAttentionChanged, version }) {
   // Attention counts default to empty so the nav renders unbadged if the Shell
   // hasn't fetched yet (or a test mounts Admin directly). refresh is a no-op
   // fallback for the same reason.
   const counts = attention || {};
   const refreshAttention = onAttentionChanged || (() => {});
+  // Update banner: shown only when a newer release exists, dismissible per
+  // latest-version (a NEWER release later re-shows it). Keyed in sessionStorage.
+  const [updDismissed, setUpdDismissed] = useState(
+    () => !!version?.latest && sessionStorage.getItem(UPDATE_DISMISS_KEY) === version.latest);
+  const showUpdate = !!version?.update_available && !updDismissed;
+  const dismissUpdate = () => {
+    if (version?.latest) sessionStorage.setItem(UPDATE_DISMISS_KEY, version.latest);
+    setUpdDismissed(true);
+  };
   return (
     <main className="admin thin-scroll">
       <h1 className="sr-only">Admin</h1>
+      {showUpdate && (
+        <div className="update-banner" role="status">
+          <span>
+            <IconInfo size={16} aria-hidden="true" />{" "}
+            <strong>v{version.latest}</strong> is available — you&rsquo;re on {version.current}.{" "}
+            <a href="https://github.com/toddawhittaker/ipeds-oracle/releases"
+               target="_blank" rel="noreferrer">Release notes</a>
+          </span>
+          <button type="button" className="update-banner-close"
+                  aria-label="Dismiss update notice" onClick={dismissUpdate}>
+            <IconClose size={16} />
+          </button>
+        </div>
+      )}
       <nav className="subtabs" aria-label="Admin sections">
         {ADMIN_TABS.map((t) => {
           // Only areas with an actionable backlog carry a count (users/skills/

@@ -55,6 +55,10 @@ function Shell() {
   const [theme, setTheme] = useState(currentTheme);
   const [attention, setAttention] = useState({ users: 0, skills: 0, logs: 0 });
   const [aboutOpen, setAboutOpen] = useState(false);
+  // Running version + update availability ({current, latest, update_available}),
+  // shown in the About dialog and the Admin update banner. Fetched once the user
+  // is signed in (the endpoint is authed); fails soft to null.
+  const [version, setVersion] = useState(null);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const landedAt = useRef(pathname);
@@ -113,6 +117,12 @@ function Shell() {
   // import completes. That was the exact bug this comment (and its
   // pre-router predecessor) was written to prevent.
   const refreshMe = () => api.me().then(setUser).catch(() => {});
+
+  // Fetch the running version once signed in (the endpoint is authed). The
+  // server caches the GitHub "newer release?" check, so this is one cheap call.
+  useEffect(() => {
+    if (user) api.version().then(setVersion).catch(() => {});
+  }, [user]);
 
   // Admin attention counts, lifted to the Shell so the top-bar Admin badge is
   // live on EVERY page (Chat included) — the per-section badges in Admin.jsx read
@@ -191,7 +201,7 @@ function Shell() {
           onSignOut={async () => { await api.logout(); setUser(null); }}
         />
       </header>
-      {aboutOpen && <AboutModal isAdmin={user.is_admin} onClose={() => setAboutOpen(false)} />}
+      {aboutOpen && <AboutModal isAdmin={user.is_admin} version={version} onClose={() => setAboutOpen(false)} />}
       <Routes>
         {/* key="chat" is a defensive pin, not what actually keeps Chat
             mounted across a "/" <-> "/chat/:id" URL change: react-router's
@@ -211,10 +221,10 @@ function Shell() {
         <Route path="/admin" element={adminOnly(
           <Navigate to={user.has_data ? "/admin/users/current" : "/admin/imports"} replace />,
         )} />
-        <Route path="/admin/:tab" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} />)} />
+        <Route path="/admin/:tab" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} version={version} />)} />
         {/* Users splits into path sub-tabs (/admin/users/current|pending|blocked);
             AdminRoute reads both params. Other tabs ignore :sub. */}
-        <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} />)} />
+        <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} version={version} />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
