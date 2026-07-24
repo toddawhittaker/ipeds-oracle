@@ -1,4 +1,4 @@
-import React, { useId, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { IconHelp } from "./icons.jsx";
 
 // A small hoverable/focusable help popover (WCAG 1.4.13: content is hoverable,
@@ -38,6 +38,18 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
     if (rect.left < m) dx = m - rect.left;
     else if (rect.right > window.innerWidth - m) dx = window.innerWidth - m - rect.right;
     if (dx) el.style.transform = `translateX(${Math.round(dx)}px)`;
+  }, [open]);
+
+  // Escape must dismiss even a HOVER-opened popover (WCAG 1.4.13 dismissable). The
+  // wrapper's onKeyDown only fires when the trigger has focus; a popover opened by
+  // pointer leaves focus elsewhere, so bind a document-level listener while open.
+  // (When focus IS on the trigger, the wrapper handler stops propagation first, so
+  // this doesn't double-fire.)
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [open]);
   // On a touch tap the button fires focus THEN click; without this, focus opens
   // it and the very next click toggles it right back shut, so a tap never opens

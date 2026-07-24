@@ -881,8 +881,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 620px) { .stats { grid-template-columns: repeat(2, 1fr); } }
-.stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+/* column-reverse: label comes FIRST in the DOM (so a screen reader reads name
+   then number) while the big value still renders visually on top. */
+.stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 16px; display: flex; flex-direction: column-reverse; }
 .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+/* Grouping bands over the stat grid (Activity / Efficiency / Answer quality). */
+.stat-band { margin-bottom: 14px; }
+.stat-band > .field-label { margin-bottom: 6px; }
 /* Label row: the text plus its ⓘ info trigger, kept on one baseline; the label
    may wrap while the trigger stays with the last word. */
 .stat .l { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: flex;
@@ -1038,10 +1044,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   padding: 12px 14px; font-size: 12.5px; line-height: 1.5; text-align: left;
 }
 .help-popover[hidden] { display: none; }
-/* Compact inline trigger for the Usage stat labels (smaller than the 24px CSV
-   help button so it sits neatly beside a 12.5px label). */
-.help-compact .help-trigger { width: 18px; height: 18px; }
-.help-compact .help-trigger svg { width: 13px; height: 13px; }
+/* Inline trigger for the Usage stat labels. 24×24 meets WCAG 2.2 SC 2.5.8
+   (target size); the glyph stays small so it sits neatly beside a 12.5px label. */
+.help-compact .help-trigger { width: 24px; height: 24px; }
+.help-compact .help-trigger svg { width: 14px; height: 14px; }
 /* Info-bubble content: the explanation, an optional note, then the "which way is
    good" line — bold, with a direction glyph and a subtle good/neutral tone. */
 .statinfo p { margin: 0 0 8px; }

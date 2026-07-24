@@ -30,8 +30,28 @@ _install_logbuffer()
 WEB_DIST = ROOT / "frontend" / "dist"
 
 
+def _insecure_cookie_warning(s) -> str | None:
+    """The boot-time cookie-posture check. Returns a CRITICAL message when an HTTPS
+    public URL is served with an insecure session cookie, else None. COOKIE_SECURE
+    False both drops the cookie's `Secure` flag (sniffable over any plain-HTTP hop)
+    AND relaxes the CSRF Origin guard's loopback carve-out (csrf.py
+    `allow_loopback=not cookie_secure`), so the whole posture pivots on one env var
+    whose default is the unsafe one. Logged, not raised — dev (http `app_public_url`)
+    and the tests are silent; a production https deployment that forgot
+    `COOKIE_SECURE=true` gets a screaming CRITICAL on every boot (stderr + the admin
+    Logs tab's attention badge)."""
+    if s.app_public_url.strip().lower().startswith("https://") and not s.cookie_secure:
+        return ("INSECURE COOKIE POSTURE: APP_PUBLIC_URL is https:// but COOKIE_SECURE "
+                "is false — the session cookie is served without Secure AND the CSRF "
+                "Origin guard keeps its loopback exception. Set COOKIE_SECURE=true.")
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _warning = _insecure_cookie_warning(get_settings())
+    if _warning:
+        log.critical(_warning)
     init_db()
     try:
         from app.auth import purge_expired_auth_rows
