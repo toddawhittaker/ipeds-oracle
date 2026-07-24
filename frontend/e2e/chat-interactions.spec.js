@@ -390,3 +390,95 @@ test.describe("copy menu (UX-H3)", () => {
     await expect(page.getByRole("menu", { name: "Copy answer" })).toHaveCount(0);
   });
 });
+
+// Re-asking an EARLIER prompt deletes that turn and every turn after it, in the
+// UI and server-side, permanently and with no undo. Browser truth for the
+// confirmation that now gates it — and, just as important, for the last-turn
+// path staying modal-free so the ordinary refine gesture isn't nagged.
+test.describe("destructive edit/rerun confirmation", () => {
+  test("editing a mid-conversation prompt confirms first, naming what is lost; "
+    + "cancel sends nothing", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 5, title: "Chat", updated_at: 0 }]);
+    await mockConversation(page, 5, longConversation(4));   // 4 turns
+    const stream = await mockStreamChat(page, { conversationId: 5, answer: "Replaced." });
+    await page.goto("/chat/5");
+
+    // Turn 0 of 4 -> three later exchanges die.
+    await page.getByText("Question 0?").hover({ force: true });
+    await page.getByRole("button", { name: "Edit", exact: true }).first().click();
+    await page.locator(".edit-box .md-editor-ta").fill("Revised question 0?");
+    await page.locator(".edit-box").getByRole("button", { name: "Send" }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("3 later questions");
+    await expect(dialog).toContainText("can't be undone");
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(stream.calls.length).toBe(0);            // nothing was sent
+    await expect(page.getByText("Answer 3.")).toBeVisible();  // thread intact
+    // The typed text survives the cancel — the editor was never torn down.
+    await expect(page.locator(".edit-box .md-editor-ta")).toHaveValue("Revised question 0?");
+  });
+
+  test("confirming sends the edit with the right edit_message_id", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 5, title: "Chat", updated_at: 0 }]);
+    await mockConversation(page, 5, longConversation(4));
+    const stream = await mockStreamChat(page, { conversationId: 5, answer: "Replaced." });
+    await page.goto("/chat/5");
+
+    await page.getByText("Question 1?").hover({ force: true });
+    await page.getByRole("button", { name: "Edit", exact: true }).nth(1).click();
+    await page.locator(".edit-box .md-editor-ta").fill("Revised question 1?");
+    await page.locator(".edit-box").getByRole("button", { name: "Send" }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("2 later questions");
+    await dialog.getByRole("button", { name: /^Edit and remove/ }).click();
+
+    await expect.poll(() => stream.calls.length).toBe(1);
+    expect(stream.calls[0].question).toBe("Revised question 1?");
+    // longConversation ids: turn 1's user message is id 3.
+    expect(stream.calls[0].edit_message_id).toBe(3);
+  });
+
+  test("editing the LAST prompt is not gated — the ordinary refine stays "
+    + "modal-free", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 5, title: "Chat", updated_at: 0 }]);
+    await mockConversation(page, 5, longConversation(3));
+    const stream = await mockStreamChat(page, { conversationId: 5, answer: "Replaced." });
+    await page.goto("/chat/5");
+
+    await page.getByText("Question 2?").hover({ force: true });
+    await page.getByRole("button", { name: "Edit", exact: true }).last().click();
+    await page.locator(".edit-box .md-editor-ta").fill("Revised last?");
+    await page.locator(".edit-box").getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(() => stream.calls.length).toBe(1);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(stream.calls[0].question).toBe("Revised last?");
+  });
+
+  test("Rerun on a mid-conversation prompt confirms with its own verb",
+    async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 5, title: "Chat", updated_at: 0 }]);
+    await mockConversation(page, 5, longConversation(3));
+    const stream = await mockStreamChat(page, { conversationId: 5, answer: "Replaced." });
+    await page.goto("/chat/5");
+
+    await page.getByText("Question 0?").hover({ force: true });
+    await page.getByRole("button", { name: "Rerun" }).first().click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /^Rerun and remove 2 later exchanges$/ }))
+      .toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    expect(stream.calls.length).toBe(0);
+  });
+});

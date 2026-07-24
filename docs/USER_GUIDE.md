@@ -189,6 +189,14 @@ You don't have to get the question perfect the first time.
 - **Edit** or **Rerun** any of your earlier prompts — hover a question you asked
   and use the controls to reword or re-run it. The new answer **replaces** the old
   one in place, so a conversation stays clean as you refine.
+
+  > **Re-asking an earlier question also removes everything below it.** A
+  > conversation is a chain, so replacing a question part-way up discards the
+  > later questions and answers that followed from it — tables, charts and SQL
+  > included, permanently. Re-asking your **most recent** question is the normal
+  > refine and costs nothing. For anything earlier the app asks first and tells
+  > you how many exchanges would go; if you'd rather keep them, cancel and ask
+  > your new question at the bottom instead.
 - Telling the assistant it got something wrong — a scope it should have asked
   about, an aggregation it should have used — isn't off-topic. It's read as
   feedback and may quietly improve how it answers similar questions later.

@@ -14,6 +14,7 @@ import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
+import { editConfirmBody, editConfirmLabel, laterTurnsLost } from "./turns.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 
 // Clickable starter prompts ("query slips") shown on the empty chat screen.
@@ -578,22 +579,47 @@ export default function Chat({ me }) {
     setEditingIdx(null); setEditText("");
     requestAnimationFrame(() => editTrigger.current?.focus?.());
   }
+  // Re-asking a prompt drops that turn AND everything after it, here and
+  // server-side (_persist's DELETE ... id>=?), permanently. On the LAST turn
+  // that's the ordinary refine gesture and costs nothing the user still wants,
+  // so it stays modal-free — that path also carries the assistant-side "Try
+  // again" button. Re-asking an EARLIER one silently destroys the analysis
+  // below it, so it confirms first, naming the count. `confirm()` is not
+  // awaitable (it just opens the dialog); the work happens in onConfirm, which
+  // must NOT return submit()'s promise or the modal would sit spinning for the
+  // whole streamed answer.
+  function confirmDestructive(lost, verb, apply) {
+    if (!lost) { apply(); return; }
+    confirm({
+      variant: "warning",
+      title: "Remove the later questions?",
+      body: editConfirmBody(lost),
+      confirmLabel: editConfirmLabel(lost, verb),
+      onConfirm: () => { apply(); },
+    });
+  }
   function saveEdit(i) {
     const text = editText.trim();
     if (!text || busy) return;
     const editMessageId = messages[i]?.id;
-    setEditingIdx(null); setEditText("");
-    setMessages((m) => m.slice(0, i));   // drop this turn + everything after
-    submit(text, { editMessageId });
-    requestAnimationFrame(() => taRef.current?.focus());  // land focus in composer
+    // Cancelling must leave the editor open with the typed text intact, so the
+    // editor is only torn down once the action is actually going ahead.
+    confirmDestructive(laterTurnsLost(messages, i), "Edit", () => {
+      setEditingIdx(null); setEditText("");
+      setMessages((m) => m.slice(0, i));   // drop this turn + everything after
+      submit(text, { editMessageId });
+      requestAnimationFrame(() => taRef.current?.focus());  // land focus in composer
+    });
   }
   // Rerun a prior prompt as-is (e.g. after a failure), replacing from that point.
   function rerun(i) {
     if (busy) return;
     const msg = messages[i];
     if (!msg) return;
-    setMessages((m) => m.slice(0, i));
-    submit(msg.content, { editMessageId: msg.id });
+    confirmDestructive(laterTurnsLost(messages, i), "Rerun", () => {
+      setMessages((m) => m.slice(0, i));
+      submit(msg.content, { editMessageId: msg.id });
+    });
   }
 
   function deleteConvo(e, id) {

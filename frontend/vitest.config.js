@@ -44,6 +44,7 @@ export default defineConfig({
         "src/suggestions.js",
         "src/tabledata.js",
         "src/trendstats.js",
+        "src/turns.js",
         "src/typeahead.js",
         "src/usageinfo.js",
         "src/usagestats.js",

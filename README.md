@@ -71,7 +71,9 @@ Ask a question in the box at the bottom and watch the answer stream in.
 - **Copy** a whole answer as **Markdown** or **rich HTML** (the HTML keeps the
   table and chart formatting when pasted into Word, Outlook, or Google Docs).
 - **Edit** or **Rerun** any of your earlier prompts to refine a question — the
-  new answer replaces the old one in place.
+  new answer replaces the old one in place. Re-asking a question part-way up the
+  conversation also removes the exchanges below it (they followed from it), so
+  the app confirms first and says how many.
 - **Conversations** are saved in the sidebar (named automatically), and you can
   delete any you don't need. Collapse the sidebar for more room.
 - **Light or dark mode** — toggle in the top bar; your choice is remembered.
