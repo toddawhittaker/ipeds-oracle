@@ -30,9 +30,10 @@ backend/              the Python side (all Python tooling runs from here)
     llm.py            the tool-calling agent loop
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
-    grounding.py      figure grounding: can the answer's hero number be
-                      reproduced from the turn's retained query results?
-                      (observe-only; feeds Admin -> Usage "Grounded figures")
+    grounding.py      figure + table grounding: can the answer's hero number and
+                      its results-table cells be reproduced from the query results
+                      (this turn's + the recent conversation window)? observe-only;
+                      feeds Admin -> Usage "Grounded figures" / "Grounded cells"
     tools/            run_sql (sandboxed), schema/discovery, skills
     routers/          auth, chat (stream/history/rename/CSV), admin
     auth.py, security.py, mailer.py, ratelimit.py
@@ -55,7 +56,8 @@ frontend/             React + Vite front end
 docs/               SCHEMA.md (data model + query guide)
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
 data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
-.github/workflows/  CI (secrets · lint · unit · backend · e2e · image) + manual NL→SQL eval
+.github/workflows/  CI (lint · secrets · sast · backend · unit · e2e · image) +
+                    CodeQL + manual NL→SQL eval
 .claude/agents/     the specialist agent team (see below)
 ```
 
@@ -158,11 +160,14 @@ scripts/coverage_check.sh                                           # the gate (
 ```
 
 The **JS side** has its own floor: `frontend/vitest.config.js` gates a per-file ≥ 80%
-line coverage over an explicit allowlist of the pure-logic modules under test
-(`accesstables.js`, `announce.js`, `csvimport.js`, `datatable.js`, `estimate.js`,
-`mdnorm.js`, `selection.js`, `tabledata.js`, `userlist.js`) — `npm run test:unit`
-fails if one dips. Add a module to that list when it gets real unit tests.
-Browser-tested components stay out of the floor (Playwright covers them).
+line coverage over an explicit allowlist of the pure-logic modules under test —
+`npm run test:unit` fails if one dips. The list is the `coverage.include` array in
+`vitest.config.js` (currently `accesstables`, `announce`, `attention`, `briefdata`,
+`clarify`, `compare`, `csvimport`, `datatable`, `datetime`, `estimate`, `figure`,
+`initials`, `mdhighlight`, `mdnorm`, `selection`, `suggestions`, `tabledata`,
+`trendstats`, `typeahead`, `usageinfo`, `usagestats`, `userlist`, `usertabs`). Add a
+module there when it gets real unit tests. Browser-tested components stay out of the
+floor (Playwright covers them).
 
 **Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
 three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
@@ -251,19 +256,23 @@ capped at `BULK_MAX_ITEMS`.
 ## Lint & format
 
 ```bash
-.venv/bin/ruff check app scripts eval   # backend lint + import order (matches CI scope; config in pyproject.toml)
+.venv/bin/ruff check --config backend/pyproject.toml backend/app backend/tests scripts   # backend lint + import order (matches CI scope)
 cd frontend && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
 cd frontend && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
 ```
 
 ## CI & the contribution workflow
 
-`.github/workflows/ci.yml` runs on every PR and push to `main`, with five jobs:
-**lint** (ruff + ESLint), **unit** (vitest — the fast pure-logic tier, with the
-JS coverage floor), **backend** (all the `backend/tests/test_*` suites against a fixture
-DB), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
-image, boots it, and curls `/api/health` as a smoke test). A separate
-`nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an API key + the real DB).
+`.github/workflows/ci.yml` runs on every PR and push to `main`, with seven jobs:
+**lint** (ruff + ESLint), **secrets** (gitleaks over full history), **sast**
+(semgrep — `p/python` · `p/security-audit` · `p/javascript` plus repo-local
+`.semgrep/` rules), **backend** (all the `backend/tests/test_*` suites against a
+fixture DB), **unit** (vitest — the fast pure-logic tier, with the JS coverage
+floor), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
+image, boots it, and curls `/api/health` as a smoke test). A separate **CodeQL**
+workflow (`codeql.yml`, `security-extended`) runs the cross-file taint analysis
+that semgrep OSS can't. `nl2sql-eval.yml` is `workflow_dispatch`‑only (it needs an
+API key + the real DB).
 
 Every PR and every `main` push **builds and smoke-tests** the image (so a broken
 build or a boot failure can't merge), but publishing to GHCR happens **only on a
