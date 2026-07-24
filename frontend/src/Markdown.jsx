@@ -1,11 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Chart from "./Chart.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { normalizeMarkdown } from "./mdnorm.js";
 import { briefLayout } from "./briefdata.js";
-import { chartSpecFromTable, columnIsNumeric, countMarkdownTables, downloadCsv, downloadServerCsv, extractTable, sortRows } from "./tabledata.js";
+import { chartSpecFromTable, columnIsNumeric, countMarkdownTables, downloadCsv, downloadServerCsv, extractTable, sortedIndices } from "./tabledata.js";
 import { comparableTable, compareSpec } from "./compare.js";
 
 function codeText(children) {
@@ -13,6 +13,49 @@ function codeText(children) {
 }
 
 const MAX_COMPARE = 4; // palette has 6 colors; keep the chart legible
+
+// Only follow http(s)/mailto links out of a table cell — react-markdown already
+// sanitizes hrefs into the hast (no rehype-raw), but re-checking is cheap
+// belt-and-suspenders on model-authored content.
+function safeHref(href) {
+  try {
+    const u = new URL(String(href || ""), window.location.origin);
+    return /^(https?|mailto):$/.test(u.protocol) ? href : null;
+  } catch {
+    return null;
+  }
+}
+
+// Minimal inline-markdown renderer over the hast a react-markdown cell holds:
+// text plus the inline subset that actually shows up in a data cell (bold,
+// italic, code, strike, links, breaks). It re-renders the ALREADY-PARSED nodes
+// — it does not re-parse markdown — so extraction to text for sort/CSV stays the
+// source of truth while the display keeps a link clickable and a total bold.
+// An unknown/other inline node degrades to just its text (via its children).
+function renderInline(node, key) {
+  if (!node) return null;
+  if (node.type === "text") return node.value || "";
+  const kids = (node.children || []).map((c, i) => renderInline(c, i));
+  switch (node.tagName) {
+    case "strong": case "b": return <strong key={key}>{kids}</strong>;
+    case "em": case "i": return <em key={key}>{kids}</em>;
+    case "code": return <code key={key}>{kids}</code>;
+    case "del": case "s": return <del key={key}>{kids}</del>;
+    case "br": return <br key={key} />;
+    case "a": {
+      const href = safeHref(node.properties?.href);
+      return href
+        ? <a key={key} href={href} target="_blank" rel="noreferrer">{kids}</a>
+        : <React.Fragment key={key}>{kids}</React.Fragment>;
+    }
+    default: return <React.Fragment key={key}>{kids}</React.Fragment>;
+  }
+}
+
+// A whole <td> hast node → its inline children rendered (or the plain text
+// fallback when no node is available, e.g. a defensively-empty parse).
+const renderCell = (tdNode, text) =>
+  (tdNode?.children ? tdNode.children.map((c, i) => renderInline(c, i)) : text);
 
 // The up/down sort glyph in a header: both triangles dim when the column is
 // unsorted (a "sortable" hint), the active direction lit in the accent.
@@ -29,20 +72,31 @@ function SortCaret({ dir }) {
 
 // The displayed result table, rendered from the EXTRACTED headers/rows (not
 // react-markdown's pass-through) so the columns are click-to-sort with up/down
-// indicators. Sorting is DISPLAY-ONLY — a new row order from sortRows, keyed off
-// the visible cell text; it never refetches and never changes the CSV (which
-// re-runs the full query server-side). Compare mode's leading checkbox is
-// rendered inline here (selection keyed by the entity LABEL, so it survives a
-// re-sort); that's why the old CompareContext/tr-override indirection is gone.
-// Cells are the extracted text (data tables carry numbers/names, not inline
-// markdown), which is what CSV/chart/compare already used.
-function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
+// indicators. Sorting is DISPLAY-ONLY — a row-index permutation from
+// sortedIndices, keyed off the visible cell TEXT; it never refetches and never
+// changes the CSV (which re-runs the full query server-side). The SAME
+// permutation reorders the parallel `cellNodes`, so each cell RENDERS through
+// the minimal inline renderer (a link stays clickable, a total stays bold)
+// while sort/CSV/compare keep using the extracted text. Compare mode's leading
+// checkbox is rendered inline (selection keyed by the entity LABEL, so it
+// survives a re-sort); that's why the old CompareContext/tr-override is gone.
+function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label }) {
   const [sort, setSort] = useState({ col: null, dir: null });
   const numericByCol = useMemo(
     () => headers.map((_, c) => columnIsNumeric(rows, c)), [headers, rows]);
-  const shown = useMemo(
-    () => sortRows(rows, sort.col, sort.dir, numericByCol[sort.col]),
+  const order = useMemo(
+    () => sortedIndices(rows, sort.col, sort.dir, numericByCol[sort.col]),
     [rows, sort, numericByCol]);
+
+  // A "more below" cue: the box is scroll-capped, so a table cut exactly at the
+  // boundary can look complete — flag when it's actually scrolled up from the end.
+  const wrapRef = useRef(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const onScroll = () => {
+    const el = wrapRef.current;
+    if (el) setMoreBelow(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
+  };
+  useEffect(() => { onScroll(); }, [order]); // recompute after a re-sort/mount
 
   // asc → desc → back to the original (query) order.
   const clickHeader = (c) => setSort((s) => (
@@ -55,7 +109,8 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
 
   return (
     <>
-    <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
+    <div className={"table-wrap" + (moreBelow ? " more-below" : "")}
+         tabIndex={0} role="region" aria-label={label} ref={wrapRef} onScroll={onScroll}>
       <table>
         <thead>
           <tr>
@@ -73,20 +128,27 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
           </tr>
         </thead>
         <tbody>
-          {shown.map((r, i) => {
+          {order.map((ri) => {
+            const r = rows[ri];
+            const nodes = cellNodes?.[ri];
             const rowLabel = comparable ? String(r[entityCol] ?? "") : "";
             const checked = comparable && selected.has(rowLabel);
             const atCap = comparable && !checked && selected.size >= MAX_COMPARE;
             return (
-              <tr key={i} className={comparable && checked ? "cmp-row picked" : undefined}>
+              <tr key={ri} className={comparable && checked ? "cmp-row picked" : undefined}>
                 {comparable && (
                   <td className="cmp-cell">
-                    <input type="checkbox" checked={checked} disabled={atCap}
+                    {/* aria-disabled (not native disabled) so a capped checkbox
+                        stays focusable and its title explains WHY — the toggle
+                        no-ops past the cap regardless. */}
+                    <input type="checkbox" checked={checked}
+                           aria-disabled={atCap ? "true" : undefined}
+                           title={atCap ? "Clear a selection to compare a different row (max 4)" : undefined}
                            aria-label={`Compare ${rowLabel}`}
-                           onChange={() => toggle(rowLabel)} />
+                           onChange={() => { if (!atCap) toggle(rowLabel); }} />
                   </td>
                 )}
-                {r.map((cell, c) => <td key={c}>{cell}</td>)}
+                {r.map((cell, c) => <td key={c}>{renderCell(nodes?.[c], cell)}</td>)}
               </tr>
             );
           })}
@@ -99,7 +161,7 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
         The full set is in the CSV (whole-query order). */}
     {sort.col != null && (
       <p className="sort-note" role="note">
-        Sorted the {shown.length} rows shown here — download the CSV for the full result.
+        Sorted the {rows.length} rows shown here — download the CSV for the full result.
       </p>
     )}
     </>
@@ -115,7 +177,7 @@ function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
 // with this table, and `pairChart` drops the "Chart this" toggle (a chart is
 // already shown — the toggle would be redundant).
 function DataTable({ node, sideChart, pairChart, serverCsvId }) {
-  const { headers, rows } = useMemo(() => extractTable(node), [node]);
+  const { headers, rows, cellNodes } = useMemo(() => extractTable(node), [node]);
   const inferred = useMemo(() => chartSpecFromTable(headers, rows), [headers, rows]);
   const [showChart, setShowChart] = useState(false);
 
@@ -142,7 +204,7 @@ function DataTable({ node, sideChart, pairChart, serverCsvId }) {
   const label = headers.length ? `Result table: ${headers.join(", ").slice(0, 60)}` : "Result table";
   const table = (
     <div className="table-block">
-      <SortableTable headers={headers} rows={rows} cmp={cmp}
+      <SortableTable headers={headers} rows={rows} cellNodes={cellNodes} cmp={cmp}
                      selected={selected} toggle={toggle} label={label} />
       <div className="table-tools">
         {/* When the answer is a single table with a persisted message id, the

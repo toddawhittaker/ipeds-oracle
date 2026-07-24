@@ -8,25 +8,28 @@ function hastText(node) {
   return (node.children || []).map(hastText).join("");
 }
 
-// -> { headers: string[], rows: string[][] }
+// -> { headers: string[], rows: string[][], cellNodes: hastNode[][] }.
+// `rows` is the trimmed TEXT of each body cell (what sort/CSV/compare use);
+// `cellNodes` is the parallel hast <td> node per cell (what the display renders
+// through a minimal inline renderer, so a link/bold/code cell keeps its markup).
 export function extractTable(node) {
   let headers = [];
   const rows = [];
+  const cellNodes = [];
   const walk = (n) => {
     for (const c of n.children || []) {
       if (c.tagName === "tr") {
-        const cells = (c.children || [])
-          .filter((x) => x.tagName === "th" || x.tagName === "td")
-          .map((x) => hastText(x).trim());
-        if ((c.children || []).some((x) => x.tagName === "th")) headers = cells;
-        else rows.push(cells);
+        const els = (c.children || []).filter((x) => x.tagName === "th" || x.tagName === "td");
+        const texts = els.map((x) => hastText(x).trim());
+        if (els.some((x) => x.tagName === "th")) headers = texts;
+        else { rows.push(texts); cellNodes.push(els); }
       } else {
         walk(c);
       }
     }
   };
   walk(node);
-  return { headers, rows };
+  return { headers, rows, cellNodes };
 }
 
 // The th/td cell elements of a rendered <tr> hast node, each with its tag and
@@ -62,12 +65,14 @@ function numericCols(headers, rows) {
   return out;
 }
 
-// A STABLE, numeric-aware sort of table rows by column `col` in `dir`
-// ('asc'|'desc') — returns a NEW array; col/dir null → original (query) order.
-// Blank / non-numeric cells in a numeric column sort to the END in both
-// directions. Display-only: it never touches the CSV or refetches anything.
-export function sortRows(rows, col, dir, numeric) {
-  if (col == null || (dir !== "asc" && dir !== "desc")) return rows.slice();
+// A STABLE, numeric-aware sort ORDER (a row-index permutation) by column `col`
+// in `dir` ('asc'|'desc'). col/dir null → identity order. Blank / non-numeric
+// cells in a numeric column sort to the END in both directions. Returning the
+// permutation (not reordered rows) lets the display reorder BOTH the text rows
+// and the parallel cell-nodes in lockstep. Display-only — never the CSV.
+export function sortedIndices(rows, col, dir, numeric) {
+  const idx = rows.map((_, i) => i);
+  if (col == null || (dir !== "asc" && dir !== "desc")) return idx;
   const sign = dir === "desc" ? -1 : 1;
   const cmp = (va, vb) => {
     if (numeric) {
@@ -79,10 +84,13 @@ export function sortRows(rows, col, dir, numeric) {
     return sign * String(va ?? "").localeCompare(
       String(vb ?? ""), undefined, { numeric: true, sensitivity: "base" });
   };
-  return rows
-    .map((r, i) => [r, i])
-    .sort((a, b) => cmp(a[0][col], b[0][col]) || a[1] - b[1])
-    .map((x) => x[0]);
+  return idx.sort((a, b) => cmp(rows[a][col], rows[b][col]) || a - b);
+}
+
+// The same sort as a NEW array of rows (kept for its unit tests / any text-only
+// caller); the display uses sortedIndices directly.
+export function sortRows(rows, col, dir, numeric) {
+  return sortedIndices(rows, col, dir, numeric).map((i) => rows[i]);
 }
 
 // A "dimension" column — a rank/index (1..n or named like one) or an identifier
