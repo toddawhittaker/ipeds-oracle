@@ -21,10 +21,10 @@ volunteer-maintained project — there is no bug-bounty program.
 ## Scope
 
 Most relevant areas: the magic-link auth and session handling (`backend/app/auth.py`,
-`security.py`), the allowlist / access-request flow, the per-IP rate limiting and
-`X-Forwarded-For` handling (`ratelimit.py`), the CSRF and security-headers
-middleware (`csrf.py`, `secheaders.py`), and the read-only SQL execution
-sandbox the agent uses (`tools/sql.py`, `tools/sqllint.py`).
+`security.py`), the allowlist / access-request flow, the per-IP (auth) and
+per-user (chat) rate limiting and `X-Forwarded-For` handling (`ratelimit.py`), the
+CSRF and security-headers middleware (`csrf.py`, `secheaders.py`), and the
+read-only SQL execution sandbox the agent uses (`tools/sql.py`, `tools/sqllint.py`).
 
 ## For operators
 
@@ -37,3 +37,8 @@ Because you run your own instance, a few things are on you:
   spoofed via `X-Forwarded-For`.
 - Keep `LLM_API_KEY` / `RESEND_API_KEY` / SMTP credentials in `.env` only (it is
   gitignored) — never commit them.
+- Cap runaway spend from a compromised or scripted account with the per-user chat
+  throttle (`CHAT_RATE_MAX_PER_USER` / `CHAT_RATE_WINDOW_SECONDS`).
+- The app makes one outbound call to GitHub to check for a newer release (cached,
+  fails open). Set `UPDATE_CHECK_ENABLED=false` if you want zero outbound calls
+  beyond the LLM/email providers you configure.
