@@ -173,6 +173,9 @@ jobs:
       - name: Security-headers (CSP) tests
         run: python backend/tests/test_secheaders.py
 
+      - name: Pre-auth request-body cap tests (oversized import must 413, not 401)
+        run: python backend/tests/test_bodylimit.py
+
       - name: Auth rate-limit tests
         run: python backend/tests/test_rate_limit.py
 

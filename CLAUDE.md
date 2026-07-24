@@ -650,7 +650,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   trusted reverse proxy/tunnel appends the real peer); `0` (dev/CI default) ignores
   XFF and uses the socket peer. Set it to **`1`** in production behind a single
   proxy/tunnel hop (via `.env`); combine with `EMAIL_DOMAIN` to close the
-  access-request-spam surface.
+  access-request-spam surface. **The app must be the ONLY interpreter of XFF:**
+  uvicorn ships `proxy_headers=True` trusting loopback and rewrites
+  `scope["client"]` from the header, which silently defeats
+  `TRUSTED_PROXY_COUNT=0` behind any loopback-adjacent ingress (ssh -L,
+  cloudflared, host-network nginx). `scripts/docker-entrypoint.sh` therefore runs
+  uvicorn with **`--no-proxy-headers`** — keep it there, and pass it in any
+  non-Docker deployment too.
 - **Per-user chat throttle (SEC-3):** `POST /api/chat/stream` is gated only by
   `current_user`, so without a cap an allowlisted user's runaway loop/script could
   burn unbounded provider spend. `ratelimit.enforce_chat_rate_limit(user_id)` — a
@@ -678,6 +684,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   **second line of defense** under the LLM-markdown render surface — that surface is
   safe today only because react-markdown emits no raw HTML (**no `rehype-raw`, default
   URL sanitizer intact — keep it that way**; a DOM-XSS review confirmed it clean).
+- **Pre-auth request-body cap:** FastAPI parses a request body while resolving a
+  route's parameters — **before** `solve_dependencies` evaluates
+  `Depends(require_admin)`. So an *unauthenticated* POST to `/api/admin/import`
+  had its whole multipart body parsed and spooled to the temp dir and only then
+  got its 401 (measured: 64 MB in 0.17s; a loop fills a container's writable
+  layer). `max_upload_mb` lives *inside* that handler, which never runs. A third
+  pure-ASGI layer, `BodyLimitMiddleware` (`bodylimit.py`), refuses the body first:
+  **`max_request_body_mb` (10 MB) on every request**, with `/api/admin/import`
+  exempt up to `max_upload_mb` **only when a session cookie is PRESENT** —
+  presence only, no signature check, no DB hit, no second copy of auth. Honest
+  limits, stated in the module docstring: one junk `Cookie:` header, or any
+  signed-in non-admin, still reaches the large tier. The three layers run
+  **SecurityHeaders → CSRF → BodyLimit → router** (last added = outermost), so a
+  cross-origin oversized POST is refused by CSRF having read zero bytes and the
+  413 still gets its security headers — pinned by
+  `test_the_413_carries_the_security_headers`. `MULTIPART_SLACK_MB` (8) keeps the
+  *handler* the authoritative decider for a merely-over-cap upload, so
+  `test_security.py`'s import-lock-leak assertion keeps its meaning; the
+  middleware only catches a grossly oversized body. Pinned in
+  `backend/tests/test_bodylimit.py` (the headline case asserts **413, not 401** —
+  a 401 would prove the parser ran).
 - A denied row records **both** `created_at` (when the request was filed →
   "Requested") **and** `denied_at` (when it was rejected → "Denied", added in
   migration 11) — kept separate so the admin Blocked-users table shows each; a
