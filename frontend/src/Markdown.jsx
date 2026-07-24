@@ -1,52 +1,98 @@
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Chart from "./Chart.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { normalizeMarkdown } from "./mdnorm.js";
 import { briefLayout } from "./briefdata.js";
-import { chartSpecFromTable, downloadCsv, extractTable, rowCells } from "./tabledata.js";
+import { chartSpecFromTable, columnIsNumeric, countMarkdownTables, downloadCsv, downloadServerCsv, extractTable, sortRows } from "./tabledata.js";
 import { comparableTable, compareSpec } from "./compare.js";
 
 function codeText(children) {
   return Array.isArray(children) ? children.join("") : String(children ?? "");
 }
 
-// Compare mode wiring. When a result table is a categorical comparison (one row per
-// entity + a numeric metric — see comparableTable), each body row gets a leading
-// checkbox; picking 2+ charts just those rows instantly from the numbers already in
-// the table (no query). The `tr` override reads this context so selection state lives
-// with the table; a non-comparable table provides `comparable: false` and its rows
-// render untouched. Selection is keyed by the entity LABEL so each row identifies
-// itself from its own hast node (no fragile row-index plumbing).
-const CompareContext = createContext({ comparable: false });
 const MAX_COMPARE = 4; // palette has 6 colors; keep the chart legible
 
-// A table row (react-markdown `tr`). Outside a comparable table it's a plain <tr>.
-// Inside one, prepend a checkbox cell: a blank <th> for the header row, or a toggle
-// bound to this row's entity label for a body row.
-function Tr({ node, ...props }) {
-  const ctx = useContext(CompareContext);
-  if (!ctx.comparable) return <tr {...props} />;
-  const cells = rowCells(node);
-  const isHeader = cells.some((c) => c.tag === "th");
-  if (isHeader) {
-    return <tr {...props} className="cmp-row">
-      <th className="cmp-cell" aria-hidden="true" />
-      {props.children}
-    </tr>;
-  }
-  const label = cells[ctx.entityCol]?.text ?? "";
-  const checked = ctx.selected.has(label);
-  const atCap = !checked && ctx.selected.size >= MAX_COMPARE;
-  return <tr {...props} className={"cmp-row" + (checked ? " picked" : "")}>
-    <td className="cmp-cell">
-      <input type="checkbox" checked={checked} disabled={atCap}
-             aria-label={`Compare ${label}`}
-             onChange={() => ctx.toggle(label)} />
-    </td>
-    {props.children}
-  </tr>;
+// The up/down sort glyph in a header: both triangles dim when the column is
+// unsorted (a "sortable" hint), the active direction lit in the accent.
+function SortCaret({ dir }) {
+  return (
+    <span className="sort-caret" aria-hidden="true">
+      <svg width="8" height="13" viewBox="0 0 8 13">
+        <path d="M4 0 L7.5 4 L0.5 4 Z" className={dir === "asc" ? "act" : ""} />
+        <path d="M4 13 L7.5 9 L0.5 9 Z" className={dir === "desc" ? "act" : ""} />
+      </svg>
+    </span>
+  );
+}
+
+// The displayed result table, rendered from the EXTRACTED headers/rows (not
+// react-markdown's pass-through) so the columns are click-to-sort with up/down
+// indicators. Sorting is DISPLAY-ONLY — a new row order from sortRows, keyed off
+// the visible cell text; it never refetches and never changes the CSV (which
+// re-runs the full query server-side). Compare mode's leading checkbox is
+// rendered inline here (selection keyed by the entity LABEL, so it survives a
+// re-sort); that's why the old CompareContext/tr-override indirection is gone.
+// Cells are the extracted text (data tables carry numbers/names, not inline
+// markdown), which is what CSV/chart/compare already used.
+function SortableTable({ headers, rows, cmp, selected, toggle, label }) {
+  const [sort, setSort] = useState({ col: null, dir: null });
+  const numericByCol = useMemo(
+    () => headers.map((_, c) => columnIsNumeric(rows, c)), [headers, rows]);
+  const shown = useMemo(
+    () => sortRows(rows, sort.col, sort.dir, numericByCol[sort.col]),
+    [rows, sort, numericByCol]);
+
+  // asc → desc → back to the original (query) order.
+  const clickHeader = (c) => setSort((s) => (
+    s.col !== c ? { col: c, dir: "asc" }
+      : s.dir === "asc" ? { col: c, dir: "desc" }
+        : { col: null, dir: null }));
+
+  const comparable = !!cmp;
+  const entityCol = cmp?.entityCol ?? -1;
+
+  return (
+    <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
+      <table>
+        <thead>
+          <tr>
+            {comparable && <th className="cmp-cell" aria-hidden="true" />}
+            {headers.map((h, c) => (
+              <th key={c} scope="col"
+                  aria-sort={sort.col === c ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+                <button type="button" className="th-sort" title={`Sort by ${h}`}
+                        onClick={() => clickHeader(c)}>
+                  <span>{h}</span>
+                  <SortCaret dir={sort.col === c ? sort.dir : null} />
+                </button>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r, i) => {
+            const rowLabel = comparable ? String(r[entityCol] ?? "") : "";
+            const checked = comparable && selected.has(rowLabel);
+            const atCap = comparable && !checked && selected.size >= MAX_COMPARE;
+            return (
+              <tr key={i} className={comparable && checked ? "cmp-row picked" : undefined}>
+                {comparable && (
+                  <td className="cmp-cell">
+                    <input type="checkbox" checked={checked} disabled={atCap}
+                           aria-label={`Compare ${rowLabel}`}
+                           onChange={() => toggle(rowLabel)} />
+                  </td>
+                )}
+                {r.map((cell, c) => <td key={c}>{cell}</td>)}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // A markdown result table plus a per-table toolbar: download THIS table as CSV
@@ -57,7 +103,7 @@ function Tr({ node, ...props }) {
 // table + one chart), `sideChart` is the answer's own chart, rendered SIDE BY SIDE
 // with this table, and `pairChart` drops the "Chart this" toggle (a chart is
 // already shown — the toggle would be redundant).
-function DataTable({ node, sideChart, pairChart, ...props }) {
+function DataTable({ node, sideChart, pairChart, serverCsvId }) {
   const { headers, rows } = useMemo(() => extractTable(node), [node]);
   const inferred = useMemo(() => chartSpecFromTable(headers, rows), [headers, rows]);
   const [showChart, setShowChart] = useState(false);
@@ -79,23 +125,24 @@ function DataTable({ node, sideChart, pairChart, ...props }) {
   const cmpSpec = useMemo(
     () => (cmp && showCompare ? compareSpec(cmp.spec, [...selected]) : null),
     [cmp, showCompare, selected]);
-  const ctxValue = useMemo(
-    () => ({ comparable: !!cmp, entityCol: cmp?.entityCol ?? -1, selected, toggle }),
-    [cmp, selected]);
 
   // Distinct region name (its column headers) so multiple tables in one answer
   // don't all read as an identical "Result table" landmark.
   const label = headers.length ? `Result table: ${headers.join(", ").slice(0, 60)}` : "Result table";
   const table = (
     <div className="table-block">
-      <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
-        <CompareContext.Provider value={ctxValue}>
-          <table {...props} />
-        </CompareContext.Provider>
-      </div>
+      <SortableTable headers={headers} rows={rows} cmp={cmp}
+                     selected={selected} toggle={toggle} label={label} />
       <div className="table-tools">
+        {/* When the answer is a single table with a persisted message id, the
+            CSV comes from the server (the FULL dataset, re-running the query at
+            the large download cap) instead of the ≤200 visible rows. Multi-table
+            answers and live (not-yet-saved) turns fall back to the client-side
+            CSV of exactly what's shown. */}
         <button type="button" className="link"
-                onClick={() => downloadCsv(headers, rows)}>Download CSV</button>
+                onClick={() => (serverCsvId
+                  ? downloadServerCsv(serverCsvId, headers.length)
+                  : downloadCsv(headers, rows))}>Download CSV</button>
         {/* Offer "Chart this" only when the answer isn't ALREADY providing a chart
             (in a brief it is — beside the table — so the toggle is redundant). */}
         {!pairChart && inferred && (
@@ -172,25 +219,31 @@ function Pre({ node, suppressChart, ...props }) {
   return <pre {...props} />;
 }
 
-const Th = ({ node, ...props }) => <th {...props} scope="col" />;
 const Anchor = ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />;
 
 // GFM gives us tables, which the analyst answers rely on. The source is first run
 // through normalizeMarkdown to repair malformed tables (header/delimiter column
 // mismatch) that GFM would otherwise drop.
-export default function Markdown({ children }) {
+export default function Markdown({ children, messageId }) {
   const src = typeof children === "string" ? normalizeMarkdown(children) : children;
   const brief = useMemo(() => briefLayout(src), [src]);
+  // Server-side full-dataset CSV is only unambiguous when the answer has exactly
+  // ONE table (the download endpoint re-runs the answer's FINAL SQL, so a
+  // second table's button would otherwise get the wrong query's rows). Count the
+  // GFM delimiter rows (all of |, :, -, space with a run of dashes — never a
+  // data row or a `---` horizontal rule, which has no pipe).
+  const serverCsvId = useMemo(
+    () => (messageId != null && countMarkdownTables(src) === 1 ? messageId : null),
+    [src, messageId]);
   // Components are memoized on the brief pairing (stable per message source), so
   // react-markdown never remounts the subtree and resets a chart's selected type.
   const components = useMemo(() => ({
     table: (p) => <DataTable {...p} pairChart={brief.pair}
-                             sideChart={brief.pair ? brief.chart : null} />,
-    tr: Tr,
-    th: Th,
+                             sideChart={brief.pair ? brief.chart : null}
+                             serverCsvId={serverCsvId} />,
     a: Anchor,
     pre: (p) => <Pre {...p} suppressChart={brief.pair} />,
-  }), [brief]);
+  }), [brief, serverCsvId]);
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

@@ -258,7 +258,12 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
             f"⚠ AGGREGATION CHECK (truncated): this result was CUT to {limit} rows "
             "— it is NOT the full result set. Do NOT sum/count/average these rows "
             "as a TOTAL. Aggregate in SQL (SUM/COUNT/AVG), add a tighter filter, "
-            "or bound the query so the whole result fits, then re-run.")
+            "or bound the query so the whole result fits, then re-run. "
+            "EXCEPTION — if the user asked for a LISTING or ranking (not an "
+            f"aggregate): you MAY present these as the first {limit} rows, but you "
+            "MUST state the full row count (run SELECT COUNT(*)) and tell the user "
+            "the complete data is downloadable via the 'Download CSV' button under "
+            "the table.")
 
     return QueryResult(
         columns=columns, rows=rows, truncated=truncated,

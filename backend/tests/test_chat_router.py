@@ -1032,6 +1032,29 @@ def test_download_csv_rejected_sql_400():
         assert csv_r.status_code == 400, csv_r.text
 
 
+def test_download_csv_picks_table_query_not_a_trailing_count():
+    # The listing rule makes the answer's LAST SQL a scalar COUNT(*) (for the
+    # "full size" note) — so re-running the last SQL hands back "total: N", not
+    # the ranking the user saw. The CSV must be the TABLE query (many rows).
+    listing = ("SELECT year, SUM(ctotalt) a FROM c_a "
+               "WHERE awlevel=3 AND majornum=1 AND cipcode='99' GROUP BY year")
+    count = "SELECT COUNT(*) total FROM c_a"
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "associate's by year, ranked", answer_text="see table",
+                       sql_log=[listing, count])  # count is LAST
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        # The client passes the shown table's column count (2) → the listing wins.
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv?cols=2")
+        assert csv_r.status_code == 200, csv_r.text
+        header, *data = csv_r.text.strip().splitlines()
+        assert header == "year,a", f"got the count, not the listing: {header}"
+        assert len(data) >= 1, "expected the listing's data rows, not an empty page"
+        # Even WITHOUT the hint, a 1-column count must not beat the 2-column listing.
+        no_hint = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert no_hint.text.strip().splitlines()[0] == "year,a", no_hint.text[:80]
+
+
 def test_results_for_storage_caps_and_drops_largest_over_budget():
     """Persisted result rows are capped so a wide brief can't bloat app.db. Over
     the byte ceiling, the LARGEST result is dropped first (a headline usually
@@ -1149,6 +1172,8 @@ def run():
           test_download_csv_no_sql_log_400)
     check("CSV download of a rejected/forbidden SQL 400s",
           test_download_csv_rejected_sql_400)
+    check("CSV download picks the table query, not a trailing COUNT(*)",
+          test_download_csv_picks_table_query_not_a_trailing_count)
     check("_results_for_storage caps and drops largest over budget",
           test_results_for_storage_caps_and_drops_largest_over_budget)
     check("_load_prior_results respects the before_id window",
