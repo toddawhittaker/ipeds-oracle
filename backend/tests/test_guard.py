@@ -23,6 +23,7 @@ tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 os.environ["COOKIE_SECURE"] = "false"
+os.environ["CHAT_RATE_MAX_PER_USER"] = "0"  # chat throttle (SEC-3) off; see test_rate_limit.py
 
 from fastapi.testclient import TestClient  # noqa: E402
 

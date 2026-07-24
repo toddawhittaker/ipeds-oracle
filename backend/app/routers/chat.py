@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app import feedback, guard, skills
+from app import feedback, guard, ratelimit, skills
 from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
@@ -181,6 +181,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "Empty question.")
+
+    # Per-user throttle (SEC-3): cap a single user's chat turns over a rolling
+    # window so a runaway loop/script can't burn unbounded provider spend. Raises
+    # 429 as a plain JSON error before any streaming/LLM work begins. Disabled
+    # when chat_rate_max_per_user <= 0.
+    ratelimit.enforce_chat_rate_limit(int(user["id"]))
 
     # Fresh-deploy "no data" guard: before touching app.db or the agent at
     # all, bail out with a friendly notice if there's no ipeds.db dataset

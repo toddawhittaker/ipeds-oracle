@@ -686,6 +686,18 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   XFF and uses the socket peer. Set it to **`1`** in production behind a single
   proxy/tunnel hop (via `.env`); combine with `EMAIL_DOMAIN` to close the
   access-request-spam surface.
+- **Per-user chat throttle (SEC-3):** `POST /api/chat/stream` is gated only by
+  `current_user`, so without a cap an allowlisted user's runaway loop/script could
+  burn unbounded provider spend. `ratelimit.enforce_chat_rate_limit(user_id)` — a
+  sliding window over `chat_request_attempts` (**migration 28**), the same app.db
+  pattern as the auth limiter — caps turns per user per `chat_rate_window_seconds`
+  (`chat_rate_max_per_user` default **30/60s**; a **non-positive max DISABLES** it,
+  the off-switch for tests/self-hosters). Called at the top of `chat_stream` before
+  any streaming/LLM work, so a 429 is a plain JSON error, not mid-SSE. **NOT pinned
+  in `ci_env.sh`** (that would mask a future stream-heavy suite that forgets to pin):
+  the modules that fire many turns pin `CHAT_RATE_MAX_PER_USER=0` at import
+  (`test_chat_router`/`test_guard`/`test_security`); `test_rate_limit.py` sets a tight
+  cap and owns the 429 contract.
 - **CSRF defense in depth:** the session cookie is `HttpOnly`+`Secure`+`SameSite=Lax`;
   on top of that a pure-ASGI `CSRFMiddleware` (`csrf.py`) refuses any state-changing
   request whose `Origin` matches neither the request `Host` nor `APP_PUBLIC_URL`.
@@ -759,7 +771,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
 - A live **NCES year catalog**: `backend/app/nces.py` probes `nces.ed.gov` (**SSRF-hardened**
   — URLs are built only from a fixed host + template + a validated year) for which
   start years have a Final/Provisional release; an admin multi-selects years to
-  fetch + integrate.
+  fetch + integrate. **Redirects are followed by hand, not by httpx (SEC-6):** the
+  client runs `follow_redirects=False` and `_validated_redirect_target` checks each
+  hop's host+scheme is `https://NCES_HOST` **before** issuing the next request (a hop
+  cap defuses loops), so an intermediate redirect can never make the server request
+  an off-host/internal URL — the old final-host-only check (kept as defense-in-depth)
+  ran only after that request was already sent. Applies to both `head_release` and
+  the streamed `download_zip`.
 - Each run is a **full rebuild of the union** of already-integrated and
   newly-picked years (never an incremental merge), through the same **staging-DB +
   integrity-checks + atomic-swap** pipeline as a manual upload. Fetched `.accdb`

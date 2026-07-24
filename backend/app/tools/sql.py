@@ -30,9 +30,11 @@ _FORBIDDEN = re.compile(
 )
 _LIMIT_RE = re.compile(r"\blimit\b", re.IGNORECASE)
 # Matches a whole single-quoted SQL string literal, honoring the doubled-quote
-# ('') escape -- used only to build a masked *scan* copy for the safety
-# checks below; the executed SQL is never altered.
+# ('') escape -- used to build a masked *scan* copy for the safety checks below
+# AND to locate comments without mistaking a `--`/`/*` INSIDE a literal for one.
 _STRING_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
 
 class SQLValidationError(ValueError):
@@ -86,11 +88,29 @@ class QueryResult:
         return cls(columns=cols, rows=rows, row_count=len(rows))
 
 
+def _strip_comments(sql: str, pattern: re.Pattern) -> str:
+    """Remove every `pattern` match that is a real comment -- i.e. NOT one that
+    only appears inside a single-quoted string literal. We locate the matches on
+    a literal-MASKED copy (`_mask_string_literals` blanks a literal's contents
+    but preserves length), so a `--`/`/*` between quotes is masked to `#` and
+    never matched; the surviving spans map 1:1 onto the ORIGINAL text, which we
+    splice (from the end forward so earlier indices stay valid). Each comment
+    becomes a single space to keep tokens separated."""
+    masked = _mask_string_literals(sql)
+    for start, end in sorted((m.span() for m in pattern.finditer(masked)), reverse=True):
+        sql = sql[:start] + " " + sql[end:]
+    return sql
+
+
 def _strip_sql(sql: str) -> str:
-    """Remove comments and a single trailing semicolon; return trimmed SQL."""
-    # strip /* */ block comments and -- line comments
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
-    sql = re.sub(r"--[^\n]*", " ", sql)
+    """Remove comments and a single trailing semicolon; return trimmed SQL.
+
+    Comments are stripped literal-awarely (block first, then line — mirroring
+    the old two-pass order, so a `--` inside a `/* ... */` block is gone before
+    the line pass runs) so a string literal like `'2020--Q1'` survives verbatim
+    in the SQL that actually executes (SEC-5)."""
+    sql = _strip_comments(sql, _BLOCK_COMMENT_RE)
+    sql = _strip_comments(sql, _LINE_COMMENT_RE)
     return sql.strip().rstrip(";").strip()
 
 

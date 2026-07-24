@@ -33,6 +33,10 @@ os.environ["RESEND_API_KEY"] = ""
 # the way so it never masks a real assertion.
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
+# Disable the per-user chat throttle (SEC-3) here — this module fires far more
+# than the default per-window budget of stream turns for one user; its own
+# 429 is exercised in test_rate_limit.py.
+os.environ["CHAT_RATE_MAX_PER_USER"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
