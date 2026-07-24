@@ -28,7 +28,15 @@ def client_ip(request: Request) -> str:
     With `trusted_proxy_count == 0` (the default, and CI) we don't trust XFF at
     all and use the socket peer, so a spoofed header is inert. When there are
     fewer hops than configured (a request that didn't traverse all proxies) we
-    also fall back to the socket peer rather than trusting a short chain."""
+    also fall back to the socket peer rather than trusting a short chain.
+
+    That inertness depends on the SERVER not having rewritten the peer for us.
+    uvicorn's ProxyHeadersMiddleware is on by default and replaces
+    `scope["client"]` from X-Forwarded-For when the socket peer is loopback —
+    which is every reverse-proxy/tunnel shape the README recommends. So
+    `scripts/docker-entrypoint.sh` runs uvicorn with `--no-proxy-headers`, and
+    this function is the only thing in the stack that interprets XFF. Run it
+    that way in any deployment that doesn't use the published image."""
     n = get_settings().trusted_proxy_count
     if n > 0:
         xff = request.headers.get("x-forwarded-for")
