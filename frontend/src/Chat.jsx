@@ -8,6 +8,7 @@ import Figure from "./Figure.jsx";
 import Suggestions from "./Suggestions.jsx";
 import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
+import CopyMenu from "./CopyMenu.jsx";
 import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
@@ -991,16 +992,11 @@ export default function Chat({ me }) {
                                 onClick={() => toggleTrace(i, "sql")}>SQL</button>
                       )}
                       {m.content && (
-                        <>
-                          <button className="link" onClick={() => doCopy(i, "md", m.content)}
-                                  title="Copy the answer as Markdown">
-                            {copied === `${i}:md` ? "Copied!" : "Copy Markdown"}
-                          </button>
-                          <button className="link" onClick={() => doCopy(i, "html", m.content)}
-                                  title="Copy the answer as rich HTML (paste into email/Word)">
-                            {copied === `${i}:html` ? "Copied!" : "Copy HTML"}
-                          </button>
-                        </>
+                        <CopyMenu
+                          onCopyMarkdown={() => doCopy(i, "md", m.content)}
+                          onCopyHtml={() => doCopy(i, "html", m.content)}
+                          copied={copied === `${i}:md` || copied === `${i}:html`}
+                        />
                       )}
                     </div>
                     {openTrace === `${i}:thinking` && m.thinking?.length > 0 && (

@@ -465,6 +465,20 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   .suggestions-chips { flex-wrap: wrap; }
   .suggestion-chip { flex-basis: 100%; }
 }
+/* UX-H2: a clarify chip is a REQUIRED disambiguation decision, not the optional
+   "you might also ask" exploration the identical outline chip reads as. Give the
+   clarify group a louder, accent-FILLED treatment (a shape+fill difference, not
+   colour alone — the "Did you mean" heading text already differs), so the choice
+   that blocks the answer looks like one. */
+.clarify .suggestions-label { color: var(--accent); font-weight: 600; }
+.clarify .suggestion-chip {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--accent-d); font-weight: 600;
+}
+.clarify .suggestion-chip:hover, .clarify .suggestion-chip:focus-visible {
+  background: var(--accent); color: var(--on-fg); border-color: var(--accent-d);
+}
 
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
@@ -706,6 +720,30 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .user-menu-item svg { flex: none; color: var(--muted); }
 .user-menu-label { flex: 1; }
 .user-menu-item .tab-badge { flex: none; }
+
+/* Copy menu on an assistant answer's action row (UX-H3: collapses the two
+   "Copy Markdown"/"Copy HTML" links into one menu button). Reuses the user-menu
+   panel/item language; the trigger is a plain .link so it sits inline with the
+   Thinking/SQL toggles. Opens UPWARD (the action row is often near the viewport
+   bottom, under the composer). */
+.copy-menu { position: relative; display: inline-flex; }
+.copy-menu-trigger { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.copy-menu-trigger svg { flex: none; }
+.copy-menu-panel {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20;
+  min-width: 190px; padding: 6px; text-align: left;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .22);
+}
+.copy-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box;
+  padding: 8px 10px; border: none; border-radius: 7px; background: transparent;
+  color: var(--text); font-size: 14px; text-align: left; cursor: pointer;
+}
+.copy-menu-item:hover, .copy-menu-item:focus-visible { background: var(--panel-2); }
+.copy-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.copy-menu-item svg { flex: none; color: var(--muted); }
 
 /* Edit/Rerun under a user prompt — quiet, reveal on hover/focus. */
 .user-actions {

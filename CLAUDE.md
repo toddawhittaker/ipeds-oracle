@@ -185,7 +185,14 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   mutually-exclusive disclosure toggles** whose panel opens **full-width below**
   the actions row (never as an inline `<details>` inside the flex row, which
   widened its own cell and shoved the copy buttons around); opening one closes
-  the other. The **Thinking trace is persisted** (migration 12,
+  the other. The two per-answer copy actions collapse into a **single Copy menu**
+  (`CopyMenu.jsx`, UX-H3) — one `.link` menu button ("Copy ▾") opening
+  `Copy Markdown` / `Copy rich HTML`, built on the same WAI-ARIA menu-button
+  pattern as `UserMenu.jsx` (roving arrows, Home/End, Escape-closes-and-restores-
+  focus, click-outside) and reusing the menu-panel CSS; the copy LOGIC stays in
+  `Chat.jsx`'s `doCopy`, and the trigger flips to a "Copied!" check on success.
+  Pinned in `frontend/e2e/chat-interactions.spec.js` (copy-menu describe). The
+  **Thinking trace is persisted** (migration 12,
   `messages.thinking` — a JSON list of `{kind,text}` items built server-side in
   `chat.py`'s stream loop via `_trace_item`, mirroring the frontend's live
   `addThought` 1:1) so it **survives a reload/reopen just like `sql_log`**, not
@@ -420,9 +427,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   clarify turn is **never cached** and **records no critic lesson**
   (`chat.py` guards both on `clarify is None`). Frontend: `Clarify.jsx` (pure
   `clarify.js` normalizer, vitest) renders the answer-phrase chips
-  structurally identical to `Suggestions.jsx`; clicking one — or just typing a
-  free-text reply in the composer, always the escape hatch — submits it as an
-  ordinary follow-up turn. When ambiguity is NOT material, the prompt instead
+  structurally identical to `Suggestions.jsx` but with a **louder accent-FILLED
+  treatment** (UX-H2: `.clarify` chips are accent-tinted/filled, the label in the
+  accent color) — a clarify is a REQUIRED decision that blocks the answer, not the
+  optional "you might also ask" exploration the identical outline chip read as; the
+  distinction is shape+fill, not colour alone (the "Did you mean" heading already
+  differs). Clicking one — or just typing a free-text reply in the composer, always
+  the escape hatch — submits it as an ordinary follow-up turn. When ambiguity is NOT material, the prompt instead
   has the model answer under the most reasonable assumption, name it in the
   method line, and offer the alternate reading as a `followups` chip; a scope
   established earlier in the thread (award level, year range, institution/state
