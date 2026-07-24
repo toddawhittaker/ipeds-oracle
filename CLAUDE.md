@@ -868,11 +868,21 @@ get wrong. When a pure function is currently pinned through an e2e assertion,
 **move it down** to vitest and thin the now-redundant e2e logic check — keep the
 browser *flow* (focus, the aria-live announcement firing) around it. **JS
 coverage is gated:** `frontend/vitest.config.js` enforces a per-file ≥80% line floor
-over an explicit **allowlist** of the pure-logic modules under test — the JS
-analogue of `coverage_check.sh`'s per-`backend/app/`-module rule. Add a module to that
-list when (and only when) it gets real unit tests, so JS logic never silently
-escapes a gate. Browser-tested components (`Chat.jsx`, `Admin.jsx`, …) are
-deliberately not in the floor — Playwright covers them.
+over the pure-logic modules under test — the JS analogue of `coverage_check.sh`'s
+per-`backend/app/`-module rule. The set is **derived from the filesystem** (any
+`src/foo.js` with a co-located `src/foo.test.js`), so writing the test is the whole
+opt-in and a tested module can't stay silently ungated. Browser-tested components
+(`Chat.jsx`, `Admin.jsx`, …) have no `*.test.js` and so stay out of the floor —
+Playwright covers them.
+**One list, not two, for the backend suites:** `scripts/run_backend_suites.sh`
+globs `backend/tests/test_*.py` and is called by BOTH `run_ci_local.sh` and CI's
+backend job. It replaced a hand-kept array plus ~30 hand-written CI steps that had
+drifted — `test_grounding.py` and `test_version.py` were in neither, running only
+inside `coverage_check.sh`'s glob with output sent to `/dev/null`, so a grounding
+failure read as "coverage gate failed". Adding a suite is now just adding the file;
+`coverage_check.sh` replays a failing suite's output instead of discarding it.
+Similarly `.env.example` is pinned against `config.Settings` in both directions by
+`backend/tests/test_env_example.py`.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
 CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on

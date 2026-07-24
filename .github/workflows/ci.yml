@@ -152,95 +152,14 @@ jobs:
       - name: Stub frontend/dist (activates backend/app/main.py SPA-serving + its traversal guard)
         run: python scripts/make_web_dist_stub.py
 
-      - name: SQL guard tests
-        run: python backend/tests/test_sql_guards.py
-
-      - name: SQL guard hardening tests
-        run: python backend/tests/test_sql_guards_hardening.py
-
-      - name: SQL aggregation lint tests (rollup/hang foot-gun checks)
-        run: python backend/tests/test_sqllint.py
-
-      - name: Backend tests (auth · admin · skills · cache · CSV)
-        run: python backend/tests/test_backend.py
-
-      - name: Security regression tests
-        run: python backend/tests/test_security.py
-
-      - name: CSRF Origin-guard tests
-        run: python backend/tests/test_csrf.py
-
-      - name: Security-headers (CSP) tests
-        run: python backend/tests/test_secheaders.py
-
-      - name: Pre-auth request-body cap tests (oversized import must 413, not 401)
-        run: python backend/tests/test_bodylimit.py
-
-      - name: Auth rate-limit tests
-        run: python backend/tests/test_rate_limit.py
-
-      - name: EMAIL_DOMAIN access-request gate tests
-        run: python backend/tests/test_access_gate.py
-
-      - name: app.db migration tests
-        run: python backend/tests/test_migrations.py
-
-      - name: run_sql result isolation tests
-        run: python backend/tests/test_result_isolation.py
-
-      - name: app.db backup/restore tests
-        run: python backend/tests/test_backup.py
-
-      - name: agent tool-loop tests
-        run: python backend/tests/test_agent_loop.py
-
-      - name: shared LLM transport tests (provider-neutral chat_completion)
-        run: python backend/tests/test_llmhttp.py
-
-      - name: log-buffer secret-scrubbing tests
-        run: python backend/tests/test_logbuffer.py
-
-      - name: mailer tests (failure handling · admin fan-out)
-        run: python backend/tests/test_mailer.py
-
-      - name: guardrail tests (topical gate · injection refusal)
-        run: python backend/tests/test_guard.py
-
-      - name: critic tests (post-answer review · one-shot revision)
-        run: python backend/tests/test_critic.py
-
-      - name: feedback-distiller tests (user-correction lessons)
-        run: python backend/tests/test_feedback.py
-
-      - name: system-prompt tests
-        run: python backend/tests/test_prompt.py
-
-      - name: self-learning lesson tests (store · dedup · critic emission)
-        run: python backend/tests/test_skills.py
-
-      - name: cost-estimate tests
-        run: python backend/tests/test_estimate.py
-
-      - name: importer tests (preflight · integrity checks · run_import pipeline)
-        run: python backend/tests/test_importer.py
-
-      - name: NCES fetch tests (host-pin · zip-slip/zip-bomb guards · catalog)
-        run: python backend/tests/test_nces.py
-
-      - name: schema discovery-tool tests
-        run: python backend/tests/test_schema_tool.py
-
-      - name: tool-registry tests (tool_specs · dispatch error handling)
-        run: python backend/tests/test_registry.py
-
-      - name: chat router tests (cache hit · edit/rerun · feedback · CSV errors)
-        run: python backend/tests/test_chat_router.py
-
-      - name: admin router tests (import HTTP surface · usage · skills · logs)
-        run: python backend/tests/test_admin_router.py
-
-      - name: pre-push hook tests (deletion-only guard must not skip real pushes)
-        run: python backend/tests/test_pre_push_hook.py
+      # ONE globbing runner, not ~30 hand-listed steps. The old list here and
+      # the array in scripts/run_ci_local.sh were maintained separately and
+      # drifted: test_grounding.py and test_version.py were in NEITHER, running
+      # only inside coverage_check.sh's glob with output discarded. Adding a
+      # suite is now just adding the file. Cost: per-suite steps no longer show
+      # separately in the checks UI -- the runner echoes each suite name instead.
+      - name: Backend suites (every backend/tests/test_*.py)
+        run: PY=python scripts/run_backend_suites.sh
 
       - name: Coverage gate (backend/app/ >= 80%)
         run: |
