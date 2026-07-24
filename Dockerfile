@@ -23,6 +23,18 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/srv/backend
 COPY backend/requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
+# Bake the local embedding model (fastembed → HF Hub) into an EARLY layer, ABOVE
+# the app-code COPYs, so its build-cache key depends only on the lockfile — a
+# code change doesn't re-download the ~65 MB model, and CI's `type=gha,mode=max`
+# layer cache reuses it across builds. FASTEMBED_CACHE_PATH is honored by
+# fastembed at BOTH build (this RUN) and runtime (the ENV persists into the
+# container), so the deployed app loads the baked model instead of fetching it —
+# no first-request download latency and no "unauthenticated HF Hub" warning.
+# Must match config.embed_model's default; a self-hoster who overrides
+# EMBED_MODEL just downloads that model on first use, as before.
+ENV FASTEMBED_CACHE_PATH=/srv/models
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
 # App code + the loader + the schema guide (used as the system prompt).
 COPY backend/app ./backend/app
 COPY scripts/ ./scripts/
@@ -31,8 +43,6 @@ COPY docs/SCHEMA.md ./docs/SCHEMA.md
 COPY --from=frontend /frontend/dist ./frontend/dist
 
 # Data (ipeds.db, app.db, uploads) lives on a mounted volume; see compose.yaml.
-# Warm the embedding model at build time so first request is fast (optional).
-# RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
 RUN chmod +x scripts/docker-entrypoint.sh
 
