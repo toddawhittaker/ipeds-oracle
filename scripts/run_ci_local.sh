@@ -136,6 +136,7 @@ BACKEND_SUITES=(
   test_registry.py
   test_chat_router.py
   test_admin_router.py
+  test_pre_push_hook.py
 )
 for suite in "${BACKEND_SUITES[@]}"; do
   step "Backend: backend/tests/$suite"

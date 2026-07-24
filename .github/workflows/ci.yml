@@ -206,8 +206,17 @@ jobs:
       - name: critic tests (post-answer review · one-shot revision)
         run: python backend/tests/test_critic.py
 
+      - name: feedback-distiller tests (user-correction lessons)
+        run: python backend/tests/test_feedback.py
+
+      - name: system-prompt tests
+        run: python backend/tests/test_prompt.py
+
       - name: self-learning lesson tests (store · dedup · critic emission)
         run: python backend/tests/test_skills.py
+
+      - name: cost-estimate tests
+        run: python backend/tests/test_estimate.py
 
       - name: importer tests (preflight · integrity checks · run_import pipeline)
         run: python backend/tests/test_importer.py
@@ -226,6 +235,9 @@ jobs:
 
       - name: admin router tests (import HTTP surface · usage · skills · logs)
         run: python backend/tests/test_admin_router.py
+
+      - name: pre-push hook tests (deletion-only guard must not skip real pushes)
+        run: python backend/tests/test_pre_push_hook.py
 
       - name: Coverage gate (backend/app/ >= 80%)
         run: |
