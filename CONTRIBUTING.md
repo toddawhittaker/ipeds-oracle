@@ -14,8 +14,9 @@ see [SCHEMA.md](docs/SCHEMA.md).
 - **Data** — two SQLite databases: `ipeds.db` (the ~1.9 GB survey data, opened
   **read‑only + immutable**) and `app.db` (users, sessions, chats, learned
   skills, usage — the only thing that's written to).
-- **Frontend** — React 18 + [Vite](https://vitejs.dev/), Recharts for charts,
-  react‑markdown for answers.
+- **Frontend** — React 19 + [Vite](https://vitejs.dev/), [React Router](https://reactrouter.com/)
+  (declarative `react-router` v8) for routing, Recharts for charts, react‑markdown
+  for answers.
 - **Tests** — plain‑script backend suites in `backend/tests/`, [vitest](https://vitest.dev/)
   unit tests for pure JS logic in `frontend/src/*.test.js`, and
   [Playwright](https://playwright.dev/) end‑to‑end specs in `frontend/e2e/`.
@@ -46,7 +47,7 @@ backend/              the Python side (all Python tooling runs from here)
   pyproject.toml      ruff config; requirements.txt / -dev.txt / .lock
 frontend/             React + Vite front end
   src/                Chat, Admin, Chart, Markdown, Login, … — client-side
-                      routed (react-router-dom); route table in App.jsx
+                      routed (react-router); route table in App.jsx
                       ("/", "/chat/:id", "/admin", "/admin/:tab", "/verify",
                       catch-all -> "/"); co-located *.test.js are vitest units.
                       App-wide UI services mounted once at the root: Toast.jsx
@@ -63,7 +64,7 @@ data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NC
 
 ## Local development
 
-Requires Python 3.12, Node 20+, and `mdbtools` (`sudo apt-get install mdbtools`,
+Requires Python 3.12, Node 22+ (React Router v8's floor), and `mdbtools` (`sudo apt-get install mdbtools`,
 only needed to build/rebuild `ipeds.db`).
 
 ```bash

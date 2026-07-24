@@ -82,7 +82,7 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
   `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
 - **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
-  routed** (react-router-dom): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
+  routed** (react-router): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
   `/admin/:tab`, `/admin/:tab/:sub`, `/verify`, catch-all → `/`. FastAPI's SPA
   catch-all serves `index.html` for all of them, so a hard refresh / deep link
   never 404s. **Admin → Users is a tabbed section** (`Allowlist` in `Admin.jsx`):
