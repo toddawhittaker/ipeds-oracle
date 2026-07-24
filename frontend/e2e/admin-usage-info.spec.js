@@ -84,3 +84,30 @@ test("a left-column stat's popover is nudged to stay inside the viewport", async
   const viewport = page.viewportSize();
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width); // ...and the right
 });
+
+test("Escape dismisses a HOVER-opened popover (WCAG 1.4.13)", async ({ page }) => {
+  // A11Y-2: the popover opens on hover with focus elsewhere; Escape must still
+  // dismiss it (a document-level listener), not only when the trigger is focused.
+  await gotoUsage(page);
+  const trigger = page.getByRole("button", { name: "What “Queries” measures" });
+  const id = await trigger.getAttribute("aria-describedby");
+  const pop = page.locator(`[id="${id}"]`);
+  await trigger.hover();
+  await expect(pop).toBeVisible();
+  // Focus is NOT on the trigger (we hovered), so this exercises the document path.
+  await page.keyboard.press("Escape");
+  await expect(pop).toBeHidden();
+});
+
+test("the stat grid is grouped into labeled bands, Top-users table is named", async ({ page }) => {
+  await gotoUsage(page);
+  // UX-P3: three bands, each stat under the right one.
+  for (const band of ["Activity", "Efficiency", "Answer quality"]) {
+    await expect(page.locator(".stat-band", { hasText: band })).toBeVisible();
+  }
+  await expect(page.locator(".stat-band", { hasText: "Activity" })).toContainText("Queries");
+  await expect(page.locator(".stat-band", { hasText: "Answer quality" }))
+    .toContainText("Exhausted");
+  // A11Y-4: the Top users table exposes an accessible name.
+  await expect(page.getByRole("table", { name: "Top users" })).toBeVisible();
+});
