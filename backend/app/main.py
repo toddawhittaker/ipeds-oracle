@@ -20,6 +20,15 @@ from app.secheaders import SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Quiet a benign third-party WARNING: fastembed downloads its embedding model
+# from the HF Hub on first use, and huggingface_hub logs "you are sending
+# unauthenticated requests … set a HF_TOKEN" — harmless (downloads still work
+# and the model is cached after the first fetch), but the root logbuffer handler
+# would otherwise file it in the admin Logs tab and tick the log-attention badge,
+# muddying a signal that should mean "something's actually wrong". A REAL HF
+# failure still surfaces (ERROR), and skills._embedder logs its own warning if
+# embeddings end up unavailable, so nothing actionable is lost.
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 log = logging.getLogger("ipeds.app")
 
 # Keep recent log records in memory so admins can view them in the UI.
