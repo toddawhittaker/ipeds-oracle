@@ -107,42 +107,10 @@ step "Backend: build CI fixture database"
 # (no-op if a real frontend/dist build already exists).
 "$PY" scripts/make_web_dist_stub.py
 
-BACKEND_SUITES=(
-  test_sql_guards.py
-  test_sql_guards_hardening.py
-  test_sqllint.py
-  test_backend.py
-  test_security.py
-  test_csrf.py
-  test_secheaders.py
-  test_bodylimit.py
-  test_rate_limit.py
-  test_access_gate.py
-  test_migrations.py
-  test_result_isolation.py
-  test_backup.py
-  test_agent_loop.py
-  test_llmhttp.py
-  test_logbuffer.py
-  test_mailer.py
-  test_guard.py
-  test_critic.py
-  test_feedback.py
-  test_prompt.py
-  test_skills.py
-  test_estimate.py
-  test_importer.py
-  test_nces.py
-  test_schema_tool.py
-  test_registry.py
-  test_chat_router.py
-  test_admin_router.py
-  test_pre_push_hook.py
-)
-for suite in "${BACKEND_SUITES[@]}"; do
-  step "Backend: backend/tests/$suite"
-  "$PY" "backend/tests/$suite" || fail "backend/tests/$suite"
-done
+# Every backend suite, from ONE globbing list (scripts/run_backend_suites.sh).
+# The old array here and the named steps in ci.yml were maintained separately
+# and drifted -- two suites were in neither.
+scripts/run_backend_suites.sh || fail "backend suites"
 
 # Coverage gate — backend/app/ must stay >= 80% (re-runs suites under coverage.py).
 step "Backend: coverage gate (backend/app/ >= 80%)"
