@@ -504,7 +504,7 @@ def test_allowlisted_send_is_scheduled_not_inline():
     tasks = BackgroundTasks()
     with _MailSpy("send_magic_link") as spy:
         try:
-            result = auth_mod.request_login(email, "http://test/", tasks)
+            result = auth_mod.request_login(email, tasks)
         except TypeError as e:
             raise AssertionError(
                 "request_login must accept a `tasks` (BackgroundTasks-like) "
@@ -536,7 +536,7 @@ def test_pending_request_send_is_scheduled_not_inline():
     tasks = BackgroundTasks()
     with _MailSpy("send_access_request") as spy:
         try:
-            result = auth_mod.request_login(email, "http://test/", tasks)
+            result = auth_mod.request_login(email, tasks)
         except TypeError as e:
             raise AssertionError(
                 "request_login must accept a `tasks` third argument so the "
@@ -571,8 +571,8 @@ def test_denied_and_out_of_domain_schedule_no_background_task():
     tasks_denied = BackgroundTasks()
     tasks_stranger = BackgroundTasks()
     try:
-        auth_mod.request_login(denied_email, "http://test/", tasks_denied)
-        auth_mod.request_login(stranger_email, "http://test/", tasks_stranger)
+        auth_mod.request_login(denied_email, tasks_denied)
+        auth_mod.request_login(stranger_email, tasks_stranger)
     except TypeError as e:
         raise AssertionError(
             f"request_login must accept a `tasks` third argument: {e}") from e

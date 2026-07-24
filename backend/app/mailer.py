@@ -171,6 +171,11 @@ def _button(href: str, label: str) -> str:
     and the fallback line up; it grows with the label so long text isn't clipped."""
     w = max(200, 24 + 9 * len(label))
     safe = _esc(label)
+    # Escape the URL for the HTML attribute context too (not just the visible
+    # label): a stray quote in an href would otherwise break out of the attribute.
+    # The link is server-built (app_public_url + a URL-safe token), so this is
+    # defense-in-depth, but it's free.
+    href = _esc(href)
     return f"""\
 <!--[if mso]>
 <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{href}" style="height:44px;v-text-anchor:middle;width:{w}px;" arcsize="14%" strokecolor="{_TEAL}" fillcolor="{_TEAL}">
@@ -249,7 +254,7 @@ def send_magic_link(to: str, link: str) -> bool:
 works once and expires in {ttl} minutes.</p>
 <p style="margin:0 0 22px;">{_button(link, "Sign in")}</p>
 <p style="margin:0 0 4px;font-size:13px;color:{_MUTED};">If the button doesn't work, paste this link into your browser:</p>
-<p style="margin:0;font-size:13px;"><a href="{link}" style="color:{_TEAL};word-break:break-all;">{link}</a></p>
+<p style="margin:0;font-size:13px;"><a href="{_esc(link)}" style="color:{_TEAL};word-break:break-all;">{_esc(link)}</a></p>
 <p style="margin:18px 0 0;font-size:13px;color:{_MUTED};">If you didn't request this, you can safely ignore this email.</p>"""
     text = (f"Sign in to {PRODUCT_NAME} (works once, expires in {ttl} min):\n{link}\n\n"
             "If you didn't request this, ignore it.")
@@ -274,7 +279,7 @@ to {PRODUCT_NAME}.</p>
 to let them in (they'll get an approval email and can request their own one-time sign-in link),
 or <strong style="color:{_INK};">decline</strong> to block further requests from that address.</p>
 <p style="margin:0 0 22px;">{_button(review_url, "Review this request")}</p>
-<p style="margin:0;font-size:13px;color:{_MUTED};">Or open <a href="{review_url}" style="color:{_TEAL};word-break:break-all;">{review_url}</a></p>"""
+<p style="margin:0;font-size:13px;color:{_MUTED};">Or open <a href="{_esc(review_url)}" style="color:{_TEAL};word-break:break-all;">{_esc(review_url)}</a></p>"""
     text = (f"{requester} just requested access to {PRODUCT_NAME}.\n\n"
             f"Review it — approve or decline — in the admin console:\n{review_url}\n\n"
             "Approving lets them sign in: they'll get an approval email and can request a "
@@ -309,7 +314,7 @@ sign-in link arrives right away. There's no password to remember.</p>
 <p style="margin:0 0 18px;">Every answer comes with the data behind it — sortable tables, inline
 charts, and one-click CSV export.</p>
 <p style="margin:0;font-size:13px;color:{_MUTED};border-top:1px solid {_LINE};padding-top:14px;">
-Bookmark <a href="{app_url}" style="color:{_TEAL};">{app_url}</a> — you can request a fresh
+Bookmark <a href="{_esc(app_url)}" style="color:{_TEAL};">{_esc(app_url)}</a> — you can request a fresh
 sign-in link there any time you need to sign in.</p>"""
     text = (
         f"You're approved for {PRODUCT_NAME}!\n\n"

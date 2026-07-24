@@ -439,6 +439,50 @@ def test_resolve_tz_sanitizes_control_chars_before_logging():
     assert cfg.resolve_tz(evil).key == "America/New_York"
 
 
+def test_magic_link_uses_configured_origin_not_request_host() -> None:
+    # SEC-1: the sign-in link must be built from app_public_url, NEVER the
+    # attacker-controllable Host header. A request-derived base (request.base_url)
+    # would let an attacker make the server email a victim a genuine signed link
+    # pointing at an attacker domain -> token harvest -> account takeover.
+    from app.config import get_settings
+    captured.pop("link", None)
+    with TestClient(app) as c:
+        r = c.post("/api/auth/request", json={"email": "admin@example.edu"},
+                   headers={"Host": "evil.example.com"})
+        assert r.status_code == 200, r.text
+    link = captured.get("link", "")
+    assert link, "an allowlisted request must mint a sign-in link"
+    origin = get_settings().app_public_url.rstrip("/")
+    assert link.startswith(origin), f"link not built from app_public_url: {link!r}"
+    assert "evil.example.com" not in link, f"link followed the Host header: {link!r}"
+
+
+def test_insecure_cookie_posture_is_flagged_at_boot() -> None:
+    # SEC-2: an https public URL served with an insecure cookie (which also relaxes
+    # the CSRF loopback carve-out) is flagged CRITICAL at boot. Logged, not raised —
+    # so dev/tests aren't broken, but a real prod misconfig screams in the Logs tab.
+    import types
+
+    from app.main import _insecure_cookie_warning
+    danger = _insecure_cookie_warning(types.SimpleNamespace(
+        app_public_url="https://oracle.example.edu", cookie_secure=False))
+    assert danger and "COOKIE_SECURE" in danger, danger
+    # dev (http) and the secure prod posture (https + Secure cookie) are both silent.
+    assert _insecure_cookie_warning(types.SimpleNamespace(
+        app_public_url="http://localhost:8000", cookie_secure=False)) is None
+    assert _insecure_cookie_warning(types.SimpleNamespace(
+        app_public_url="https://oracle.example.edu", cookie_secure=True)) is None
+
+
+def test_email_button_escapes_the_href_attribute() -> None:
+    # SEC-4: a quote in an href must be escaped so it can't break out of the
+    # attribute and inject markup into the outgoing email.
+    from app.mailer import _button
+    html = _button('https://x/verify?token=a"onmouseover="alert(1)', "Sign in")
+    assert '"onmouseover=' not in html, "a raw quote escaped the href attribute"
+    assert "&quot;onmouseover" in html or "&#34;onmouseover" in html, html
+
+
 def run() -> None:
     print("Security/correctness contract tests (TDD — RED expected pre-fix)\n")
 
@@ -478,6 +522,14 @@ def run() -> None:
     print("\n8. log injection: user-controlled tz param is scrubbed before logging")
     check("resolve_tz sanitizes control chars before the warning log",
           test_resolve_tz_sanitizes_control_chars_before_logging)
+
+    print("\n9. auth origin-trust hardening (SEC-1/2/4)")
+    check("magic link uses app_public_url, not the request Host (SEC-1)",
+          test_magic_link_uses_configured_origin_not_request_host)
+    check("insecure cookie posture is flagged CRITICAL at boot (SEC-2)",
+          test_insecure_cookie_posture_is_flagged_at_boot)
+    check("email button escapes the href attribute (SEC-4)",
+          test_email_button_escapes_the_href_attribute)
 
     print()
     if FAILURES:

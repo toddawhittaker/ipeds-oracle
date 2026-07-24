@@ -136,9 +136,16 @@ def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
 
 
-def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
+def mint_login_link(con: sqlite3.Connection, email: str) -> str:
     """Insert a single-use login token for `email` and return its verify URL.
-    The caller commits. Reused by the login flow and by admin approval."""
+    The caller commits.
+
+    The URL is built from the CANONICAL origin (`app_public_url`), NOT from the
+    request — a magic link from a request-derived base (`request.base_url`) follows
+    the client-supplied `Host` header, so an attacker could make the server email a
+    victim a genuine, signed sign-in link pointing at an attacker domain
+    (link-poisoning → account takeover). Reading the configured origin here, inside
+    the minter, means no caller can ever reintroduce that foot-gun."""
     token = new_token()
     con.execute(
         "INSERT INTO login_tokens(token_hash, email, expires_at) VALUES (?,?,?)",
@@ -146,10 +153,11 @@ def mint_login_link(con: sqlite3.Connection, email: str, base_url: str) -> str:
     # Point at the SPA confirmation page, not the consuming API endpoint: the
     # page shows a "Sign in" button that POSTs the token. Email link-scanners
     # that GET this URL therefore can't burn the single-use link.
+    base_url = get_settings().app_public_url
     return f"{base_url.rstrip('/')}/verify?token={token}"
 
 
-def request_login(email: str, base_url: str, tasks: BackgroundTasks) -> dict:
+def request_login(email: str, tasks: BackgroundTasks) -> dict:
     """Start a login. Returns a neutral message either way (never reveals whether
     an address is on the allowlist, denied, or simply unknown). Allowlisted →
     emails a link; denied → nothing; otherwise (in-domain, not yet decided) →
@@ -197,7 +205,7 @@ def request_login(email: str, base_url: str, tasks: BackgroundTasks) -> dict:
     con = connect()
     try:
         if is_allowlisted(con, email):
-            link = mint_login_link(con, email, base_url)
+            link = mint_login_link(con, email)
             con.commit()
             tasks.add_task(send_magic_link, email, link)
         elif is_denied(con, email):

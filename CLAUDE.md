@@ -618,6 +618,17 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `_resolve_backend`; a backend failure is swallowed (returns False, never 500s the
   login/approval). The Outlook-safe HTML templates are backend-agnostic. The
   allowlist is the **sole authority on sign-in**.
+- **The sign-in link is built from the canonical `app_public_url`, NEVER
+  `request.base_url`.** `mint_login_link` reads `get_settings().app_public_url`
+  internally (no caller passes a base) — a request-derived base follows the
+  attacker-controllable `Host` header, so an attacker could make the server email a
+  victim a genuine signed link pointing at an attacker domain (link-poisoning →
+  account takeover). Every email href is also HTML-attribute-escaped (`mailer.py`).
+- **Boot-time cookie-posture check.** `main._insecure_cookie_warning` logs a
+  **CRITICAL** on startup when `app_public_url` is `https://` but `COOKIE_SECURE`
+  is false (that combo serves an insecure cookie AND relaxes the CSRF loopback
+  carve-out — `csrf.py` `allow_loopback=not cookie_secure`). Logged, not raised, so
+  dev/tests aren't broken; a prod misconfig screams in stderr + the admin Logs tab.
 - **Approval mints no token.** Only a user's OWN `POST /api/auth/request` mints +
   emails a real one-time sign-in link (`auth.py` `mint_login_link` + `send_magic_link`).
   Admin **approve / manual-add / CSV-import** just add the allowlist row and email a
