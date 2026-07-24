@@ -167,7 +167,7 @@ test.describe("delete-conversation focus management", () => {
     await confirmDelete(page, "Delete chat: Solo Chat");
 
     await expect.poll(() => del.calls).toEqual(["9"]);
-    await expect(page.getByRole("link", { name: "+ New chat" })).toBeFocused();
+    await expect(page.getByRole("link", { name: "New chat" })).toBeFocused();
 
     await expect(page.locator(".toast-msg")).toContainText("Deleted"); // wording in src/announce.test.js
   });
@@ -187,7 +187,7 @@ test.describe("delete-conversation focus management", () => {
     const del = await mockDeleteConversation(page);
 
     await page.goto("/");
-    await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "New chat" })).toBeVisible();
 
     convos.setList([{ id: 6, title: "" }]);
     // Both rows are identically named "Delete chat: Untitled" at this point --

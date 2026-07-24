@@ -36,7 +36,7 @@ async function openDeleteModal(page, { delayMs = 0, failTimes = 0 } = {}) {
   ]);
   const del = await controllableDelete(page, { delayMs, failTimes });
   await page.goto("/");
-  await page.getByRole("link", { name: "+ New chat" }).waitFor();
+  await page.getByRole("link", { name: "New chat" }).waitFor();
   const opener = page.getByRole("button", { name: "Delete chat: Chat One" });
   // Hover-revealed control (pointer-events:none until the row is hovered):
   // force-hover positions the mouse over the row so the trash turns clickable.

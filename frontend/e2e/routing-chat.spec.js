@@ -76,7 +76,7 @@ test.describe("chat routing", () => {
     // contains the bare title as a substring (see note above).
     await expect(page.getByRole("link", { name: "CA nursing associate's degrees", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Other chat", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "+ New chat" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "New chat" })).toBeVisible();
   });
 
   // Regression guard: a naive "fetch the conversation whenever :id changes"
@@ -130,7 +130,7 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
     await expect(page.getByText("Here you go.")).toBeVisible();
 
-    await page.getByRole("link", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "New chat" }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     await expect(page.getByText("Here you go.")).toHaveCount(0);
@@ -161,7 +161,7 @@ test.describe("chat routing", () => {
     expect(new URL(page.url()).pathname).toBe("/");
 
     const historyLenBefore = await page.evaluate(() => globalThis.history.length);
-    await page.getByRole("link", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "New chat" }).click();
 
     await expect(page.getByText("Here's what I can tell you without data.")).toHaveCount(0);
     expect(new URL(page.url()).pathname).toBe("/");
@@ -187,7 +187,7 @@ test.describe("chat routing", () => {
     await expect(page.getByText(/boom/)).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");
 
-    await page.getByRole("link", { name: "+ New chat" }).click();
+    await page.getByRole("link", { name: "New chat" }).click();
 
     await expect(page.getByText(/boom/)).toHaveCount(0);
     expect(new URL(page.url()).pathname).toBe("/");
@@ -445,7 +445,7 @@ test.describe("chat routing", () => {
     // away before it resolves, same as a user who changes their mind.
     await page.waitForTimeout(150);
     expect(new URL(page.url()).pathname).toBe("/");
-    await page.getByRole("link", { name: "+ New chat" }).click({ force: true });
+    await page.getByRole("link", { name: "New chat" }).click({ force: true });
 
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");

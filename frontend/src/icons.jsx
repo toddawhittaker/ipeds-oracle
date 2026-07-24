@@ -154,6 +154,14 @@ export const IconSignOut = (p) => (
 // Small downward caret — the disclosure affordance on a menu button (e.g. Copy ▾).
 export const IconChevronDown = (p) => (<Svg {...p}><path d="M6 9l6 6 6-6" /></Svg>);
 
+// Left / right chevrons — the sidebar collapse / expand affordance (replace the
+// literal « » text glyphs so the control matches the rest of the icon set).
+export const IconChevronLeft = (p) => (<Svg {...p}><path d="M15 18l-6-6 6-6" /></Svg>);
+export const IconChevronRight = (p) => (<Svg {...p}><path d="M9 18l6-6-6-6" /></Svg>);
+
+// Plus — the "New chat" affordance (replaces the literal + text glyph).
+export const IconPlus = (p) => (<Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>);
+
 // Question mark in a circle for the format-help popover trigger.
 export const IconHelp = (p) => (
   <Svg {...p}>

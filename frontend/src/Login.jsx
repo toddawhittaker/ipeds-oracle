@@ -55,7 +55,7 @@ export default function Login() {
             <span className="field-label">
               Computer science · Bachelor&apos;s · California publics · 2024
             </span>
-            <div className="figure num">7,679</div>
+            <div className="figure num">7,397</div>
             <div className="door-figure-src">degrees conferred · IPEDS Completions</div>
           </div>
         </div>
