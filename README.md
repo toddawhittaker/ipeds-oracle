@@ -11,6 +11,10 @@ Department of Education's annual census of colleges) across recent collection
 years: degrees awarded, enrollment, tuition and financial aid, graduation and
 outcome rates, admissions, and institutional details.
 
+> **Why "Oracle"?** Nothing to do with the database or cloud company. The name
+> is a nod to the **Oracle of Delphi** of Greek mythology — the place you went
+> with a question and came away with an answer.
+
 ![IPEDS Oracle answering a question with a hero figure, a table, and a chart](docs/images/answer-anatomy.png)
 
 *One question, answered: a hero figure, a short summary, the table and chart

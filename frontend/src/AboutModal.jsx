@@ -6,6 +6,7 @@ import Wordmark from "./Wordmark.jsx";
 const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
 const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
+const LICENSE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/LICENSE";
 // The guides live in the repo and render on GitHub (with screenshots). The Admin
 // guide link is shown only to admins (see the `isAdmin` gate below).
 const USER_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/USER_GUIDE.md";
@@ -100,6 +101,12 @@ export default function AboutModal({ onClose, isAdmin = false }) {
             the read-only IPEDS database, then streams back an answer with the figures,
             tables, and charts behind it.
           </p>
+          <p>
+            <strong>Why &ldquo;Oracle&rdquo;?</strong> Nothing to do with the database
+            or cloud company. It&rsquo;s a nod to the <strong>Oracle of Delphi</strong>{" "}
+            of Greek mythology — the place you went with a question and came away with
+            an answer.
+          </p>
           <p className="about-guides">
             <strong>Guides:</strong>{" "}
             <a href={USER_GUIDE_URL} target="_blank" rel="noreferrer">Using IPEDS Oracle</a>
@@ -116,6 +123,10 @@ export default function AboutModal({ onClose, isAdmin = false }) {
              aria-label="View the source code on GitHub">
             <IconGitHub size={26} />
           </a>
+          <p className="about-copyright muted small">
+            &copy; 2026 Todd Whittaker ·{" "}
+            <a href={LICENSE_URL} target="_blank" rel="noreferrer">MIT licensed</a>
+          </p>
           <button type="button" className="modal-confirm" ref={closeRef} onClick={onClose}>
             Close
           </button>

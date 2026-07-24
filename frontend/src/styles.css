@@ -179,9 +179,43 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .door-thesis { font-size: clamp(26px, 3.6vw, 34px); line-height: 1.1; margin: 12px 0 8px; max-width: 16ch; }
 .door-left .field-label { display: block; }
 .door-figure { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
-.door-figure .field-label { display: block; margin-bottom: 8px; }
+/* The rotating slide. overflow:hidden clips the slide-in so it never bleeds past
+   the card; no focusable elements live inside (the nav sits outside it), so
+   clipping costs no focus ring. Reserve two label lines + one source line so
+   advancing the gallery doesn't jog the number and nav up and down. */
+.door-fig-slide { overflow: hidden; }
+/* align-items:flex-end drops the (reserved 2-line) label to the bottom of its
+   box, so a 1-line label sits snug above the number instead of leaving a gap —
+   the empty reserve goes UP toward the divider, not between label and number. */
+.door-figure .field-label { display: flex; align-items: flex-end; min-height: 2.8em; margin-bottom: 4px; }
 .door-figure .figure { font-size: 46px; }
-.door-figure-src { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
+/* The ochre baseline rule (as in the chat figure) carries the number→source gap:
+   more air below the statistic, tighter above the label. */
+.door-figure .fig-rule { margin: 16px 0 10px; }
+.door-figure-src { font-family: var(--mono); font-size: 11px; color: var(--muted); min-height: 1.4em; }
+@keyframes doorSlideFwd { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes doorSlideBack { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+.door-fig-slide.fwd { animation: doorSlideFwd .34s ease; }
+.door-fig-slide.back { animation: doorSlideBack .34s ease; }
+@media (prefers-reduced-motion: reduce) { .door-fig-slide.fwd, .door-fig-slide.back { animation: none; } }
+/* ‹ ··· › gallery controls under the door figure. */
+.door-figure-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+.dfn-arrow { display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--muted); padding: 4px 6px;
+  border-radius: 6px; cursor: pointer; }
+.dfn-arrow:hover { color: var(--accent); }
+.dfn-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dfn-dots { display: inline-flex; align-items: center; gap: 4px; }
+/* A 16px hit target carrying a small 7px dot (drawn as a pseudo-element). */
+.dfn-dot { width: 16px; height: 16px; padding: 0; border: none; background: none;
+  position: relative; cursor: pointer; }
+.dfn-dot::before { content: ""; position: absolute; inset: 0; margin: auto;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong);
+  transition: background .15s ease, transform .15s ease; }
+.dfn-dot:hover::before { background: var(--muted); }
+.dfn-dot.on::before { background: var(--accent); transform: scale(1.25); }
+.dfn-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 50%; }
+@media (prefers-reduced-motion: reduce) { .dfn-dot::before { transition: none; } }
 .login { max-width: 440px; width: 100%; }
 .door-right { justify-self: stretch; }
 .login h1 { margin: 0 0 10px; }
@@ -298,6 +332,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .about-title .wm-div { align-self: center; }
 .about-guides { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 14px; }
 .about-guides strong { color: var(--text); }
+/* Sits in the About footer row between the GitHub icon and Close, filling the
+   middle so the notice is centered horizontally; the row's align-items:center
+   centers it vertically. It's OUTSIDE .modal-body, so its link needs the app's
+   accent link styling explicitly (else it falls back to the UA default blue). */
+.about-copyright { margin: 0; flex: 1; text-align: center; }
+.about-copyright a, .about-copyright a:visited { color: var(--accent); text-decoration: underline; }
+.about-copyright a:hover { color: var(--accent-d); }
+.about-copyright a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .about-actions { justify-content: space-between; align-items: center; }
 /* Sized to match the Close button's footprint (icon + padding ≈ its height). */
 .about-gh {
@@ -855,12 +897,36 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    past the viewport — the whole page (topbar included) scrolls AND .admin
    scrolls (double scrollbars), with phantom blank space below the content. */
 .admin { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
-.subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; }
+/* The admin content is a centered 1000px column (equal left/right margins),
+   not left-hugged: the subtab nav and the panel share the same max-width and
+   auto side-margins so they line up and sit centered in the .admin viewport.
+   On a narrow viewport both fall back to full width inside .admin's 20px pad. */
+.subtabs { display: flex; flex-wrap: wrap; gap: 6px; max-width: 1000px; margin: 0 auto 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-width: 1000px; margin-inline: auto; }
 .panel h3 { margin-top: 0; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .row button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; }
 .chk { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+/* A pill toggle switch (e.g. Logs "auto-refresh"). Styles the native checkbox
+   itself via appearance:none, so it keeps real checkbox keyboard/focus + label
+   semantics; pair it with role="switch" on the input so AT announces on/off. */
+.switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); cursor: pointer; }
+.switch input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none;
+  width: 34px; height: 20px; border-radius: 999px; background: var(--line-strong);
+  position: relative; cursor: pointer; transition: background .15s ease;
+}
+.switch input[type="checkbox"]::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .15s ease;
+}
+.switch input[type="checkbox"]:checked { background: var(--accent); }
+.switch input[type="checkbox"]:checked::before { transform: translateX(14px); }
+.switch input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .switch input[type="checkbox"], .switch input[type="checkbox"]::before { transition: none; }
+}
 .grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .grid th, .grid td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; font-size: 14px; }
 /* Users section inner tabs (Current users / Pending requests / Blocked users).

@@ -35,6 +35,35 @@ test.describe("auth / login", () => {
     await expect(page.getByRole("button", { name: "Email me a sign-in link" })).toHaveCount(0);
   });
 
+  test("the door figure gallery: ‹ ›/dots move through the real IPEDS examples", async ({ page }) => {
+    // Emulate reduced-motion so the 5s auto-advance never fires — the gallery is
+    // then driven ONLY by the manual controls, making this deterministic.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await mockMe(page, null);
+    await mockAuthConfig(page, "example.edu");
+    await page.goto("/");
+
+    const figure = page.locator(".door-figure .figure");
+    await expect(figure).toHaveText("7,397"); // first specimen
+
+    // Next → the community-college enrollment-change slide.
+    await page.getByRole("button", { name: "Next example" }).click();
+    await expect(
+      page.getByText("change at public two-year colleges", { exact: false })
+    ).toBeVisible();
+
+    // A dot jumps straight to that example and marks itself current.
+    await page.getByRole("button", { name: "Show example 4 of 7" }).click();
+    await expect(figure).toHaveText("58.5%");
+    await expect(page.getByRole("button", { name: "Show example 4 of 7" }))
+      .toHaveAttribute("aria-current", "true");
+
+    // Previous wraps from the first example round to the last.
+    await page.getByRole("button", { name: "Show example 1 of 7" }).click();
+    await page.getByRole("button", { name: "Previous example" }).click();
+    await expect(figure).toHaveText("+5.4%");
+  });
+
   test("shows a generic error notice when the request fails", async ({ page }) => {
     await mockMe(page, null);
     await mockAuthConfig(page, "example.edu");
