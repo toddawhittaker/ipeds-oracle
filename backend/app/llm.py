@@ -802,7 +802,17 @@ def _s5_fabricated(res: AgentResult) -> bool:
     with no grounded table to lean on. Deliberately conservative: a `partial` table
     (some cells matched — a mostly-correct answer), a `no_table`/`no_figure`
     already-honest non-answer, and an `unchecked` turn (no results to check against)
-    all return False. This is the deterministic signal the S5 gate suppresses."""
+    all return False. This is the deterministic signal the S5 gate suppresses.
+
+    KNOWN LIMITATION (deliberate): `check_table` reconciles each cell per-column
+    (verbatim / display-rounded / a single-column op), NOT cross-column arithmetic.
+    So an S5 answer whose ONLY measure column is a genuine cross-column computation
+    (e.g. a ratio C = A/B present in no retained result) grades `unmatched` → this
+    returns True → the honest-refusal message replaces a correct answer. Contained
+    (needs the S5 path AND a wholly-unreconcilable table; a normal count/rank column
+    grounds verbatim). Watch the `exhaustion='degraded'` telemetry (Admin → Usage):
+    if false-degrades show up, require a corroborating signal (e.g. also an
+    `ungrounded` figure) before degrading a table that could be cross-column."""
     tbl = res.table_grounding
     if tbl == grounding.TABLE_UNMATCHED:
         return True
@@ -1025,9 +1035,15 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
             # emit_answer never reaches registry.dispatch.
             emit_call = _find_emit_call(tool_calls)
             if emit_call is not None:
-                res.emit_mode = "structured"
-                msg = {"content": _reconstruct_answer(emit_call)}
-                tool_calls = []
+                reconstructed = _reconstruct_answer(emit_call)
+                # Guard a degenerate emit (e.g. an ask_clarification whose required
+                # `question` came back empty — "required" allows an empty string):
+                # only intercept a NON-EMPTY reconstruction. An empty one falls
+                # through to the normal path rather than shipping an empty bubble.
+                if reconstructed.strip():
+                    res.emit_mode = "structured"
+                    msg = {"content": reconstructed}
+                    tool_calls = []
 
             messages.append({
                 "role": "assistant", "content": msg.get("content") or "",
@@ -1283,6 +1299,23 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         if not tcs:
                             corrected = msg.get("content") or ""
                             break
+                        # Mirror the main loop's terminal-tool interception: under
+                        # structured emission the model finishes the correction
+                        # round by calling emit_answer. Without this it would be
+                        # dispatched as an unknown tool ("ERROR: unknown tool") —
+                        # scored as a failed round, wasting an iteration and
+                        # discarding the structured figure/chart. Reconstruct the
+                        # answer from the validated args instead. (The assistant
+                        # message with tool_calls was already appended above; we
+                        # break and never re-send `messages`, so the un-answered
+                        # tool_call is harmless.)
+                        emit_call = _find_emit_call(tcs)
+                        if emit_call is not None:
+                            reconstructed = _reconstruct_answer(emit_call)
+                            if reconstructed.strip():  # skip a degenerate empty emit
+                                corrected = reconstructed
+                                res.emit_mode = "structured"
+                                break
                         for tc in tcs:
                             fn = tc.get("function") or {}
                             name = fn.get("name", "")

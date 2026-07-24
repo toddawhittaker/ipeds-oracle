@@ -276,6 +276,33 @@ def test_exhaustion_critic_ok_ships_draft_unchanged():
         "no correction round → sql_log unchanged from the main loop"
 
 
+def test_exhaustion_correction_via_emit_answer_is_reconstructed_not_dispatched():
+    """CODE-1: under structured emission a REVISE correction round finishes by
+    calling emit_answer. It must be INTERCEPTED and reconstructed (like the main
+    loop), not dispatched as an unknown tool ("ERROR: unknown tool") and wasted."""
+    def correction(state):
+        if not state["requeried"]:
+            state["requeried"] = True
+            return _tool_call_response()  # re-query first (so `requeried` holds)
+        return _emit_call("emit_answer",
+                          {"markdown": "Corrected via emit: 1,000,000 degrees."})
+    res = _run_with_review("q", _exhaust_then(correction=correction), review_ok=False)
+    assert "1,000,000" in res.answer, res.answer
+    assert res.critic_revised is True, "a re-queried, changed emit correction ships"
+    assert res.emit_mode == "structured", res.emit_mode
+
+
+def test_reconstruct_answer_skips_a_degenerate_empty_clarify():
+    """CODE-4: an ask_clarification whose required `question` came back empty
+    reconstructs to "" (so the interception guard skips it — no empty bubble)."""
+    call = _emit_tool_call("ask_clarification", {"question": "   ", "options": ["a"]})
+    assert llm._reconstruct_answer(call) == "", llm._reconstruct_answer(call)
+    # A real question still reconstructs to a clarify fence.
+    good = _emit_tool_call("ask_clarification",
+                           {"question": "Which award level?", "options": ["a", "b"]})
+    assert "```clarify" in llm._reconstruct_answer(good)
+
+
 # --- S5 grounding gate + leaked tool-markup scrub ------------------------------
 # chat/32: an exhausted turn fabricated a whole answer table (0/15 cells grounded)
 # and leaked raw DeepSeek tool-call markup into the prose. The gate degrades a
@@ -1525,6 +1552,10 @@ def run():
           test_exhaustion_correction_rebuttal_without_requery_reverts_to_draft)
     check("S5: exhaustion critic OK ships the draft unchanged",
           test_exhaustion_critic_ok_ships_draft_unchanged)
+    check("S5: a correction-round emit_answer is reconstructed, not dispatched (CODE-1)",
+          test_exhaustion_correction_via_emit_answer_is_reconstructed_not_dispatched)
+    check("_reconstruct_answer skips a degenerate empty clarify (CODE-4)",
+          test_reconstruct_answer_skips_a_degenerate_empty_clarify)
     check("_strip_tool_markup removes a well-formed DSML block",
           test_strip_tool_markup_removes_a_wellformed_block)
     check("_strip_tool_markup removes an unclosed trailing block",

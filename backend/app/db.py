@@ -317,11 +317,12 @@ MIGRATIONS: list[tuple[int, str]] = [
     # only mark 'unchecked'. Backend-only (never surfaced to the client), NULL on
     # a turn that ran no query (cache hit / refusal / clarify) or predates it.
     (23, "ALTER TABLE messages ADD COLUMN results TEXT;"),
-    # Structured-emission telemetry (PR-1): `emit_mode` = 'structured' (the model
-    # finished via the emit_answer tool) | 'fence' (free-typed, or the feature is
-    # off); `answer_leaked` = 1 when the sentinel found residual fence/JSON debris
-    # in the SHIPPED prose. Together they prove structured emission drives the
-    # leak rate to 0 before the default is flipped. NULL/0 on turns that predate.
+    # Structured-emission telemetry (PR-1): `emit_mode` = 'structured'/'forced'
+    # (finished via the emit_answer tool, voluntarily or via a forced re-emit) |
+    # 'fence' (free-typed, or the feature is off); `answer_leaked` = 1 when the
+    # scrubber CAUGHT AND REMOVED residual fence/JSON debris from the prose before
+    # it shipped (a scrub rate, not a ship rate). Together they show structured
+    # emission holds the leak rate near 0. NULL/0 on turns that predate.
     (24, "ALTER TABLE usage_log ADD COLUMN emit_mode TEXT;\n"
          "ALTER TABLE usage_log ADD COLUMN answer_leaked INTEGER NOT NULL DEFAULT 0;"),
     # Table grounding (app/grounding.py, observe-only): `table_grounding` = the

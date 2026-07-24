@@ -92,10 +92,11 @@ export function groundedTableLabel(totals) {
   return `${num(t.table_cells_matched)}/${checked} Grounded cells`;
 }
 
-// LEAK rate: of the real agent turns, what share shipped residual fence/JSON
-// debris in the prose (the sentinel). This is the metric that proves structured
-// emission works — it should fall to 0 as `structured_turns` rises. "—" on an
-// empty window (no real agent turns). See backend/app/llm.py `_leak_flag`.
+// LEAK rate: of the real agent turns, what share had residual fence/JSON debris
+// CAUGHT AND REMOVED from the prose before shipping (a scrub rate, not a ship
+// rate). This is the metric that proves structured emission works — it should
+// stay near 0 as `structured_turns` rises. "—" on an empty window (no real agent
+// turns). See backend/app/llm.py `_scrub_leaked_blocks`.
 export function leakRate(totals) {
   const t = totals || {};
   return rate(num(t.leaked_turns), num(t.emit_turns));
