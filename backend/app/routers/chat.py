@@ -20,7 +20,7 @@ from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
 from app.llm import effective_cost, generate_title, stream_agent
-from app.tools.sql import QueryResult, SQLValidationError, ipeds_years, run_sql
+from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, ipeds_years, run_sql
 
 log = logging.getLogger("ipeds.chat")
 
@@ -642,28 +642,31 @@ def delete_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user))
 
 
 def _select_table_sql(sql_list: list[str], cols: int | None, cap: int):
-    """Pick the SQL whose result IS the displayed table and return its full run.
+    """Return the FULL run of the SQL whose result IS the displayed table.
 
-    NOT simply `sql_list[-1]`: under the "state the full COUNT(*)" listing rule
-    the answer's LAST query is often a scalar count, not the ranking the user
-    sees — re-running it hands back "total: 834" instead of the 834 rows. So run
-    every candidate (read-only, capped) and choose the best match: an exact
-    column-count match with the on-screen table first (the caller passes the
-    table's column count), then the widest result, then the longest. Skips a SQL
-    that fails validation; raises the last error only if NOTHING ran (→ 400)."""
-    results = []
-    last_err: SQLValidationError | None = None
-    for sql in sql_list:
+    NOT simply `sql_list[-1]`: under the "state the full COUNT(*)" listing rule the
+    answer's LAST query is often a scalar count, not the ranking the user sees —
+    re-running it hands back "total: 834" instead of the 834 rows. And NOT a full
+    run of EVERY candidate: that materialized up to N × `cap` (100k) rows at once,
+    a resource-exhaustion amplifier on a multi-query turn. Instead PROBE each
+    candidate cheaply (LIMIT 1) for its column shape, pick the best match — an
+    exact column-count match with the shown table first (the caller passes it),
+    then any real (multi-column) table, ties broken by the LAST such query
+    (closest to the answer, since the listing usually runs right before its
+    COUNT) — and run ONLY that one at the full cap. A candidate that fails to
+    validate OR times out is skipped; raise only if NOTHING ran (→ 400)."""
+    best_i, best_key = None, None
+    for i, sql in enumerate(sql_list):
         try:
-            results.append(run_sql(sql, limit=cap))
-        except SQLValidationError as e:
-            last_err = e
-    if not results:
-        raise last_err or SQLValidationError("No runnable query for this answer.")
-    return max(results, key=lambda r: (
-        cols is not None and len(r.columns) == cols,  # matches the shown table
-        len(r.columns) > 1,                           # a real table, not a scalar
-        len(r.rows)))                                 # the full listing is longest
+            probe = run_sql(sql, limit=1)
+        except (SQLValidationError, SQLTimeoutError):
+            continue
+        key = (cols is not None and len(probe.columns) == cols, len(probe.columns) > 1)
+        if best_key is None or key >= best_key:  # >= → a later tie wins (last match)
+            best_i, best_key = i, key
+    if best_i is None:
+        raise SQLValidationError("No runnable query for this answer.")
+    return run_sql(sql_list[best_i], limit=cap)
 
 
 @router.get("/messages/{message_id}/download.csv")
@@ -676,6 +679,9 @@ def download_csv(message_id: int, request: Request, cols: int | None = None,
     table's column count, from the client) disambiguates WHICH of the answer's
     queries produced the table — see `_select_table_sql`.
     """
+    # A download re-runs a query at the LARGE download cap, so throttle it the same
+    # as a chat turn — otherwise it's a scriptable DB/memory-pressure vector.
+    ratelimit.enforce_chat_rate_limit(int(user["id"]))
     con = connect()
     try:
         row = con.execute(
@@ -693,12 +699,22 @@ def download_csv(message_id: int, request: Request, cols: int | None = None,
         result = _select_table_sql(sql_list, cols, get_settings().sql_row_cap_download)
     except SQLValidationError as e:
         raise HTTPException(400, str(e)) from e
+    except SQLTimeoutError as e:
+        raise HTTPException(504, "The query took too long to export.") from e
 
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(result.columns)
-    w.writerows(result.rows)
-    buf.seek(0)
+    # Serialize row-by-row so a 100k-row CSV isn't also buffered whole as one
+    # string on top of the already-materialized rows.
+    def _csv_stream():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(result.columns)
+        yield buf.getvalue()
+        for r in result.rows:
+            buf.seek(0)
+            buf.truncate(0)
+            w.writerow(r)
+            yield buf.getvalue()
+
     return StreamingResponse(
-        iter([buf.getvalue()]), media_type="text/csv",
+        _csv_stream(), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="ipeds_result_{message_id}.csv"'})
