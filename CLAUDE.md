@@ -180,6 +180,18 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `test_interrupted_new_turn_leaves_no_phantom_conversation` +
   `test_interrupted_edit_turn_keeps_the_old_exchange_intact` in
   `backend/tests/test_chat_router.py`.)
+  **Edit/Rerun is destructive beyond the turn it touches** — it drops that turn
+  AND every later one, client-side (`slice(0, i)`) and server-side (`_persist`'s
+  `DELETE … id>=?`), permanently, with no tombstone or undo. Re-asking the LAST
+  turn is the ordinary refine and stays **modal-free** (that path also carries
+  the assistant-side "Try again" button); anything earlier routes through
+  `useConfirm` naming the count. The safe-case predicate is pure and
+  vitest-pinned (`turns.js`: `messages` is a strictly alternating user/assistant
+  array, so a turn is the pair `[i, i+1]` and the last turn is
+  `i === length - 2`). `confirm()` is NOT awaitable and `onConfirm` must not
+  return `submit()`'s promise, or the modal sits spinning for the whole streamed
+  answer. Pinned in `turns.test.js` + the `destructive edit/rerun confirmation`
+  describe in `frontend/e2e/chat-interactions.spec.js`.
   Auto-scroll **follows only while the viewer is near the bottom** (scrolled
   up = never yanked; a "Jump to latest" pill is the way back). Conversation
   switches show a skeleton, never the empty-state prompt. A printable key
