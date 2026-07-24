@@ -61,12 +61,15 @@ Ask a question in the box at the bottom and watch the answer stream in.
   note on how it was calculated. Expand **Thinking** to see the steps and the
   exact SQL the assistant ran.
 - **Tables** — each result table has its own **Download CSV** button, and
-  **Chart this** when the data suits a graph.
+  **Chart this** when the data suits a graph. Click a column header to **sort**;
+  long tables scroll with a pinned header. A big result shows a readable preview
+  on screen, but the CSV (and the copy actions below) always carry the **full
+  data set**.
 - **Charts** — pick the chart type (**Line**, **Bar**, or **Line + trend**),
   toggle **data labels**, **maximize** for a bigger view, and **copy the image**
   to paste straight into an email, doc, or slide (clean in light or dark mode).
-- **Copy** a whole answer as **Markdown** or **HTML** (the HTML keeps the table
-  and chart formatting when pasted into Word, Outlook, or Google Docs).
+- **Copy** a whole answer as **Markdown** or **rich HTML** (the HTML keeps the
+  table and chart formatting when pasted into Word, Outlook, or Google Docs).
 - **Edit** or **Rerun** any of your earlier prompts to refine a question — the
   new answer replaces the old one in place.
 - **Conversations** are saved in the sidebar (named automatically), and you can
@@ -206,9 +209,11 @@ commented list. The essentials:
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
 
 The published image reports its own version (the release tag it was built from) on
-the **About** dialog; when a newer release exists on GitHub, admins also see a
-dismissible banner. The check is cached (~6h), fails open (offline is fine), and is
-disabled with `UPDATE_CHECK_ENABLED=false`. (A local/non-Docker run reports `dev`.)
+the **About** dialog, which also shows the latest release available on GitHub; when
+a newer release exists, admins also see a banner in the Admin console (it stays
+until you're on the current release). The check is cached (~6h), fails open (offline
+is fine), and is disabled with `UPDATE_CHECK_ENABLED=false`. (A local/non-Docker run
+reports `dev`.)
 
 ## How this was built
 

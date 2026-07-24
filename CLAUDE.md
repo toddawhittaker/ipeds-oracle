@@ -247,80 +247,61 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   DISTINCT-year full-scans) in the model's SQL and feeds the warning back so the
   agent self-corrects;
 - a deterministic **figure-grounding check** (`backend/app/grounding.py`) — the
-  answer's hero figure is the most prominent number on screen and used to be the
-  least verified: `_extract_figure` validated only its JSON *shape*, so a number
-  the model mis-typed while transcribing a result table reached the user with
-  nothing comparing it back to the rows. The check reproduces the figure's value
-  from the turn's **retained** `QueryResult`s — verbatim, at the figure's own
-  display rounding, or via the derivation menu prompt step 6(ii) actually asks
-  for (`sum`/`mean`/`pct_change`/`share`/`max`/`min`) — and records
-  `exact`/`rounded`/`derived`/`ungrounded` (plus the non-evidence
-  `no_figure`/`unchecked`). Pure arithmetic: no DB, no LLM, no network, so it
-  runs on every answer and needs no setting. **OBSERVE-ONLY — it alters no
-  answer and blocks nothing**; it lands on `usage_log.figure_grounding`
-  (migration 21) and surfaces as **Grounded figures** on Admin → Usage
-  (`groundedFigureRate`, vitest-pinned), whose denominator counts *only* turns
-  that had both a numeric figure and results to check it against — folding the
-  no-figure majority in would peg the rate near 100% and quietly destroy the
-  signal. Aggregations are barred over **dimension** columns
-  (`year`/`unitid`/`cipcode`/… — `_DIMENSION_COL_RE`): a real collision found in
-  testing had a genuine +25.0% awards trend "verified" as `share(year)`
-  (2021/(2021+…+2024) = 24.98%, inside tolerance), and `year` is in nearly every
-  IPEDS result. Retention is the foundation — `last_result` was overwritten per
-  call, so a multi-query brief discarded the very result its headline came from;
-  `AgentResult.results` now keeps them all, in call order. **Grounding is
-  CONVERSATION-scoped, not just turn-scoped**: each turn's results are persisted
-  (`messages.results`, migration 23, capped + backend-only) and the recent window
-  is re-hydrated (`_load_prior_results`, same `before_id` semantics as
-  `_load_history`) into `stream_agent(prior_results=…)`. A figure is checked
-  against THIS turn's results FIRST, then the borrowed prior ones
-  (`_ground_results`), so a follow-up that recites a number without re-querying —
-  previously an unverifiable `unchecked` — now grounds against the earlier turn
-  that produced it, tagged **`ctx:`** in `figure_derivation` (composes with
-  `retry:` → `retry:ctx:pct_change(q3.x)`). Prior results are borrowed for
-  grounding only, **never re-persisted** as this turn's own and **never fed to
-  the model** (the prompt is unchanged — we verify recitation, we don't prevent
-  it). This also relaxes the retry's `_figure_required` gate to fire on a no-SQL
-  turn when prior results exist. Pinned in `backend/tests/test_grounding.py` +
+  answer's hero figure is the most prominent number on screen, and `_extract_figure`
+  once validated only its JSON *shape*. The check reproduces the figure's value from
+  the turn's **retained** `QueryResult`s — verbatim, at the figure's display
+  rounding, or via the derivation menu prompt step 6(ii) asks for
+  (`sum`/`mean`/`pct_change`/`share`/`max`/`min`) — recording
+  `exact`/`rounded`/`derived`/`ungrounded` (plus non-evidence
+  `no_figure`/`unchecked`). Pure arithmetic (no DB/LLM/network), runs on every
+  answer, no setting. **OBSERVE-ONLY — alters no answer, blocks nothing**; lands on
+  `usage_log.figure_grounding` (migration 21) → **Grounded figures** on Admin →
+  Usage (`groundedFigureRate`, vitest-pinned), whose denominator counts *only* turns
+  with both a numeric figure and results to check (folding the no-figure majority in
+  would peg it near 100% and destroy the signal). Aggregations are barred over
+  **dimension** columns (`year`/`unitid`/`cipcode`/… — `_DIMENSION_COL_RE`): `year`
+  is in nearly every IPEDS result, and a real +25.0% trend once "verified" as
+  `share(year)` inside tolerance. Retention is the foundation: `AgentResult.results`
+  keeps every call's result (in call order), where `last_result` used to overwrite.
+  **Grounding is CONVERSATION-scoped**: each turn's results are persisted
+  (`messages.results`, migration 23, capped + backend-only) and the recent window is
+  re-hydrated (`_load_prior_results`, same `before_id` semantics as `_load_history`)
+  into `stream_agent(prior_results=…)`. A figure is checked against THIS turn's
+  results FIRST, then the borrowed prior ones (`_ground_results`), so a follow-up
+  that recites a number without re-querying grounds against the earlier turn that
+  produced it, tagged **`ctx:`** in `figure_derivation` (composes with `retry:` →
+  `retry:ctx:pct_change(q3.x)`). Prior results are borrowed for grounding only —
+  **never re-persisted** as this turn's own and **never fed to the model** (we verify
+  recitation, we don't prevent it) — and this relaxes `_figure_required` to fire on a
+  no-SQL turn when prior results exist. Pinned in `backend/tests/test_grounding.py` +
   `test_agent_loop.py` + `test_chat_router.py`.
-- a deterministic **table-grounding check** (`grounding.check_table`, same
-  module, also **OBSERVE-ONLY**) — the results **table** is the model re-typing
-  the query rows one-for-one, the densest block of numbers on screen and (like
-  the figure once was) unverified. It parses the answer's GFM tables
-  (`parse_markdown_tables`, header kept, skipping ```` ``` ````-fenced regions so
-  a ```chart block isn't read as a table) and grades the **MEASURE columns only**
-  — `_is_measure_column` excludes a **rank ordinal** (values are a pure 1..N
-  sequence, whatever the header — "#"/"No."/"Rank") and any **dimension** column
-  (header matches `is_dimension`: rank/year/unitid/cipcode/id/…). This keeps the
-  rate a clean transcription-accuracy signal for the DATA rather than dragging it
-  down with a model-added Rank column that was never in the DB (the live-test
-  regression: a perfectly-transcribed top-5 table scored 5/10 because its five
-  rank ordinals can't ground). Each graded cell is reconciled — **CONVERSATION-
-  scoped, mirroring the figure**: against this turn's results borrowed with the
-  recent window (`_ground_results`/`prior_results`, the same #166 infra the figure
-  uses), so a follow-up that RESHAPES an earlier table (transpose/regroup, running
-  no SQL of its own) is VERIFIED against the borrowed base rows — its values are
-  the same, just rearranged — instead of hiding as `unchecked`, and a corrupted
-  reshape is caught. Reconciliation uses the shared `_reconcile_value` kernel
-  (verbatim / display-rounded / derivable) — but with **`allow_dimension=False`**:
-  a measure cell is verified only by a MEASURE result-column, never by a
-  code/dimension column it merely collides with (the live-observed anomaly: a
-  small count "3" spuriously grounding against an `awlevel` 3 — barred now; the
-  figure path keeps `allow_dimension=True`, since a headline can legitimately BE a
-  year/code). A legitimately **computed measure** (a share/%-change column) still
-  grounds instead of false-alarming, at the cost of the figure's known
-  coincidental-match bias (acceptable observe-only: `messages.results` is
-  persisted, so an all-columns variant is recomputable offline). Records a
-  per-turn status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked` — the
-  last now means neither this turn nor the recent window retained anything) +
-  numeric-cell counts on
+- a deterministic **table-grounding check** (`grounding.check_table`, same module,
+  also **OBSERVE-ONLY**) — the results **table** is the model re-typing the query
+  rows one-for-one, the densest block of numbers on screen. It parses the answer's
+  GFM tables (`parse_markdown_tables`, header kept, skipping ```` ``` ````-fenced
+  regions so a ```chart isn't read as a table) and grades the **MEASURE columns
+  only** — `_is_measure_column` excludes a **rank ordinal** (a pure 1..N sequence,
+  whatever the header) and any **dimension** column (`is_dimension`:
+  rank/year/unitid/cipcode/id/…), so a model-added Rank column that was never in the
+  DB can't drag the rate down. Each graded cell is reconciled **CONVERSATION-scoped,
+  mirroring the figure**: against this turn's results borrowed with the recent window
+  (`_ground_results`/`prior_results`, the same #166 infra), so a follow-up that
+  RESHAPES an earlier table (transpose/regroup, no SQL of its own) is VERIFIED
+  against the borrowed base rows, and a corrupted reshape is caught. Reconciliation
+  uses the shared `_reconcile_value` kernel (verbatim / display-rounded / derivable)
+  but with **`allow_dimension=False`**: a measure cell is verified only by a MEASURE
+  result-column, never a code/dimension column it merely collides with (a small
+  count "3" must not ground against an `awlevel` 3 — the figure path keeps
+  `allow_dimension=True`, since a headline can legitimately BE a year/code). A
+  legitimately computed measure (share/%-change) still grounds. Records a per-turn
+  status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked` — the last means
+  neither this turn nor the window retained anything) + numeric-cell counts on
   `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
-  (**migration 25**; `no_table`/`unchecked` carry 0 counts so they self-exclude
-  from the SUM-based rate), surfaced as a **cell-level** **Grounded cells** stat
-  on Admin → Usage (`groundedTableRate`, vitest-pinned). Stamped in `llm.py`
-  (`_stamp_table_grounding`) right after the figure stamp on BOTH terminators (the
-  normal answer and the budget-exhausted best-effort), on the FINAL settled
-  answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
+  (**migration 25**; `no_table`/`unchecked` carry 0 counts so they self-exclude from
+  the SUM-based rate) → a cell-level **Grounded cells** stat on Admin → Usage
+  (`groundedTableRate`, vitest-pinned). Stamped in `llm.py`
+  (`_stamp_table_grounding`) right after the figure stamp on BOTH terminators, on the
+  FINAL settled answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
   `test_migrations.py`.
 - a post-answer **critic** that can force one revision round. **It is given the
   actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
@@ -334,100 +315,67 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
   **The critic also runs on the TOOL-BUDGET-EXHAUSTED path** (S5): when the agent
-  burns all `llm_max_tool_iters` without answering and falls back to the
-  tools-disabled "best effort" synthesis, that answer used to ship with ZERO
-  review (the highest-risk path, least checking). It now gets the same critic,
-  and on a REVISE a **bounded correction round with tools RE-ENABLED**
-  (`_CRITIC_CORRECTION_ITERS=3` — a deliberate, capped exception to the "no more
-  tools" budget, fired only by a REVISE) so a flagged aggregation error can
-  actually be re-queried and fixed. Re-enabling tools is what makes `requeried`
-  meaningful again there — the SAME anti-leak gate applies, so a rebuttal or a
-  confirm-only re-query reverts to the clean draft. Pinned by the `S5:` cases in
-  `backend/tests/test_agent_loop.py`. **The exhaustion path also carries a
-  deterministic GROUNDING GATE and a raised ceiling** (measured live from a real
-  fabrication — chat/32 invented a whole 0/15-cell answer table at the old cap):
-  **(1)** `llm_max_tool_iters` **defaults to 20** (`LLM_MAX_TOOL_ITERS`, was 12) —
-  a genuine multi-table question needs ~15-17 rounds to converge, and cutting it
-  off mid-progress is what forced the confabulation; higher only costs on the hard
-  turns that use the rounds, each reusing the cached prefix. **(2)** After the
-  synthesis + critic + grounding stamps, `_s5_fabricated(res)` degrades the answer
-  to an honest **`_EXHAUSTION_DEGRADE`** message (dropping any fabricated
-  figure/chips) when its numbers are WHOLLY ungrounded (`table_grounding=unmatched`,
-  or an `ungrounded` figure with no grounded table) — a `partial`/`no_table`/
-  `unchecked` answer is left alone. This is **S5-only** on purpose: the normal path
-  keeps shipping first-pass ungrounded figures observe-only (#163); acting on the
-  verdict is scoped to the highest-risk path (a sibling to `retry:suppressed`).
-  **(3)** `_strip_tool_markup` scrubs leaked DeepSeek tool-call markup
-  (`<｜｜DSML｜｜tool_calls>…`, which the gate can't catch — it parses to `no_table`)
-  from BOTH terminators. Exhaustion is recorded on `usage_log.exhaustion`
-  (**migration 27**: `answered`/`degraded`/NULL) and surfaced as the **Exhausted**
-  stat on Admin → Usage (`exhaustionLabel`, with a `· N degraded` breakdown).
-  Reasoning-off synthesis and forced `emit_answer` were BOTH measured and rejected
-  (reasoning-off makes DeepSeek dump the raw tool markup; forced emit yields an
-  empty answer when there's no data). Pinned by the `S5 gate:` cases in
-  `test_agent_loop.py` + `test_admin_router.py` + `test_migrations.py`.
-- **Structured emission** (`config.structured_emission_enabled`, PR-1 of the
-  "structured output, not fenced text" work — **default OFF, dark-shipped**).
-  The durable, model-agnostic fix behind #167's `_normalize_misfenced_blocks`
-  band-aid: instead of free-typing ```figure/```chart/```followups/```clarify
-  fences it can mangle, the model FINISHES a turn by calling an **`emit_answer`**
-  (or **`ask_clarification`**) tool whose fields the *provider* validates.
-  `llm.py` intercepts that call before dispatch and **reconstructs WELL-FORMED
-  fences from the validated args** (`_reconstruct_answer` + `_fence` — the SERVER
-  writes them, so they always parse), then falls into the SAME no-tool-call
-  terminator — so `_extract_*` / critic / grounding / retry / persistence AND the
-  **frontend are all unchanged** (figure/followups/clarify were already
-  structured events; the chart stays a server-written ```chart fence the
-  frontend already renders). A model that ignores the tool falls back to the
-  fence path. **Forced re-emit (Phase 1) — the structured-emission GUARANTEE:**
-  when a turn free-types the terminal answer under structured mode,
-  `_forced_emit` makes ONE **reasoning-off** follow-up call that FORCES
-  `emit_answer` (`tool_choice:{function:emit_answer}` + `reasoning:{enabled:false}`)
-  — compelling a well-formed tool call, so the figure/chart come back as validated
-  args (no fence to mangle → no leak, and the figure SHIPS, unlike the scrubber
-  which just deletes it). Reasoning-off is REQUIRED, not cosmetic: forcing a
-  specific function is rejected by DeepSeek/Kimi while thinking is enabled (400
-  *"Thinking mode does not support this tool_choice"*, tested 2026-07-23); the
-  answer's reasoning already happened on the draft turn, so the re-emit needs
-  none. It **FAILS OPEN** — a provider that rejects forced choice (or an outage)
-  → `_forced_emit` returns None → fall back to the **`_EMIT_REPROMPT` nudge**
-  (the 0.1 lever) + fence path. Bounded once per turn (`emit_reprompted`).
-  **Clarify is handled FIRST** (ahead of the forced re-emit) — forcing
-  `emit_answer` must never clobber a clarification, and a single-function
-  `tool_choice` can't target "emit_answer OR ask_clarification". A forced re-emit
-  records `emit_mode="forced"` (counts as structured on Admin→Usage; the distinct
-  value measures how often the force was NEEDED — the go/no-go data for **Phase 2**,
-  deleting the whole fence-parsing layer once forced-capable models are required).
-  `chat_completion` gained per-call `tool_choice`/`reasoning` overrides for this.
-  **Measured 3/10 → 10/10 structured, 0 leaks over two runs — and
-  a bonus: figure emission went to 10/10 too** (the figure is now a tool field
-  the model fills, not a fence it forgets — this dissolves the earlier
-  emission-decay saga). A **leak scrubber** (`_scrub_leaked_blocks`, evolved from
-  the observe-only `_leak_flag` sentinel) runs on the FINAL answer of both
-  terminal paths: it STRIPS any residual figure/chart-shaped JSON a mangled fence
-  left in the prose — **whatever the wrapping** (a bare object, an
-  `inline-code`-wrapped one, a stray `}}`) — so raw JSON never reaches the user.
-  It's **model-agnostic**: it keys off the object SHAPE (figure = `value`+`label`,
-  chart = `type`+`data`), not a per-model quirk, so a novel mangle is caught too;
-  a proper ```chart fence is preserved (fenced segments are skipped whole). The
-  fence path FALLBACK is exercised ~30% of the time live on DeepSeek flash (far
-  more than the near-0 the tests suggested), and ~10% of those turns mangled the
-  figure fence into inline-code JSON that the extractor missed (the observed
-  conv-18 leak) — so this net matters in practice, not just for tool-incapable
-  models. `usage_log.answer_leaked` now records that debris was **caught and
-  removed** (never shipped) rather than shipped; with `emit_mode` (structured|
-  fence, migration 24) it drives the **Answer-leaks** stat on Admin → Usage
-  (`leakRate`/`leakLabel`) — now a scrub rate. (The clarify terminal paths are
-  intentionally NOT scrubbed: a clarify turn carries no figure/chart by contract.) **`structured_emission_enabled` DEFAULTS ON
-  (0.2)** — validated 100%-structured / 0-leaks across FOUR vendors
-  (DeepSeek/MiniMax/Anthropic/Moonshot); the fence path is the retained fallback
-  for a tool-incapable model (set the flag false to force it). The sentinel
-  deliberately ignores a plain
-  ```chart fence (that's the intended chart delivery — a false-positive caught in
-  the PR-1 dark-ship run). The **number stays model-supplied** (envelope only);
-  server-computed figures from declared provenance are the next step (PR-2).
-  Pinned in `test_agent_loop.py` (structured + forced-re-emit cases) +
-  `test_llmhttp.py` (tool_choice/reasoning overrides) +
+  burns all `llm_max_tool_iters` and falls back to the tools-disabled "best effort"
+  synthesis (the highest-risk path, once shipped with ZERO review), it now gets the
+  same critic — and on a REVISE a **bounded correction round with tools RE-ENABLED**
+  (`_CRITIC_CORRECTION_ITERS=3`, a capped exception fired only by a REVISE) so a
+  flagged aggregation error can actually be re-queried and fixed. The SAME anti-leak
+  gate applies (a rebuttal or confirm-only re-query reverts to the clean draft).
+  The exhaustion path also carries a deterministic **GROUNDING GATE and a raised
+  ceiling** (measured from a real fabrication — a whole 0/15-cell table invented at
+  the old cap): **(1)** `llm_max_tool_iters` **defaults to 20** (`LLM_MAX_TOOL_ITERS`,
+  was 12) — a genuine multi-table question needs ~15-17 rounds, and cutting off
+  mid-progress is what forced the confabulation; higher only costs on hard turns,
+  each reusing the cached prefix. **(2)** After the synthesis + critic + grounding
+  stamps, `_s5_fabricated(res)` degrades the answer to an honest
+  **`_EXHAUSTION_DEGRADE`** message (dropping any fabricated figure/chips) when its
+  numbers are WHOLLY ungrounded (`table_grounding=unmatched`, or an `ungrounded`
+  figure with no grounded table); a `partial`/`no_table`/`unchecked` answer is left
+  alone. **S5-only** on purpose — the normal path keeps shipping first-pass
+  ungrounded figures observe-only (#163); acting on the verdict is scoped to the
+  highest-risk path (a sibling to `retry:suppressed`). **(3)** `_strip_tool_markup`
+  scrubs leaked DeepSeek tool-call markup (`<｜｜DSML｜｜tool_calls>…`) from BOTH
+  terminators. Exhaustion is recorded on `usage_log.exhaustion` (**migration 27**:
+  `answered`/`degraded`/NULL) → the **Exhausted** stat on Admin → Usage
+  (`exhaustionLabel`, `· N degraded` breakdown). Pinned by the `S5:`/`S5 gate:` cases
+  in `test_agent_loop.py` + `test_admin_router.py` + `test_migrations.py`.
+- **Structured emission** (`config.structured_emission_enabled`, **DEFAULTS ON**;
+  validated 100%-structured / 0-leaks across four vendors). The durable,
+  model-agnostic fix for mangled fences: instead of free-typing
+  ```figure/```chart/```followups/```clarify fences, the model FINISHES a turn by
+  calling an **`emit_answer`** (or **`ask_clarification`**) tool whose fields the
+  *provider* validates. `llm.py` intercepts that call and **reconstructs
+  WELL-FORMED fences from the validated args** (`_reconstruct_answer` + `_fence` —
+  the SERVER writes them, so they always parse), then falls into the SAME
+  no-tool-call terminator, leaving `_extract_*` / critic / grounding / retry /
+  persistence AND the frontend unchanged. A tool-incapable model falls back to the
+  fence path (the retained fallback; set the flag false to force it).
+  **Forced re-emit — the structured-emission GUARANTEE:** when a turn free-types
+  the terminal answer under structured mode, `_forced_emit` makes ONE
+  **reasoning-off** follow-up call that FORCES `emit_answer`
+  (`tool_choice:{function:emit_answer}` + `reasoning:{enabled:false}`), so the
+  figure/chart come back as validated args (no fence to mangle → no leak, and the
+  figure SHIPS). Reasoning-off is REQUIRED: forcing a specific function is rejected
+  while thinking is enabled (400 *"Thinking mode does not support this
+  tool_choice"*), and the draft turn already did the reasoning. It **FAILS OPEN** →
+  `_forced_emit` returns None → the **`_EMIT_REPROMPT` nudge** + fence path. Bounded
+  once per turn (`emit_reprompted`). **Clarify is handled FIRST** — a single-function
+  `tool_choice` can't target "emit_answer OR ask_clarification", so forcing emit must
+  never clobber a clarification. Records `emit_mode="forced"` (counts as structured;
+  measures how often the force was NEEDED). `chat_completion` gained per-call
+  `tool_choice`/`reasoning` overrides for this.
+  A **leak scrubber** (`_scrub_leaked_blocks`) runs on the FINAL answer of both
+  terminal paths and STRIPS any residual figure/chart-shaped JSON a mangled fence
+  left in the prose — **whatever the wrapping**, keyed off the object SHAPE (figure =
+  `value`+`label`, chart = `type`+`data`), so a novel mangle is caught too; a proper
+  ```chart fence is preserved (fenced segments skipped whole). The fence-path
+  fallback fires ~30% of the time live on DeepSeek flash, so this net matters in
+  practice. `usage_log.answer_leaked` records debris **caught and removed** (never
+  shipped); with `emit_mode` (structured|fence, migration 24) it drives the
+  **Answer-leaks** scrub-rate stat on Admin → Usage (`leakRate`/`leakLabel`). Clarify
+  paths are NOT scrubbed (no figure/chart by contract). The **number stays
+  model-supplied** (envelope only); server-computed figures from declared provenance
+  is the next step. Pinned in `test_agent_loop.py` + `test_llmhttp.py` +
   `test_admin_router.py` + `test_migrations.py`.
 - **Disambiguation (clarify).** Prompt INSTRUCTIONS' leading "Before you answer"
   step: when a plausible alternate reading would change the HEADLINE result (e.g.
@@ -484,72 +432,40 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   prose and OUTSIDE the `.md` copy surface — reusing the Reading-Room `.figure`/
   `.fig-rule`/`.field-label` device (the same primitive the Login "door" uses).
   (`_extract_figure` accepts BOTH the ```figure fence AND an HTML `<figure>` tag —
-  some models emit the latter.) The brief applies on **follow-up turns too** — never
-  code-gated, but **the prompt wording carries the whole load, and the first version
-  of it did not work**: measured over a 10-turn conversation, the figure appeared on
-  1/1 first turns and **0/9 follow-ups**. `suggestions` survived the same
-  strip-before-persist treatment on 11/13 turns, so the cause was not the stripped
-  history — it was that step 6 was *conditional* ("whenever a single number can
-  honestly capture…", plus a judgment-call SKIP clause) while step 7 was flatly
-  REQUIRED. The model read a follow-up as a lighter conversational reply and took the
-  hatch every time (one answer literally opened "I already have this at hand from the
-  first query"). Step 6 now mirrors step 7's grammar — REQUIRED on every answered
-  turn, with the skip narrowed to three enumerable cases (no number anywhere /
-  couldn't answer / clarify turn) and the "already shown above" excuses named and
-  refused. **That reword alone moved follow-up emission only 0/9 → 1/9.** A second
-  measurement isolated the real driver: emission decays with conversation **DEPTH**,
-  not question type — turn 6 ("how many nursing bachelor's nationally", structurally
-  identical to turn 1) emitted nothing where turn 1 did. The system prompt must stay
-  FIRST to remain the cacheable prefix, so by turn 10 its rules sit behind ten turns
-  of conversation, and *rewording buried text does not make it less buried*. Hence
-  `llm.py`'s **`_TURN_REMINDER`** — a short pointer back to steps 6/7 injected as a
+  some models emit the latter.) The brief applies on **follow-up turns too**, but
+  prompt wording alone can't carry it: figure emission **decays with conversation
+  DEPTH** — the system prompt must stay FIRST to remain the cacheable prefix, so its
+  rules sit behind ever more history, and reword/compress/model-swap experiments all
+  under-delivered (a compressed step 6 even broke the FORMAT — correct JSON,
+  mis-wrapped). The fix is STRUCTURAL — three guards in `llm.py`:
+  (1) **`_TURN_REMINDER`** — a short pointer back to steps 6/7 injected as a
   `system` message **after the history and immediately before the question**, on
-  follow-up turns only (first turns already comply; the rules are still adjacent
-  there). It is built per request and never persisted, so it cannot accumulate in
-  history; and it must never move ahead of the system prefix, which would collapse
-  cache reuse — pinned by
-  `test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix`. That took
-  follow-up emission to **3/9 — a real improvement but NOT a fix**. Two further
-  PROMPT experiments then FAILED and were abandoned: compressing step 6
-  (42→20 lines, taxonomy moved to a FIGURE SHAPING section) **regressed to 0/10**
-  — the model emitted correct figure JSON but MIS-WRAPPED (`[Figure: 767](767)`
-  + bare object, no fence), so separating the requirement from its worked
-  fence-in-context examples broke the FORMAT; and swapping flash→v4-pro made it
-  *worse* at 3.4× cost. Conclusion (pre-registered): prompt wording is not the
-  lever. **The fix is STRUCTURAL** — two guards in `llm.py`:
-  (1) `_extract_figure` now has a **mis-wrap fallback** — after the fence/tag
-  regex misses, it recovers a bare `{value,label}` object at the answer's HEAD
-  (behind an optional stray `[..](..)` artifact), for zero LLM cost; scoped to
-  the head so a ```chart fence or a mid-prose object is never mistaken for a
-  figure. Related, **`_normalize_misfenced_blocks`** runs BEFORE extraction and
-  repairs the model's other observed mis-wrap — a figure/chart emitted as
-  MARKDOWN IMAGE syntax (`![figure]\n{json}`, `![chart]\n{json}`,
-  `![Figure: 767](767) {json}`) — into real ```figure/```chart fences. Without
-  it that raw JSON LEAKS into chat (charts have no other safety net) and, when
-  the retry separately recovers the figure, DUPLICATES it. Balanced-brace scan
-  (so a chart's nested `data:[…]` is captured whole), fires only when the label
-  is actually followed by a JSON object (a genuine `![alt](image.png)` is
-  untouched), scoped to the two block names. Pinned in `test_agent_loop.py`.
-  (2) A **missing-figure retry** (`retry_missing_figure` +
-  `_maybe_retry_figure`, gated `FIGURE_RETRY_ENABLED`, modeled on the critic:
-  own call, fails open): when a data-backed answer that should lead with a figure
-  emits none (`_figure_required` — has SQL, has a digit, no clarify/error), ONE
-  targeted call asks for ONLY the ```figure fence — a far narrower ask than
-  re-obeying step 6, which is why it works. A recovered figure is **grounded
-  before it ships**: reproducible → kept, derivation tagged **`retry:`**;
-  **ungrounded → SUPPRESSED** (`retry:suppressed`) — a figure we FORCED that
-  isn't in the data is an induced hallucination, worse than the honest absence,
-  the ONE place figures are suppressed rather than shipped (first-pass ungrounded
-  figures still ship, observe-only per #163). Measured 4/10→**5–7/10** across two
-  runs, every shipped figure grounded, the suppress path confirmed firing. The
-  RESIDUAL gap is turns that run **no SQL** and recite from conversation context
-  (deep follow-ups): `_figure_required` skips them (no fresh results to ground
-  against) — closing that needs **conversation-scoped retention**, which would
-  both ground context-recited numbers AND make them retry-eligible. **If you
-  touch step 6, the reminder, or the retry, re-measure `figure_grounding` before
-  and after** — emission is prompt-compliance behaviour and three prompt fixes
-  already under-delivered; `retry:`-prefixed derivations in `usage_log` mark what
-  the retry recovered. A brief's
+  follow-up turns only. Built per request, never persisted, and it must never move
+  ahead of the system prefix (that collapses cache reuse) — pinned by
+  `test_followup_turn_gets_a_tail_reminder_after_the_cached_prefix`.
+  (2) `_extract_figure`'s **mis-wrap fallback** (recovers a bare `{value,label}`
+  object at the answer's HEAD, behind an optional stray `[..](..)`; head-scoped so a
+  ```chart fence or mid-prose object is never mistaken for a figure) plus
+  **`_normalize_misfenced_blocks`** (runs BEFORE extraction; repairs a figure/chart
+  emitted as MARKDOWN IMAGE syntax — `![figure]\n{json}` — into real
+  ```figure/```chart fences via a balanced-brace scan, firing only when the label is
+  followed by a JSON object, so a genuine `![alt](image.png)` is untouched).
+  Otherwise that raw JSON leaks (charts have no other net) and can DUPLICATE a
+  retry-recovered figure. Pinned in `test_agent_loop.py`.
+  (3) A **missing-figure retry** (`retry_missing_figure` + `_maybe_retry_figure`,
+  gated `FIGURE_RETRY_ENABLED`, modeled on the critic: own call, fails open): when a
+  data-backed answer that should lead with a figure emits none (`_figure_required` —
+  has SQL, has a digit, no clarify/error, OR a no-SQL turn with prior results to
+  ground against), ONE targeted call asks for ONLY the ```figure fence — a narrower
+  ask than re-obeying step 6, which is why it works. A recovered figure is
+  **grounded before it ships**: reproducible → kept, derivation tagged **`retry:`**;
+  **ungrounded → SUPPRESSED** (`retry:suppressed`) — a forced figure not in the data
+  is an induced hallucination, the ONE place a figure is suppressed rather than
+  shipped (first-pass ungrounded figures still ship observe-only, #163). **If you
+  touch step 6, the reminder, or the retry, re-measure `figure_grounding` before and
+  after** — emission is prompt-compliance behaviour and prompt fixes have repeatedly
+  under-delivered; `retry:`-prefixed derivations in `usage_log` mark what the retry
+  recovered. A brief's
   **table + trend chart render side by side** (`briefdata.js` pairs one-table +
   one-chart → `Markdown.jsx` passes the chart into the table component and suppresses
   the standalone fence; drops the redundant "Chart this"). To hand the chart room,

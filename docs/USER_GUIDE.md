@@ -83,6 +83,10 @@ The answer streams in as it's generated. A typical answer has several parts:
 6. **Follow-up chips** — *"You might also ask…"* — one click asks the next
    question (see [Refining and following up](#refining-and-following-up)).
 
+Each question you ask is stamped with the time you sent it (in your own time
+zone), and under each answer a small **"Thought for N seconds"** shows how long
+the assistant worked on it.
+
 > **A note on accuracy.** The assistant sanity-checks magnitudes before
 > answering, but it's a tool, not an oracle. For anything you'll publish or
 > decide on, spot-check the result and use **Download CSV** or **Thinking → SQL**
@@ -114,11 +118,16 @@ over the whole range.
 
 Every result table has its own toolbar:
 
-- **Download CSV** — export exactly that table.
+- **Download CSV** — export the table's data. When a result is large, the chat
+  shows a readable preview (the first rows) with a note of the full size, but the
+  CSV always contains the **complete result set**, not just the rows on screen.
 - **Chart this** — when a table has a numeric column and the answer didn't
   already draw a chart, this renders one on demand.
 
-Long tables scroll within their own area, so a wide table never breaks the page.
+**Click any column header to sort** by that column (click again to reverse); a
+small arrow shows the active sort. Long tables scroll within their own area — the
+header row stays pinned as you scroll — so even a big ranking never breaks the
+page. **Copy Markdown** and **Copy HTML** (below) also carry the full data set.
 
 ---
 
@@ -153,11 +162,13 @@ This is how you check exactly what a number means before you rely on it.
 
 ## Copying an answer
 
-Two buttons under each answer copy the whole thing:
+The **Copy** menu under each answer copies the whole thing two ways:
 
 - **Copy Markdown** — the answer as Markdown text.
-- **Copy HTML** — the answer with its table and chart formatting preserved, so it
-  pastes cleanly into **Word, Outlook, or Google Docs**.
+- **Copy rich HTML** — the answer with its table and chart formatting preserved,
+  so it pastes cleanly into **Word, Outlook, or Google Docs**.
+
+Either way you get the full answer, including every row of a large table.
 
 ---
 

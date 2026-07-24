@@ -21,6 +21,7 @@ server logs. Everything lives under **Admin**, reachable from your account menu
 - [Usage: activity and cost](#usage-activity-and-cost)
 - [Skills: what the assistant has learned](#skills-what-the-assistant-has-learned)
 - [Logs](#logs)
+- [Keeping up to date](#keeping-up-to-date)
 
 ---
 
@@ -202,8 +203,24 @@ The dashboard shows **three** cache figures — don't confuse them:
 > reproduce from its own data.** The underlying number is written by the language
 > model, which transcribes it out of the query results — so a slip is possible,
 > and this is the measurement that makes it visible. A one-off is worth a look; a
-> persistent gap is worth reporting. Note this measures the *figure* only; the
-> prose, tables and charts in an answer aren't checked this way yet.
+> persistent gap is worth reporting.
+
+Three more integrity/telemetry stats sit alongside Grounded figures:
+
+- **Grounded cells** — the same idea as Grounded figures, extended to the
+  *results table*. Every number in a table's measure columns is checked back
+  against the rows the app's own queries returned; this is the share that
+  reproduce. (Rank and label columns aren't counted — only the data.) It's a
+  cell-level transcription-accuracy signal for the densest block of numbers on
+  screen.
+- **Answer leaks** — a *count* of answers where stray formatting debris (a bit of
+  raw chart/figure markup the model mis-wrapped) was **caught and removed before
+  the answer shipped**. It reads how often that safety net fired, not how often
+  something reached a user.
+- **Exhausted** — a *count* of questions that used up the whole tool budget before
+  the assistant could answer (with a `· N degraded` sub-label for the few whose
+  numbers couldn't be grounded and were replaced with an honest "couldn't
+  complete" message). A rising count is the signal to raise `LLM_MAX_TOOL_ITERS`.
 
 > **Watch the Schema cache rate.** If it sits low over a range with real traffic,
 > the provider isn't reusing the schema prefix and you're paying close to full price
@@ -260,3 +277,19 @@ badge counts **problems (warnings and errors) since you last opened this tab**, 
 it's easy to notice when something needs a look; opening Logs clears it and it
 re-counts only later problems. It's the first place to check if a user reports
 that email isn't arriving or a query behaved oddly.
+
+---
+
+## Keeping up to date
+
+The **About** dialog (account menu → **About**) shows the version you're running
+and the latest release available on GitHub. When a newer version exists, admins
+also see a **banner in the Admin console** — "vX.Y.Z is available" with a link to
+the release notes — and the same "something's waiting" count on your avatar badge.
+The banner isn't dismissible: it's there until you're on the current release, so
+an available update never quietly disappears.
+
+The version check is cached, fails silently if GitHub can't be reached, and can be
+turned off entirely (`UPDATE_CHECK_ENABLED=false`) if you'd rather the app make no
+outbound calls to check — see the README's **Self-hosting** section for how to
+update the running image.
