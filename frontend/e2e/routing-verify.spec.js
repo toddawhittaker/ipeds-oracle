@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { mockMe, mockVerifyInfo, mockVerify, mockConversations } from "./mocks.js";
 
-// /verify must behave EXACTLY as it does today once react-router-dom owns
+// /verify must behave EXACTLY as it does today once react-router owns
 // top-level routing: strip `token` from the URL/history on load, and never
 // call GET /api/auth/me while the confirm page is up (a naive router setup
 // that always fires the "am I logged in" check on mount, instead of carving

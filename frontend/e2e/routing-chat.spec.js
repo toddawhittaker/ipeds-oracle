@@ -15,7 +15,7 @@ import {
 // constant keeps the field name from drifting silently out of sync.
 const CONVERSATION_ID_FIELD = "conversation_id";
 
-// Client-side routing (react-router-dom v6) for Chat. URLs mirror the open
+// Client-side routing (react-router) for Chat. URLs mirror the open
 // conversation so a chat is shareable/bookmarkable and the browser's Back/
 // Forward buttons behave like a normal multi-page app:
 //   /            -> Chat, empty new-chat screen

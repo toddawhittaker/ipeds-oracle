@@ -19,7 +19,7 @@ import {
 // suite relies on mockMe's default of has_data: true (see mocks.js) to keep
 // rendering Chat/Admin exactly as before this feature existed.
 //
-// Client-side routing (react-router-dom v6) makes this an explicit URL
+// Client-side routing (react-router) makes this an explicit URL
 // contract, not just a view-state one: the once-on-load redirect lands
 // specifically on /admin/imports, fires ONLY when the admin landed on bare /
 // (a deep link to /chat/:id or /admin/:other-tab must NOT be yanked), and

@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { initials } from "./initials.js";
 import { formatBadge } from "./attention.js";
 import { IconShield, IconInfo, IconSun, IconMoon, IconSignOut } from "./icons.jsx";
