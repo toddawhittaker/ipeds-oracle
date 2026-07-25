@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import {
   USER_SUBTABS,
   DEFAULT_SUBTAB,
+  rememberSubTab,
+  rememberedSubTab,
   resolveSubTab,
   subTabKeyForArrow,
   pendingBadgeTone,
@@ -79,5 +81,44 @@ describe("pendingBadgeTone", () => {
   });
   it("is idle (neutral) when zero", () => {
     expect(pendingBadgeTone(0)).toBe("idle");
+  });
+});
+
+// Session memory for the active sub-tab. THE REGRESSION worth guarding is the
+// throw path: sessionStorage does not return null in a hardened/private-mode
+// browser, it THROWS — and an uncaught throw here would take the entire Admin
+// section down to lose two lines of tab memory.
+describe("sub-tab session memory", () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it("round-trips a remembered tab", () => {
+    rememberSubTab("blocked");
+    expect(rememberedSubTab()).toBe("blocked");
+  });
+
+  it("falls back to the default when nothing is remembered", () => {
+    expect(rememberedSubTab()).toBe(DEFAULT_SUBTAB);
+  });
+
+  // A stale value from an older build (or a hand-edited storage entry) must not
+  // open a blank panel — it goes through resolveSubTab like a URL param does.
+  it("sanitizes a stale/unknown stored value", () => {
+    sessionStorage.setItem("admin.usersSubTab", "bogus");
+    expect(rememberedSubTab()).toBe(DEFAULT_SUBTAB);
+  });
+
+  it("survives storage that throws, in both directions", () => {
+    const proto = Object.getPrototypeOf(sessionStorage);
+    const get = proto.getItem;
+    const set = proto.setItem;
+    proto.getItem = () => { throw new Error("storage disabled"); };
+    proto.setItem = () => { throw new Error("storage disabled"); };
+    try {
+      expect(() => rememberSubTab("pending")).not.toThrow();
+      expect(rememberedSubTab()).toBe(DEFAULT_SUBTAB);
+    } finally {
+      proto.getItem = get;
+      proto.setItem = set;
+    }
   });
 });

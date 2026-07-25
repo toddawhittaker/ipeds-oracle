@@ -85,7 +85,24 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   routed** (react-router): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
   `/admin/:tab`, `/admin/:tab/:sub`, `/verify`, catch-all → `/`. FastAPI's SPA
   catch-all serves `index.html` for all of them, so a hard refresh / deep link
-  never 404s. **Admin → Users is a tabbed section** (`Allowlist` in `Admin.jsx`):
+  never 404s. **`Admin.jsx` is a ~110-line SHELL** — route params (`AdminRoute`),
+  `ADMIN_TABS`, the alias/redirect rules, and the tab chrome. The five pages live
+  in **`src/admin/`** (`Allowlist` · `Imports` · `Usage` · `Skills` · `Logs`),
+  props-only, plus the pure `admin/format.js` (`humanBytes`/`humanSeconds`/
+  `canonEmailForDisplay`/`fmtDateTime`/`fmtApprovalDate`/`money`/`ruleName`,
+  vitest-pinned — they were unreachable by the fast tier while trapped in a
+  component file). Sub-tab session memory (`rememberedSubTab`/`rememberSubTab`)
+  lives in `usertabs.js` next to `resolveSubTab`, NOT in the shell: `Allowlist`
+  writes it too, so keeping it in `Admin.jsx` would make a child import from its
+  own parent — a module cycle for two lines of `sessionStorage`.
+  **Adding a subdirectory under `src/` required fixing the vitest coverage
+  derivation**: `readdirSync("src")` is NOT recursive, so `src/admin/format.test.js`
+  was *collected* by the `src/**` include glob yet its module never entered
+  `coverage.include` — running fully outside the 80% floor while looking tested.
+  Proven both ways: a 38%-covered `format.js` exits 1 with a named error under the
+  recursive walk, and exits 0 with zero mentions under the old one. Same drift
+  shape #207 killed, re-entering through a directory.
+  **Admin → Users is a tabbed section** (`Allowlist` in `src/admin/Allowlist.jsx`):
   three path sub-tabs — **Current users** (default) / **Pending requests** /
   **Blocked users** — at `/admin/users/<sub>`; bare `/admin/users` or an invalid
   sub redirects to the remembered-or-`current` tab (session memory in
@@ -1044,8 +1061,9 @@ over the pure-logic modules under test — the JS analogue of `coverage_check.sh
 per-`backend/app/`-module rule. The set is **derived from the filesystem** (any
 `src/foo.js` with a co-located `src/foo.test.js`), so writing the test is the whole
 opt-in and a tested module can't stay silently ungated. Browser-tested components
-(`Chat.jsx`, `Admin.jsx`, …) have no `*.test.js` and so stay out of the floor —
-Playwright covers them.
+(`Chat.jsx`, `src/admin/*.jsx`, …) have no `*.test.js` and so stay out of the floor —
+Playwright covers them. The derivation walks `src/` **recursively**; it must, or a
+module in a subdirectory escapes the floor silently (see the `src/admin/` note above).
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`.**
 `critical`-only was not a strict threshold but a shaped blind spot: axe rates
 colour-contrast, `aria-prohibited-attr`, `scrollable-region-focusable` and

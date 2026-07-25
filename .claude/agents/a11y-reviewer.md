@@ -22,7 +22,8 @@ the drill-down `Suggestions.jsx` and disambiguation `Clarify.jsx` chip rows belo
 an answer (both `role="group"` + `aria-label`, `.suggestion-chip` buttons — a
 clarify turn's chips are the only UI for its 2–4 short answer phrases, but the
 free-text composer must stay a fully working escape hatch alongside them),
-`Login.jsx`, `Admin.jsx` (tabbed: allowlist/imports/usage/skills), `Markdown.jsx`
+`Login.jsx`, `Admin.jsx` (a ~110-line shell; the five pages are `src/admin/`:
+Allowlist/Imports/Usage/Skills/Logs), `Markdown.jsx`
 (react-markdown + gfm, scrollable result tables), `styles.css` (light/dark via
 `prefers-color-scheme`).
 
@@ -30,7 +31,8 @@ free-text composer must stay a fully working escape hatch alongside them),
 
 1. **Keyboard** — every interactive control reachable and operable by keyboard;
    visible focus indicators; logical tab order; no keyboard traps; tabs
-   (`Admin.jsx`) follow the tab/tabpanel keyboard pattern.
+   (`Admin.jsx` shell + `src/admin/Allowlist.jsx`) follow the tab/tabpanel
+   keyboard pattern.
 2. **Screen readers / semantics** — real semantic elements or correct ARIA
    roles/names; buttons are `<button>`, not clickable `<div>`s; form inputs have
    associated `<label>`s; icon-only buttons (send, edit, rerun, delete) have text

@@ -28,7 +28,8 @@ result tables, CSV/chart export, editable/rerun turns, conversation history,
 "you might also ask" drill-down chips, and — when a question is materially
 ambiguous — a disambiguation "Did you mean" turn with short answer-phrase chips
 alongside the always-usable free-text composer),
-`Admin.jsx` (tabbed: allowlist, imports, usage, skills),
+`Admin.jsx` (a ~110-line shell; pages in `src/admin/`: Allowlist, Imports,
+Usage, Skills, Logs),
 `Markdown.jsx`, `styles.css` (light/dark via `prefers-color-scheme`). The users
 are non-technical university colleagues who want answers, not SQL.
 

@@ -49,3 +49,27 @@ export function subTabKeyForArrow(currentKey, action) {
 export function pendingBadgeTone(count) {
   return count > 0 ? "attention" : "idle";
 }
+
+// --- session memory --------------------------------------------------------
+// The active sub-tab is remembered per browser session, so returning via the
+// bare /admin/users link reopens the tab you left — the spec's "...or was
+// previously selected during the current administrative session". A :sub in the
+// URL always wins over this.
+//
+// These live HERE, next to resolveSubTab, rather than in Admin.jsx: the shell
+// writes the remembered value on navigation and the Allowlist panel writes it on
+// a tab switch, so leaving them in Admin.jsx would force Allowlist.jsx to import
+// back from its own parent — a module cycle for two lines of sessionStorage.
+const USERS_SUBTAB_STORAGE_KEY = "admin.usersSubTab";
+
+// Both wrap storage in try/catch: sessionStorage THROWS (not returns null) in a
+// hardened/private-mode browser, and losing tab memory must never take the whole
+// Admin section down with it.
+export function rememberedSubTab() {
+  try { return resolveSubTab(sessionStorage.getItem(USERS_SUBTAB_STORAGE_KEY)); }
+  catch { return DEFAULT_SUBTAB; }
+}
+
+export function rememberSubTab(sub) {
+  try { sessionStorage.setItem(USERS_SUBTAB_STORAGE_KEY, sub); } catch { /* storage disabled */ }
+}
