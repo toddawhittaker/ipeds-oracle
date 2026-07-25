@@ -698,6 +698,7 @@ export default function Chat({ me }) {
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
     let durationMs = null; // turn wall-clock from the done event → "Thought for N seconds"
     let resultsTruncated = false; // did this turn's SQL return more rows than shown?
+    let figureGrounding = null;   // did the server reproduce the figure's number?
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -771,6 +772,9 @@ export default function Chat({ me }) {
           // Same flag the message row stores, so a live turn captions a
           // truncated table without waiting for a reload.
           if (ev.results_truncated != null) resultsTruncated = ev.results_truncated;
+          // …and marks a reproduced figure "verified" without one, matching what
+          // the message row stores so live and reloaded agree.
+          if (ev.figure_grounding != null) figureGrounding = ev.figure_grounding;
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -793,7 +797,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -1001,7 +1005,7 @@ export default function Chat({ me }) {
                             mdRefs targets), so the hero figure sits above the
                             prose and stays out of the copy surface. Renders
                             null when the message carries no figure. */}
-                        <Figure spec={m.figure} />
+                        <Figure spec={m.figure} grounding={m.figure_grounding} />
                         <Markdown messageId={m.id} resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
                       </>
                     )}

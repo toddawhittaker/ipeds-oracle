@@ -675,6 +675,48 @@ def test_cache_is_scoped_to_the_user_who_asked():
         "another user was served this user's cached answer text"
 
 
+def test_cache_round_trips_the_result_rows_that_back_the_answer():
+    """THE REGRESSION: query_cache stored the answer but not its RESULTS, so a
+    cache hit persisted messages.results=NULL and every LATER turn in that
+    conversation had nothing to ground a recited number against — it silently
+    graded `unchecked`, denting a rate the project steers by with no visible
+    failure anywhere.
+
+    The rows are legitimate evidence for the cached answer: the prose replayed is
+    byte-identical to the turn that produced them, so they ARE that answer's
+    backing data, not a stand-in for it.
+    """
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — cache results round-trip skipped")
+        return
+    q = "how many associate degrees in nursing were awarded nationally"
+    results = [{"columns": ["year", "awards"], "rows": [[2024, 61234], [2025, 62001]]}]
+    skills.cache_store(q, "SELECT 1", "CACHED-ANSWER", None, None,
+                       results, True, user_id=404)
+
+    hit = skills.cache_lookup(q, 404)
+    assert hit is not None, "the author must get their own cached answer"
+    assert hit["results"] == results, \
+        f"the answer's backing rows must survive the cache: {hit['results']!r}"
+    assert hit["results_truncated"] is True, \
+        "a cached truncated result must still report itself truncated"
+
+
+def test_cache_without_results_reports_none_not_a_crash():
+    """A cached turn that retained no rows (or a row written before migration 31)
+    must come back as None — the caller persists NULL, which is what it did
+    before. The fix must not make the absent case throw."""
+    if skills._embedder() is None:
+        print("    ⚠ fastembed not installed — cache empty-results test skipped")
+        return
+    q = "a question whose turn retained no result rows at all"
+    skills.cache_store(q, "SELECT 1", "NO-ROWS-ANSWER", user_id=505)
+
+    hit = skills.cache_lookup(q, 505)
+    assert hit is not None and hit["results"] is None, hit
+    assert hit["results_truncated"] is False, hit
+
+
 def test_legacy_rows_without_a_user_are_unreachable():
     """Rows written before migration 29 have user_id NULL. They must fail CLOSED
     (reachable by nobody) rather than being treated as shared-by-default."""
@@ -834,6 +876,10 @@ def run():
     check("cache lookup is gated by skills_enabled", test_cache_lookup_disabled_when_skills_off)
     check("the cache is scoped to the user who asked", test_cache_is_scoped_to_the_user_who_asked)
     check("legacy NULL-user rows are unreachable", test_legacy_rows_without_a_user_are_unreachable)
+    check("the cache round-trips the rows backing its answer",
+          test_cache_round_trips_the_result_rows_that_back_the_answer)
+    check("a cached turn with no rows reports none, not a crash",
+          test_cache_without_results_reports_none_not_a_crash)
     check("cache_store prunes past the row cap", test_cache_store_prunes_past_the_row_cap)
     check("a non-positive cap disables the sweep", test_a_non_positive_cap_disables_the_sweep)
     print()

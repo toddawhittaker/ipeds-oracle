@@ -384,6 +384,24 @@ MIGRATIONS: list[tuple[int, str]] = [
     # complete 200-row result. The only disclosure was whatever prose the model
     # remembered to write. Booleans stored as 0/1; NULL on pre-migration rows.
     (30, "ALTER TABLE messages ADD COLUMN results_truncated INTEGER;"),
+    # 31: two halves of the same gap — the grounding chain, and what it can say.
+    #
+    # query_cache.results: a cache hit persisted results=NULL, so every LATER
+    # turn in that conversation had nothing to ground against (_load_prior_results
+    # selects only non-NULL rows) and silently graded `unchecked`. The cached rows
+    # ARE the evidence for that answer — the prose is byte-identical to the turn
+    # that produced them — so storing and replaying them is correctness, not a
+    # shortcut. results_truncated rides along for the same reason.
+    #
+    # messages.figure_grounding: the server already grades every hero figure
+    # exact/rounded/derived/ungrounded, but only usage_log ever saw it, so the
+    # person reading the number learned nothing. Persisting the STATUS (never the
+    # derivation string — that stays backend telemetry) lets a reproduced figure
+    # carry a quiet "verified" mark that survives a reload. NULL on pre-migration
+    # rows reads as "not known", which correctly renders no mark.
+    (31, "ALTER TABLE query_cache ADD COLUMN results TEXT;\n"
+         "ALTER TABLE query_cache ADD COLUMN results_truncated INTEGER;\n"
+         "ALTER TABLE messages ADD COLUMN figure_grounding TEXT;"),
 ]
 
 

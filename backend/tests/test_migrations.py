@@ -1008,6 +1008,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0
       ],
       [
+        "figure_grounding",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
         "id",
         "INTEGER",
         0,
@@ -1141,6 +1148,20 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "question",
         "TEXT",
         1,
+        null,
+        0
+      ],
+      [
+        "results",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "results_truncated",
+        "INTEGER",
+        0,
         null,
         0
       ],

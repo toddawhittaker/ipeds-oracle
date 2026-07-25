@@ -298,9 +298,16 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
                     model="cache", tokens=0, cached=True, ok=True,
                     thinking=[{"kind": "status", "text": status}], figure=figure,
-                    suggestions=suggestions, delete_from_id=edit_from)
+                    suggestions=suggestions, delete_from_id=edit_from,
+                    # Replay the cached turn's own result rows onto this message
+                    # (migration 31). Without them a cache hit wrote results=NULL
+                    # and every LATER turn in the conversation lost the evidence
+                    # it would have grounded a recited number against.
+                    results=cached.get("results"),
+                    results_truncated=cached.get("results_truncated", False))
                 done = {"type": "done", "cached": True, "message_id": msg_id,
-                        "user_message_id": user_msg_id}
+                        "user_message_id": user_msg_id,
+                        "results_truncated": bool(cached.get("results_truncated"))}
                 if is_new and answer:
                     title = await generate_title(question, answer)
                     if title:
@@ -409,7 +416,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     and clarify is None):
                 await run_in_threadpool(functools.partial(
                     skills.cache_store, question, result.sql_log[-1], answer,
-                    result.figure, result.suggestions, user_id=int(user["id"])))
+                    result.figure, result.suggestions,
+                    # Store the rows behind the answer too, so a hit can replay
+                    # them and keep the conversation's grounding chain intact.
+                    _results_for_storage(result.results),
+                    any(r.truncated for r in (result.results or [])),
+                    user_id=int(user["id"])))
 
             # 4b) If the critic caught a real mistake and forced a correction, capture
             # its finding as an unverified lesson (self-learning from actual errors).
@@ -456,7 +468,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     "duration_ms": duration_ms,
                     # …and captions a truncated table without one. Same value the
                     # message row stores, so live and reloaded agree.
-                    "results_truncated": any(r.truncated for r in (result.results or []))}
+                    "results_truncated": any(r.truncated for r in (result.results or [])),
+                    # …and marks a reproduced figure "verified" without one.
+                    "figure_grounding": result.figure_grounding or None}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
                 title = await generate_title(question, answer)
@@ -542,15 +556,19 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
             "thinking, figure, suggestions, clarify, results, model_used, tokens, "
-            "duration_ms, results_truncated, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "duration_ms, results_truncated, figure_grounding, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
              json.dumps(clarify) if clarify else None,
              json.dumps(results) if results else None, model, tokens,
-             duration_ms, int(bool(results_truncated)), now))
+             duration_ms, int(bool(results_truncated)),
+             # STATUS only — the derivation string stays backend telemetry on
+             # usage_log. This is what lets a reproduced figure keep its
+             # "verified" mark across a reload.
+             figure_grounding or None, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -605,7 +623,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
             raise HTTPException(404, "Not found.")
         rows = con.execute(
             "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
-            "model_used, created_at, duration_ms, results_truncated "
+            "model_used, created_at, duration_ms, results_truncated, figure_grounding "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:

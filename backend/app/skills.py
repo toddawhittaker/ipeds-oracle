@@ -311,7 +311,8 @@ def cache_lookup(question: str, user_id: int) -> dict | None:
     try:
         dv = data_version(con)
         rows = con.execute(
-            "SELECT question, final_sql, answer_md, figure, suggestions, embedding "
+            "SELECT question, final_sql, answer_md, figure, suggestions, results, "
+            "results_truncated, embedding "
             "FROM query_cache WHERE data_version=? AND user_id=? "
             "AND embedding IS NOT NULL",
             (dv, user_id)).fetchall()
@@ -326,6 +327,13 @@ def cache_lookup(question: str, user_id: int) -> dict | None:
                     "figure": json.loads(rows[i]["figure"]) if rows[i]["figure"] else None,
                     "suggestions": (json.loads(rows[i]["suggestions"])
                                     if rows[i]["suggestions"] else None),
+                    # The rows that BACK this answer (migration 31). Replayed onto
+                    # the cached message so a later turn in the conversation can
+                    # ground a recited number against them — without this a cache
+                    # hit broke the chain for every turn after it.
+                    "results": (json.loads(rows[i]["results"])
+                                if rows[i]["results"] else None),
+                    "results_truncated": bool(rows[i]["results_truncated"]),
                     "matched_question": rows[i]["question"],
                     "similarity": float(sims[i])}
     finally:
@@ -363,6 +371,7 @@ def _prune_cache(con) -> int:
 
 def cache_store(question: str, final_sql: str, answer_md: str,
                 figure: dict | None = None, suggestions: list | None = None,
+                results: list | None = None, results_truncated: bool = False,
                 *, user_id: int) -> None:
     v = embed(question)
     if v is None:
@@ -371,11 +380,16 @@ def cache_store(question: str, final_sql: str, answer_md: str,
     try:
         con.execute(
             "INSERT INTO query_cache(question, embedding, final_sql, answer_md, "
-            "figure, suggestions, data_version, created_at, user_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "figure, suggestions, results, results_truncated, data_version, "
+            "created_at, user_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (question, _to_blob(v), final_sql, answer_md,
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
+             # Already capped by the caller's _results_for_storage, so this adds
+             # no new size risk beyond what messages.results already carries.
+             json.dumps(results) if results else None,
+             int(bool(results_truncated)),
              data_version(con), time.time(), user_id))
         # Opportunistic, on the write path only — a read must stay cheap.
         if _prune_cache(con) > 0:
