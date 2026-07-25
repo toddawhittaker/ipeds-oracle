@@ -28,6 +28,19 @@ dataset (`ipeds.db`) and streams back an answer. The app is the work;
   serif "Oracle" · Column), NOT a PNG pair. Product name = `PRODUCT_NAME` in
   `config.py` (feeds the API title + every email); the wordmark's accessible name is
   "IPEDS Oracle".
+- `.design-sync/` — inputs for the **claude.ai/design** sync (`/design-sync`), which
+  publishes the UI as a design system so Claude Design builds screens out of the real
+  components. Committed: `config.json` (incl. the 45 hand-written prop contracts),
+  `conventions.md` (prepended to the generated README → the design agent's system
+  prompt), `previews/*.tsx`, `groups/*.md`, `NOTES.md`. **Read `NOTES.md` before
+  re-running.** Two repo facts make this non-standard, and both bite silently: there
+  is **no library build**, so `frontend/ds-entry.js` must name every export (the
+  converter's `export * from …` fallback drops `default` exports — that once left 18
+  components out of the bundle while still emitting their cards); and there is **no
+  TypeScript**, so every prop contract is hand-maintained in `cfg.dtsPropsFor` and
+  goes stale the moment a component's props change. `frontend/ds-*.js` are
+  sync-only — the app is still built from `index.html`/`main.jsx`. Details in
+  `CONTRIBUTING.md` → *Design system sync*.
 
 ## The dataset (`ipeds.db`)
 

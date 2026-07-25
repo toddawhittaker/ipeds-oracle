@@ -259,6 +259,63 @@ reuse the exact same mutation helpers the single-row endpoints call
 `_deny_group`/`_clear_denial_group`), recompute eligibility per record, and are
 capped at `BULK_MAX_ITEMS`.
 
+## Design system sync (claude.ai/design)
+
+`/design-sync` publishes this UI to a **claude.ai/design** project so that Claude
+Design builds screens out of the real components instead of generic ones. The
+project is `IPEDS Oracle Design System`; its id is pinned in
+`.design-sync/config.json`, so a re-sync finds it without asking.
+
+Committed inputs live in `.design-sync/`: `config.json`, `conventions.md` (the
+usage guide prepended to the generated README, which becomes the design agent's
+system prompt), `previews/<Name>.tsx` (one authored preview per component),
+`groups/<Name>.md` (a 3-line frontmatter stub that assigns the card's group), and
+`NOTES.md`. **Read `NOTES.md` first** — it carries the gotchas and the re-sync
+risk list. Generated output (`ds-bundle/`) and the staged converter (`.ds-sync/`)
+are gitignored.
+
+Re-run from the **repo root** (`cfg.entry` is resolved against the working
+directory, not the package):
+
+```bash
+node .ds-sync/package-build.mjs   --config .design-sync/config.json \
+  --node-modules ./frontend/node_modules --out ./ds-bundle
+node .ds-sync/package-validate.mjs ./ds-bundle
+```
+
+Two things about this repo make the sync non-standard, and **both fail silently**:
+
+**1. There is no library build, so `frontend/ds-entry.js` is load-bearing.**
+`frontend/package.json` is `private` with no `main`/`module`/`exports`, so the
+converter falls back to synthesizing an entry with `export * from "<each src
+file>"` — and `export *` does **not** re-export a module's `default`. Nearly every
+component here is `export default function X`, so that fallback put only the icons
+and the two providers on `window.IpedsOracle`: 18 components were missing from the
+bundle while still getting preview cards, and the build exited 0. The tell is a log
+line reading `bundle export list: N` well below the component count. When a
+component becomes reusable, add it in **two** places — a named export in
+`frontend/ds-entry.js` and a pin in `cfg.componentSrcMap`. Those two lists are the
+design system's public surface. (`frontend/ds-preview-env.js` is the other
+sync-only file: it supplies a Router so `UserMenu`'s `<Link>` can render in a card.
+Neither file is imported by the app.)
+
+**2. There is no TypeScript, so every prop contract is hand-written.** No `.ts`,
+no `.d.ts`, and `react/prop-types` is off — nothing in the repo declares a prop.
+All 45 `<Name>Props` bodies live in `cfg.dtsPropsFor` and there is nothing to
+regenerate them from, so **a prop rename in a component leaves the published
+contract wrong** and the design agent keeps coding against the old API. Re-read the
+component sources on any sync that follows real UI work. The `.d.ts` parse gate
+needs **typescript 5** in `.ds-sync/node_modules`: `npm i typescript` now installs
+7.x, whose Node API dropped `createSourceFile`, and validate then misreports the
+check as *"skipped — typescript not in node_modules"*.
+
+Previews are graded from real screenshots (`ds-bundle/_screenshots/review/`), and
+that is what catches a wrong contract — the first draft of `DataTable`'s
+`config`/`rowKey` types rendered a blank table. Do not grade a card you have not
+looked at. `[FONT_MISSING]` is expected and accepted: `--serif`/`--mono` are
+system-font stacks with real fallbacks, and this app deliberately ships no
+webfonts (it keeps the CSP's `script-src 'self'` untouched).
+
 ## Lint & format
 
 ```bash
