@@ -9,7 +9,15 @@ import { defineConfig } from "vitest/config";
 // UNGATED -- no failure, no signal, which is the worst shape a coverage gap can
 // take. Deriving it means the only way to escape the floor is to have no test at
 // all, which is visible.
-const gatedModules = readdirSync("src")
+// RECURSIVE on purpose. The `include` glob below is src/**, so a test in a
+// SUBDIRECTORY (src/admin/format.test.js) is collected and runs — but a
+// top-level-only readdir never put its module in `coverage.include`, so it
+// silently escaped the 80% floor while looking fully tested. That is the exact
+// drift shape this derivation exists to kill, reintroduced by a directory: no
+// failure, no signal. Splitting Admin.jsx into src/admin/* is what would have
+// triggered it.
+const gatedModules = readdirSync("src", { recursive: true })
+  .map((f) => String(f).replaceAll("\\", "/")) // recursive readdir yields nested paths
   .filter((f) => f.endsWith(".test.js"))
   .map((f) => `src/${f.replace(/\.test\.js$/, ".js")}`)
   .sort();
