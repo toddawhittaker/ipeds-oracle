@@ -157,4 +157,25 @@ test.describe("Users sub-tabs — keyboard + ARIA", () => {
     await page.keyboard.press("ArrowLeft");
     await expect.poll(() => path(page)).toBe("/admin/users/blocked");
   });
+
+  // THE REGRESSION: every keypress above waits for the URL to settle first, and
+  // that wait is what made the handler look correct. A real keyboard user
+  // HOLDING an arrow key fires repeats far faster than react-router commits its
+  // re-render (v8 routes through startTransition), and the handler computed the
+  // next tab from the committed `sub` prop — so the second press re-computed
+  // from the tab the FIRST one had already left. Two presses from Current landed
+  // on Pending instead of Blocked, 100% of the time. No wait here on purpose:
+  // that is the whole point.
+  test("rapid arrow keys chain from the previous selection, not a stale prop",
+    async ({ page }) => {
+      await openUsers(page);
+      const first = tab(page, /Current users/);
+      await expect(first).toBeVisible();
+      await first.focus();
+
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => path(page)).toBe("/admin/users/blocked");
+      await expect(tab(page, /Blocked users/)).toHaveAttribute("aria-selected", "true");
+    });
 });
