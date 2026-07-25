@@ -12,6 +12,14 @@
 // `showIcon` (default true) draws the Column mark; pass false for the text-only
 // type lockup (mono "IPEDS" · ochre rule · serif "Oracle") — e.g. inline in the
 // About dialog title, where the head already carries its own icon.
+/**
+ * @typedef {object} WordmarkProps
+ * @property {boolean} [showIcon] Draw the Column mark before the type. The wordmark
+ *   is inline SVG drawn from the theme tokens — never a PNG pair — so light/dark
+ *   comes from one source.
+ */
+
+/** @param {WordmarkProps} props */
 export default function Wordmark({ showIcon = true }) {
   return (
     <span className="wordmark" role="img" aria-label="IPEDS Oracle">

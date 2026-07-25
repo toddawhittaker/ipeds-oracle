@@ -30,17 +30,23 @@ dataset (`ipeds.db`) and streams back an answer. The app is the work;
   "IPEDS Oracle".
 - `.design-sync/` — inputs for the **claude.ai/design** sync (`/design-sync`), which
   publishes the UI as a design system so Claude Design builds screens out of the real
-  components. Committed: `config.json` (incl. the 45 hand-written prop contracts),
-  `conventions.md` (prepended to the generated README → the design agent's system
-  prompt), `previews/*.tsx`, `groups/*.md`, `NOTES.md`. **Read `NOTES.md` before
-  re-running.** Two repo facts make this non-standard, and both bite silently: there
-  is **no library build**, so `frontend/ds-entry.js` must name every export (the
+  components. Committed: `config.json`, `conventions.md` (prepended to the generated
+  README → the design agent's system prompt), `previews/*.tsx`, `groups/*.md`,
+  `NOTES.md`. **Read `NOTES.md` before re-running.** The non-standard bit: there is
+  **no library build**, so `frontend/ds-entry.js` must name every export (the
   converter's `export * from …` fallback drops `default` exports — that once left 18
-  components out of the bundle while still emitting their cards); and there is **no
-  TypeScript**, so every prop contract is hand-maintained in `cfg.dtsPropsFor` and
-  goes stale the moment a component's props change. `frontend/ds-*.js` are
-  sync-only — the app is still built from `index.html`/`main.jsx`. Details in
-  `CONTRIBUTING.md` → *Design system sync*.
+  components out of the bundle while still emitting their cards). `frontend/ds-*.js`
+  are sync-only — the app is still built from `index.html`/`main.jsx`.
+- **Prop contracts are DERIVED, never hand-written.** The repo has no TypeScript, so
+  props are declared as **JSDoc on the components** and `tsc --emitDeclarationOnly`
+  (`frontend/tsconfig.json`, `npm run types`) emits **`frontend/types/` — committed**,
+  so a prop rename shows up as a contract diff in the same PR. `npm run typecheck`
+  re-emits and diffs; CI fails if they drift. Two rules when annotating: write prop
+  sub-shapes **INLINE, never as a named `@typedef`** — the converter resolves types
+  into the published contract and prints an alias *by name*, so a named typedef emits
+  as a reference the published `.d.ts` never defines (the parse gate does NOT catch
+  it); and per-prop docs are truncated at **120 chars** downstream, so lead with the
+  actionable half of a warning. Details in `CONTRIBUTING.md` → *Design system sync*.
 
 ## The dataset (`ipeds.db`)
 

@@ -299,15 +299,38 @@ design system's public surface. (`frontend/ds-preview-env.js` is the other
 sync-only file: it supplies a Router so `UserMenu`'s `<Link>` can render in a card.
 Neither file is imported by the app.)
 
-**2. There is no TypeScript, so every prop contract is hand-written.** No `.ts`,
-no `.d.ts`, and `react/prop-types` is off — nothing in the repo declares a prop.
-All 45 `<Name>Props` bodies live in `cfg.dtsPropsFor` and there is nothing to
-regenerate them from, so **a prop rename in a component leaves the published
-contract wrong** and the design agent keeps coding against the old API. Re-read the
-component sources on any sync that follows real UI work. The `.d.ts` parse gate
-needs **typescript 5** in `.ds-sync/node_modules`: `npm i typescript` now installs
-7.x, whose Node API dropped `createSourceFile`, and validate then misreports the
-check as *"skipped — typescript not in node_modules"*.
+**2. There is no TypeScript, so the prop contracts are DERIVED from JSDoc.**
+`react/prop-types` is off and nothing else declares a prop, so props are annotated
+as JSDoc on the components themselves and `tsc --emitDeclarationOnly`
+(`frontend/tsconfig.json`) emits `frontend/types/`, which the converter reads.
+`cfg.dtsPropsFor` no longer exists — a prop is declared in exactly one place, next
+to the code it describes.
+
+- `npm run types` regenerates; `cfg.buildCmd` runs it before every sync build.
+- **`frontend/types/` is committed**, so renaming a prop shows up as a contract
+  diff in the same PR rather than silently desyncing the published API.
+- `npm run typecheck` re-emits to a scratch dir and diffs — **CI fails if they
+  drift**. That gate is what makes this trustworthy; confirm it still bites by
+  editing a file under `frontend/types/` and re-running.
+- `checkJs` is deliberately **off**. We emit declarations; we do not type-check
+  the app. Turning that on is a separate and much larger project.
+- Pin **`typescript@^5`**: `npm i typescript` now installs 7.x, whose Node API
+  dropped `createSourceFile`, and the sync's own `.d.ts` parse gate then
+  misreports itself as *"skipped — typescript not in node_modules"*.
+
+**Two annotation rules, both learned the hard way:**
+
+**Write prop sub-shapes INLINE, never as a named `@typedef`.** The converter fully
+resolves types into the published contract but prints a type alias *by name* — so a
+named typedef emits as a reference the published `.d.ts` never defines, and the
+design agent sees an unresolvable type. That is worse than no contract, because it
+looks authoritative. **`[DTS_PARSE]` does not catch it** (undefined names parse
+fine); it was caught by reading the output. Four components hit this on the first
+pass: `DataTable`, `Chart`, `ChartModal`, `BulkBar`.
+
+**Per-prop doc comments are truncated at 120 characters** downstream, so lead with
+the actionable half of a warning. (The old hand-written path passed bodies through
+verbatim and did not truncate — this is a real constraint the derived path adds.)
 
 Previews are graded from real screenshots (`ds-bundle/_screenshots/review/`), and
 that is what catches a wrong contract — the first draft of `DataTable`'s

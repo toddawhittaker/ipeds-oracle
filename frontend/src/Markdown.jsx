@@ -321,6 +321,21 @@ const Anchor = ({ node, ...props }) => <a {...props} target="_blank" rel="norefe
 // GFM gives us tables, which the analyst answers rely on. The source is first run
 // through normalizeMarkdown to repair malformed tables (header/delimiter column
 // mismatch) that GFM would otherwise drop.
+/**
+ * @typedef {object} MarkdownProps
+ * @property {string} children The Markdown source, as a plain string. Rendered with
+ *   GFM. Raw HTML is deliberately NOT enabled (no rehype-raw, default URL sanitizer
+ *   intact) because this renders model output — keep it that way.
+ * @property {number | string | null} [messageId] Message id used for the
+ *   server-side full-result CSV re-run. Honoured only when the answer contains
+ *   EXACTLY ONE table; otherwise the button falls back to exporting the
+ *   transcribed rows.
+ * @property {boolean} [resultsTruncated] True when the stored result rows were cut
+ *   at the server row cap. Adds the "First N rows" caption and the warn-toned sort
+ *   note.
+ */
+
+/** @param {MarkdownProps} props */
 export default function Markdown({ children, messageId, resultsTruncated = false }) {
   const src = typeof children === "string" ? normalizeMarkdown(children) : children;
   const brief = useMemo(() => briefLayout(src), [src]);

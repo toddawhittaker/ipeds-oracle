@@ -14,6 +14,27 @@ import { highlight } from "./mdhighlight.js";
 // .fill() / toHaveValue) keep working unchanged. Reused by the chat composer AND
 // the inline prompt-edit box, which size differently — so the auto-grow cap is
 // read from the element's CSS `max-height` rather than hardcoded here.
+/**
+ * @typedef {object} MarkdownTextareaBaseProps
+ * @property {string} value Controlled value — always the RAW Markdown string. The
+ *   highlighting is a colored <pre> mirror behind a transparent <textarea>, never a
+ *   rich-text model.
+ * @property {(e: React.ChangeEvent<HTMLTextAreaElement>) => void} onChange
+ * @property {(e: React.KeyboardEvent<HTMLTextAreaElement>) => void} [onKeyDown]
+ * @property {string} [placeholder]
+ * @property {string} [id]
+ * @property {string} [className]
+ * @property {boolean} [autoFocus]
+ * @property {number} [maxLength] Hard character cap. The composer keeps this in
+ *   sync with the server's MAX_QUESTION_LEN (4000).
+ */
+
+/**
+ * `@property` cannot express a hyphenated key, so aria-label is intersected in.
+ * @typedef {MarkdownTextareaBaseProps & { "aria-label"?: string }} MarkdownTextareaProps
+ */
+
+/** @type {React.ForwardRefExoticComponent<MarkdownTextareaProps & React.RefAttributes<HTMLTextAreaElement>>} */
 const MarkdownTextarea = forwardRef(function MarkdownTextarea(
   { value, onChange, onKeyDown, placeholder, id, className = "", autoFocus, maxLength,
     "aria-label": ariaLabel }, ref) {

@@ -15,6 +15,23 @@ import { IconShield, IconInfo, IconSun, IconMoon, IconSignOut } from "./icons.js
 // on the trigger, role="menu"/"menuitem" items, arrow-key roving with wrap, Home/End,
 // Escape-closes-and-restores-focus, and click-outside to dismiss. Browser truth
 // (focus, keyboard) is pinned in frontend/e2e/user-menu.spec.js.
+/**
+ * @typedef {object} UserMenuProps
+ * @property {string} email Signed-in address. The avatar's initials are derived
+ *   from it (first.last -> "TW"; a +tag is stripped).
+ * @property {boolean} [isAdmin] Adds the Admin item and lets the attention badge
+ *   render.
+ * @property {number} [attentionTotal] Count of things awaiting an admin. Rendered
+ *   through the capped formatBadge: "" at 0, the number to 99, then "99+".
+ *   Accent-toned — a queue is work waiting, never a red failure.
+ * @property {"light" | "dark"} theme
+ * @property {() => void} onToggleTheme The ONE menu item that deliberately keeps
+ *   the menu open on activation.
+ * @property {() => void} onSignOut
+ * @property {() => void} onAbout
+ */
+
+/** @param {UserMenuProps} props */
 export default function UserMenu({
   email,
   isAdmin,

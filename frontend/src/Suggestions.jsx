@@ -5,6 +5,16 @@ import { normalizeSuggestions } from "./suggestions.js";
 // chips beneath an answer. Clicking submits the question as a FOLLOW-UP turn (which
 // gets its own brief), turning a single answer into an exploration loop. Renders
 // nothing when there are no suggestions.
+/**
+ * @typedef {object} SuggestionsProps
+ * @property {string[]} items Follow-up questions. Non-string and empty entries are
+ *   dropped; an empty list renders nothing.
+ * @property {(question: string) => void} onAsk Called with the clicked question —
+ *   the caller submits it as an ordinary follow-up turn.
+ * @property {boolean} [disabled]
+ */
+
+/** @param {SuggestionsProps} props */
 export default function Suggestions({ items, onAsk, disabled }) {
   const qs = normalizeSuggestions(items);
   if (qs.length === 0) return null;

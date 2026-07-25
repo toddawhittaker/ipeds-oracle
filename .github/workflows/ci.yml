@@ -66,6 +66,14 @@ jobs:
         run: npm run lint
         working-directory: frontend
 
+      # frontend/types/ is COMMITTED and is the design system's published API
+      # contract (see CONTRIBUTING.md -> "Design system sync"). Re-emit it from
+      # the JSDoc and diff: a prop changed without regenerating fails here, which
+      # is the whole point of deriving the contracts instead of hand-writing them.
+      - name: Types are in sync with the source
+        run: npm run typecheck
+        working-directory: frontend
+
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest

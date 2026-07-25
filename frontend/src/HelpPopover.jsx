@@ -14,6 +14,16 @@ import { IconHelp } from "./icons.jsx";
 // info mark), and `className` adds a wrapper modifier (e.g. "help-compact" for a
 // smaller inline trigger). State/close behaviour lives here; the visual styling is
 // `.help`/`.help-popover` in styles.css.
+/**
+ * @typedef {object} HelpPopoverProps
+ * @property {string} label Accessible name for the trigger button.
+ * @property {React.ReactNode} children Popover body.
+ * @property {React.ComponentType<{ size?: number }>} [icon] Trigger glyph. Defaults
+ *   to IconHelp; pass any icon from this system.
+ * @property {string} [className]
+ */
+
+/** @param {HelpPopoverProps} props */
 export default function HelpPopover({ label, children, icon: Icon = IconHelp, className = "" }) {
   const [open, setOpen] = useState(false);
   const id = useId();

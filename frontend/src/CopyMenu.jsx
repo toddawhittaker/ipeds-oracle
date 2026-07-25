@@ -12,6 +12,15 @@ import { IconCopy, IconCheck, IconChevronDown } from "./icons.jsx";
 // The copy LOGIC stays in Chat.jsx: onCopyMarkdown/onCopyHtml just call its
 // existing doCopy(); `copied` flips the trigger glyph to a checkmark briefly so
 // the user gets the same "Copied!" acknowledgement the text buttons gave.
+/**
+ * @typedef {object} CopyMenuProps
+ * @property {() => void} onCopyMarkdown
+ * @property {() => void} onCopyHtml
+ * @property {boolean} [copied] Flips the trigger to a "Copied!" check. The caller
+ *   owns the reset timer.
+ */
+
+/** @param {CopyMenuProps} props */
 export default function CopyMenu({ onCopyMarkdown, onCopyHtml, copied = false }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);

@@ -1,5 +1,24 @@
 import React from "react";
 
+/**
+ * Every icon in this module takes the same props. Stroke is `currentColor` at 2px
+ * on a 24-viewBox, so an icon inherits its button's text colour — recolour with
+ * `color`, never a fill prop.
+ *
+ * @typedef {object} IconBaseProps
+ * @property {number} [size] Width and height in px. Defaults to 15.
+ * @property {string} [className]
+ * @property {React.CSSProperties} [style]
+ */
+
+/**
+ * `@property` cannot express a hyphenated key, so the aria props are intersected
+ * in — that keeps the documented props above readable rather than collapsing the
+ * whole typedef into one inline object literal.
+ *
+ * @typedef {IconBaseProps & { "aria-hidden"?: boolean | "true" | "false" }} IconProps
+ */
+
 // Small inline stroke icons (currentColor, so they inherit button text color).
 function Svg({ size = 15, children, ...rest }) {
   return (
@@ -11,6 +30,7 @@ function Svg({ size = 15, children, ...rest }) {
   );
 }
 
+/** @param {IconProps} p */
 export const IconTrash = (p) => (
   <Svg {...p}>
     <path d="M3 6h18" />
@@ -20,12 +40,15 @@ export const IconTrash = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconClose = (p) => (<Svg {...p}><path d="M6 6l12 12M18 6L6 18" /></Svg>);
 
 // Approve a pending access request (checkmark).
+/** @param {IconProps} p */
 export const IconCheck = (p) => (<Svg {...p}><path d="M20 6 9 17l-5-5" /></Svg>);
 
 // Allow a blocked address to request access again (open padlock).
+/** @param {IconProps} p */
 export const IconUnlock = (p) => (
   <Svg {...p}>
     <rect x="3" y="11" width="18" height="11" rx="2" />
@@ -33,8 +56,10 @@ export const IconUnlock = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconSend = (p) => (<Svg {...p}><path d="M4 12h14M12 5l7 7-7 7" /></Svg>);
 
+/** @param {IconProps} p */
 export const IconEdit = (p) => (
   <Svg {...p}>
     <path d="M12 20h9" />
@@ -42,6 +67,7 @@ export const IconEdit = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconCopy = (p) => (
   <Svg {...p}>
     <rect x="9" y="9" width="11" height="11" rx="2" />
@@ -50,6 +76,7 @@ export const IconCopy = (p) => (
 );
 
 // Data-labels toggle on a chart (a price-tag glyph).
+/** @param {IconProps} p */
 export const IconTag = (p) => (
   <Svg {...p}>
     <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z" />
@@ -58,6 +85,7 @@ export const IconTag = (p) => (
 );
 
 // Maximize a chart into a modal (arrows to the four corners).
+/** @param {IconProps} p */
 export const IconMaximize = (p) => (
   <Svg {...p}>
     <path d="M8 3H5a2 2 0 0 0-2 2v3" />
@@ -67,6 +95,7 @@ export const IconMaximize = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconRerun = (p) => (
   <Svg {...p}>
     <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -76,6 +105,7 @@ export const IconRerun = (p) => (
 
 // Shield + / shield − for promote-to-admin / remove-admin. Shields (not up/down
 // arrows) so they never read as the table's sort carets.
+/** @param {IconProps} p */
 export const IconShieldPlus = (p) => (
   <Svg {...p}>
     <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
@@ -83,6 +113,7 @@ export const IconShieldPlus = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconShieldMinus = (p) => (
   <Svg {...p}>
     <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
@@ -91,6 +122,7 @@ export const IconShieldMinus = (p) => (
 );
 
 // Plain shield for the Admin menu item (no +/- — that's the promote/demote pair).
+/** @param {IconProps} p */
 export const IconShield = (p) => (
   <Svg {...p}>
     <path d="M12 3l7 3v5c0 4.5-3 7.4-7 9-4-1.6-7-4.5-7-9V6l7-3z" />
@@ -98,6 +130,7 @@ export const IconShield = (p) => (
 );
 
 // Upload glyph (tray + up-arrow) for the CSV drop target.
+/** @param {IconProps} p */
 export const IconUpload = (p) => (
   <Svg {...p}>
     <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
@@ -106,6 +139,7 @@ export const IconUpload = (p) => (
 );
 
 // Exclamation-in-triangle for warning/danger confirmation modals.
+/** @param {IconProps} p */
 export const IconWarning = (p) => (
   <Svg {...p}>
     <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -114,6 +148,7 @@ export const IconWarning = (p) => (
 );
 
 // Sun / moon for the light-dark theme toggle (replaces the old ☀️/🌙 emoji).
+/** @param {IconProps} p */
 export const IconSun = (p) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="4" />
@@ -121,6 +156,7 @@ export const IconSun = (p) => (
   </Svg>
 );
 
+/** @param {IconProps} p */
 export const IconMoon = (p) => (
   <Svg {...p}>
     <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
@@ -128,6 +164,7 @@ export const IconMoon = (p) => (
 );
 
 // GitHub mark (filled). Uses its own <svg> — the shared Svg helper is stroke-only.
+/** @param {IconProps} props */
 export const IconGitHub = ({ size = 18, ...rest }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor"
        aria-hidden="true" focusable="false" {...rest}>
@@ -136,6 +173,7 @@ export const IconGitHub = ({ size = 18, ...rest }) => (
 );
 
 // Info "i" in a circle for the About dialog trigger.
+/** @param {IconProps} p */
 export const IconInfo = (p) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />
@@ -144,6 +182,7 @@ export const IconInfo = (p) => (
 );
 
 // Leave / sign out (door + arrow).
+/** @param {IconProps} p */
 export const IconSignOut = (p) => (
   <Svg {...p}>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -152,25 +191,32 @@ export const IconSignOut = (p) => (
 );
 
 // Small downward caret — the disclosure affordance on a menu button (e.g. Copy ▾).
+/** @param {IconProps} p */
 export const IconChevronDown = (p) => (<Svg {...p}><path d="M6 9l6 6 6-6" /></Svg>);
 
 // Left / right chevrons — the sidebar collapse / expand affordance (replace the
 // literal « » text glyphs so the control matches the rest of the icon set).
+/** @param {IconProps} p */
 export const IconChevronLeft = (p) => (<Svg {...p}><path d="M15 18l-6-6 6-6" /></Svg>);
+/** @param {IconProps} p */
 export const IconChevronRight = (p) => (<Svg {...p}><path d="M9 18l6-6-6-6" /></Svg>);
 
 // Plus — the "New chat" affordance (replaces the literal + text glyph).
+/** @param {IconProps} p */
 export const IconPlus = (p) => (<Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>);
 
 // Pause / play — the persistent stop control on the auto-rotating login gallery.
+/** @param {IconProps} p */
 export const IconPause = (p) => (
   <Svg {...p}><path d="M9 5v14M15 5v14" /></Svg>
 );
+/** @param {IconProps} p */
 export const IconPlay = (p) => (
   <Svg {...p} fill="currentColor" stroke="none"><path d="M7 5l12 7-12 7z" /></Svg>
 );
 
 // Question mark in a circle for the format-help popover trigger.
+/** @param {IconProps} p */
 export const IconHelp = (p) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />
