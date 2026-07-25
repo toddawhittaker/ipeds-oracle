@@ -938,6 +938,80 @@ def _settle_revision(res: AgentResult, answer: str, draft_answer: str,
     return draft_answer
 
 
+async def _finalize_answer(res: AgentResult, answer: str, question: str, *,
+                           allow_figure_retry: bool, allow_degrade: bool) -> None:
+    """Settle a raw model answer into the shipped one, in ONE place.
+
+    Both terminal paths — the normal no-tool-call answer and the S5
+    exhaustion/stranded tail — ran this same sequence inline, and they had
+    already drifted TWICE: the S5 tail was missing the forced re-emit and the
+    figure retry, and the second drift (a stranded critic revision skipping the
+    settle gate entirely) shipped reviewer-rebuttal prose to users — the P0 fixed
+    in #205, a reintroduction of the #43 regression through a door that forgot
+    the gate.
+
+    The failure mode being designed out is a difference that exists only as a
+    MISSING LINE, which is invisible in review. Every real difference between the
+    paths is now a named parameter with a reason:
+
+    `allow_figure_retry` — only the normal path. A stranded draft was already
+    critic-reviewed; the S5 synthesis ran with tools disabled, so a retry there
+    would chase a figure the turn could not have grounded anyway.
+
+    `allow_degrade` — only S5. Acting on the grounding verdict (rather than
+    merely recording it) is deliberately scoped to the highest-risk path; the
+    normal path keeps shipping first-pass ungrounded figures observe-only (#163).
+    The caller also gates on `res.exhausted`, so a stranded draft — reviewed,
+    not a tools-disabled best-effort — is never replaced by _EXHAUSTION_DEGRADE.
+
+    Mutates `res` (answer/figure/suggestions/leaked/grounding stamps). Emitting
+    the events stays with the callers via `_final_events`, since only an async
+    generator can yield into the stream.
+    """
+    # Repair mis-wrapped ![figure]/![chart] artifacts into real fences FIRST, so a
+    # figure is extracted rather than leaked or duplicated, and a chart reaches
+    # the frontend as a normal fence.
+    answer = _normalize_misfenced_blocks(answer)
+    raw_answer = answer
+    answer, res.figure = _extract_figure(answer)
+    answer, res.suggestions = _extract_suggestions(answer)
+    res.answer = answer
+    # Grounding stamps run on the FINAL settled prose, so they always describe
+    # the answer that actually ships.
+    _stamp_grounding(res, raw_answer)
+    _stamp_table_grounding(res)
+    if allow_figure_retry:
+        # Runs AFTER the critic settled the winning answer, so it never chases a
+        # draft that is about to revert.
+        await _maybe_retry_figure(res, question, res.answer)
+    # Last-resort scrubbers (the fence-fallback net): strip residual
+    # figure/chart-shaped JSON a mangled fence left in the prose, and any leaked
+    # DeepSeek tool-call markup. `leaked` records debris caught AND removed.
+    res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
+    res.answer, markup_removed = _strip_tool_markup(res.answer)
+    res.leaked = res.leaked or markup_removed
+    if allow_degrade and res.exhausted and _s5_fabricated(res):
+        # A struggling turn, often on partial data, that produced a confident
+        # synthesis grounding against NOTHING is a fabrication — ship an honest
+        # "couldn't finish" instead of an invented table.
+        res.answer = _EXHAUSTION_DEGRADE
+        res.figure = None
+        res.suggestions = None
+        res.exhaustion_degraded = True
+
+
+def _final_events(res: AgentResult):
+    """The terminal event sequence, identical on both paths. A plain generator so
+    each caller can `for ev in _final_events(res): yield ev` — the events must be
+    yielded by the async generator itself."""
+    if res.figure:
+        yield {"type": "figure", "figure": res.figure}
+    if res.suggestions:
+        yield {"type": "suggestions", "suggestions": res.suggestions}
+    yield {"type": "answer", "text": res.answer}
+    yield {"type": "done", "result": res}
+
+
 async def stream_agent(question: str, *, history: list[dict] | None = None,
                        skills_block: str = "",
                        prior_results: list[QueryResult] | None = None
@@ -1164,45 +1238,16 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 #    it falls back to the draft too; the hardened
                 #    revision_instruction steers real corrections to re-run run_sql.
                 answer = _settle_revision(res, answer, draft_answer, sql_count_at_critique)
-                # Extract the structured blocks from the FINAL answer (after the
-                # critic revert settles it), so they always match the winning prose.
-                # First repair any mis-wrapped ![figure]/![chart] artifacts into
-                # real fences, so a figure is extracted (not leaked/duplicated) and
-                # a chart reaches the frontend as a normal fence.
-                answer = _normalize_misfenced_blocks(answer)
-                raw_answer = answer
-                answer, res.figure = _extract_figure(answer)
-                answer, res.suggestions = _extract_suggestions(answer)
-                res.answer = answer
                 res.model_used = model
                 res.last_result = last_sql_result["result"]
                 res.results = last_sql_result["results"]
-                _stamp_grounding(res, raw_answer)
-                # Observe-only: does the answer's result TABLE reproduce from the
-                # retained rows? (app/grounding.py) Runs on the FINAL settled
-                # answer, same as the figure stamp above.
-                _stamp_table_grounding(res)
-                # Structural recovery: if this data answer should have led with a
-                # figure but emitted none, one targeted call tries to recover it
-                # (see _maybe_retry_figure). Runs AFTER the critic has settled the
-                # winning answer, so it never chases a draft that's about to revert.
-                await _maybe_retry_figure(res, question, res.answer)
-                # Last-resort scrubber (fence-fallback net): strip any residual
-                # figure/chart-shaped JSON that a mangled fence left in the prose,
-                # whatever the wrapping, so raw JSON never reaches the user.
-                # res.leaked records that debris was caught (and removed) — the
-                # same telemetry, now a scrub rate rather than a ship rate.
-                res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
-                # Also strip any leaked DeepSeek tool-call markup (a mis-emitted
-                # tool call that surfaced as answer text) — same debris class.
-                res.answer, markup_removed = _strip_tool_markup(res.answer)
-                res.leaked = res.leaked or markup_removed
-                if res.figure:
-                    yield {"type": "figure", "figure": res.figure}
-                if res.suggestions:
-                    yield {"type": "suggestions", "suggestions": res.suggestions}
-                yield {"type": "answer", "text": res.answer}
-                yield {"type": "done", "result": res}
+                # Everything from here is shared with the S5 tail — see
+                # _finalize_answer for why each difference is a named flag.
+                # The figure retry is normal-path-only; the degrade gate is not.
+                await _finalize_answer(res, answer, question,
+                                       allow_figure_retry=True, allow_degrade=False)
+                for ev in _final_events(res):
+                    yield ev
                 return
 
             turn_had_fail = False
@@ -1403,36 +1448,14 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     # Reflect any correction-round queries in the retained results.
                     res.results = last_sql_result["results"]
                     res.last_result = last_sql_result["result"]
-            final = _normalize_misfenced_blocks(final)
-            raw_final = final
-            final, res.figure = _extract_figure(final)
-            final, res.suggestions = _extract_suggestions(final)
-            res.answer = final
-            _stamp_grounding(res, raw_final)
-            _stamp_table_grounding(res)
-            res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
-            res.answer, markup_removed = _strip_tool_markup(res.answer)
-            res.leaked = res.leaked or markup_removed
-            # Grounding gate (S5 ONLY). This is the highest-risk path — a struggling
-            # turn, often on partial data, that here produced a confident synthesis.
-            # If its numbers ground against NOTHING it is a fabrication (chat/32's
-            # 0/15-cell invented table); ship an honest "couldn't finish" instead.
-            # The normal path stays observe-only (first-pass ungrounded figures ship,
-            # #163); acting on the verdict is deliberately scoped to exhaustion.
-            # A stranded draft (res.exhausted False) never reaches this gate —
-            # it was already critic-reviewed with tools enabled, not a
-            # tools-disabled best-effort synthesis.
-            if res.exhausted and _s5_fabricated(res):
-                res.answer = _EXHAUSTION_DEGRADE
-                res.figure = None
-                res.suggestions = None
-                res.exhaustion_degraded = True
-            if res.figure:
-                yield {"type": "figure", "figure": res.figure}
-            if res.suggestions:
-                yield {"type": "suggestions", "suggestions": res.suggestions}
-            yield {"type": "answer", "text": res.answer}
-            yield {"type": "done", "result": res}
+            # Same settle sequence as the normal path — see _finalize_answer.
+            # No figure retry here (a tools-disabled synthesis could not have
+            # grounded one); the degrade gate is S5-only and additionally gated
+            # on res.exhausted, so a stranded draft never reaches it.
+            await _finalize_answer(res, final, question,
+                                   allow_figure_retry=False, allow_degrade=True)
+            for ev in _final_events(res):
+                yield ev
             return
 
         res.error = "Reached max tool iterations without a final answer."
