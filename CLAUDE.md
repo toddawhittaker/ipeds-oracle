@@ -422,6 +422,23 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   Exhausted; that's deliberate (overloading the flag is what corrupted it), and a
   separate `critic_unsettled` counter is the follow-up if the rate matters. Pinned by
   the `[[critic-stranded-revision]]` cases in `test_agent_loop.py`.
+- **Both terminators are ONE function now: `_finalize_answer`.** The normal
+  no-tool-call path and the S5 exhaustion/stranded tail ran the same settle
+  sequence inline — normalize → extract figure/suggestions → grounding stamps →
+  scrub → emit — and had already drifted **twice**, the second time into the #205
+  P0 above. The failure mode is a difference that exists only as a **missing
+  line**, invisible in review. Every real difference is now a **named flag with a
+  reason**: `allow_figure_retry` (normal path only — a tools-disabled S5 synthesis
+  could not have grounded a recovered figure) and `allow_degrade` (S5 only, and
+  additionally gated on `res.exhausted`, so a reviewed stranded draft is never
+  replaced by `_EXHAUSTION_DEGRADE`). Both flags are **proven load-bearing**:
+  flipping `allow_figure_retry` off fails the three retry contracts, flipping
+  `allow_degrade` off fails the S5 gate contract. The terminal events live in
+  `_final_events` (a plain generator — only the async generator itself can yield
+  into the stream). `res.model_used`/`results`/`last_result` stay at the call
+  sites: they describe the calling context, not the settle. Behaviour-neutral —
+  `test_agent_loop.py`/`test_critic.py`/`test_grounding.py` pass **untouched**,
+  and the NL→SQL eval stayed 3/3 with no escalation.
 - **Structured emission** (`config.structured_emission_enabled`, **DEFAULTS ON**;
   validated 100%-structured / 0-leaks across four vendors). The durable,
   model-agnostic fix for mangled fences: instead of free-typing
