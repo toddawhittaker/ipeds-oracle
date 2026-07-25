@@ -1,4 +1,5 @@
 // Thin API client. Cookies (session) are sent automatically (same-origin).
+import { detailText } from "./authcopy.js";
 
 // Every failed request throws one of these. Before it existed, `j()` threw a bare
 // Error whose message was the RAW RESPONSE BODY and discarded the status
@@ -27,7 +28,9 @@ async function _apiError(r) {
   const text = await r.text().catch(() => "");
   let detail = "";
   try {
-    detail = JSON.parse(text)?.detail || "";
+    // detailText, not `|| ""`: a pydantic 422 sends detail as an ARRAY, which
+    // the Error constructor would stringify to "[object Object]". See authcopy.
+    detail = detailText(JSON.parse(text)?.detail);
   } catch {
     // Not JSON. FastAPI always sends {"detail": ...}, but a reverse proxy or
     // tunnel in front of it does not — and a plain-text "upstream timed out" is

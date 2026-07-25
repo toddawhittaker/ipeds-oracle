@@ -170,6 +170,47 @@ def test_empty_question_rejected():
         assert r.status_code == 400, r.text
 
 
+def test_oversized_question_rejected_before_anything_is_written():
+    """A question is a question, not a payload.
+
+    BodyLimitMiddleware caps the whole request at 10 MB, but under that ceiling
+    an unbounded question is still written to app.db TWICE (the user message and
+    usage_log.question) and sent to the provider as billed tokens. The rejection
+    has to land BEFORE any of that: the regression worth catching is not the
+    status code but a row surviving it, so this asserts the conversation count is
+    unchanged rather than just reading the 400.
+    """
+    from app.routers.chat import MAX_QUESTION_LEN
+
+    with TestClient(app) as c:
+        _login(c)
+        with connect() as con:
+            before = con.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+
+        r = c.post("/api/chat/stream", json={"question": "x" * (MAX_QUESTION_LEN + 1)})
+        assert r.status_code == 400, r.text
+        # A readable sentence, not pydantic's {"detail": [{...}]} array — which
+        # is why this is a hand-raised 400 and not Field(max_length=...).
+        assert isinstance(r.json()["detail"], str), r.text
+        assert "too long" in r.json()["detail"].lower(), r.text
+
+        with connect() as con:
+            after = con.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+            msgs = con.execute(
+                "SELECT COUNT(*) FROM messages WHERE length(content) > ?",
+                (MAX_QUESTION_LEN,)).fetchone()[0]
+        assert after == before, "an over-long question must not create a conversation"
+        assert msgs == 0, "an over-long question must never reach messages"
+
+    # The boundary itself is allowed through (it is a cap, not a target) — this
+    # gets past the length check and fails later for want of a dataset/model,
+    # which is enough to prove the guard did not fire.
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/chat/stream", json={"question": "y" * MAX_QUESTION_LEN})
+        assert r.status_code != 400 or "too long" not in r.text.lower(), r.text
+
+
 def test_stream_unknown_conversation_id_404():
     with TestClient(app) as c:
         _login(c)
@@ -1150,6 +1191,8 @@ def test_load_prior_results_respects_before_id_window():
 def run():
     print("chat router contract:")
     check("empty question is rejected (400)", test_empty_question_rejected)
+    check("an over-long question is rejected before anything is written",
+          test_oversized_question_rejected_before_anything_is_written)
     check("streaming into an unknown conversation_id 404s",
           test_stream_unknown_conversation_id_404)
     check("streaming into another user's conversation 404s",

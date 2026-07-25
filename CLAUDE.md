@@ -737,6 +737,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   the modules that fire many turns pin `CHAT_RATE_MAX_PER_USER=0` at import
   (`test_chat_router`/`test_guard`/`test_security`); `test_rate_limit.py` sets a tight
   cap and owns the 429 contract.
+- **A question is capped at `MAX_QUESTION_LEN` (4,000 chars).** `BodyLimitMiddleware`
+  bounds the whole request at 10 MB, but under that ceiling an unbounded question is
+  still written to `app.db` **twice** (the user message + `usage_log.question`) and
+  billed as provider tokens. Enforced as a hand-raised **400 with a readable
+  sentence**, matching `MAX_TITLE_LEN` — deliberately NOT `Field(max_length=…)`,
+  whose 422 sends `detail` as a **LIST**. Mirrored client-side by the composer's
+  `maxLength` (keep the two in sync), so the server cap is the backstop, not the UX.
+  `authcopy.detailText` flattens a pydantic detail array anyway — FastAPI raises 422
+  itself on any malformed body, and the raw array would reach the user as
+  `[object Object]`, the same leak `ApiError` exists to end.
+- **`GET /api/auth/me` reports the loaded collection years**, from ONE `ipeds_years()`
+  probe that also derives `has_data` (so the two can never disagree). The chat empty
+  state used to state the range as fact — "collection years 2019-20 through
+  2024-25" — while every deployment picks its own years via Admin → Imports and
+  `_years` is the only authority. The wording lives in the pure `years.js`
+  (vitest-pinned): `year` is the **ending** year, so 2020 renders "2019-20", and a
+  single loaded year reads "collection year 2024-25", never "X through X". Guard the
+  empties before `Number()` — `Number(null)` is `0` and **finite**, so a naive
+  `isFinite` check renders a missing bound as year zero ("-1-00 through 2024-25").
+  Pinned in `years.test.js` + the empty-state describe in `chat-interactions.spec.js`
+  (which asserts the text FOLLOWS the mocked bounds, so a re-hardcoded literal fails).
 - **CSRF defense in depth:** the session cookie is `HttpOnly`+`Secure`+`SameSite=Lax`;
   on top of that a pure-ASGI `CSRFMiddleware` (`csrf.py`) refuses any state-changing
   request whose `Origin` matches neither the request `Host` nor `APP_PUBLIC_URL`.

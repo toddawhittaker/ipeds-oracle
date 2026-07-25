@@ -9,6 +9,21 @@
 // went inert) and an ordinary rate-limit showed the literal text
 // ⚠️ {"detail":"Too many requests — please slow down and try again in a moment."}
 
+// FastAPI's OWN 422 — raised by pydantic before any handler runs, on a
+// malformed body (a non-integer conversation_id, a missing field) — sends
+// `detail` as an ARRAY of {loc, msg, type} objects rather than a string. Passing
+// that array to `new ApiError(...)` lets the Error constructor stringify it to
+// "[object Object]", which is the raw-body failure above wearing a different
+// hat: nothing in this codebase raises a 422 by hand, so it is the one status
+// that slips past every hand-written message. Flatten to the human `msg` parts.
+export function detailText(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d) => d?.msg).filter((m) => typeof m === "string" && m).join("; ");
+  }
+  return "";
+}
+
 export const SESSION_EXPIRED =
   "Your session expired. Sign in again to pick up where you left off — your chats are saved.";
 

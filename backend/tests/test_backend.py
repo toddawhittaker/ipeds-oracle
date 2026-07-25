@@ -56,16 +56,29 @@ def run():
             f"/me must include a boolean has_data flag: {me.text}"
         print("  ✓ /me includes a boolean has_data flag")
 
+        # /me reports the LOADED year range so the chat empty state can name it
+        # instead of hardcoding one. Both fields come from a single ipeds_years()
+        # probe, so they can never disagree — has_data=True with years=None (or
+        # the reverse) is the contradiction worth guarding.
+        yrs = me.json().get("years")
+        assert (yrs is not None) == me.json()["has_data"], \
+            f"/me years and has_data must agree: {me.text}"
+        if yrs is not None:
+            assert isinstance(yrs["min"], int) and isinstance(yrs["max"], int), me.text
+            assert yrs["min"] <= yrs["max"], me.text
+            print(f"  ✓ /me reports the loaded year range {yrs['min']}–{yrs['max']}")
+
         from app.routers import auth as auth_router
-        orig_has_data = auth_router.has_ipeds_data
-        auth_router.has_ipeds_data = lambda: False
+        orig_years = auth_router.ipeds_years
+        auth_router.ipeds_years = lambda: []
         try:
             me_nodata = c.get("/api/auth/me")
         finally:
-            auth_router.has_ipeds_data = orig_has_data
+            auth_router.ipeds_years = orig_years
         assert me_nodata.status_code == 200, me_nodata.text
         assert me_nodata.json().get("has_data") is False, me_nodata.text
-        print("  ✓ /me reports has_data=False when patched to the no-data state")
+        assert me_nodata.json().get("years") is None, me_nodata.text
+        print("  ✓ /me reports has_data=False + years=None in the no-data state")
 
         # --- TRUST_LLM_PROVIDER parse (privacy warning gate) ----------------
         # The parser must FAIL SAFE: only explicit opt-in tokens are True; every
