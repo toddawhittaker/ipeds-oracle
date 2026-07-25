@@ -260,6 +260,8 @@ export async function mockStreamChat(page, {
   title = null,
   durationMs = null,
   figureGrounding = null,
+  tableGrounding = null,
+  tableCellsChecked = null,
   delayMs = 0,
 } = {}) {
   const calls = [];
@@ -288,7 +290,12 @@ export async function mockStreamChat(page, {
         // The server's verdict on whether the figure's number reproduces from
         // the query results — drives the quiet "verified" mark on a live turn
         // without waiting for a reload.
-        ...(figureGrounding != null ? { figure_grounding: figureGrounding } : {}) },
+        ...(figureGrounding != null ? { figure_grounding: figureGrounding } : {}),
+        // Same, for the answer's TABLE numbers. The count travels with the
+        // status because the mark states it ("40 values reproduced"); a status
+        // with no count renders nothing at all.
+        ...(tableGrounding != null ? { table_grounding: tableGrounding } : {}),
+        ...(tableCellsChecked != null ? { table_cells_checked: tableCellsChecked } : {}) },
     ];
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });

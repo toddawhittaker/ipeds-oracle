@@ -568,6 +568,69 @@ def test_figure_is_persisted_and_returned_on_reload():
         assert user_msg["figure"] is None, user_msg["figure"]
 
 
+def test_table_grounding_is_persisted_and_in_the_done_event():
+    """The table's verdict has to reach the READER, live and after a reload.
+
+    check_table graded every measure cell from the day it shipped, but the result
+    landed only on usage_log — an admin stat, invisible to the person about to
+    copy those numbers into a report. Without BOTH halves of this the mark can't
+    render: no done-event field means the live turn shows nothing until refresh,
+    and no persisted column means it vanishes on reopen. Exactly the gap #215
+    closed for the figure.
+
+    Also pins that the two COUNTS travel with the status — the wording states
+    "N values", so a status without its counts renders an empty claim.
+    """
+    async def _table_agent(question, *, history=None, skills_block="", prior_results=None):
+        yield {"type": "answer", "text": "| a |\n| --- |\n| 1 |"}
+        yield {"type": "done", "result": AgentResult(
+            answer="| a |\n| --- |\n| 1 |", model_used="test", sql_log=["SELECT 1"],
+            table_grounding="matched", table_cells_checked=12, table_cells_matched=12,
+            prompt_tokens=1, completion_tokens=1)}
+
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_skills_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        chat_router.stream_agent = _table_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q, _uid=None: None
+        skills.cache_store = lambda *a, **k: None
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a table question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_skills_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        # Live: the mark renders without waiting for a reload.
+        assert done.get("table_grounding") == "matched", done
+        assert done.get("table_cells_checked") == 12, done
+        assert done.get("table_cells_matched") == 12, done
+
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        # Reloaded: same verdict, same counts, straight off the message row.
+        # .get() on purpose — if get_conversation stops SELECTing these the
+        # failure must be a readable assertion, not a KeyError that aborts the
+        # whole suite and hides every test after it.
+        assert assistant.get("table_grounding") == "matched", assistant
+        assert assistant.get("table_cells_checked") == 12, assistant
+        assert assistant.get("table_cells_matched") == 12, assistant
+        # An ungraded row stores NULL, not 0 — "0 values reproduced" would be a
+        # claim, where NULL correctly renders no mark at all.
+        user_msg = next(m for m in msgs if m["role"] == "user")
+        assert user_msg.get("table_grounding") is None, user_msg
+        assert user_msg.get("table_cells_checked") is None, user_msg
+
+
 def test_extract_suggestions_parses_and_strips_the_fence():
     """The server pulls the ```followups fence (a JSON array of drill-down
     questions) into structured data and ALWAYS strips it from the prose."""
@@ -1271,6 +1334,8 @@ def run():
           test_extract_figure_parses_and_strips_the_fence)
     check("the figure is persisted and returned on reload",
           test_figure_is_persisted_and_returned_on_reload)
+    check("table grounding is persisted and carried on the done event",
+          test_table_grounding_is_persisted_and_in_the_done_event)
     check("_extract_suggestions parses + strips the followups fence",
           test_extract_suggestions_parses_and_strips_the_fence)
     check("suggestions are persisted and returned on reload",

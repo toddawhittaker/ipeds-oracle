@@ -305,6 +305,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     # it would have grounded a recited number against.
                     results=cached.get("results"),
                     results_truncated=cached.get("results_truncated", False))
+                # NB no figure_grounding / table_grounding here, so a cache hit
+                # carries NEITHER mark. Deliberate, and the same call #215 made:
+                # the rows above make re-grading possible now, but doing it would
+                # move the Grounded-figures/cells denominators, and a measurement
+                # shouldn't shift inside a replay path. The replayed answer is
+                # byte-identical to a turn that WAS graded; it just doesn't say so.
                 done = {"type": "done", "cached": True, "message_id": msg_id,
                         "user_message_id": user_msg_id,
                         "results_truncated": bool(cached.get("results_truncated"))}
@@ -470,7 +476,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     # message row stores, so live and reloaded agree.
                     "results_truncated": any(r.truncated for r in (result.results or [])),
                     # …and marks a reproduced figure "verified" without one.
-                    "figure_grounding": result.figure_grounding or None}
+                    "figure_grounding": result.figure_grounding or None,
+                    # …and likewise for the table's numbers. Same values the
+                    # message row stores, so live and reloaded agree.
+                    "table_grounding": result.table_grounding or None,
+                    "table_cells_checked": result.table_cells_checked,
+                    "table_cells_matched": result.table_cells_matched}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
                 title = await generate_title(question, answer)
@@ -556,8 +567,9 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
             "thinking, figure, suggestions, clarify, results, model_used, tokens, "
-            "duration_ms, results_truncated, figure_grounding, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "duration_ms, results_truncated, figure_grounding, table_grounding, "
+            "table_cells_checked, table_cells_matched, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
@@ -568,7 +580,14 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              # STATUS only — the derivation string stays backend telemetry on
              # usage_log. This is what lets a reproduced figure keep its
              # "verified" mark across a reload.
-             figure_grounding or None, now))
+             figure_grounding or None,
+             # Same idea for the table: status + the two counts, so the answer can
+             # say how many of its numbers reproduced. NULL (not 0) when nothing
+             # was graded — a cache hit and a refusal pass table_grounding=None,
+             # and NULL is what renders no mark rather than a "0 values" claim.
+             table_grounding or None,
+             int(table_cells_checked) if table_grounding else None,
+             int(table_cells_matched) if table_grounding else None, now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -623,7 +642,8 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
             raise HTTPException(404, "Not found.")
         rows = con.execute(
             "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
-            "model_used, created_at, duration_ms, results_truncated, figure_grounding "
+            "model_used, created_at, duration_ms, results_truncated, figure_grounding, "
+            "table_grounding, table_cells_checked, table_cells_matched "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:

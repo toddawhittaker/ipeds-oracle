@@ -7,8 +7,63 @@ import {
   csvLabel,
   sortNoteTone,
   sortScopeNote,
+  tableTrustNote,
   truncationCaption,
 } from "./tabletruth.js";
+
+describe("tableTrustNote", () => {
+  it("marks a fully reproduced answer, stating the count", () => {
+    const note = tableTrustNote({ status: "matched", cellsChecked: 40, cellsMatched: 40 });
+    expect(note).not.toBeNull();
+    expect(note.tone).toBe("ok");
+    expect(note.text).toContain("40");
+    // "N values", never "all" — check_table grades MEASURE columns only, so a
+    // rank ordinal and every dimension column went ungraded. Claiming "all"
+    // would assert coverage the check never had.
+    expect(note.text).not.toMatch(/\ball\b/i);
+    // Reproduction, not correctness — the tooltip must not promise the query
+    // asked the right question.
+    expect(note.title).toMatch(/not that the query/i);
+  });
+
+  it("says NOTHING when the check failed, however it failed", () => {
+    // THE regression this guards, and it is a product decision, not an
+    // omission: a "% change" column is computed across a row while every
+    // reconciler op runs down a column, so a table whose every number is
+    // CORRECT grades `partial` — or `unmatched` when that derived column is the
+    // only measure. A caution keyed on either would call correct answers wrong.
+    // Pinned server-side in backend/tests/test_grounding.py ("KNOWN BLIND SPOT").
+    for (const status of ["partial", "unmatched"]) {
+      expect(tableTrustNote({ status, cellsChecked: 22, cellsMatched: 9 })).toBeNull();
+    }
+  });
+
+  it("says nothing when nothing was checked", () => {
+    // `unchecked` = no retained rows to compare against; `no_table` = no numeric
+    // table. Neither is evidence about the numbers, so neither may render.
+    for (const status of ["unchecked", "no_table"]) {
+      expect(tableTrustNote({ status, cellsChecked: 0, cellsMatched: 0 })).toBeNull();
+    }
+  });
+
+  it("says nothing for an absent or unrecognised verdict", () => {
+    // A pre-migration message, a cache hit, and a refusal all arrive as null —
+    // the default must be silence, never a claim.
+    for (const arg of [undefined, {}, { status: null }, { status: "matched" },
+                       { status: "matched", cellsChecked: 0 },
+                       { status: "matched", cellsChecked: null },
+                       { status: "wat", cellsChecked: 5 }]) {
+      expect(tableTrustNote(arg)).toBeNull();
+    }
+  });
+
+  it("keeps the count grammatical and readable at any size", () => {
+    expect(tableTrustNote({ status: "matched", cellsChecked: 1 }).text).toMatch(/\b1 value\b/);
+    expect(tableTrustNote({ status: "matched", cellsChecked: 2 }).text).toMatch(/\b2 values\b/);
+    expect(tableTrustNote({ status: "matched", cellsChecked: 1294 }).text)
+      .toMatch(/1,294 values/);
+  });
+});
 
 describe("canCaptionTruncation", () => {
   const base = { truncated: true, tableCount: 1, messageId: 12 };

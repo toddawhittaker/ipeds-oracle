@@ -379,8 +379,16 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   but with **`allow_dimension=False`**: a measure cell is verified only by a MEASURE
   result-column, never a code/dimension column it merely collides with (a small
   count "3" must not ground against an `awlevel` 3 — the figure path keeps
-  `allow_dimension=True`, since a headline can legitimately BE a year/code). A
-  legitimately computed measure (share/%-change) still grounds. Records a per-turn
+  `allow_dimension=True`, since a headline can legitimately BE a year/code).
+  **KNOWN BLIND SPOT — a CORRECT table can grade `partial`.** Every op the
+  reconciler tries runs DOWN one result column, so a **share**-of-total column
+  grounds (column-scoped) but a **row-wise `% change`** column — `(2024-2021)/2021`
+  for *that row* — has no route at all, and a table whose only measure is such a
+  column grades **`unmatched`**. Measured, and pinned by the four
+  `KNOWN BLIND SPOT` cases in `test_grounding.py`; fixing it means a row-wise
+  cross-column route, after which **re-measure Grounded cells** (widening the match
+  surface across hundreds of cells invites coincidental hits — the same reason
+  `row_total` is figure-only). Records a per-turn
   status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked` — the last means
   neither this turn nor the window retained anything) + numeric-cell counts on
   `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
@@ -390,6 +398,24 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   (`_stamp_table_grounding`) right after the figure stamp on BOTH terminators, on the
   FINAL settled answer. Pinned in `test_grounding.py` + `test_admin_router.py` +
   `test_migrations.py`.
+  **The verdict is also shown to the READER** (the table's counterpart to the
+  figure's ✓): status + counts persist on `messages.table_grounding`/
+  `table_cells_checked`/`table_cells_matched` (**migration 33**) and ride the `done`
+  SSE event, so `Chat.jsx`'s `TableTrust` renders one **answer-level** line —
+  `✓ 40 values reproduced from the query result` — as a sibling AFTER `<Markdown>`,
+  outside the `.md` copy surface (same rule as `<Figure>`). **ANSWER-scoped, not
+  per-table**: `check_table` returns ONE verdict for every table in the answer, so
+  attaching it to a particular table would mis-attribute it — which is also why it
+  needs no single-table gate (unlike the truncation caption, whose flag maps to one
+  query result). Wording rules in the pure `tabletruth.js` (`tableTrustNote`,
+  vitest): state the **count, never "all"** (measure columns only were graded), and
+  promise **reproduction, not correctness**. **POSITIVE-ONLY, and the silence on
+  `partial`/`unmatched` is the blind spot above, not laziness** — a caution keyed on
+  either would fire on correct answers of a shape prompt step 6(b) asks for; fix the
+  reconciler first. A cache hit shows NEITHER mark (it passes no grounding, like
+  `figure_grounding`). Pinned in `frontend/e2e/table-grounding.spec.js` (incl. a
+  direct contrast assertion — the axe scan never renders this element, and light
+  theme clears AA by only ~0.07) + `tabletruth.test.js` + `test_chat_router.py`.
 - a post-answer **critic** that can force one revision round. **It is given the
   actual result rows** (capped, via `QueryResult.to_markdown`, with a truncation
   flag) — without them it saw only the SQL *text* and the prose, so it could
