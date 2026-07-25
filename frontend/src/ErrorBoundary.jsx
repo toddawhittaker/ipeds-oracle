@@ -3,6 +3,13 @@ import React from "react";
 // App-wide error boundary: if any descendant throws during render, catch it and
 // show a recoverable fallback instead of React unmounting the whole tree to a
 // blank white screen. Error boundaries must be class components.
+/**
+ * @typedef {object} ErrorBoundaryProps
+ * @property {React.ReactNode} children Subtree to guard. Any render error below
+ *   this swaps the whole subtree for the reload card.
+ */
+
+/** @extends {React.Component<ErrorBoundaryProps, { error: Error | null }>} */
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);

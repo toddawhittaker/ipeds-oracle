@@ -1,0 +1,27 @@
+{
+  // NOT a migration to TypeScript. This exists for ONE job: emit .d.ts files
+  // from the JSDoc annotations on our plain-JS components, so the design-system
+  // sync (/.design-sync/) publishes a real API contract per component instead of
+  // 45 hand-written ones that nothing can verify. See CONTRIBUTING.md ->
+  // "Design system sync".
+  //
+  // checkJs is OFF on purpose: type-checking the whole app is a separate and far
+  // larger project, and turning it on here would surface unrelated pre-existing
+  // issues in files this has no business touching. We emit, we do not police.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "types",
+    "jsx": "react-jsx",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false
+  },
+  "include": ["src/**/*.js", "src/**/*.jsx", "ds-entry.js", "ds-preview-env.js"],
+  "exclude": ["src/**/*.test.js", "e2e/**", "dist/**", "node_modules/**"]
+}

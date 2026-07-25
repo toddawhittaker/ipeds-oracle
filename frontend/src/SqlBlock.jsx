@@ -26,6 +26,16 @@ function prettySql(code) {
 // `format` pretty-prints the source (default) — turn it off to highlight text
 // as authored (e.g. a ```sql fence in an answer, where the writer's own layout
 // should be preserved).
+/**
+ * @typedef {object} SqlBlockProps
+ * @property {string} code The SQL text. Every SQL surface in the product renders
+ *   through this component.
+ * @property {string} [className]
+ * @property {boolean} [format] Pretty-print before highlighting. Pass false for
+ *   author-written ```sql fences (highlight only, leave their formatting alone).
+ */
+
+/** @param {SqlBlockProps} props */
 export default function SqlBlock({ code, className = "", format = true }) {
   const shown = useMemo(() => (format ? prettySql(code) : (code || "")), [code, format]);
   return (

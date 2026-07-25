@@ -18,6 +18,21 @@ function focusables(root) {
 // control and renders taller; initial* carry the opener's current type/trend/labels
 // so the modal opens showing the same view. (Chart ↔ ChartModal is an intentional
 // cyclic import — resolved at render time, never at module top level.)
+/**
+ * @typedef {object} ChartModalProps
+ * @property {{ x: string, y: string | string[], data: Array<Record<string, string | number>>, type?: "line" | "bar", title?: string, xLabel?: string, yLabel?: string }} spec
+ *   Same spec the opener Chart was rendering. Inline, not a named typedef — see
+ *   the note in DataTable.jsx.
+ * @property {"line" | "bar"} [initialType] Carry the opener's current view so
+ *   maximizing doesn't reset it.
+ * @property {boolean} [initialTrend]
+ * @property {boolean} [initialLabels]
+ * @property {() => void} onClose Called on EVERY dismissal path (Close button,
+ *   Escape, overlay click). Required — the dialog never closes itself, and focus
+ *   returns to the opener on unmount.
+ */
+
+/** @param {ChartModalProps} props */
 export default function ChartModal({ spec, initialType, initialTrend, initialLabels, onClose }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);

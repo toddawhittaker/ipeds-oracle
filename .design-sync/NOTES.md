@@ -36,11 +36,28 @@ When a component becomes reusable, add it in **two** places: a named export in
 `frontend/ds-entry.js` and a pin in `cfg.componentSrcMap`. Those two lists are
 what this sync treats as the design system's public surface.
 
-### Every prop contract is hand-written
+### Prop contracts are DERIVED (no longer hand-written)
 
-`cfg.dtsPropsFor` carries all 45 bodies. There is no source of truth to
-regenerate them from, so **when a component's props change, edit `dtsPropsFor`
-by hand** or the design agent codes against a stale API.
+`cfg.dtsPropsFor` is gone. Props are JSDoc on the components; `tsc
+--emitDeclarationOnly` (`frontend/tsconfig.json`) emits `frontend/types/`, which
+the converter reads via `package.json`'s `types` field. `cfg.buildCmd`
+(`npm --prefix frontend run types`) regenerates before every build, and
+`frontend/types/` is **committed** so a prop change is reviewable. `npm run
+typecheck` re-emits and diffs; CI fails on drift.
+
+**When annotating, two rules — both cost a debugging cycle:**
+
+1. **Sub-shapes must be INLINE, never a named `@typedef`.** The converter resolves
+   types into the published contract but prints an alias *by name*, so a named
+   typedef emits as a dangling reference the published `.d.ts` never defines.
+   `[DTS_PARSE]` does NOT catch this — undefined names parse fine. Caught only by
+   reading the emitted contract. Hit `DataTable`, `Chart`, `ChartModal`, `BulkBar`.
+2. **Per-prop docs truncate at 120 chars** (`lib/dts.mjs`), so lead with the
+   actionable half. The old hand-written path passed bodies through verbatim.
+
+Also: `PreviewRouter` must stay excluded via `componentSrcMap` — real declarations
+made it a typed export of `ds-entry.js`, so it started appearing as a 46th
+component until pinned to `null`.
 
 The `.d.ts` parse gate needs **typescript 5** in `.ds-sync/node_modules`.
 `npm i typescript` now installs **7.x**, whose Node API dropped
@@ -90,10 +107,10 @@ bound via `cfg.docsMap`. Those paths are package-relative and resolve **from
 
 1. **`frontend/ds-entry.js` drifting from the component list.** A new component
    added to `src/` appears nowhere until it is exported here. Nothing warns.
-2. **`cfg.dtsPropsFor` drifting from the real props.** Hand-written, so a prop
-   rename in the app leaves the published contract wrong and the design agent
-   will keep using the old name. Re-read the component sources on any sync that
-   follows real UI work.
+2. ~~`cfg.dtsPropsFor` drifting from the real props.~~ **CLOSED** — contracts are
+   derived from JSDoc and `npm run typecheck` fails CI on drift. What can still
+   rot is the *prose*: a JSDoc comment can describe behaviour the code no longer
+   has, and nothing checks English against implementation.
 3. **Preview data is inlined.** Institution names, award counts and the version
    strings in the previews are literals; they are illustrative, not live, and
    will look dated eventually. That is fine — they are compositions, not data.

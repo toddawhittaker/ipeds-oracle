@@ -1,0 +1,29 @@
+export function estimateIntegrate({ zipBytes, alreadyIntegratedCount, selectedCount, liveDbBytes, currentIntegratedYearCount, diskFreeBytes, diskTotalBytes, expandFactor, defaultPerYearDbMb, bandwidthMbps, buildSecondsPerYear, safetyFactor, }: {
+    zipBytes: any;
+    alreadyIntegratedCount: any;
+    selectedCount: any;
+    liveDbBytes: any;
+    currentIntegratedYearCount: any;
+    diskFreeBytes: any;
+    diskTotalBytes: any;
+    expandFactor: any;
+    defaultPerYearDbMb: any;
+    bandwidthMbps: any;
+    buildSecondsPerYear: any;
+    safetyFactor: any;
+}): {
+    totalDownloadBytes: number;
+    extractedBytes: number;
+    stagingDbBytes: number;
+    perYearDbBytes: number;
+    additionalBytesNeeded: number;
+    usedNowBytes: number;
+    peakUsedBytes: number;
+    diskFreeBytes: any;
+    diskTotalBytes: any;
+    estDownloadSeconds: number;
+    estBuildSeconds: number;
+    safetyFactor: any;
+    neededWithSafetyBytes: number;
+    sufficient: boolean;
+};

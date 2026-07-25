@@ -20,6 +20,16 @@ const ADMIN_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/mai
 // in on open and returns to the opener on close, Escape / overlay-click / Close all
 // dismiss, and the background is inert while it's open. Pinned in
 // frontend/e2e/user-menu.spec.js.
+/**
+ * @typedef {object} AboutModalProps
+ * @property {() => void} onClose Called on every dismissal path. Required.
+ * @property {boolean} [isAdmin] Gates the admin-guide link.
+ * @property {{ current: string, latest?: string | null, update_available?: boolean } | null} [version]
+ *   Running and latest version; shows the update note when `update_available` is
+ *   true.
+ */
+
+/** @param {AboutModalProps} props */
 export default function AboutModal({ onClose, isAdmin = false, version = null }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);

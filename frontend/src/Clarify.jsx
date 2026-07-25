@@ -10,6 +10,18 @@ import { normalizeClarify } from "./clarify.js";
 // group's own heading in that case instead of the generic "Did you mean" label,
 // so the chips are never unlabeled. Renders nothing when there's nothing
 // renderable.
+/**
+ * @typedef {object} ClarifyProps
+ * @property {{ question: string, options: string[] }} spec The blocking
+ *   clarification. `options` are SHORT answer phrases ("bachelor's only"), never
+ *   restated questions.
+ * @property {(answer: string) => void} onAsk
+ * @property {boolean} [disabled]
+ * @property {boolean} [showQuestion] Show the model's actual question as the label
+ *   instead of the default "Did you mean".
+ */
+
+/** @param {ClarifyProps} props */
 export default function Clarify({ spec, onAsk, disabled, showQuestion = false }) {
   const c = normalizeClarify(spec);
   if (!c) return null;

@@ -40,6 +40,10 @@ certs/
 # node_modules slips past it and gets committed.
 node_modules
 frontend/dist/
+# Scratch output of `npm run typecheck` (emits and diffs against the COMMITTED
+# frontend/types/ tree). frontend/types/ itself IS committed on purpose — a prop
+# rename then shows up as a contract diff in the same PR.
+frontend/.types-check/
 *.tsbuildinfo
 
 # --- Playwright e2e output ---

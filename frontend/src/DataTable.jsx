@@ -27,6 +27,56 @@ import { IconClose } from "./icons.jsx";
 // Imperative handle (ref): focusSearch(), focusRowAction(rowKey) — the latter
 // focuses the first enabled button in that row's actions cell, so features never
 // manage per-row refs. Focus targets OUTSIDE the table stay owned by the feature.
+
+/**
+ * NOTE ON SHAPE: prop sub-types are written INLINE, not as named @typedefs. The
+ * design-sync converter fully resolves types into the published contract and
+ * prints a named alias by name — so a named typedef here emits as a reference to
+ * something the published .d.ts never defines, and the design agent sees an
+ * unresolvable type. Keep these inline.
+ *
+ * Per-prop doc comments are capped at 120 chars downstream, so lead with the
+ * actionable half of any warning.
+ *
+ * @typedef {object} DataTableProps
+ * @property {Array<Record<string, unknown>>} rows All rows, unpaginated — this component owns search, sort and paging client-side.
+ * @property {Array<{ key: string, label: string, sortable?: boolean, render?: (row: any) => React.ReactNode, cellTitle?: (row: any) => string, colClass?: string, thClass?: string, cellClass?: string }>} columns
+ *   `render` defaults to row[key].
+ * @property {(row: any) => string | number} rowKey A FUNCTION returning a row's unique key, e.g. `(r) => r.email` — NOT a field name. Also the focus target.
+ * @property {{ fields: string[], comparators: Record<string, (a: any, b: any) => number>, tiebreak: (row: any) => string | number, nouns: { one: string, many: string } }} config
+ *   `comparators` + `tiebreak` are REQUIRED — sortRows does Object.keys(comparators), so omitting them renders a blank table.
+ * @property {string} [searchPlaceholder]
+ * @property {string} [searchLabel]
+ * @property {string} [searchId]
+ * @property {string} [emptyNoData] Shown when there are no rows at all — keep it DISTINCT from a load failure, which must never look like an empty result.
+ * @property {string} [emptyNoMatch] Shown when the search filtered everything out.
+ * @property {{ key: string, dir?: "asc" | "desc" }} [initialSort] Defaults to the first sortable column, ascending.
+ * @property {number[]} [pageSizes]
+ * @property {number} [defaultPageSize]
+ * @property {string} [sizeLabel]
+ * @property {string} [ariaLabel]
+ * @property {(row: any) => React.ReactNode} [renderActions]
+ * @property {Record<string, string>} [sortLabels]
+ * @property {string} [tableClass]
+ * @property {(q: string) => void} [onSearchChange]
+ * @property {boolean} [selectable] Opt-in bulk selection. When falsy NONE of the selection UI renders and the table behaves exactly as it did before selection existed.
+ * @property {(row: any) => string | number} [selectionId] Selection-id accessor. Defaults to `rowKey`.
+ * @property {"page" | "all"} [selectionMode] "all" INVERTS the meaning of `selectedIds`: it then holds the EXCLUDED ids, not the selected ones.
+ * @property {Set<string | number>} [selectedIds]
+ * @property {(row: any) => boolean} [rowSelectable] Rows this returns false for cannot be selected (e.g. your own account).
+ * @property {(row: any) => string} [rowSelectLabel]
+ * @property {(id: string | number) => void} [onToggleRow]
+ * @property {() => void} [onTogglePage]
+ * @property {(ctx: any) => React.ReactNode} [renderSelectionBar] Renders the contextual selection toolbar (normally BulkBar). Called only while at least one row is selected.
+ */
+
+/**
+ * @typedef {object} DataTableHandle
+ * @property {() => void} focusSearch
+ * @property {(rowKey: string | number) => void} focusRowAction
+ */
+
+/** @type {React.ForwardRefExoticComponent<DataTableProps & React.RefAttributes<DataTableHandle>>} */
 const DataTable = forwardRef(function DataTable({
   rows, columns, rowKey, config,
   searchPlaceholder = "Search", searchLabel, searchId,

@@ -28,6 +28,13 @@ const RESUME_MS = 2500;   // re-arm this soon after un-hover / blur
 const FADE_MS = 300;      // fade-out before unmount
 const ANNOUNCE_MS = 1200; // how long a queued announcement lingers in the live region
 
+/**
+ * @typedef {object} ToastProviderProps
+ * @property {React.ReactNode} children App subtree. Descendants call `useToast()`
+ *   to push a transient message.
+ */
+
+/** @param {ToastProviderProps} props */
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [polite, setPolite] = useState([]);       // queued {id,text} announcements

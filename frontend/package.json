@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
+  "types": "./types/ds-entry.d.ts",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "types": "tsc -p tsconfig.json",
+    "typecheck": "rm -rf .types-check && tsc -p tsconfig.json --outDir .types-check && diff -r types .types-check",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:unit": "vitest run --coverage",
@@ -38,6 +41,7 @@
     "globals": "^17.7.0",
     "jsdom": "^29.1.1",
     "prettier": "^3.9.5",
+    "typescript": "^5.9.3",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }
