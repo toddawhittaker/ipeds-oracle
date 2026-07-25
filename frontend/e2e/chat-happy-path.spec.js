@@ -67,6 +67,17 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   const chartType = page.getByRole("combobox", { name: "Chart type" });
   await expect(chartType).toBeVisible();
 
+  // The chart's role="img" must wrap ONLY the graphic. ARIA makes every
+  // descendant of a role="img" presentational, so when it sat on the outer
+  // <figure> it removed this <select>, the delta badge, and the data-label/
+  // copy/maximize buttons from the accessibility tree — on screen, unreachable
+  // by a screen reader. This asserts CONTAINMENT deliberately: Playwright's
+  // role engine does not prune presentational children, so the getByRole
+  // assertion two lines up passed happily while the bug was live and cannot be
+  // the regression test for it.
+  await expect(page.locator('[role="img"] .chart-head')).toHaveCount(0);
+  await expect(page.locator("figure.chart .chart-graphic[role='img']")).toHaveCount(1);
+
   // The chart is rasterized to a PNG (hidden <img>) for clean HTML copy/paste.
   await expect(page.locator("img.chart-export-img"))
     .toHaveAttribute("src", /^data:image\/png/, { timeout: 5000 });
