@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
-import { api } from "./api.js";
+import { api, setUnauthenticatedHandler } from "./api.js";
+import { SERVER_UNREACHABLE, SESSION_EXPIRED } from "./authcopy.js";
 import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import { AdminRoute } from "./Admin.jsx";
@@ -52,6 +53,7 @@ export default function App() {
 
 function Shell() {
   const [user, setUser] = useState(undefined); // undefined=loading, null=logged out
+  const [authNotice, setAuthNotice] = useState("");
   const [theme, setTheme] = useState(currentTheme);
   const [attention, setAttention] = useState({ users: 0, skills: 0, logs: 0 });
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -75,6 +77,28 @@ function Shell() {
   // still lands inside the initial-load window screen readers swallow.
   const routeAnnounce = routeAnnouncement(pathname);
 
+  // One place turns a 401 from ANY request into "you're signed out", instead of
+  // every caller having to notice for itself — which none did, so an expired
+  // session (they last a month) left the shell rendered and inert: an empty
+  // conversation sidebar, Usage stuck on "Loading…", Logs claiming "No log
+  // records." Registered before the first fetch below.
+  useEffect(() => {
+    setUnauthenticatedHandler(async () => {
+      // CONFIRM before signing anyone out. One endpoint's 401 is not proof the
+      // session is gone — it could be a stale route, a race against sign-out, or
+      // a background poll hitting something unexpected — and throwing away a
+      // working session over that is worse than the inert shell this replaced.
+      // api.me() is exempt from the hook (see api.js), so this can't recurse.
+      try {
+        await api.me();
+        return;   // still signed in; whatever 401'd was that endpoint's problem
+      } catch { /* the auth check agrees — the session really is gone */ }
+      setUser(null);
+      setAuthNotice(SESSION_EXPIRED);
+    });
+    return () => setUnauthenticatedHandler(null);
+  }, []);
+
   useEffect(() => {
     api.me().then((u) => {
       setUser(u);
@@ -92,7 +116,15 @@ function Shell() {
       if (u?.is_admin && !u.has_data && landedAt.current === "/") {
         navigate("/admin/imports", { replace: true });
       }
-    }).catch(() => setUser(null));
+    }).catch((err) => {
+      // 401 is a real "you're not signed in" — anything else (a 500, a dropped
+      // connection) is NOT, and bouncing a signed-in user to the login door
+      // over a transient blip reads as "I've been logged out" when they
+      // haven't been. Show the door either way (there's nothing else to show
+      // without a user), but say which it was.
+      setUser(null);
+      if (!err?.isUnauthenticated) setAuthNotice(SERVER_UNREACHABLE);
+    });
     // Deliberately NOT depending on `navigate`: react-router v6's
     // useNavigate() returns a NEW function identity whenever the pathname
     // changes (it closes over useLocation() internally), and the very
@@ -168,7 +200,7 @@ function Shell() {
   }
 
   if (user === undefined) return <div className="center muted">Loading…</div>;
-  if (!user) return <Login onDone={() => api.me().then(setUser).catch(() => {})} />;
+  if (!user) return <Login notice={authNotice} />;
 
   // UX-only guard: an unauthorized viewer bounces straight back to "/" and
   // never renders (or fetches data for) an admin panel. The real security

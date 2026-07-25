@@ -544,6 +544,17 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    the full reading column so the actions bar underneath is full width. */
 .msg.assistant { width: 100%; }
 .msg.assistant .bubble { width: 100%; border: none; background: transparent; padding: 2px 2px 4px; border-radius: 0; }
+/* A failed turn is a CONDITION, not an answer. It used to render as ordinary
+   assistant prose whose text happened to start with an emoji, so a rate-limit
+   or an expired session looked like something the assistant had said. The rule
+   is a --danger left edge (not a fill: the message is short and the page is a
+   reading surface), matching how .denied-error marks a persistent in-flow
+   failure elsewhere. */
+.msg.assistant.failed .bubble {
+  border-left: 3px solid var(--danger);
+  padding-left: 12px;
+  color: var(--fg);
+}
 .msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
 /* Per-turn time stamp ("2:47 PM EST") + "Thought for N seconds" — quiet meta. */

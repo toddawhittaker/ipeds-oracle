@@ -45,6 +45,9 @@ function focusables(root) {
 // A FastAPI error body arrives as err.message = JSON like {"detail": "..."}.
 // Surface that detail in-modal when present, else a supplied fallback.
 function extractError(err, fallback) {
+  // ApiError (api.js) already parsed FastAPI's {"detail": ...}; older throw
+  // sites may still hand us a raw JSON body, so keep that path as a fallback.
+  if (err?.detail) return err.detail;
   try {
     const detail = JSON.parse(err?.message)?.detail;
     if (detail) return detail;

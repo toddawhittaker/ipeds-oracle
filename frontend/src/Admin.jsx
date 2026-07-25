@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Navigate, useNavigate, useParams } from "react-router";
 import { api } from "./api.js";
+import { loadErrorMessage } from "./authcopy.js";
 import Chart from "./Chart.jsx";
 import { shortZone } from "./datetime.js";
 import { estimateIntegrate } from "./estimate.js";
@@ -353,14 +354,13 @@ function Allowlist({ me, sub, onAttentionChanged }) {
     // confidence. Render a real error state instead (see the JSX below).
     // Report only what the response actually says (a `detail` field, when
     // the server sent one) rather than inferring a cause -- same principle,
-    // and the same JSON.parse(err.message).detail pattern, as
+    // and the same server-detail-first pattern (now err.detail), as
     // toggleAdmin's catch further down: guessing at a cause from a proxy
     // value instead of asking the server directly is exactly the class of
     // bug PR #57/#60 fixed for the invite-email flash.
     api.deniedRequests().then((d) => { setDenied(d); setDeniedError(""); })
       .catch((err) => {
-        let detail = "";
-        try { detail = JSON.parse(err.message).detail || ""; } catch { /* no JSON body to read */ }
+        const detail = err?.detail || "";
         setDeniedError(detail || "Couldn't load blocked addresses.");
       });
     // Anchor the poll's cooldown to when this reload settles (see lastLoadAt),
@@ -658,7 +658,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
         : `${r.email} is now an admin.`, "ok");
     } catch (err) {
       let msg = "Could not update admin status.";
-      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      msg = err?.detail || msg;   // ApiError carries the server's own wording
       announce(msg, "error");
     } finally {
       setBusyEmail("");
@@ -1625,7 +1625,7 @@ function Imports({ onDataChanged }) {
       watch(body.job_id);
     } catch (err) {
       let msg = "Could not start the import.";
-      try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+      msg = err?.detail || msg;   // ApiError carries the server's own wording
       notify(msg, "error");
       if (/already running/i.test(msg)) {
         // Someone else's import is mid-flight — find it and watch its progress.
@@ -1656,7 +1656,7 @@ function Imports({ onDataChanged }) {
           outcome = { jobId: body.job_id, message: `Removing ${entry.year_label}…`, kind: "" };
         } catch (err) {
           let msg = "Could not start the removal.";
-          try { msg = JSON.parse(err.message).detail || msg; } catch { /* keep default */ }
+          msg = err?.detail || msg;   // ApiError carries the server's own wording
           if (/already running/i.test(msg)) {
             const list = await api.importJobs().catch(() => []);
             const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
@@ -1953,6 +1953,7 @@ function Usage() {
   const [custom, setCustom] = useState({ since: "", until: "" });
   const [metric, setMetric] = useState("tokens");
   const [u, setU] = useState(null);
+  const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
 
   // `<input type=date>` values are parsed as LOCAL midnight (matching the local
@@ -1968,7 +1969,13 @@ function Usage() {
       since = now - RANGES.find((r) => r.key === range).secs;
       until = now;
     }
-    api.usage(since, until).then(setU).catch(() => {}).finally(() => setLoading(false));
+    api.usage(since, until)
+      .then((d) => { setU(d); setErr(""); })
+      // A swallowed failure left `u` null forever, and the render gate is `!u`
+      // -- so a failed load rendered "Loading…" PERMANENTLY, with `loading`
+      // already false so even the "updating…" hint was gone.
+      .catch((e) => setErr(loadErrorMessage("usage", e?.detail)))
+      .finally(() => setLoading(false));
   }, [range, custom]);
 
   const pick = (fn) => { setLoading(true); fn(); };
@@ -2005,7 +2012,8 @@ function Usage() {
         {loading && u && <span className="muted small">updating…</span>}
       </div>
 
-      {!u ? <div className="muted">Loading…</div> : (
+      {err ? <p className="denied-error" role="alert">{err}</p>
+       : !u ? <div className="muted">Loading…</div> : (
         <div className={"usage-body" + (loading ? " updating" : "")}>
           {u.cost_warning && (
             <p className="notice warn small" role="status">
@@ -2119,6 +2127,7 @@ function Skills({ onAttentionChanged }) {
   const confirm = useConfirm();
   const refreshAttention = onAttentionChanged || (() => {});
   const [rows, setRows] = useState([]);
+  const [err, setErr] = useState("");
   const [editingId, setEditingId] = useState(null);   // at most one card at a time
   const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
   // Focus returns to the "edit" button when the editor closes (a11y). We can't
@@ -2128,7 +2137,12 @@ function Skills({ onAttentionChanged }) {
   const editBtnRefs = useRef({});   // skill id -> its "edit" button node
   const headlineRef = useRef(null);
   const headingRef = useRef(null);  // focus target after a card is deleted
-  const load = () => api.skills().then(setRows);
+  // No .catch at all before this: a failed load was an unhandled rejection and
+  // rendered the "No lessons yet" empty state, which is byte-identical to a
+  // healthy-but-empty library.
+  const load = () => api.skills()
+    .then((d) => { setRows(d); setErr(""); })
+    .catch((e) => setErr(loadErrorMessage("the lessons", e?.detail)));
   useEffect(() => { load(); }, []);
 
   // Which "edit" button to focus once a save's reload has COMMITTED, as a fresh
@@ -2241,7 +2255,8 @@ function Skills({ onAttentionChanged }) {
         it here.
         {pending > 0 && ` ${pending} awaiting review.`}
       </p>
-      {rows.length === 0 && (
+      {err && <p className="denied-error" role="alert">{err}</p>}
+      {!err && rows.length === 0 && (
         <p className="muted small">
           No lessons yet — they’ll appear here as the critic or a user’s
           corrective feedback proposes them.
@@ -2347,6 +2362,7 @@ function Skills({ onAttentionChanged }) {
 
 function Logs({ onAttentionChanged }) {
   const [records, setRecords] = useState([]);
+  const [err, setErr] = useState("");
   const [level, setLevel] = useState("");
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");
@@ -2369,8 +2385,13 @@ function Logs({ onAttentionChanged }) {
     const since = from ? Math.floor(new Date(`${from}T00:00:00`).getTime() / 1000) : null;
     const until = to ? Math.floor(new Date(`${to}T23:59:59.999`).getTime() / 1000) : null;
     api.logs(500, level, q.trim(), since, until)
-      .then((d) => setRecords(d.records || []))
-      .catch(() => {});
+      .then((d) => { setRecords(d.records || []); setErr(""); })
+      // The worst of the three: a swallowed failure rendered "No log
+      // records." to an admin whose entire job on this screen is to find out
+      // whether something is wrong -- so they'd conclude the server was fine
+      // and stop looking. Clearing on success matters too: the 4s refresh
+      // must not pin a stale error.
+      .catch((e) => setErr(loadErrorMessage("the logs", e?.detail)));
   }, [level, q, from, to]);
 
   // Debounced load on any filter change (also the initial load).
@@ -2429,7 +2450,9 @@ function Logs({ onAttentionChanged }) {
       </div>
       <div className="log logbox thin-scroll">
         {records.length === 0
-          ? <div className="muted">{filtered ? "No matching log records." : "No log records."}</div>
+          ? (err
+              ? <p className="denied-error" role="alert">{err}</p>
+              : <div className="muted">{filtered ? "No matching log records." : "No log records."}</div>)
           : records.map((r, i) => (
             <div key={i} className={"logline lvl-" + r.level}>
               <span className="logts">{fmt(r.ts)}</span>

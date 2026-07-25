@@ -1,5 +1,79 @@
 // Thin API client. Cookies (session) are sent automatically (same-origin).
 
+// Every failed request throws one of these. Before it existed, `j()` threw a bare
+// Error whose message was the RAW RESPONSE BODY and discarded the status
+// entirely — so callers that wanted the human message had to JSON.parse the
+// message string (four places did, each with its own fallback), callers that
+// wanted the status had to regex the detail text (two did), and anything that
+// forwarded err.message to the UI printed FastAPI's JSON braces at the user.
+export class ApiError extends Error {
+  constructor(status, detail, statusText) {
+    // `message` stays human: it's what leaks into a UI that forgets to read
+    // .detail, which is the failure mode this class exists to end.
+    super(detail || statusText || `Request failed (${status}).`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail || "";
+  }
+
+  get isUnauthenticated() {
+    return this.status === 401;
+  }
+}
+
+// FastAPI errors arrive as {"detail": "..."}; anything else (a proxy's HTML 502,
+// an empty body) falls back to the status text.
+async function _apiError(r) {
+  const text = await r.text().catch(() => "");
+  let detail = "";
+  try {
+    detail = JSON.parse(text)?.detail || "";
+  } catch {
+    // Not JSON. FastAPI always sends {"detail": ...}, but a reverse proxy or
+    // tunnel in front of it does not — and a plain-text "upstream timed out" is
+    // far more useful to show than a generic apology. Guard against dumping an
+    // HTML error page into the UI.
+    const t = text.trim();
+    if (t && t.length <= 200 && !t.startsWith("<")) detail = t;
+  }
+  return new ApiError(r.status, detail, r.statusText);
+}
+
+// Set by App.jsx. A 401 SUGGESTS the session is gone, and every caller would
+// otherwise have to notice for itself — which none did, so an expired session
+// left the shell rendered and inert (empty sidebar, "Loading…" forever, "No log
+// records."). One hook, notified once per 401.
+//
+// It is a SUGGESTION, not proof: the handler re-checks /api/auth/me before
+// signing anyone out. A single endpoint answering 401 — a stale route, a race
+// against sign-out, a background poll hitting something unexpected — must not
+// throw a working session away. (Trusting the first 401 blindly logged the user
+// out on any incidental one, which broke ~226 e2e specs and would have done the
+// same to real users.)
+let _onUnauthenticated = null;
+
+export function setUnauthenticatedHandler(fn) {
+  _onUnauthenticated = fn;
+}
+
+// The auth check itself is exempt, or confirming a 401 would re-enter the
+// handler that is doing the confirming.
+const AUTH_CHECK_URL = "/api/auth/me";
+
+// A page load fires several requests at once, so an expired session produces a
+// BURST of 401s. Collapse them into one confirmation instead of one per failed
+// request — otherwise a single expiry costs N extra /auth/me round-trips.
+let _confirming = false;
+
+function _raise(err, url) {
+  if (err.status === 401 && _onUnauthenticated && !_confirming
+      && !String(url).endsWith(AUTH_CHECK_URL)) {
+    _confirming = true;
+    Promise.resolve(_onUnauthenticated()).finally(() => { _confirming = false; });
+  }
+  throw err;
+}
+
 async function j(method, url, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -7,10 +81,7 @@ async function j(method, url, body) {
     opts.body = JSON.stringify(body);
   }
   const r = await fetch(url, opts);
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(text || r.statusText);
-  }
+  if (!r.ok) _raise(await _apiError(r), url);
   const ct = r.headers.get("content-type") || "";
   return ct.includes("application/json") ? r.json() : r.text();
 }
@@ -102,7 +173,7 @@ export async function streamChat({ question, conversationId, editMessageId }, on
       edit_message_id: editMessageId ?? null,
     }),
   });
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) _raise(await _apiError(r), "/api/chat/stream");
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
