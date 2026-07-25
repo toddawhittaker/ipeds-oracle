@@ -34,7 +34,10 @@ export async function mockMe(page, user) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ has_data: true, ...user }),
+        // `years` mirrors the real /me: the loaded collection-year bounds, which
+        // the chat empty state names instead of hardcoding a range. Spread last
+        // so a test can override or drop it.
+        body: JSON.stringify({ has_data: true, years: { min: 2020, max: 2025 }, ...user }),
       });
     }
   });

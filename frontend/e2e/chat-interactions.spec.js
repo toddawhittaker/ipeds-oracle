@@ -121,6 +121,47 @@ test.describe("scroll containment", () => {
   });
 });
 
+// THE REGRESSION: the empty state used to STATE the loaded range as fact
+// ("collection years 2019-20 through 2024-25") while every deployment picks its
+// own years via Admin → Imports. It was wrong everywhere but the machine it was
+// typed on, and nothing could catch it, because a hardcoded string renders just
+// as confidently as a correct one. These drive the range from /me, so a
+// re-hardcoding fails: the wording must FOLLOW the mocked bounds.
+test.describe("chat empty state names the loaded collection years", () => {
+  test("reads the range from /me rather than a literal", async ({ page }) => {
+    await mockMe(page, { ...USER, years: { min: 2016, max: 2021 } });
+    await mockConversations(page, []);
+    await page.goto("/");
+
+    // Deliberately NOT the 2020–2025 the shared mock defaults to: a literal left
+    // in the source would still print the old span and pass a laxer assertion.
+    await expect(page.locator(".empty p.muted"))
+      .toContainText("collection years 2015-16 through 2020-21");
+  });
+
+  test("a single loaded year is not written as a range", async ({ page }) => {
+    await mockMe(page, { ...USER, years: { min: 2025, max: 2025 } });
+    await mockConversations(page, []);
+    await page.goto("/");
+
+    const blurb = page.locator(".empty p.muted");
+    await expect(blurb).toContainText("collection year 2024-25");
+    await expect(blurb).not.toContainText("through");
+  });
+
+  test("omits the clause entirely when /me carries no years", async ({ page }) => {
+    // An older server (or a deployment mid-import) sends no bounds. The sentence
+    // has to stay grammatical rather than trailing a half-written clause.
+    await mockMe(page, { ...USER, years: null });
+    await mockConversations(page, []);
+    await page.goto("/");
+
+    const blurb = page.locator(".empty p.muted");
+    await expect(blurb).toContainText("staffing and finance.");
+    await expect(blurb).not.toContainText("across");
+  });
+});
+
 test.describe("conversation-loading skeleton", () => {
   test("switching to a conversation shows the skeleton — never the "
     + "empty-state prompt — until messages land", async ({ page }) => {

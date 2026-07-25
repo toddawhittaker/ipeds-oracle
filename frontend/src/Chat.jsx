@@ -17,6 +17,11 @@ import { useToast } from "./Toast.jsx";
 import { turnErrorMessage } from "./authcopy.js";
 import { editConfirmBody, editConfirmLabel, laterTurnsLost } from "./turns.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
+import { collectionYearRange } from "./years.js";
+
+// Mirrors MAX_QUESTION_LEN in backend/app/routers/chat.py — the browser stops an
+// over-long question at the composer so the server's 400 stays a backstop.
+const MAX_QUESTION_LEN = 4000;
 
 // Clickable starter prompts ("query slips") shown on the empty chat screen.
 // Each carries a small mono tag naming the kind of record it pulls, which
@@ -153,6 +158,7 @@ const NUMERIC_ID = /^\d+$/;
 const NOT_AVAILABLE = "That conversation isn't available.";
 
 export default function Chat({ me }) {
+  const yearRange = collectionYearRange(me?.years);
   const [convos, setConvos] = useState([]);
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
@@ -927,9 +933,14 @@ export default function Chat({ me }) {
             <div className="empty">
               <span className="field-label">Ask the record</span>
               <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>
+              {/* The range comes from /me (i.e. from `_years`), never a literal
+                  — each deployment loads its own years via Admin → Imports, so a
+                  hardcoded span is wrong everywhere but the box it was written
+                  on. Falls back to the sentence without a range if /me is old or
+                  the bounds are unusable, rather than printing a broken clause. */}
               <p className="muted">
                 Degrees awarded, enrollment, tuition, graduation rates, staffing
-                and finance — across collection years 2019-20 through 2024-25.
+                and finance{yearRange ? ` — across ${yearRange}` : ""}.
               </p>
               <div className="examples-grid">
                 {EXAMPLES.map((ex) => (
@@ -1126,6 +1137,10 @@ export default function Chat({ me }) {
             <MarkdownTextarea
               id="composer-input" ref={taRef}
               value={input} placeholder="Ask about IPEDS data…  (Shift-Enter for a new line)"
+              // Mirrors chat.py's MAX_QUESTION_LEN so the browser stops an
+              // over-long question before it is sent; the server cap is the
+              // backstop, not the primary UX. Keep the two in sync.
+              maxLength={MAX_QUESTION_LEN}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) send(e); }}
             />

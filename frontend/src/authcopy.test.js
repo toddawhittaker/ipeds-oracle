@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   SERVER_UNREACHABLE,
   SESSION_EXPIRED,
+  detailText,
   loadErrorMessage,
   turnErrorMessage,
 } from "./authcopy.js";
@@ -82,5 +83,41 @@ describe("loadErrorMessage", () => {
       expect(msg).not.toMatch(/^no /i);
       expect(msg).toMatch(/couldn't load/i);
     }
+  });
+});
+
+// THE REGRESSION: FastAPI raises 422 itself, before any handler runs, whenever a
+// body fails validation — and its `detail` is an ARRAY, not the string every
+// hand-written error in this codebase sends. Passed to `new ApiError(...)` the
+// array stringifies to "[object Object]", which is the raw-body leak this module
+// exists to prevent, arriving through the one status nobody writes by hand.
+describe("detailText", () => {
+  it("flattens a pydantic 422 array to its human messages", () => {
+    const detail = [
+      { loc: ["body", "conversation_id"], msg: "Input should be a valid integer",
+        type: "int_parsing" },
+    ];
+    expect(detailText(detail)).toBe("Input should be a valid integer");
+  });
+
+  it("joins multiple field errors", () => {
+    expect(detailText([{ msg: "field required" }, { msg: "too long" }]))
+      .toBe("field required; too long");
+  });
+
+  it("never yields the object stringification", () => {
+    for (const d of [[{ msg: "nope" }], [{}], [{ msg: 7 }], {}, 42, null, undefined]) {
+      expect(detailText(d)).not.toMatch(/\[object Object\]/);
+    }
+  });
+
+  it("passes a normal string detail straight through", () => {
+    expect(detailText("Question is too long (max 4,000 characters)."))
+      .toBe("Question is too long (max 4,000 characters).");
+  });
+
+  it("returns empty for a shape it can't read, so the caller falls back", () => {
+    expect(detailText({ unexpected: true })).toBe("");
+    expect(detailText([{ noMsg: 1 }])).toBe("");
   });
 });

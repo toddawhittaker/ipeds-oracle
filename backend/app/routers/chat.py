@@ -83,6 +83,17 @@ NO_DATA_USER = (
 )
 
 
+# A question is a question, not a payload. `BodyLimitMiddleware` caps the whole
+# request at max_request_body_mb (10 MB), but 10 MB of "question" would still be
+# written to app.db TWICE (the user message + usage_log.question) and sent to the
+# provider as billed tokens. ~1,000 tokens is generous for anything a person
+# actually asks. Enforced as a 400 with a human message rather than a pydantic
+# Field(max_length=...), which 422s with a LIST detail — matching MAX_TITLE_LEN
+# below, and keeping the error readable when it reaches the UI. Mirrored
+# client-side by the composer's maxLength — keep the two in sync.
+MAX_QUESTION_LEN = 4000
+
+
 class ChatRequest(BaseModel):
     question: str
     conversation_id: int | None = None
@@ -182,6 +193,9 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "Empty question.")
+    if len(question) > MAX_QUESTION_LEN:
+        raise HTTPException(
+            400, f"Question is too long (max {MAX_QUESTION_LEN:,} characters).")
 
     # Per-user throttle (SEC-3): cap a single user's chat turns over a rolling
     # window so a runaway loop/script can't burn unbounded provider spend. Raises

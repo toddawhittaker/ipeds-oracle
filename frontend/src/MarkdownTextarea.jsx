@@ -15,7 +15,8 @@ import { highlight } from "./mdhighlight.js";
 // the inline prompt-edit box, which size differently — so the auto-grow cap is
 // read from the element's CSS `max-height` rather than hardcoded here.
 const MarkdownTextarea = forwardRef(function MarkdownTextarea(
-  { value, onChange, onKeyDown, placeholder, id, className = "", autoFocus, "aria-label": ariaLabel }, ref) {
+  { value, onChange, onKeyDown, placeholder, id, className = "", autoFocus, maxLength,
+    "aria-label": ariaLabel }, ref) {
   const taRef = useRef(null);
   const preRef = useRef(null);
 
@@ -64,6 +65,7 @@ const MarkdownTextarea = forwardRef(function MarkdownTextarea(
         className={"md-editor-ta thin-scroll " + className}
         value={value}
         placeholder={placeholder}
+        maxLength={maxLength}
         onChange={onChange}
         onKeyDown={onKeyDown}
         onScroll={syncScroll}

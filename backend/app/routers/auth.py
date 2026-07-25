@@ -11,7 +11,7 @@ from app import auth
 from app.auth import current_user
 from app.config import get_settings
 from app.ratelimit import client_ip, enforce_auth_rate_limit
-from app.tools.sql import has_ipeds_data
+from app.tools.sql import ipeds_years
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -70,8 +70,19 @@ def verify_post(body: VerifyRequest, response: Response):
 
 @router.get("/me")
 def me(user: sqlite3.Row = Depends(current_user)):
+    # ONE probe answers both questions. has_ipeds_data() is itself just
+    # bool(ipeds_years()), so calling ipeds_years() directly and deriving the
+    # flag from it costs one fewer read than asking twice.
+    #
+    # `years` exists because the chat empty state used to STATE the loaded range
+    # as fact ("2019-20 through 2024-25") while every deployment picks its own
+    # years via Admin -> Imports — `_years` is the only authority. The browser
+    # formats the collection-year labels (year is the ENDING year, so 2020 reads
+    # as "2019-20"); the server just reports the bounds.
+    years = ipeds_years()
     return {"email": user["email"], "is_admin": bool(user["is_admin"]),
-            "has_data": has_ipeds_data(),
+            "has_data": bool(years),
+            "years": {"min": years[0], "max": years[-1]} if years else None,
             # Only the RESOLVED boolean crosses to the browser — never the raw
             # setting or any other config. Gates the chat privacy warning only.
             "trust_llm_provider": get_settings().trust_llm_provider_enabled}
