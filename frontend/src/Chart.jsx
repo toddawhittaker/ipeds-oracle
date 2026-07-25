@@ -276,7 +276,15 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
 
   return (
     <>
-    <figure className="chart" role="img" aria-label={alt}>
+    {/* role="img" belongs on the GRAPHIC, never on this wrapper. ARIA's
+        presentational-children rule strips every descendant of a role="img"
+        from the accessibility tree, so putting it here hid the chart-type
+        select, the delta badge, and the data-label/copy/maximize buttons from
+        assistive tech entirely -- the controls were on screen and unreachable.
+        Playwright's role engine does NOT prune presentational children, so
+        getByRole found them all and the toolbar specs passed throughout; the
+        regression test for this asserts CONTAINMENT instead. */}
+    <figure className="chart">
       <div className="chart-head">
         <select className="chart-type" value={typeValue} aria-label="Chart type"
                 onChange={(e) => onTypeChange(e.target.value)}>
@@ -311,11 +319,13 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={chartH}>
-        <VisChart data={chartData} margin={margin}>
-          {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey, longLabels })}
-        </VisChart>
-      </ResponsiveContainer>
+      <div className="chart-graphic" role="img" aria-label={alt}>
+        <ResponsiveContainer width="100%" height={chartH}>
+          <VisChart data={chartData} margin={margin}>
+            {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey, longLabels })}
+          </VisChart>
+        </ResponsiveContainer>
+      </div>
 
       {/* Hidden, fixed-size, LIGHT, no-animation chart — the source for the PNG. */}
       <div className="chart-export-src" aria-hidden="true" ref={exportRef}>

@@ -118,7 +118,7 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label,
           <tr>
             {comparable && <th className="cmp-cell" aria-hidden="true" />}
             {headers.map((h, c) => (
-              <th key={c} scope="col"
+              <th key={c} scope="col" className={numericByCol[c] ? "num" : undefined}
                   aria-sort={sort.col === c ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
                 <button type="button" className="th-sort" title={`Sort by ${h}`}
                         onClick={() => clickHeader(c)}>
@@ -150,7 +150,11 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label,
                            onChange={() => { if (!atCap) toggle(rowLabel); }} />
                   </td>
                 )}
-                {r.map((cell, c) => <td key={c}>{renderCell(nodes?.[c], cell)}</td>)}
+                {r.map((cell, c) => (
+                  <td key={c} className={numericByCol[c] ? "num" : undefined}>
+                    {renderCell(nodes?.[c], cell)}
+                  </td>
+                ))}
               </tr>
             );
           })}

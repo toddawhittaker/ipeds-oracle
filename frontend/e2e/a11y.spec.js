@@ -11,6 +11,7 @@ import {
   mockAllowlist,
   mockAccessRequests,
   mockImportJobs,
+  mockAttention,
 } from "./mocks.js";
 
 // Coverage for the a11y fixes the implementer landed across App.jsx, Chat.jsx,
@@ -232,29 +233,122 @@ test.describe("Admin landmark + login alert", () => {
 
 // axe-core smoke tests. @axe-core/playwright installed cleanly offline (npm
 // registry was reachable), so these run as part of the normal suite rather
-// than being skipped. Scoped to *critical*-impact violations only, since a
-// broad zero-violations assertion would be brittle against third-party
-// markup (react-markdown output, etc.) this suite doesn't control.
+// than being skipped.
+//
+// Gated on critical AND *serious*. Filtering to `critical` alone (as this did
+// originally) is not a strict threshold -- it is a blind spot with a specific
+// shape: axe rates colour-contrast, aria-prohibited-attr,
+// scrollable-region-focusable and heading-order as `serious`, so the whole
+// class of defect this suite exists to catch scored below the gate. A dark-mode
+// contrast failure sat on the avatar attention badge -- visible on every page,
+// on every admin -- while these tests stayed green.
+const GATED_IMPACTS = ["critical", "serious"];
+
+function gatedViolations(results) {
+  return results.violations.filter((v) => GATED_IMPACTS.includes(v.impact));
+}
+
+// WCAG 2.x relative-luminance contrast for an element's rendered text against
+// the nearest painted ancestor background. Measures RESOLVED pixels, so it pins
+// the readability contract itself rather than a colour literal -- a later theme
+// or token change that happens to stay legible passes, and one that doesn't
+// fails no matter which declaration caused it.
+async function contrastRatio(page, selector) {
+  return page.evaluate((sel) => {
+    const el = globalThis.document.querySelector(sel);
+    if (!el) return null;
+    const channels = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+    const luminance = (rgb) => {
+      const [r, g, b] = rgb.map((v) => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opaque = (s) => s && s !== "transparent" && !/rgba\([^)]*,\s*0\s*\)$/.test(s);
+    let bg = null;
+    for (let n = el; n; n = n.parentElement) {
+      const c = globalThis.getComputedStyle(n).backgroundColor;
+      if (opaque(c)) { bg = channels(c); break; }
+    }
+    if (!bg) return null;
+    const fg = globalThis.getComputedStyle(el).color;
+    const [hi, lo] = [luminance(channels(fg)), luminance(bg)]
+      .sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  }, selector);
+}
+
 test.describe("axe smoke scan", () => {
-  test("Login screen has no critical violations", async ({ page }) => {
+  test("Login screen has no critical or serious violations", async ({ page }) => {
     await mockMe(page, null);
     await mockAuthConfig(page, "");
+    // Scan the RESTING state. The door's figure gallery auto-advances every 5s
+    // and each change replays a .34s fade from opacity:0, so an unlucky sample
+    // catches the source line mid-fade and axe measures the BLENDED colour
+    // (#737f7a instead of --muted #5c6a65) -- reporting 3.56:1 against text
+    // that actually renders at 4.85:1. Reduced motion is a real user setting
+    // the gallery already honours (it stops rotation and drops the animation),
+    // so this measures the pixels a user sees rather than a transient frame.
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "IPEDS Oracle" })).toBeVisible();
 
-    const results = await new AxeBuilder({ page }).analyze();
-    const critical = results.violations.filter((v) => v.impact === "critical");
-    expect(critical, JSON.stringify(critical, null, 2)).toEqual([]);
+    const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+    expect(found, JSON.stringify(found, null, 2)).toEqual([]);
   });
 
-  test("Chat screen has no critical violations", async ({ page }) => {
+  test("Chat screen has no critical or serious violations", async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, []);
     await page.goto("/");
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
 
-    const results = await new AxeBuilder({ page }).analyze();
-    const critical = results.violations.filter((v) => v.impact === "critical");
-    expect(critical, JSON.stringify(critical, null, 2)).toEqual([]);
+    const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+    expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+  });
+
+  // The two scans above run in the LIGHT theme as an anonymous/non-admin user,
+  // which is exactly where the app's contrast bugs were NOT. The accent-filled
+  // badges hardcoded #fff, and #fff over the dark theme's lighter --accent is
+  // 2.43:1 -- so the defect needed BOTH the dark theme and an element that only
+  // renders for an admin with work waiting. The avatar attention badge is the
+  // one such element visible on every page, Chat included, which makes this the
+  // cheapest surface that can see it. main.jsx reads the saved theme at boot,
+  // so seeding localStorage before load is what puts the page in dark mode.
+  test("Chat in dark theme, admin badge showing, has no critical or serious violations",
+    async ({ page }) => {
+      await mockMe(page, { email: "admin@example.edu", is_admin: true });
+      await mockConversations(page, []);
+      await mockAttention(page, { users: 2, skills: 1, logs: 4 });
+      await page.addInitScript(() => globalThis.localStorage.setItem("theme", "dark"));
+      await page.goto("/");
+      await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeVisible();
+      // Don't scan until the badge the theme bug lived on is actually painted.
+      await expect(page.locator(".avatar-badge")).toBeVisible();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
+  // axe CANNOT catch the badge, which is why this is a separate, explicit
+  // assertion rather than a line in the scan above. Its colour-contrast rule
+  // files a one-character element as `incomplete`, not a violation --
+  // "Element content is too short to determine if it is actual text content"
+  // -- and `incomplete` is not gatable in general (it also holds the composer's
+  // deliberate 1:1 transparent-textarea-over-mirror overlay). So the count pill
+  // that hardcoded #fff over the dark theme's lighter --accent sat at 2.43:1,
+  // on every page, on every admin, with the a11y suite green.
+  test("the avatar attention badge meets AA contrast in dark theme", async ({ page }) => {
+    await mockMe(page, { email: "admin@example.edu", is_admin: true });
+    await mockConversations(page, []);
+    await mockAttention(page, { users: 2, skills: 1, logs: 4 });
+    await page.addInitScript(() => globalThis.localStorage.setItem("theme", "dark"));
+    await page.goto("/");
+    await expect(page.locator(".avatar-badge")).toBeVisible();
+
+    const ratio = await contrastRatio(page, ".avatar-badge");
+    expect(ratio, `.avatar-badge contrast was ${ratio?.toFixed(2)}:1`)
+      .toBeGreaterThanOrEqual(4.5);
   });
 });
