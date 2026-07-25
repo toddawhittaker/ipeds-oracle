@@ -64,7 +64,15 @@ UNGROUNDED = "ungrounded"    # no cell and no derivation produced this number
 # model actually chose. A kernel that cannot reproduce a CORRECT number
 # manufactures evidence of model error, which is the most damaging way for this
 # measurement to be wrong.
-OPS = ("value", "sum", "mean", "pct_change", "diff", "share", "max", "min")
+# `row_total` is the SECOND instance of the same class as `diff` above, found
+# the same way — a correct figure reported `ungrounded`. Every other op
+# aggregates DOWN a column; a figure that totals ACROSS one row of a pivoted
+# table had no route at all. That is the canonical shape of a by-award-level or
+# by-category breakdown, and exactly what step 6(ii) invites for a peak-year hero
+# stat: "324,575 — peak national nursing degrees in 2022" is the row-wise sum of
+# associate+bachelor+master+doctorate+certificate for 2022, exactly reproducible
+# and previously unreproducible by this kernel.
+OPS = ("value", "sum", "mean", "pct_change", "diff", "share", "max", "min", "row_total")
 
 # Relative tolerance for "these two numbers are the same". Generous enough to
 # absorb the model's own display rounding (it is told to write thousands
@@ -360,6 +368,33 @@ def check_figure(figure: dict | None,
     return GroundingCheck(status, derivation, target)
 
 
+def _row_totals(result: QueryResult) -> list[float]:
+    """Row-wise totals across a result's MEASURE columns, in row order.
+
+    Computed from row INDICES rather than numeric_columns(), which skips null
+    cells per column and would therefore misalign columns against each other —
+    summing row 3 of one column with row 4 of the next.
+
+    Requires at least two measure columns: with one, the "row total" is just that
+    cell, which `value` already covers. Dimension and rank columns are excluded
+    (year + 85,506 is not a total), reusing the same _is_measure_column guard
+    that keeps `share(year)` from manufacturing matches.
+    """
+    if not result or not result.columns:
+        return []
+    cols = numeric_columns(result)
+    idxs = [i for i, name in enumerate(result.columns)
+            if name in cols and _is_measure_column(name, cols[name])]
+    if len(idxs) < 2:
+        return []
+    totals: list[float] = []
+    for row in result.rows:
+        vals = [_as_number(row[i]) if i < len(row) else None for i in idxs]
+        if all(v is not None for v in vals):
+            totals.append(sum(vals))
+    return totals
+
+
 def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                      allow_dimension: bool = True) -> tuple[str, Derivation] | None:
     """Reproduce `target` from any column of any retained result, returning the
@@ -390,6 +425,21 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
             # Keep looking for an exact match, but remember the weaker one.
             if best is None or (best[0] == DERIVED and status == ROUNDED):
                 best = (status, derivation)
+    if best is not None and best[0] != DERIVED:
+        return best          # a verbatim/rounded cell already beats a derivation
+    # Row-wise totals, last: strictly weaker evidence than a column route, and
+    # only for the FIGURE. check_table passes allow_dimension=False and is
+    # deliberately excluded — a table grades hundreds of cells, so widening its
+    # match surface would inflate the Grounded-cells rate with coincidental hits,
+    # while the figure is one value per turn where the false `ungrounded` was
+    # actually observed.
+    if allow_dimension:
+        tol = _displayed_precision_tol(raw_value, target)
+        for r_idx, result in enumerate(results):
+            for row_i, total in enumerate(_row_totals(result)):
+                if _close(target, total) or (tol and abs(target - total) <= tol):
+                    return DERIVED, Derivation(op="row_total", result_index=r_idx,
+                                               column=f"row{row_i + 1}")
     return best
 
 
