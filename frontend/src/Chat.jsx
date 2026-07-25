@@ -691,6 +691,7 @@ export default function Chat({ me }) {
 
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
     let durationMs = null; // turn wall-clock from the done event → "Thought for N seconds"
+    let resultsTruncated = false; // did this turn's SQL return more rows than shown?
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -761,6 +762,9 @@ export default function Chat({ me }) {
           if (ev.message_id) msgId = ev.message_id;
           if (ev.user_message_id) userMsgId = ev.user_message_id;
           if (ev.duration_ms != null) durationMs = ev.duration_ms;
+          // Same flag the message row stores, so a live turn captions a
+          // truncated table without waiting for a reload.
+          if (ev.results_truncated != null) resultsTruncated = ev.results_truncated;
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -783,7 +787,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -987,7 +991,7 @@ export default function Chat({ me }) {
                             prose and stays out of the copy surface. Renders
                             null when the message carries no figure. */}
                         <Figure spec={m.figure} />
-                        <Markdown messageId={m.id}>{m.content || ""}</Markdown>
+                        <Markdown messageId={m.id} resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
                       </>
                     )}
                   </div>

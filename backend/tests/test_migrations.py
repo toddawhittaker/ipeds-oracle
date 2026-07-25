@@ -1022,6 +1022,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0
       ],
       [
+        "results_truncated",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
         "role",
         "TEXT",
         1,

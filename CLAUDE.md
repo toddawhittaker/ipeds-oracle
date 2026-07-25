@@ -725,6 +725,31 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   ASGI so it never buffers the chat SSE stream. In the **dev posture only** (insecure
   cookies) it also accepts loopback origins so the Vite dev-proxy (`changeOrigin`)
   works — production (Secure cookies) enforces strict same-origin.
+- **A truncated table says so, and its sort admits its scope.** `run_sql` cuts at
+  `sql_row_cap_model` (200) and `QueryResult.truncated` records it, but
+  `to_storage` dropped that flag and `get_conversation` never selected `results`
+  — so the browser had **no structured signal**, and a 200-row PAGE of an 834-row
+  result was byte-identical on screen to a complete one. The only disclosure was
+  whatever sentence the model remembered to write. Now plumbed: **migration 30**
+  (`messages.results_truncated`), carried on the `done` SSE event so a live turn
+  captions without a reload, and selected back on conversation load.
+  `tabletruth.js` (pure, vitest) owns the wording. **The caption never states a
+  total** — `row_count` is the count AFTER the cut and nothing runs a `COUNT(*)`,
+  so "of 3,412" would be invented; it says "First 200 rows · the full result is
+  larger". It is **scoped to single-table answers** via the same
+  `countMarkdownTables(src) === 1 && messageId != null` gate that decides whether
+  the CSV re-runs server-side, because attributing one of N results to one of N
+  rendered tables is a heuristic that can pick wrong. **Sorting a truncated table
+  is kept but warned**, in `--warn` tone naming the cap ("not a ranking of the
+  full result") — the old note appeared only AFTER sorting, in 12px muted text,
+  and counted the rows the MODEL transcribed, a number unrelated to both the cap
+  and the true total. The CSV button now **names what it does**: `Download full
+  result (CSV)` (server re-run at the 100k cap) vs `Download these N rows (CSV)`
+  (the transcription). And `downloadServerCsv` **fetches into a blob** instead of
+  clicking a bare `<a href>` with no `download` attribute — every error path
+  (400/404/**429**/504) used to replace the chat view with a raw JSON page, and a
+  slow export timing out is the likeliest failure. Pinned in
+  `frontend/e2e/truncated-table.spec.js` + `tabletruth.test.js`.
 - **API errors are typed, and a failure is never silent or raw.** `api.js` threw a
   bare `Error` whose message was the **raw response body** and discarded the
   status, so four call sites re-implemented `JSON.parse(err.message).detail` and

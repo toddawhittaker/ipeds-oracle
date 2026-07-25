@@ -881,6 +881,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .table-block { margin: 8px 0; }
 .table-tools { display: flex; gap: 14px; padding: 5px 2px 0; font-size: 13px; }
 .sort-note { margin: 5px 2px 0; font-size: 12px; color: var(--muted); }
+/* A sort over a TRUNCATED table answers a different question than the one asked
+   ("the biggest of the first 200"), so its note is a warning, not a footnote. */
+.sort-note.warn { color: var(--warn); font-weight: 600; }
+/* Row-cap caption, above the toolbar, in the mono micro-label device. */
+.table-caption { margin: 0 2px 4px; }
 
 /* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
    that appears once rows are ticked, and the instant snapshot chart panel. */

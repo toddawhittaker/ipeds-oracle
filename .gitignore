@@ -12,6 +12,9 @@ data/*.mdb
 # App state DB (users, skills, chats) and staging rebuilds — never commit
 app.db
 app.db-*
+# Pre-migration snapshots (backend/app/db.py _snapshot_before_migrating).
+# NOT covered by *.db — the version suffix comes last (app.db.pre-v29).
+*.db.pre-v*
 ipeds_staging.db
 ipeds.db-*
 # Atomic-swap backup the importer leaves next to ipeds.db (repo root in local

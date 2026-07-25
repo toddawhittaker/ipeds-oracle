@@ -368,6 +368,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # THIS turn's own results (capped), so a LATER turn can ground a
                 # figure against them (app/grounding.py, conversation-scoped).
                 results=_results_for_storage(result.results),
+                results_truncated=any(r.truncated for r in (result.results or [])),
                 # Structured-emission telemetry (PR-1): how the turn emitted, and
                 # whether the sentinel found residual leak debris in the prose.
                 emit_mode=result.emit_mode, leaked=result.leaked,
@@ -438,7 +439,10 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     "model": result.model_used, "tokens": result.total_tokens,
                     "message_id": msg_id, "user_message_id": user_msg_id,
                     # The live turn shows "Thought for N seconds" without a reload.
-                    "duration_ms": duration_ms}
+                    "duration_ms": duration_ms,
+                    # …and captions a truncated table without one. Same value the
+                    # message row stores, so live and reloaded agree.
+                    "results_truncated": any(r.truncated for r in (result.results or []))}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
                 title = await generate_title(question, answer)
@@ -500,7 +504,8 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              suggestions=None, clarify=None, figure_grounding=None,
              figure_derivation=None, results=None, emit_mode=None, leaked=False,
              table_grounding=None, table_cells_checked=0, table_cells_matched=0,
-             duration_ms=None, exhaustion=None, delete_from_id=None):
+             duration_ms=None, exhaustion=None, results_truncated=False,
+             delete_from_id=None):
     """Persist the user + assistant messages and usage row. Returns the new
     assistant message id (so the stream can hand it to the client without a
     full conversation reload).
@@ -523,14 +528,15 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         cur = con.execute(
             "INSERT INTO messages(conversation_id, role, content, sql_log, "
             "thinking, figure, suggestions, clarify, results, model_used, tokens, "
-            "duration_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "duration_ms, results_truncated, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (conv_id, "assistant", answer, json.dumps(sql_log),
              json.dumps(thinking or []),
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
              json.dumps(clarify) if clarify else None,
              json.dumps(results) if results else None, model, tokens,
-             duration_ms, now))
+             duration_ms, int(bool(results_truncated)), now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -585,7 +591,7 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
             raise HTTPException(404, "Not found.")
         rows = con.execute(
             "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
-            "model_used, created_at, duration_ms "
+            "model_used, created_at, duration_ms, results_truncated "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
