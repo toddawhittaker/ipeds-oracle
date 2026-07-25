@@ -1748,6 +1748,38 @@ def test_skills_patch_updates_fields_and_noop_with_empty_body():
         assert noop.status_code == 200 and noop.json()["ok"] is True, noop.text
 
 
+def test_skills_patch_on_a_missing_id_is_404_not_500_or_a_false_ok():
+    """A PATCH against a skill that no longer exists must say so.
+
+    Two different wrong answers used to come out of the same handler, and an
+    admin hits both by editing a lesson in a stale tab that another admin (or
+    their own other window) already deleted:
+
+    - editing headline/lesson CRASHED — the re-embed step does
+      `row = ...fetchone()` then subscripts it, so a missing row raised
+      TypeError and surfaced as a 500;
+    - a verify-only PATCH silently returned {"ok": true} while its UPDATE
+      matched zero rows, so the UI reported a successful save of nothing.
+    """
+    missing = 10_000_000
+    with TestClient(app) as c:
+        _login(c)
+        assert not any(s["id"] == missing for s in c.get("/api/admin/skills").json())
+
+        edit = c.patch(f"/api/admin/skills/{missing}", json={"lesson": "rewritten"})
+        assert edit.status_code == 404, (
+            f"editing a deleted skill should 404, got {edit.status_code}: {edit.text[:200]}")
+
+        verify = c.patch(f"/api/admin/skills/{missing}", json={"verified": True})
+        assert verify.status_code == 404, (
+            f"verifying a deleted skill should 404, got {verify.status_code}: "
+            f"{verify.text[:200]}")
+
+        empty = c.patch(f"/api/admin/skills/{missing}", json={})
+        assert empty.status_code == 404, (
+            f"an empty PATCH to a deleted skill should 404, got {empty.status_code}")
+
+
 def test_skills_delete_removes_the_row():
     with TestClient(app) as c:
         _login(c)
@@ -3356,6 +3388,8 @@ def run():
           test_skills_patch_verify_only_does_not_reembed)
     check("skills PATCH updates fields; empty body is a no-op",
           test_skills_patch_updates_fields_and_noop_with_empty_body)
+    check("skills PATCH on a missing id is 404, not 500 or a false ok",
+          test_skills_patch_on_a_missing_id_is_404_not_500_or_a_false_ok)
     check("skills DELETE removes the row", test_skills_delete_removes_the_row)
     check("server logs endpoint returns records", test_server_logs_returns_records)
     check("server logs endpoint handles no handler installed",

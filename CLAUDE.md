@@ -18,7 +18,13 @@ dataset (`ipeds.db`) and streams back an answer. The app is the work;
 - `app.db` — app state (users, sessions, conversations, usage). `logs.db` —
   persistent server logs. Both separate from the read-only `ipeds.db`.
 - `scripts/build_ipeds_db.py` — repeatable loader that builds `ipeds.db` from the
-  `data/*.accdb` files (`--dry-run` prints the table→family mapping).
+  `data/*.accdb` files (`--dry-run` prints the table→family mapping). It **checks
+  `mdb-export`'s exit status** and aborts: a failed extraction used to be
+  indistinguishable from an empty table, so a whole survey family could load ZERO
+  rows with the build still reporting success — and on a FIRST build there is no
+  prior dataset for `integrity_checks`' shrink detector to catch it against. An
+  ABANDONED stream is exempt (`header_only` probes a table's shape and breaks,
+  killing `mdb-export` with SIGPIPE); only a fully-drained one is judged.
 - `CONTRIBUTING.md` — **dev handbook** (stack, local run, tests, lint, CI, agent
   team). `docs/` — `SCHEMA.md` (data model + query guide). Self-hosting lives in the README.
 - `brand/` — the **IPEDS Oracle** identity: `icon.svg` (the Column mark — vector

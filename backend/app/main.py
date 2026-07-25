@@ -1,6 +1,6 @@
 """FastAPI application entry point.
 
-Serves the JSON API and, in production, the built React app (web/dist). On
+Serves the JSON API and, in production, the built React app (frontend/dist). On
 startup it initializes app.db, seeds skill exemplars, and warms the embedder.
 """
 from __future__ import annotations
@@ -156,11 +156,22 @@ if WEB_DIST.exists():
         # Real API routes, and the api_404 catch-all above, are matched first;
         # everything else serves the SPA shell.
         web_root = WEB_DIST.resolve()
-        candidate = (WEB_DIST / full_path).resolve()
-        if full_path and candidate.is_relative_to(web_root) and candidate.is_file():
+        try:
+            candidate = (WEB_DIST / full_path).resolve()
+            is_file = candidate.is_file()
+        except (ValueError, OSError):
+            # The path can't even be evaluated by the OS, so it is certainly not
+            # a file we ship: a NUL byte raises ValueError ("embedded null
+            # byte"), an over-long segment raises OSError (ENAMETOOLONG). These
+            # fire BEFORE the traversal check below, so leaving them unhandled
+            # turned any such request into an unauthenticated 500 — one that
+            # writes an ERROR row into logs.db and, through the admin attention
+            # badge that counts log problems, lights up an admin's UI.
+            return FileResponse(WEB_DIST / "index.html")
+        if full_path and candidate.is_relative_to(web_root) and is_file:
             return FileResponse(candidate)
         return FileResponse(WEB_DIST / "index.html")
 else:
     @app.get("/")
     def dev_root():
-        return {"detail": "API running. Build the frontend (web/) or run Vite dev server."}
+        return {"detail": "API running. Build the frontend (frontend/) or run Vite dev server."}

@@ -1,7 +1,7 @@
 // Disk/time estimator — JS mirror of app/estimate.py's estimate_integrate.
 // Cross-language agreement is asserted against the SAME fixture
-// (eval/fixtures/estimate_cases.json) by the vitest unit test
-// web/src/estimate.test.js; keep this in lockstep with the Python original if
+// (backend/tests/fixtures/estimate_cases.json) by the vitest unit test
+// frontend/src/estimate.test.js; keep this in lockstep with the Python original if
 // either changes.
 //
 // estimateIntegrate takes a SINGLE options object with camelCase keys
@@ -11,7 +11,7 @@
 // buildSecondsPerYear, safetyFactor. Returns a plain object with camelCase
 // output keys mirroring the Python result dict 1:1.
 //
-// Pinned arithmetic (see eval/test_estimate.py / the fixture for the full
+// Pinned arithmetic (see backend/tests/test_estimate.py / the fixture for the full
 // derivation): MB = 1024*1024 (storage) vs. bandwidthMbps * 1_000_000/8
 // (decimal Mbps -> bytes/sec) — these must NOT be conflated. A null zipBytes
 // entry contributes exactly one defaultPerYearDbMb*MB slice. perYearDbBytes

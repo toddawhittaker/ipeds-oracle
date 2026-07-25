@@ -70,6 +70,22 @@ def list_tables(accdb):
     return [t for t in out.stdout.splitlines() if t.strip()]
 
 
+def _export_failed(proc, accdb, table):
+    """Raise if mdb-export ended badly. Call only after wait().
+
+    Without this the loader could not tell a FAILED extraction from an empty
+    table: mdb-export writes nothing when it can't open the file or the table is
+    misnamed, so a whole survey family loaded zero rows and the build still
+    reported success. On a first build there is no prior dataset for
+    integrity_checks' shrink detector to compare against either, so the wrong
+    data just ships.
+    """
+    if proc.returncode:
+        raise RuntimeError(
+            f"mdb-export failed for table {table!r} in {accdb} "
+            f"(exit {proc.returncode}) — refusing to treat it as empty data.")
+
+
 def stream_table(accdb, table):
     """Yield (header_list, row_iter) for a table via mdb-export (streamed)."""
     p = subprocess.Popen(
@@ -81,15 +97,25 @@ def stream_table(accdb, table):
         header = next(reader)
     except StopIteration:
         p.wait()
-        return [], iter(())
+        _export_failed(p, accdb, table)
+        return [], iter(())          # clean exit, no rows: a genuinely empty table
     header = [h.strip().lower() for h in header]
 
     def rows():
+        # `drained` separates the two ways this generator ends. Running out of
+        # rows means the export finished, so its exit status is meaningful.
+        # Being closed early (header_only probes a table's shape and breaks)
+        # kills mdb-export with SIGPIPE — a non-zero status that says nothing
+        # about the data, and raising on it would break every schema probe.
+        drained = False
         try:
             yield from reader
+            drained = True
         finally:
             p.stdout.close()
             p.wait()
+            if drained:
+                _export_failed(p, accdb, table)
 
     return header, rows()
 

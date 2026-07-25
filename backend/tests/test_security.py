@@ -45,7 +45,7 @@ mailer.send_access_request = lambda *a, **k: True
 
 from app import skills  # noqa: E402
 from app.db import connect  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import WEB_DIST, app  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -95,6 +95,37 @@ def test_path_traversal_blocked() -> None:
             assert not leaked, (
                 f"{p} returned 200 and leaked docs/SCHEMA.md contents "
                 f"(body starts: {r.text[:60]!r})")
+
+
+def test_unopenable_paths_serve_the_shell_instead_of_crashing() -> None:
+    """A path the OS can't even evaluate must not become a 500.
+
+    `spa()` calls Path.resolve()/is_file() on the raw request path, and those
+    raise before any traversal check can run: a NUL byte -> ValueError
+    ("embedded null byte"), an over-long segment -> OSError (ENAMETOOLONG).
+    Both surfaced as unhandled 500s, which is an UNAUTHENTICATED way to write
+    ERROR rows into logs.db — and since the admin attention badge counts log
+    problems, an unauthenticated way to light up an admin's badge.
+
+    The contract is the same as any other unknown path: fall through to the SPA
+    shell and let the client router deal with it.
+    """
+    paths = {
+        "NUL byte": "/%00",
+        "NUL byte mid-path": "/app/%00/x",
+        "over-long segment": "/" + "a" * 600,
+    }
+    with TestClient(app) as c:
+        for label, p in paths.items():
+            r = c.get(p, follow_redirects=False)
+            assert r.status_code != 500, (
+                f"{label} ({p!r}) crashed the SPA catch-all: "
+                f"{r.status_code} {r.text[:120]!r}")
+            # With frontend/dist present (CI stubs it) the shell must be served,
+            # not merely "something that isn't a 500".
+            if WEB_DIST.exists():
+                assert r.status_code == 200, (
+                    f"{label} ({p!r}) should serve the SPA shell, got {r.status_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +527,8 @@ def run() -> None:
 
     print("1. path traversal in SPA catch-all")
     check("blocks encoded ../ escapes from frontend/dist", test_path_traversal_blocked)
+    check("a NUL-byte / over-long path serves the shell, never a 500",
+          test_unopenable_paths_serve_the_shell_instead_of_crashing)
 
     print("\n2. de-authorization revokes access")
     check("removing from allowlist kills session + clears is_admin",

@@ -1,6 +1,6 @@
 # Playwright e2e suite
 
-End-to-end browser tests for the React UI in `web/src`. These drive the real
+End-to-end browser tests for the React UI in `frontend/src`. These drive the real
 app (via Vite dev server) but intercept every `/api/**` request with
 `page.route(...)` (see `mocks.js`), so the suite runs deterministically with
 **no `LLM_API_KEY` and no `ipeds.db`** — no backend process is started.
@@ -25,7 +25,7 @@ npx playwright show-report                  # open the HTML report after a run
 
 `playwright.config.js` starts `npm run dev -- --port 5173 --strictPort` as the
 `webServer` and points `baseURL` at it. The dev server's `/api` proxy to
-`:8000` (see `web/vite.config.js`) is never actually used — every API call is
+`:8000` (see `frontend/vite.config.js`) is never actually used — every API call is
 fulfilled by a mock before it leaves the page.
 
 ## Specs
