@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { deleteAnnouncement } from "./announce.js";
 
 // The delete-announcer wording — the pure branch/plural logic that used to be
-// pinned as exact strings inside web/e2e/delete-focus.spec.js. The e2e spec
+// pinned as exact strings inside frontend/e2e/delete-focus.spec.js. The e2e spec
 // still owns the browser truth (focus lands right, the live region actually
 // re-announces); this owns WHAT it says.
 describe("deleteAnnouncement", () => {

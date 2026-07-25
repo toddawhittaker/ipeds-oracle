@@ -674,31 +674,6 @@ async def _forced_emit(client: httpx.AsyncClient, model: str,
     return _find_emit_call(msg.get("tool_calls") or [])
 
 
-# Residual structured-emission DEBRIS in the SHIPPED prose — a mangle that slipped
-# every guard. The sentinel records it (telemetry only; the normalizer already
-# repairs the known forms). Debris means: a bare figure `"value"`+`"label"` object
-# left inline; a leftover ```figure/```followups/```clarify fence (those are
-# EXTRACTED to structured fields, so a residual one is debris); or a mangled
-# `![figure]`/`![chart]` image form (the observed #167 leak). A plain ```chart
-# fence is deliberately NOT here — a chart is DELIVERED to the frontend as a
-# ```chart fence in the prose by design, so it must never flag. (A bare chart
-# object's nested `data:[{…}]` also defeats a flat brace regex; the realistic
-# chart mangle is `![chart]`, which IS covered.)
-_LEAK_SENTINEL_RE = re.compile(
-    r"\{[^{}]*\"value\"[^{}]*\"label\"[^{}]*\}"
-    r"|```(?:figure|followups|clarify)\b"
-    r"|!\[(?:figure|chart)\b",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _leak_flag(prose: str) -> bool:
-    """True if the shipped prose still carries residual structured-emission
-    debris. A plain ```chart fence (the intended chart delivery) matches none of
-    the patterns, so it is never flagged."""
-    return bool(_LEAK_SENTINEL_RE.search(prose or ""))
-
-
 def _is_debris_object(obj: object) -> bool:
     """A parsed JSON value that is figure-shaped (value+label) or chart-shaped
     (type+data) — the two block payloads that leak as raw JSON when the model

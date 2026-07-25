@@ -58,11 +58,11 @@ test.describe("conversation list items", () => {
     await page.goto("/");
 
     // Before the a11y fix these were click-only <div>s with no button role;
-    // now they're real react-router <a> links (see web/e2e/nav-links.spec.js
+    // now they're real react-router <a> links (see frontend/e2e/nav-links.spec.js
     // for the full link-conversion contract). exact:true -- getByRole
     // name-matching is substring by default, and the row's own trash-button
     // aria-label ("Delete chat: <title>", added for the delete-focus a11y
-    // fix -- see web/e2e/delete-focus.spec.js) now CONTAINS this bare title,
+    // fix -- see frontend/e2e/delete-focus.spec.js) now CONTAINS this bare title,
     // so an unscoped substring match would hit both controls (strict-mode
     // violation). This still tests the same intent -- the row is a real
     // link, reachable by its accessible name -- exact matching just

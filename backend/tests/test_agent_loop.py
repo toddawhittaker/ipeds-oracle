@@ -1408,18 +1408,6 @@ def test_reconstruct_ask_clarification():
                     "options": ["Bachelor's", "All levels"]}, clar
 
 
-def test_leak_flag_detects_residual_debris():
-    assert llm._leak_flag('lead\n{"value":"5","label":"x"} trail') is True
-    assert llm._leak_flag("```figure\n{}\n```") is True   # should've been extracted
-    assert llm._leak_flag("![figure] {}") is True          # a mangled image form
-    assert llm._leak_flag("A clean prose answer with a number 511.") is False
-    # A plain ```chart fence is the INTENDED chart delivery — never a leak...
-    assert llm._leak_flag('```chart\n{"type":"line","data":[{"y":1}]}\n```') is False, \
-        "a chart fence is delivered to the frontend by design, not debris"
-    # ...but a mangled ![chart] image form (the observed #167 leak) IS flagged.
-    assert llm._leak_flag('![chart] {"type":"line"}') is True
-
-
 def test_scrub_strips_leaked_figure_json_whatever_the_wrapping():
     """The observed conv-18 regression: on a fence-fallback turn the model emits
     the figure as raw JSON the extractor missed — bare, `inline-code`-wrapped, or
@@ -1838,8 +1826,6 @@ def run():
           test_reconstruct_answer_builds_well_formed_fences)
     check("_reconstruct_answer builds a clarify fence from ask_clarification",
           test_reconstruct_ask_clarification)
-    check("_leak_flag detects residual fence/JSON debris",
-          test_leak_flag_detects_residual_debris)
     check("scrub strips leaked figure JSON whatever the wrapping",
           test_scrub_strips_leaked_figure_json_whatever_the_wrapping)
     check("scrub preserves a real chart fence and ordinary braces",

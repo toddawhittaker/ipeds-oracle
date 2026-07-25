@@ -30,7 +30,7 @@ log = logging.getLogger("ipeds.importer")
 
 FILENAME_RE = re.compile(r"^IPEDS(\d{4})(\d{2})\.accdb$", re.IGNORECASE)
 REQUIRED_FAMILIES = ("c_a", "hd", "valuesets", "vartable", "_years")
-# The Imports tab polls every 2s (web/src/Admin.jsx) — persisting per-year
+# The Imports tab polls every 2s (frontend/src/Admin.jsx) — persisting per-year
 # progress more often than that is pure overhead. See _ProgressWriter below.
 PROGRESS_MIN_INTERVAL_SECONDS = 1.5
 # scripts/build_ipeds_db.py emits these machine-readable lines (in addition to

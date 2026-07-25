@@ -1,13 +1,13 @@
-// Cross-language agreement test: web/src/estimate.js's estimateIntegrate must
+// Cross-language agreement test: frontend/src/estimate.js's estimateIntegrate must
 // reproduce app/estimate.py's estimate_integrate EXACTLY, byte-for-byte (ints)
 // and to float precision (seconds), against the SHARED ground-truth fixture
 // backend/tests/fixtures/estimate_cases.json (also asserted from the Python side by
-// eval/test_estimate.py). See that fixture's cases for the derivation.
+// backend/tests/test_estimate.py). See that fixture's cases for the derivation.
 //
-// Moved here from web/e2e/estimate.spec.js: this is pure input->output logic
+// Moved here from frontend/e2e/estimate.spec.js: this is pure input->output logic
 // that never referenced `page`, so it belongs in the fast unit tier, not a
 // browser. (The disk-headroom METER that renders this result -- .over class,
-// submit-disable -- IS browser truth and stays in web/e2e/nces-catalog.spec.js.)
+// submit-disable -- IS browser truth and stays in frontend/e2e/nces-catalog.spec.js.)
 //
 // The fixture stores snake_case keys (the Python kwarg names); estimateIntegrate
 // takes a single options object with camelCase keys mirroring them 1:1, so this

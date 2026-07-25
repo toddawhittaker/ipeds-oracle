@@ -356,6 +356,48 @@ def test_migration_28_adds_chat_request_attempts_table():
     assert "idx_chat_attempts_created" in idx, idx
 
 
+def test_migration_32_drops_the_dead_messages_feedback_column():
+    """The 👍/👎 column outlived its feature; migration 32 is the first DROP here.
+
+    Two things make a DROP different from every migration above it, and both are
+    asserted:
+
+    1. CONVERGENCE. The baseline SCHEMA is frozen, so it still CREATEs the
+       column — an install that runs SCHEMA as migration 1 must therefore end up
+       identical to one upgraded from an old app.db. Removing the column from
+       SCHEMA instead of shipping this migration would give a fresh install no
+       column and an upgraded install a live one, and both answer queries fine,
+       so the divergence would be invisible (the failure mode the golden
+       fingerprint exists to force a checkpoint on).
+    2. SQLite rewrites the whole table for a DROP COLUMN, so neighbouring data
+       has to be proven intact rather than assumed.
+    """
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 31])
+    assert "feedback" in _cols(con, "messages"), (
+        "precondition: the frozen baseline SCHEMA still creates the column")
+
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+                "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, sql_log, "
+                "feedback, created_at) VALUES (1, 'assistant', 'kept', 'SELECT 1', 1, 7)")
+
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    assert "feedback" not in _cols(con, "messages"), _cols(con, "messages")
+
+    # The table rewrite preserved every other column of the existing row.
+    row = con.execute("SELECT conversation_id, role, content, sql_log, created_at "
+                      "FROM messages").fetchone()
+    assert tuple(row) == (1, "assistant", "kept", "SELECT 1", 7), tuple(row)
+
+    # Convergence: a FRESH database ends in the same shape as the upgraded one.
+    fresh = sqlite3.connect(":memory:")
+    _apply_migrations(fresh, MIGRATIONS)
+    assert _cols(fresh, "messages") == _cols(con, "messages"), (
+        "a fresh install and an upgraded install disagree on messages' columns")
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -988,13 +1030,6 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ],
       [
         "duration_ms",
-        "INTEGER",
-        0,
-        null,
-        0
-      ],
-      [
-        "feedback",
         "INTEGER",
         0,
         null,
@@ -1698,6 +1733,8 @@ def run():
           test_migration_27_adds_usage_log_exhaustion_column)
     check("migration 28 adds chat_request_attempts (SEC-3 throttle)",
           test_migration_28_adds_chat_request_attempts_table)
+    check("migration 32 drops the dead messages.feedback column (fresh == upgraded)",
+          test_migration_32_drops_the_dead_messages_feedback_column)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

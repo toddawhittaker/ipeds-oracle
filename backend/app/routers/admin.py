@@ -856,7 +856,7 @@ def _integrated_starts() -> set[int]:
 
     NOTE: kept calling `importer._years(...)` (a bare module attribute) rather
     than the newer `app.tools.sql.ipeds_years()` non-raising probe, even
-    though the two are functionally equivalent -- eval/test_admin_router.py's
+    though the two are functionally equivalent -- backend/tests/test_admin_router.py's
     `_patch_catalog`/`_patch_years` helpers monkeypatch
     `admin_router.importer._years` and document that the router must call it
     "through the module ... for these patches to take effect." Switching to
@@ -1205,17 +1205,24 @@ def update_skill(skill_id: int, body: SkillUpdate):
         sets.append("notes=?"); vals.append(body.notes)
     if body.canonical_sql is not None:
         sets.append("canonical_sql=?"); vals.append(body.canonical_sql)
-    if not sets:
-        return {"ok": True}
     con = connect()
     try:
+        # Existence is checked FIRST, for every body shape. Editing a skill that
+        # another admin (or another tab) already deleted used to give two
+        # different wrong answers from here: a headline/lesson edit crashed on
+        # the re-embed's `row[...]` (500), while a verify-only edit ran an UPDATE
+        # that matched nothing and still reported {"ok": true}.
+        row = con.execute(
+            "SELECT headline, lesson FROM skills WHERE id=?", (skill_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Skill not found.")
+        if not sets:
+            return {"ok": True}
         # The embedding derives from headline+lesson (app.skills._embed_source),
         # so editing either one makes the stored vector stale — recompute it in
         # the same request. A verify-only PATCH touches neither field and skips
         # this entirely.
         if body.headline is not None or body.lesson is not None:
-            row = con.execute(
-                "SELECT headline, lesson FROM skills WHERE id=?", (skill_id,)).fetchone()
             new_headline = body.headline if body.headline is not None else (row["headline"] or "")
             new_lesson = body.lesson if body.lesson is not None else (row["lesson"] or "")
             v = skills.embed(skills._embed_source(new_headline, new_lesson))

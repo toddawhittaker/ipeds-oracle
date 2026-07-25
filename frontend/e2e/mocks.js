@@ -16,7 +16,7 @@
  * specify it, so every existing spec (written before the no-data/onboarding
  * feature existed) keeps rendering Chat/Admin normally without having to be
  * touched. Pass `has_data: false` explicitly to exercise the fresh-deploy
- * no-data state (see web/e2e/no-data-onboarding.spec.js).
+ * no-data state (see frontend/e2e/no-data-onboarding.spec.js).
  *
  * `trust_llm_provider` is likewise absent (falsy) by default, so the chat
  * privacy warning shows unless a spec passes `trust_llm_provider: true` to
@@ -161,7 +161,7 @@ export async function mockConversations(page, initial = []) {
  * GET /api/chat/conversations/:id -> array of {role, content, id?, sql_log?,
  * clarify?}
  * (or a non-200 `httpStatus`, e.g. 404 for "doesn't exist" / 403 for "not
- * yours" -- see web/e2e/routing-chat.spec.js's bad-:id notice tests, which
+ * yours" -- see frontend/e2e/routing-chat.spec.js's bad-:id notice tests, which
  * assert the SAME rendered text for both so the UI isn't an enumeration
  * oracle). `sql_log` must be passed as a JSON STRING per the real API
  * contract (Chat.jsx does JSON.parse on it) — pass an array of SQL strings
@@ -238,7 +238,7 @@ export async function mockRenameConversation(page, id, { httpStatus = 200 } = {}
  * route has fulfilled, in order — so a spec can assert exactly which
  * `conversation_id` a given turn sent (e.g. a follow-up turn must carry the
  * conversation id the FIRST turn was assigned, not null — see
- * web/e2e/routing-chat.spec.js's orphaned-conversation regression).
+ * frontend/e2e/routing-chat.spec.js's orphaned-conversation regression).
  *
  * `delayMs` (default 0) delays fulfilling the response by that many ms —
  * i.e. simulates network/model latency so the request is genuinely
@@ -301,7 +301,7 @@ export async function mockStreamChat(page, {
  * backend/app/routers/chat.py's has_data:false guard, which streams only
  * status/answer/done and deliberately never assigns/returns a conversation id
  * (there's nothing to save yet). Used to exercise the "URL never leaves /"
- * path -- see web/e2e/routing-chat.spec.js's "+ New chat" no-op regression.
+ * path -- see frontend/e2e/routing-chat.spec.js's "+ New chat" no-op regression.
  */
 export async function mockStreamChatNoConversation(page, {
   statusText = "Thinking…",
@@ -365,7 +365,7 @@ export async function mockDeleteConversation(page, { httpStatus = 200 } = {}) {
  * `postStatus`/`postBody` let a spec control exactly what POST returns, so
  * the four `inviteFlash()` branches in frontend/src/Admin.jsx (added/failed-to-add,
  * invited, mail_configured true/false) can each be driven deterministically —
- * see web/e2e/admin-allowlist-flash.spec.js. Defaults (200, {ok:true}) match
+ * see frontend/e2e/admin-allowlist-flash.spec.js. Defaults (200, {ok:true}) match
  * every pre-existing caller of this helper, which only cares about the GET.
  */
 export async function mockAllowlist(page, rows, { postStatus = 200, postBody = { ok: true } } = {}) {
@@ -445,7 +445,7 @@ export async function mockUsage(page, data) {
  * [{id,question,headline,lesson,canonical_sql,notes,verified,upvotes,downvotes,hits,
  *   created_by}].
  * `headline` is the short generalized rule title that now leads the admin UI
- * (see web/e2e/admin-lessons.spec.js); `lesson` is the longer generalized
+ * (see frontend/e2e/admin-lessons.spec.js); `lesson` is the longer generalized
  * description, collapsed behind a "Details" `<details>`.
  */
 export async function mockSkills(page, rows) {
@@ -471,7 +471,7 @@ export async function mockImportJobs(page, rows) {
  * the real API contract it's a JSON STRING (mirrors `sql_log` on chat
  * messages) that the app JSON.parses; shape: {overall:{phase,message},
  * years:{"<start_year>":{start_year,year_label,step,downloaded_bytes,
- * total_bytes,pct}}}. See web/e2e/nces-catalog.spec.js's per-file-progress
+ * total_bytes,pct}}}. See frontend/e2e/nces-catalog.spec.js's per-file-progress
  * test for a worked example.
  */
 export async function mockImportJobPoll(page, jobId, sequence) {
@@ -514,13 +514,13 @@ export async function mockDenyAccessRequest(page, { httpStatus = 200, detail } =
  * GET /api/admin/access-requests/denied ->
  * [{id, canon_email, emails:[...], created_at}] (or a non-200 `httpStatus`,
  * e.g. 500, to exercise the load-failure state -- see SEC #3,
- * web/e2e/undo-denial.spec.js). One object per CANONICAL group (deliberately
+ * frontend/e2e/undo-denial.spec.js). One object per CANONICAL group (deliberately
  * grouped differently from mockAccessRequests' raw-address pending list --
  * see admin.py's access_requests_denied docstring): `canon_email` is the
  * ACTUALLY-BLOCKED address (also the argument the Undo control's DELETE call
  * keys on) and `emails` is every distinct ORIGINAL address in the group.
  * Which the UI renders, and when, is a UI decision -- see SEC #1 in
- * web/e2e/undo-denial.spec.js for why canon_email is NOT always hidden.
+ * frontend/e2e/undo-denial.spec.js for why canon_email is NOT always hidden.
  */
 export async function mockDeniedRequests(page, rows, { httpStatus = 200 } = {}) {
   await page.route("**/api/admin/access-requests/denied", async (route) => {

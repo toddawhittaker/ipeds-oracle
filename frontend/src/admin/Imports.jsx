@@ -300,7 +300,7 @@ export default function Imports({ onDataChanged }) {
   // already-integrated AND checked (a status:"update" re-integration) counts
   // once in the union, not twice, so it can't inflate the staging-db term.
   // This is still a UX preview, not the server's authoritative preflight
-  // check — see app/estimate.py / web/src/estimate.js for the shared formula.
+  // check — see app/estimate.py / frontend/src/estimate.js for the shared formula.
   const diskEstimate = useMemo(() => {
     if (!catalog?.disk || !catalog?.calibration) return null;
     const calib = catalog.calibration;

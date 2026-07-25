@@ -142,7 +142,7 @@ test("a 409 response shows the already-running notice", async ({ page }) => {
 //
 // The numbers below are chosen so the exact arithmetic is known ahead of time
 // (same formula as backend/app/estimate.py / frontend/src/estimate.js — see
-// eval/fixtures/estimate_cases.json for the shared ground truth): with
+// backend/tests/fixtures/estimate_cases.json for the shared ground truth): with
 // already_integrated_count=0, live_db_bytes=0 (so per_year_db_bytes falls
 // back to default_per_year_db_mb*MB = 380*1024*1024 = 398,458,880),
 // expand_factor=3.0, safety_factor=1.2, and each selectable year's

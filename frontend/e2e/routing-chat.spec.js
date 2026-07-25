@@ -48,8 +48,8 @@ test.describe("chat routing", () => {
     // row's own trash-button aria-label ("Delete chat: <title>") now CONTAINS
     // the bare title, so an unscoped substring match hits both the row link
     // and the trash button (strict-mode violation) -- see
-    // web/e2e/delete-focus.spec.js. The row itself is a real react-router
-    // <a> link (see web/e2e/nav-links.spec.js).
+    // frontend/e2e/delete-focus.spec.js. The row itself is a real react-router
+    // <a> link (see frontend/e2e/nav-links.spec.js).
     const row = page.getByRole("link", { name: "CA nursing associate's degrees", exact: true });
     await row.click();
 
@@ -205,7 +205,7 @@ test.describe("chat routing", () => {
     await page.goto("/chat/3");
     await expect(page.getByText("Here you go.")).toBeVisible();
 
-    // Per-row accessible name (WCAG 4.1.2, see web/e2e/delete-focus.spec.js):
+    // Per-row accessible name (WCAG 4.1.2, see frontend/e2e/delete-focus.spec.js):
     // every trash button used to be identically named "Delete chat". The trash
     // is hover-revealed (pointer-events:none until the row is hovered), so
     // force-hover it first to make the click land.

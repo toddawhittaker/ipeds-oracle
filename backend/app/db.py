@@ -87,7 +87,10 @@ CREATE TABLE IF NOT EXISTS messages (
     sql_log         TEXT,                 -- JSON list of executed SQL
     model_used      TEXT,
     tokens          INTEGER,
-    feedback        INTEGER,              -- +1 / -1 / NULL
+    feedback        INTEGER,              -- DEAD: dropped by migration 32.
+                                          -- Stays here because SCHEMA is frozen
+                                          -- (it runs as migration 1); removing it
+                                          -- would diverge fresh from upgraded dbs.
     created_at      REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages(conversation_id, id);
@@ -402,6 +405,25 @@ MIGRATIONS: list[tuple[int, str]] = [
     (31, "ALTER TABLE query_cache ADD COLUMN results TEXT;\n"
          "ALTER TABLE query_cache ADD COLUMN results_truncated INTEGER;\n"
          "ALTER TABLE messages ADD COLUMN figure_grounding TEXT;"),
+    # 32: drop messages.feedback — the 👍/👎 column, dead since the thumbs
+    # feature was removed (nothing reads or writes it; the lesson pipeline now
+    # mines the critic and the feedback distiller instead, which is a different
+    # mechanism that never touched this column).
+    #
+    # This is the FIRST destructive migration here, so two notes for the next one:
+    #  - It is deliberately a MIGRATION rather than an edit to the frozen baseline
+    #    SCHEMA. SCHEMA runs as migration 1 on a fresh install, so editing it
+    #    would leave a fresh install without the column and an upgraded install
+    #    with it — a silent divergence, since both answer every query fine.
+    #    Adding the DROP here converges both.
+    #  - It is one-way. The values are from a removed feature and nothing can use
+    #    them again, but the pre-migration snapshot (_snapshot_before_migrating)
+    #    is the escape hatch if that judgement is ever wrong. That file is
+    #    `app.db.pre-v31`, NOT pre-v32 — the snapshot is named for the version it
+    #    HOLDS (the one before the upgrade), not the one being applied.
+    #    DROP COLUMN rewrites the table; it needs sqlite >= 3.35 (2021), well
+    #    under the floor every supported build already ships.
+    (32, "ALTER TABLE messages DROP COLUMN feedback;"),
 ]
 
 
