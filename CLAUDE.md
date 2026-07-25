@@ -877,6 +877,17 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   whose shrink-detector would falsely fail an intentional removal), then the same
   atomic-swap tail. It never touches the network or mutates live in place, and
   (unlike a rebuild) never invokes the loader subprocess.
+- **The swap keeps no `.prev` copy.** `_activate_staging` moves live aside only
+  so the two-step move is recoverable if the process dies between them; once
+  staging is in place it **deletes** that copy. Nothing used to, so every import
+  or year-removal left a full extra ~2 GB dataset on disk, forever. Safe with
+  queries in flight — the swap is a rename, so an open connection holds the old
+  INODE and unlinking removes the name, not the file. Likewise
+  `db._prune_snapshots` caps pre-migration `app.db.pre-v<N>` snapshots at
+  `SNAPSHOTS_KEPT` (2). **Scheduled backups are deliberately NOT the app's job**
+  — the operator snapshots the bind-mounted volume or crons
+  `scripts/backup_app_db.py`; the pre-migration snapshot is an upgrade safety
+  net, not a backup.
 - A rebuild (manual upload or NCES integrate) streams `scripts/build_ipeds_db.py`'s
   `##PROGRESS##` markers into a determinate rebuild-progress bar on the Imports tab.
 

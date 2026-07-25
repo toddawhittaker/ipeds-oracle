@@ -440,17 +440,29 @@ def deintegrate_checks(staging: Path, live: Path, removed_year: int) -> tuple[bo
 
 def _activate_staging(job_id: int, staging: Path,
                       done_message: str = "Import succeeded and is now live.") -> None:
-    """Atomic swap: back up live -> .db.prev, move staging -> live, bump
-    data_version, invalidate the semantic cache. Shared swap tail used by
+    """Atomic swap: move live aside, move staging -> live, DELETE the moved-aside
+    copy, bump data_version, invalidate the semantic cache. Shared swap tail used by
     BOTH build_check_swap (import/integrate) and run_deintegrate (year
     removal) — the only difference between callers is what happened before
     this point (a full rebuild vs. an offline in-place delete + VACUUM)."""
     s = get_settings()
     _update_overall_phase(job_id, "swapping", "Swapping the staging database into place…")
+    prev = s.ipeds_db_path.with_suffix(".db.prev")
     if s.ipeds_db_path.exists():
-        shutil.move(str(s.ipeds_db_path), str(s.ipeds_db_path.with_suffix(".db.prev")))
+        shutil.move(str(s.ipeds_db_path), str(prev))
     shutil.move(str(staging), str(s.ipeds_db_path))
-    _log(job_id, "Swapped staging → live ipeds.db")
+    # The .prev copy exists ONLY to make the two-step move recoverable: if the
+    # process died between them, the old database is still on disk under that
+    # name. Once staging is in place that window is closed, so drop it —
+    # ipeds.db is ~2 GB and REBUILDABLE from the .accdb sources (the README says
+    # so, which is why it isn't backed up), and nothing ever deleted this, so a
+    # long-running deployment silently carried two full datasets forever.
+    #
+    # Safe to unlink with queries in flight: the swap is a rename, so an
+    # already-open connection holds the old INODE — unlinking removes the name,
+    # not the file, and that reader finishes normally.
+    prev.unlink(missing_ok=True)
+    _log(job_id, "Swapped staging → live ipeds.db (previous copy removed)")
 
     con = connect()
     try:

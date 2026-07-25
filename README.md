@@ -152,9 +152,19 @@ The app serves a read‑only `ipeds.db`. Either drop a prebuilt one into the `/d
 volume (`srv-data/ipeds.db`), or start with none and build the first year through
 **Admin → Imports** (it fetches from NCES, or accepts an `.accdb` upload). Keep the
 source `.accdb` files under `srv-data/accdb/` for later re‑imports. `ipeds.db` is
-rebuildable, so it is **not** backed up; `app.db` (users, chats, learned skills) is
-the irreplaceable state — back it up with `scripts/backup_app_db.py` (optional
-off‑site copy to any S3‑compatible store via rclone; set `BACKUP_REMOTE`).
+rebuildable, so it is **not** backed up — and the previous copy is deleted as soon
+as an import or year‑removal swaps a new one into place, rather than leaving a
+second full dataset on disk.
+
+**Backups are yours to run.** `app.db` (users, chats, learned skills) is the
+irreplaceable state, and the app deliberately does **not** schedule its own
+backups — snapshot the bind‑mounted volume on whatever cadence you already use
+for the host, or run `scripts/backup_app_db.py` from your own cron (it takes a
+consistent online snapshot and can push off‑site to any S3‑compatible store via
+rclone; set `BACKUP_REMOTE`). The one thing the app does automatically is
+snapshot `app.db` **before applying migrations** on an upgrade, keeping the two
+most recent (`app.db.pre-v<N>`), so a bad upgrade is reversible. That is an
+upgrade safety net, not a backup: it does nothing for ordinary data loss.
 
 ### HTTPS
 
