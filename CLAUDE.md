@@ -559,7 +559,15 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   type/trend/labels via `initial*` props (Chart ↔ ChartModal is an intentional cyclic
   import, resolved at render time). A long chart **title wraps to 2 lines**
   (`wrapLabel`) so a narrow chart doesn't clip it, while the wide PNG export keeps one
-  line. `.chart-head` wraps rather than overflowing.
+  line. `.chart-head` wraps rather than overflowing. **`role="img"` sits on the inner
+  `.chart-graphic`, NEVER on the outer `<figure>`** — ARIA's presentational-children
+  rule strips every descendant of a `role="img"` from the a11y tree, so on the figure
+  it hid the whole toolbar (type select, delta badge, labels/copy/maximize) from
+  assistive tech while leaving it on screen. **Playwright's role engine does not prune
+  presentational children**, so `getByRole` found the controls and the toolbar specs
+  passed the entire time it was broken; the regression test therefore asserts
+  **containment** (`[role="img"] .chart-head` → 0) in `chat-happy-path.spec.js`, not
+  role. Treat "pinned by e2e" with suspicion for a11y semantics specifically.
 - **The analyst layer** on top of the brief:
   - **Trend line + %-change** — `Chart.jsx` overlays a least-squares fit (a computed
     `__trend` `<Line>`, dashed ochre, injected into `chartChildren()` so it flows to
@@ -761,6 +769,13 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   (400/404/**429**/504) used to replace the chat view with a raw JSON page, and a
   slow export timing out is the likeliest failure. Pinned in
   `frontend/e2e/truncated-table.spec.js` + `tabletruth.test.js`.
+  **Numeric columns right-align.** `Markdown.jsx` already computed `numericByCol`
+  (via `columnIsNumeric`) to pick a sort comparator; it now also puts `.num` on the
+  matching `<th>`/`<td>`, so digits line up on the ones place and magnitudes are
+  scannable down the column (`.num` already carried `tabular-nums lining-nums`). The
+  CSS stays **`.md`-scoped** — `.num` is shared with the hero figure's big serif
+  number, which is centred — and a `thead th` has `padding:0` and delegates to the
+  `.th-sort` button, so the *button* is what has to move its content.
 - **API errors are typed, and a failure is never silent or raw.** `api.js` threw a
   bare `Error` whose message was the **raw response body** and discarded the
   status, so four call sites re-implemented `JSON.parse(err.message).detail` and
@@ -980,6 +995,25 @@ per-`backend/app/`-module rule. The set is **derived from the filesystem** (any
 opt-in and a tested module can't stay silently ungated. Browser-tested components
 (`Chat.jsx`, `Admin.jsx`, …) have no `*.test.js` and so stay out of the floor —
 Playwright covers them.
+**The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`.**
+`critical`-only was not a strict threshold but a shaped blind spot: axe rates
+colour-contrast, `aria-prohibited-attr`, `scrollable-region-focusable` and
+`heading-order` as **`serious`**, i.e. the whole class this suite exists to catch
+scored under the bar. Three scans: Login, Chat, and **Chat in the DARK theme as an
+admin with an attention badge** — the light-theme non-admin scans structurally
+could not render the elements whose contrast was broken. Two hard-won limits:
+**(1)** the Login scan runs under `emulateMedia({reducedMotion:"reduce"})`, because
+the door's figure gallery auto-advances every 5s through a .34s fade and axe
+sampling mid-fade measures the *blended* colour — reporting 3.56:1 against text
+that rests at 4.85:1. Scan resting pixels, not a transient frame. **(2)** axe files
+a one-character element as **`incomplete`, not a violation** ("content is too short
+to determine if it is actual text content"), so the count badge that sat at 2.43:1
+on every admin's screen was invisible to the gate — and `incomplete` is not gatable
+in general (it also holds the composer's deliberate 1:1 transparent-textarea
+overlay). Contrast on such elements needs a **direct computed-style assertion**
+(`contrastRatio()` in that spec measures resolved pixels, pinning readability
+rather than a colour literal). `--on-fg` is the token for text on an `--accent`
+fill; a hardcoded `#fff` there is the recurring bug.
 **One list, not two, for the backend suites:** `scripts/run_backend_suites.sh`
 globs `backend/tests/test_*.py` and is called by BOTH `run_ci_local.sh` and CI's
 backend job. It replaced a hand-kept array plus ~30 hand-written CI steps that had
