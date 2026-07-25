@@ -843,7 +843,28 @@ function Allowlist({ me, sub, onAttentionChanged }) {
   // A tab click / arrow key routes to /admin/users/<key>; the URL's :sub is the
   // single source of truth for which panel shows (so Back/Forward + deep links
   // just work). navigate() pushes, so each tab switch is its own history entry.
-  const goSub = (key) => navigate(`/admin/users/${key}`);
+  // The tab a keypress must move FROM, tracked synchronously.
+  //
+  // `sub` is the committed prop, and it LAGS a navigation: navigate() updates the
+  // URL immediately, but react-router commits the re-render later (v8 routes
+  // through startTransition — the same deferral behind [[react-router7-
+  // streaming-urlflip]]). So a second keypress inside that window computed from
+  // the tab BEFORE the first one, and two quick presses from Current landed on
+  // Pending instead of Blocked — exactly what a keyboard user gets holding an
+  // arrow key. Reproduces 100% of the time with back-to-back presses; the
+  // existing spec only passed because it waited for the URL between keys.
+  //
+  // goSub owns the update so the click path keeps the same invariant (the effect
+  // alone would leave a window between navigate and commit). That path is NOT
+  // separately tested: a Playwright click carries enough latency that `sub`
+  // commits first, so the test passed with and without the fix — a test that
+  // cannot fail is noise, so it was dropped rather than shipped.
+  const activeKeyRef = useRef(sub);
+  useEffect(() => { activeKeyRef.current = sub; }, [sub]);
+  const goSub = (key) => {
+    activeKeyRef.current = key;
+    navigate(`/admin/users/${key}`);
+  };
   // Automatic activation: an arrow/Home/End moves selection immediately and
   // carries focus to the newly-active tab (its node persists across the
   // re-render; the rAF lets the new tabIndex settle first).
@@ -851,7 +872,7 @@ function Allowlist({ me, sub, onAttentionChanged }) {
     const action = { ArrowLeft: "left", ArrowRight: "right", Home: "home", End: "end" }[e.key];
     if (!action) return;
     e.preventDefault();
-    const nextKey = subTabKeyForArrow(sub, action);
+    const nextKey = subTabKeyForArrow(activeKeyRef.current, action);
     goSub(nextKey);
     requestAnimationFrame(() => tabRefs.current[nextKey]?.focus());
   }
