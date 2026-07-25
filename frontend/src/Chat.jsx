@@ -14,6 +14,7 @@ import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
+import { turnErrorMessage } from "./authcopy.js";
 import { editConfirmBody, editConfirmLabel, laterTurnsLost } from "./turns.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 
@@ -755,7 +756,7 @@ export default function Chat({ me }) {
         else if (ev.type === "figure") figure = ev.figure; // structured hero stat, rendered above the prose
         else if (ev.type === "suggestions") suggestions = ev.suggestions; // drill-down chips below the answer
         else if (ev.type === "clarify") clarify = ev.clarify; // disambiguation chips, no figure/suggestions on this turn
-        else if (ev.type === "error") { answer = "⚠️ " + ev.text; failed = true; }
+        else if (ev.type === "error") { answer = ev.text; failed = true; }
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
           if (ev.user_message_id) userMsgId = ev.user_message_id;
@@ -764,7 +765,13 @@ export default function Chat({ me }) {
         }
       });
     } catch (err) {
-      answer = "⚠️ " + err.message;
+      // NEVER the raw response body. This used to be `"⚠️ " + err.message`,
+      // where message was the unparsed body — so an ordinary rate-limit reached
+      // the user as ⚠️ {"detail":"Too many requests — please slow down…"},
+      // JSON braces and all, and an expired session as ⚠️ {"detail":"Not signed
+      // in."} with no way to act on it. turnErrorMessage keys on the status so
+      // the expected failures read as conditions, not as breakage.
+      answer = turnErrorMessage(err?.status, err?.detail);
       failed = true;
     }
     // VIEW writes -- gated: a stale (abandoned) turn's final answer must not
@@ -939,7 +946,7 @@ export default function Chat({ me }) {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={"msg " + m.role + (editingIdx === i ? " editing" : "")}>
+            <div key={i} className={"msg " + m.role + (m.error ? " failed" : "") + (editingIdx === i ? " editing" : "")}>
               <div className="bubble">
                 {m.role === "assistant" ? (
                   <div aria-live="polite" aria-busy={!!m.pending}

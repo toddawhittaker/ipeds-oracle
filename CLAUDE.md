@@ -725,6 +725,28 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   ASGI so it never buffers the chat SSE stream. In the **dev posture only** (insecure
   cookies) it also accepts loopback origins so the Vite dev-proxy (`changeOrigin`)
   works — production (Secure cookies) enforces strict same-origin.
+- **API errors are typed, and a failure is never silent or raw.** `api.js` threw a
+  bare `Error` whose message was the **raw response body** and discarded the
+  status, so four call sites re-implemented `JSON.parse(err.message).detail` and
+  anything that forwarded `err.message` printed FastAPI's JSON braces at the user
+  — an ordinary 429 reached the chat bubble as
+  `⚠️ {"detail":"Too many requests…"}`. Now one **`ApiError {status, detail}`**,
+  parsed once (and tolerant of a non-JSON body from a proxy). A **401 fires a
+  single `setUnauthenticatedHandler` hook** — advisory, not authoritative: the
+  handler **re-checks `/api/auth/me` before signing anyone out** (that endpoint is
+  exempt from the hook so it can't recurse), and a burst of 401s collapses into
+  one confirmation. Trusting the first 401 blindly logs a user out on any
+  incidental one — it broke ~226 e2e specs when tried, and would have done the
+  same to real users. `App.jsx` distinguishes **expired** (401) from
+  **unreachable** (anything else) so a transient 500 doesn't read as "you've been
+  logged out". User-facing wording lives in the pure `authcopy.js`
+  (vitest-pinned, the `announce.js` split). A failed turn now renders as a
+  **condition** — `.msg.assistant.failed`, a `--danger` left edge — not as prose
+  that happens to start with an emoji. Admin **Usage / Logs / Skills** render a
+  real error instead of "Loading…" forever, **"No log records."**, and "No
+  lessons yet" — a load failure must never be indistinguishable from an empty
+  result (the `deniedError` precedent, generalized). Pinned in
+  `frontend/e2e/error-visibility.spec.js` + `authcopy.test.js`.
 - **Security headers on every response:** a pure-ASGI `SecurityHeadersMiddleware`
   (`secheaders.py`, outermost so it stamps even the CSRF 403) sets a restrictive
   **CSP** (`script-src 'self'`, no `unsafe-inline`/`unsafe-eval`; `img-src 'self'

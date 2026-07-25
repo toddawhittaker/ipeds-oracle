@@ -7,6 +7,8 @@ import {
   mockImportJobs,
   mockImportJobPoll,
   mockIntegrate,
+  mockVersion,
+  mockAttention,
 } from "./mocks.js";
 
 // Fresh-deploy / no-data onboarding (SPEC-nodata.md):
@@ -170,6 +172,11 @@ test("an integrate reaching 'swapped' re-fetches /me and clears the Chat no-data
     });
   });
   await mockConversations(page, []);
+  // Mocked so this spec stays hermetic: an UNMOCKED /api/** 401s against the dev
+  // server, and a 401 now provokes one confirming /auth/me (api.js) — which
+  // would inflate the meCalls count this test is actually about.
+  await mockVersion(page);
+  await mockAttention(page);
   await mockImportCatalog(page, NO_DATA_CATALOG);
   await mockImportJobs(page, []);
   const integrate = await mockIntegrate(page, { jobId: 501, status: "pending" });

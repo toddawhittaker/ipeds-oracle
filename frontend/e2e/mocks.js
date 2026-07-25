@@ -713,7 +713,10 @@ export async function mockLogs(page, records) {
  * calibration/status directly rather than this helper synthesizing them.
  */
 export async function mockImportCatalog(page, data) {
-  await page.route("**/api/admin/import/catalog", async (route) => {
+  // `**` past the path so the ?refresh=1 variant (api.importCatalog(true)) is
+  // covered too — the bare glob let a refresh escape to the real server and
+  // 401, which was invisible while the caller swallowed its errors.
+  await page.route("**/api/admin/import/catalog**", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
 }

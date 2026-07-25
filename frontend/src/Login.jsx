@@ -101,9 +101,14 @@ function DoorFigures({ externalPaused = false }) {
   );
 }
 
-export default function Login() {
+// `notice` seeds the message slot from outside — App.jsx passes it when the door
+// is being shown BECAUSE something happened (an expired session, an unreachable
+// server) rather than because the visitor arrived logged out. Without it, all
+// three arrivals looked identical and silent, so "my session expired" was
+// indistinguishable from "I signed out" and from "the backend is down".
+export default function Login({ notice = "" }) {
   const [email, setEmail] = useState("");
-  const [msg, setMsg] = useState(null);
+  const [msg, setMsg] = useState(notice || null);
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState(FALLBACK_HINT);
