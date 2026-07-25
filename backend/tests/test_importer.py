@@ -737,8 +737,11 @@ def test_run_import_success_swaps_and_bumps_data_version():
     assert row["status"] == "swapped", row
     assert "✓ all good" in (row["report"] or ""), row
     assert live.read_bytes() == b"new-staging-content", "live db was not swapped"
-    prev = live.with_suffix(".db.prev")
-    assert prev.read_bytes() == b"old-live-content", "previous live was not backed up"
+    # The moved-aside copy exists only to make the two-step move recoverable;
+    # once staging is in place it is deleted, because ipeds.db is ~2 GB and
+    # rebuildable. Keeping it doubled the dataset on disk, forever.
+    assert not live.with_suffix(".db.prev").exists(), \
+        "the previous live database was left on disk after a successful swap"
     assert not staging.exists()
 
     con = db_connect()
@@ -1528,8 +1531,10 @@ def test_run_deintegrate_happy_path_removes_year_and_swaps():
 
     staging = live.with_name("ipeds_staging.db")
     assert not staging.exists(), "staging db must be removed after the swap"
-    assert live.with_suffix(".db.prev").exists(), \
-        "a .db.prev backup of the pre-removal live db must exist"
+    # Same contract as an import swap: the moved-aside copy is deleted once
+    # staging is live. A year removal is just as rebuildable as a rebuild.
+    assert not live.with_suffix(".db.prev").exists(), \
+        "the pre-removal database copy was left on disk after a successful swap"
 
 
 def test_run_deintegrate_refuses_removing_the_only_integrated_year():
@@ -1710,6 +1715,43 @@ def test_loader_script_path_resolves_to_repo_root_scripts():
     assert build.exists(), f"loader script not found at {build}"
 
 
+def test_activate_staging_removes_the_previous_copy():
+    """THE REGRESSION: _activate_staging moved live -> ipeds.db.prev and NOTHING
+    ever deleted it, so every import or year-removal left a full extra copy of a
+    ~2 GB database on disk, permanently — a long-running deployment silently
+    carried two datasets. ipeds.db is rebuildable from the .accdb sources (which
+    is why it isn't backed up), so the .prev copy is only worth keeping for the
+    instant between the two moves."""
+    d = Path(tempfile.mkdtemp())
+    live, staging = d / "ipeds.db", d / "ipeds_staging.db"
+    live.write_bytes(b"OLD-DATABASE")
+    staging.write_bytes(b"NEW-DATABASE")
+
+    orig_settings = importer.get_settings
+    base = orig_settings()
+
+    class _S:
+        ipeds_db_path = live
+        def __getattr__(self, name):
+            return getattr(base, name)
+
+    importer.get_settings = lambda: _S()
+    calls = []
+    orig_phase, orig_log = importer._update_overall_phase, importer._log
+    importer._update_overall_phase = lambda *a, **k: None
+    importer._log = lambda *a, **k: calls.append(a)
+    try:
+        importer._activate_staging(1, staging)
+    finally:
+        importer.get_settings = orig_settings
+        importer._update_overall_phase, importer._log = orig_phase, orig_log
+
+    assert live.read_bytes() == b"NEW-DATABASE", "staging did not become live"
+    assert not (d / "ipeds.db.prev").exists(), \
+        "the previous database copy was left behind — that is a full extra dataset on disk"
+    assert not staging.exists(), "the staging file should have been moved, not copied"
+
+
 def run():
     print("importer contract:")
     check("loader script path resolves to repo-root scripts/ (ROOT anchor)",
@@ -1823,6 +1865,8 @@ def run():
           test_update_rebuild_progress_computes_pct_and_preserves_siblings)
     check("build_check_swap parses ##PROGRESS## markers, keeps them out of the log",
           test_build_check_swap_parses_progress_markers_and_keeps_them_out_of_the_log)
+    check("the atomic swap removes the previous ipeds.db copy",
+          test_activate_staging_removes_the_previous_copy)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

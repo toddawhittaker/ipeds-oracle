@@ -18,7 +18,14 @@ tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 
-from app.db import MIGRATIONS, SchemaTooNewError, _apply_migrations, connect, init_db
+from app.db import (
+    MIGRATIONS,
+    SchemaTooNewError,
+    _apply_migrations,
+    _prune_snapshots,
+    connect,
+    init_db,
+)
 from app.seeds import SEED_LESSON_REWRITES
 
 FAILURES = []
@@ -1592,12 +1599,48 @@ def test_an_equal_version_is_not_refused():
     assert _apply_migrations(con, MIGRATIONS) == v, "a no-op re-apply must stay a no-op"
 
 
+def test_snapshots_are_capped():
+    """One pre-migration snapshot is written per upgrade and nothing removed
+    them, so a long-lived deployment accumulated a full copy of app.db per
+    version, forever — the same unbounded-growth shape as the ipeds.db.prev copy
+    the importer used to leave behind. Two is enough to step back across the
+    upgrade you just did and the one before it; older ones are the operator's own
+    volume backups to keep (scheduled backups are deliberately not the app's
+    job — see the README)."""
+    d = Path(tempfile.mkdtemp())
+    db = d / "app.db"
+    db.write_bytes(b"live")
+    # Five snapshots, oldest first, with distinct mtimes so "newest" is well-defined.
+    for i, v in enumerate([25, 26, 27, 28, 29]):
+        snap = d / f"app.db.pre-v{v}"
+        snap.write_bytes(b"x")
+        os.utime(snap, (1000 + i, 1000 + i))
+
+    _prune_snapshots(db)
+
+    left = sorted(p.name for p in d.glob("app.db.pre-v*"))
+    assert left == ["app.db.pre-v28", "app.db.pre-v29"], \
+        f"expected the two NEWEST snapshots to survive, got {left}"
+    assert db.exists(), "the live database must never be touched by the sweep"
+
+
+def test_pruning_is_safe_with_fewer_snapshots_than_the_cap():
+    d = Path(tempfile.mkdtemp())
+    db = d / "app.db"
+    db.write_bytes(b"live")
+    (d / "app.db.pre-v29").write_bytes(b"x")
+    _prune_snapshots(db)
+    assert (d / "app.db.pre-v29").exists(), "a single snapshot must be kept"
+
+
 def run():
     print("app.db migration contract:")
     check("a db from a NEWER build is refused, not silently accepted",
           test_a_db_from_a_newer_build_is_refused)
     check("an up-to-date db is not mistaken for a downgrade",
           test_an_equal_version_is_not_refused)
+    check("pre-migration snapshots are capped at the newest two", test_snapshots_are_capped)
+    check("pruning is safe below the cap", test_pruning_is_safe_with_fewer_snapshots_than_the_cap)
     check("fresh db applies all migrations + sets user_version",
           test_fresh_applies_all_and_sets_version)
     check("re-running migrations is idempotent", test_idempotent_rerun)

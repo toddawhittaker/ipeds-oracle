@@ -15,6 +15,12 @@ from app.seeds import SEED_LESSON_REWRITES
 
 log = logging.getLogger("ipeds.db")
 
+# How many pre-migration app.db snapshots to keep (backend/app/db.py
+# _snapshot_before_migrating). Two lets you step back across the upgrade you
+# just did and the one before it; older ones are the operator's volume
+# backups to keep, not the app's.
+SNAPSHOTS_KEPT = 2
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY,
@@ -457,8 +463,29 @@ def _snapshot_before_migrating(con: sqlite3.Connection, db_path) -> None:
         finally:
             dst.close()
         log.info("app.db snapshot before migrating v%d -> v%d: %s", current, newest, dest)
+        _prune_snapshots(db_path)
     except Exception as e:  # noqa: BLE001 — a snapshot must never block an upgrade
         log.warning("pre-migration snapshot skipped (%s)", e)
+
+
+def _prune_snapshots(db_path, keep: int = SNAPSHOTS_KEPT) -> None:
+    """Keep only the newest `keep` pre-migration snapshots.
+
+    One is written per upgrade and nothing removed them, so a long-lived
+    deployment accumulated a full copy of app.db per version forever. Two is
+    enough to step back across the upgrade you just did and the one before it;
+    anything older is a job for the operator's own volume backups (see the
+    README's Self-hosting section — scheduled backups are deliberately NOT the
+    app's responsibility). Newest-first by mtime, matching
+    scripts/backup_app_db.py's _prune."""
+    snaps = sorted(db_path.parent.glob(f"{db_path.name}.pre-v*"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in snaps[max(keep, 1):]:
+        try:
+            old.unlink()
+            log.info("pruned old app.db snapshot %s", old.name)
+        except OSError as e:
+            log.warning("could not prune %s (%s)", old.name, e)
 
 
 def init_db() -> None:
