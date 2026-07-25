@@ -186,6 +186,14 @@ The **secrets** check runs `gitleaks` over full history (defense-in-depth under
 GitHub's native push protection); the local gate runs it too when `gitleaks` is
 on your `PATH`.
 
+> **Adding a step to `.github/workflows/ci.yml` means adding it to
+> `scripts/run_ci_local.sh` in the SAME PR.** These are two hand-maintained lists
+> of the same thing, and they have already drifted once: #220 added the
+> *"types are in sync"* typecheck to the CI Lint job only, so for two PRs the
+> local gate passed while CI failed — the exact failure this script exists to
+> prevent. Same shape as the backend suite lists that `run_backend_suites.sh`
+> now globs away.
+
 > A real production `.env` bleeds into the suites two ways. With
 > `COOKIE_SECURE=true` the auth‑dependent suites can't hold the session cookie
 > over http; with a real `EMAIL_DOMAIN`, `test_backend.py`'s out‑of‑domain

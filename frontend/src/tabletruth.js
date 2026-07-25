@@ -96,6 +96,15 @@ export function csvLabel({ serverSide, rowsShown }) {
 // per answer. Attaching it to a particular table would mis-attribute it, which
 // is also why it needs no single-table gate (unlike truncation, whose flag maps
 // to one specific query result).
+/**
+ * @param {object} [verdict] The message's persisted table-grounding verdict.
+ * @param {string} [verdict.status] Server verdict: matched|partial|unmatched|no_table|unchecked.
+ *   Only `matched` renders — see the positive-only note above before widening this.
+ * @param {number} [verdict.cellsChecked] How many numeric MEASURE cells were graded; the
+ *   note states this count, so a verdict without it renders nothing.
+ * @returns {{tone: string, text: string, title: string} | null} The line to render, or
+ *   null for "say nothing" — the default for every non-matched and malformed verdict.
+ */
 export function tableTrustNote({ status, cellsChecked } = {}) {
   if (status !== "matched") return null;      // see the positive-only note above
   const n = Number(cellsChecked);
