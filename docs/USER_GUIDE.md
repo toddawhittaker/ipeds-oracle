@@ -118,11 +118,17 @@ over the whole range.
 
 Every result table has its own toolbar:
 
-- **Download CSV** — export the table's data. When a result is large, the chat
+- **Download full result (CSV)** / **Download these N rows (CSV)** — the label tells you which you get: the complete query result from the server, or just the rows shown on screen (multi-table answers). When a result is large, the chat
   shows a readable preview (the first rows) with a note of the full size, but the
   CSV always contains the **complete result set**, not just the rows on screen.
 - **Chart this** — when a table has a numeric column and the answer didn't
   already draw a chart, this renders one on demand.
+
+> **A big result is shown as a page, and the app says so.** When a query returns
+> more rows than fit, the table is captioned *"First 200 rows · the full result is
+> larger"* — and if you sort it, a warning says the sort covers only those 200
+> rows, so it is **not** a ranking of the whole result. To rank or total the full
+> data, download the CSV (or ask for the top N directly).
 
 **Click any column header to sort** by that column (click again to reverse); a
 small arrow shows the active sort. Long tables scroll within their own area — the

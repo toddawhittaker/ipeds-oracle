@@ -53,8 +53,11 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await sqlToggle.click();
   await expect(page.locator(".trace-panel .sqlblock")).toContainText("51.3801");
 
-  // Each rendered table has its own client-side CSV download button.
-  await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
+  // Each rendered table has its own CSV download button, and it now NAMES what
+  // it will do. The stream carries a message id (see the note at the top), so
+  // this single-table answer gets the SERVER export of the full result — not a
+  // dump of the rows on screen. That distinction was invisible before.
+  await expect(page.getByRole("button", { name: /Download full result/i })).toBeVisible();
 
   // The table has a numeric column, so "Chart this" is offered; toggling it
   // reveals the chart with a compact line/bar type <select>.

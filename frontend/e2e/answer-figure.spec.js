@@ -49,9 +49,10 @@ test("a figure renders above the prose and outside the copy surface", async ({ p
   // A few-column table shares the row (side by side), NOT stacked.
   await expect(page.locator(".brief-figrow.stacked")).toHaveCount(0);
   // ...and the redundant "Chart this" toggle dropped (a chart is already shown),
-  // while Download CSV stays.
+  // while the CSV download stays.
   await expect(page.getByRole("button", { name: "Chart this" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Download (full result|these \d+ rows)/i }))
+    .toBeVisible();
   // Trend intelligence: a %-change delta badge + the chart-type <select> defaulting
   // to "Line + trend" (trend on by default; it's a line subtype in the dropdown).
   await expect(page.locator(".chart-delta")).toContainText("%");

@@ -186,7 +186,16 @@ describe("sortRows", () => {
 });
 
 describe("downloadServerCsv", () => {
-  it("builds the message CSV URL, adding ?cols only for a positive integer", () => {
+  // It now FETCHES rather than clicking a bare <a href>. That is the whole
+  // point: the old form had no `download` attribute and no `target`, so a
+  // 400/404/429/504 from the export endpoint replaced the chat view with a raw
+  // JSON error page — and a slow export timing out is the likeliest failure.
+  const okResponse = () => ({
+    ok: true,
+    blob: async () => new Blob(["a,b\n1,2\n"], { type: "text/csv" }),
+  });
+
+  function stubDom() {
     const anchors = [];
     const make = document.createElement.bind(document);
     const spy = vi.spyOn(document, "createElement").mockImplementation((tag) => {
@@ -194,14 +203,57 @@ describe("downloadServerCsv", () => {
       if (tag === "a") { el.click = () => {}; anchors.push(el); }
       return el;
     });
-    downloadServerCsv(7, 4);
-    downloadServerCsv(7);        // no column hint
-    downloadServerCsv(7, 0);     // non-positive → no ?cols
-    spy.mockRestore();
-    expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
-      "/api/chat/messages/7/download.csv?cols=4",
-      "/api/chat/messages/7/download.csv",
-      "/api/chat/messages/7/download.csv",
-    ]);
+    if (!URL.createObjectURL) URL.createObjectURL = () => "blob:stub";
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
+    return { anchors, restore: () => spy.mockRestore() };
+  }
+
+  it("requests the message CSV URL, adding ?cols only for a positive integer",
+    async () => {
+      const calls = [];
+      globalThis.fetch = vi.fn(async (url) => { calls.push(url); return okResponse(); });
+      const dom = stubDom();
+      await downloadServerCsv(7, 4);
+      await downloadServerCsv(7);        // no column hint
+      await downloadServerCsv(7, 0);     // non-positive → no ?cols
+      dom.restore();
+      expect(calls).toEqual([
+        "/api/chat/messages/7/download.csv?cols=4",
+        "/api/chat/messages/7/download.csv",
+        "/api/chat/messages/7/download.csv",
+      ]);
+    });
+
+  it("names the downloaded file instead of navigating to it", async () => {
+    globalThis.fetch = vi.fn(async () => okResponse());
+    const dom = stubDom();
+    await downloadServerCsv(42, 3);
+    dom.restore();
+    // A `download` attribute is what makes this a download rather than a
+    // navigation — its absence is why an error page used to replace the app.
+    expect(dom.anchors[0].getAttribute("download")).toBe("ipeds_result_42.csv");
+  });
+
+  it("THROWS on a failed export instead of silently navigating away", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 504,
+      text: async () => JSON.stringify({ detail: "The query took too long to export." }),
+    }));
+    const dom = stubDom();
+    await expect(downloadServerCsv(7, 2)).rejects.toMatchObject({
+      status: 504,
+      detail: "The query took too long to export.",
+    });
+    dom.restore();
+    // and nothing was handed to the browser to open
+    expect(dom.anchors).toHaveLength(0);
+  });
+
+  it("still throws usefully when the error body isn't JSON", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false, status: 502, text: async () => "<html>bad gateway</html>",
+    }));
+    await expect(downloadServerCsv(7)).rejects.toMatchObject({ status: 502 });
   });
 });

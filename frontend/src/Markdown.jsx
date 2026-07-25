@@ -5,6 +5,8 @@ import Chart from "./Chart.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import { normalizeMarkdown } from "./mdnorm.js";
 import { briefLayout } from "./briefdata.js";
+import { useToast } from "./Toast.jsx";
+import { canCaptionTruncation, csvErrorMessage, csvLabel, sortNoteTone, sortScopeNote, truncationCaption } from "./tabletruth.js";
 import { chartSpecFromTable, columnIsNumeric, countMarkdownTables, downloadCsv, downloadServerCsv, extractTable, sortedIndices } from "./tabledata.js";
 import { comparableTable, compareSpec } from "./compare.js";
 
@@ -80,7 +82,7 @@ function SortCaret({ dir }) {
 // while sort/CSV/compare keep using the extracted text. Compare mode's leading
 // checkbox is rendered inline (selection keyed by the entity LABEL, so it
 // survives a re-sort); that's why the old CompareContext/tr-override is gone.
-function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label }) {
+function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label, truncated }) {
   const [sort, setSort] = useState({ col: null, dir: null });
   const numericByCol = useMemo(
     () => headers.map((_, c) => columnIsNumeric(rows, c)), [headers, rows]);
@@ -160,8 +162,8 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label 
         "sort ascending to find the smallest" isn't read as a global answer.
         The full set is in the CSV (whole-query order). */}
     {sort.col != null && (
-      <p className="sort-note" role="note">
-        Sorted the {rows.length} rows shown here — download the CSV for the full result.
+      <p className={"sort-note " + sortNoteTone(truncated)} role="note">
+        {sortScopeNote({ truncated, sorted: true, rowsShown: rows.length })}
       </p>
     )}
     </>
@@ -176,10 +178,12 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label 
 // table + one chart), `sideChart` is the answer's own chart, rendered SIDE BY SIDE
 // with this table, and `pairChart` drops the "Chart this" toggle (a chart is
 // already shown — the toggle would be redundant).
-function DataTable({ node, sideChart, pairChart, serverCsvId }) {
+function DataTable({ node, sideChart, pairChart, serverCsvId, truncated }) {
   const { headers, rows, cellNodes } = useMemo(() => extractTable(node), [node]);
   const inferred = useMemo(() => chartSpecFromTable(headers, rows), [headers, rows]);
   const [showChart, setShowChart] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const toast = useToast();
 
   // Compare mode: only offered on a comparable (entity-row) table, and never when
   // the table is already paired with a brief's chart. Selection is a Set of entity
@@ -204,18 +208,34 @@ function DataTable({ node, sideChart, pairChart, serverCsvId }) {
   const label = headers.length ? `Result table: ${headers.join(", ").slice(0, 60)}` : "Result table";
   const table = (
     <div className="table-block">
-      <SortableTable headers={headers} rows={rows} cellNodes={cellNodes} cmp={cmp}
+      <SortableTable truncated={truncated} headers={headers} rows={rows} cellNodes={cellNodes} cmp={cmp}
                      selected={selected} toggle={toggle} label={label} />
+      {truncated && (
+        <p className="table-caption field-label">{truncationCaption(true)}</p>
+      )}
       <div className="table-tools">
         {/* When the answer is a single table with a persisted message id, the
             CSV comes from the server (the FULL dataset, re-running the query at
             the large download cap) instead of the ≤200 visible rows. Multi-table
             answers and live (not-yet-saved) turns fall back to the client-side
             CSV of exactly what's shown. */}
-        <button type="button" className="link"
-                onClick={() => (serverCsvId
-                  ? downloadServerCsv(serverCsvId, headers.length)
-                  : downloadCsv(headers, rows))}>Download CSV</button>
+        <button type="button" className="link" disabled={downloading}
+                onClick={async () => {
+                  if (!serverCsvId) { downloadCsv(headers, rows); return; }
+                  // The server path re-runs the query and can genuinely fail
+                  // (400/404/429/504). It used to navigate the tab to a JSON
+                  // error page; now it toasts and the chat stays put.
+                  setDownloading(true);
+                  try {
+                    await downloadServerCsv(serverCsvId, headers.length);
+                  } catch (e) {
+                    toast(csvErrorMessage(e?.status, e?.detail), "error");
+                  } finally {
+                    setDownloading(false);
+                  }
+                }}>
+          {downloading ? "Preparing…" : csvLabel({ serverSide: !!serverCsvId, rowsShown: rows.length })}
+        </button>
         {/* Offer "Chart this" only when the answer isn't ALREADY providing a chart
             (in a brief it is — beside the table — so the toggle is redundant). */}
         {!pairChart && inferred && (
@@ -297,7 +317,7 @@ const Anchor = ({ node, ...props }) => <a {...props} target="_blank" rel="norefe
 // GFM gives us tables, which the analyst answers rely on. The source is first run
 // through normalizeMarkdown to repair malformed tables (header/delimiter column
 // mismatch) that GFM would otherwise drop.
-export default function Markdown({ children, messageId }) {
+export default function Markdown({ children, messageId, resultsTruncated = false }) {
   const src = typeof children === "string" ? normalizeMarkdown(children) : children;
   const brief = useMemo(() => briefLayout(src), [src]);
   // Server-side full-dataset CSV is only unambiguous when the answer has exactly
@@ -305,18 +325,25 @@ export default function Markdown({ children, messageId }) {
   // second table's button would otherwise get the wrong query's rows). Count the
   // GFM delimiter rows (all of |, :, -, space with a run of dashes — never a
   // data row or a `---` horizontal rule, which has no pipe).
+  const tableCount = useMemo(() => countMarkdownTables(src), [src]);
   const serverCsvId = useMemo(
-    () => (messageId != null && countMarkdownTables(src) === 1 ? messageId : null),
-    [src, messageId]);
+    () => (messageId != null && tableCount === 1 ? messageId : null),
+    [tableCount, messageId]);
+  // Same gate as the server CSV: only a single-table answer may caption itself as
+  // truncated, because attributing one of N query results to one of N rendered
+  // tables is a heuristic that can pick wrong (see tabletruth.js).
+  const captionTruncation = canCaptionTruncation({
+    truncated: resultsTruncated, tableCount, messageId });
   // Components are memoized on the brief pairing (stable per message source), so
   // react-markdown never remounts the subtree and resets a chart's selected type.
   const components = useMemo(() => ({
     table: (p) => <DataTable {...p} pairChart={brief.pair}
                              sideChart={brief.pair ? brief.chart : null}
-                             serverCsvId={serverCsvId} />,
+                             serverCsvId={serverCsvId}
+                             truncated={captionTruncation} />,
     a: Anchor,
     pre: (p) => <Pre {...p} suppressChart={brief.pair} />,
-  }), [brief, serverCsvId]);
+  }), [brief, serverCsvId, captionTruncation]);
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

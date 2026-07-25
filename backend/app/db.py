@@ -370,6 +370,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     (29, "ALTER TABLE query_cache ADD COLUMN user_id INTEGER;\n"
          "CREATE INDEX IF NOT EXISTS idx_query_cache_lookup "
          "ON query_cache(data_version, user_id);"),
+    # 30: did this turn's SQL return more rows than the model was shown?
+    # run_sql cuts at sql_row_cap_model (200) and QueryResult.truncated records
+    # it, but to_storage() deliberately drops that flag and get_conversation
+    # never selected results at all — so the browser had NO structured signal,
+    # and a 200-row page of an 834-row result was byte-identical on screen to a
+    # complete 200-row result. The only disclosure was whatever prose the model
+    # remembered to write. Booleans stored as 0/1; NULL on pre-migration rows.
+    (30, "ALTER TABLE messages ADD COLUMN results_truncated INTEGER;"),
 ]
 
 

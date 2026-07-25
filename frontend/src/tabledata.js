@@ -197,12 +197,32 @@ export function countMarkdownTables(src) {
 // `cols` is the displayed table's column count — the server uses it to pick
 // WHICH of the answer's queries produced this table (the last query is often a
 // scalar COUNT(*), not the listing), so the download is the table, not a total.
-export function downloadServerCsv(messageId, cols) {
-  const a = document.createElement("a");
+export async function downloadServerCsv(messageId, cols) {
+  // fetch -> blob -> object URL, NOT a bare <a href> click.
+  //
+  // The old form built an anchor with no `download` attribute and no `target`
+  // and clicked it, so every error path on that endpoint — 400 (no runnable
+  // query), 404, 429 (it shares the chat rate limiter), 504 ("the query took
+  // too long to export") — REPLACED THE CHAT VIEW with a raw JSON error page.
+  // A slow export timing out is the likeliest failure and it cost the user
+  // their screen. Errors are now catchable, so the caller can toast instead.
   const q = Number.isInteger(cols) && cols > 0 ? `?cols=${cols}` : "";
-  a.href = `/api/chat/messages/${messageId}/download.csv${q}`;
-  a.rel = "noreferrer";
+  const r = await fetch(`/api/chat/messages/${messageId}/download.csv${q}`);
+  if (!r.ok) {
+    let detail = "";
+    try { detail = JSON.parse(await r.text())?.detail || ""; } catch { /* not JSON */ }
+    const err = new Error(detail || `Download failed (${r.status}).`);
+    err.status = r.status;
+    err.detail = detail;
+    throw err;
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ipeds_result_${messageId}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
