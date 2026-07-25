@@ -259,6 +259,7 @@ export async function mockStreamChat(page, {
   userMessageId = null,
   title = null,
   durationMs = null,
+  figureGrounding = null,
   delayMs = 0,
 } = {}) {
   const calls = [];
@@ -283,7 +284,11 @@ export async function mockStreamChat(page, {
       // settled answer (server wall-clock in the real done event). Omitted null.
       { type: "done", message_id: messageId, user_message_id: userMessageId,
         model: "test", tokens: 0, ...(title ? { title } : {}),
-        ...(durationMs != null ? { duration_ms: durationMs } : {}) },
+        ...(durationMs != null ? { duration_ms: durationMs } : {}),
+        // The server's verdict on whether the figure's number reproduces from
+        // the query results — drives the quiet "verified" mark on a live turn
+        // without waiting for a reload.
+        ...(figureGrounding != null ? { figure_grounding: figureGrounding } : {}) },
     ];
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });

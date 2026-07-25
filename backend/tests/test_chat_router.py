@@ -1150,6 +1150,60 @@ def test_results_for_storage_caps_and_drops_largest_over_budget():
     assert out[0]["columns"] == ["n"], out
 
 
+def test_cache_hit_keeps_the_conversation_grounding_chain_intact():
+    """THE REGRESSION: a cache hit persisted messages.results=NULL, so the NEXT
+    turn in that conversation had nothing to ground a recited number against and
+    silently graded `unchecked`.
+
+    The assertion that matters is the second one — that _load_prior_results (the
+    thing a later turn actually calls) can see the cached turn's rows. Checking
+    only that the column is non-NULL would pass on a blob the grounding path
+    can't read.
+    """
+    cached_results = [QueryResult(columns=["year", "awards"],
+                                  rows=[(2024, 61234)], row_count=1).to_storage()]
+    orig_lookup = skills.cache_lookup
+    orig_agent = chat_router.stream_agent
+    orig_block = skills.retrieve_skills_block
+    skills.cache_lookup = lambda q, uid: {
+        "final_sql": "SELECT year, awards FROM c_a",
+        "answer_md": "61,234 awards in 2024.",
+        "figure": None, "suggestions": None,
+        "results": cached_results, "results_truncated": False,
+        "matched_question": q, "similarity": 0.99,
+    }
+    skills.retrieve_skills_block = lambda q: ("", [])
+    try:
+        with TestClient(app) as c:
+            _login(c)
+            r = c.post("/api/chat/stream", json={"question": "nursing awards in 2024"})
+            assert r.status_code == 200, r.text
+            events = _parse_sse(r.text)
+            done = next(e for e in events if e.get("type") == "done")
+            assert done.get("cached") is True, f"expected a cache hit: {events}"
+            msg_id = done["message_id"]
+    finally:
+        skills.cache_lookup = orig_lookup
+        chat_router.stream_agent = orig_agent
+        skills.retrieve_skills_block = orig_block
+
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT id, conversation_id, results FROM messages WHERE id=?",
+            (msg_id,)).fetchone()
+        assert row is not None, "the cached turn was not persisted"
+        assert row["results"] is not None, \
+            "a cache hit must persist the rows backing its answer, not NULL"
+
+        # The chain itself: what a LATER turn in this conversation would borrow.
+        prior = chat_router._load_prior_results(con, row["conversation_id"])
+        assert prior and prior[0].rows[0][1] == 61234, \
+            f"a later turn could not borrow the cached turn's rows: {prior!r}"
+    finally:
+        con.close()
+
+
 def test_load_prior_results_respects_before_id_window():
     """An edit/rerun grounds only against results that will survive the pending
     delete — _load_prior_results must exclude messages at/after before_id, exactly
@@ -1260,6 +1314,8 @@ def run():
           test_version_endpoint_authed_and_shape)
     check("_results_for_storage caps and drops largest over budget",
           test_results_for_storage_caps_and_drops_largest_over_budget)
+    check("a cache hit keeps the conversation grounding chain intact",
+          test_cache_hit_keeps_the_conversation_grounding_chain_intact)
     check("_load_prior_results respects the before_id window",
           test_load_prior_results_respects_before_id_window)
     print()

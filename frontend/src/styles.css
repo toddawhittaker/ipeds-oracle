@@ -111,6 +111,12 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .answer-figure .figure { font-size: 54px; }
 .answer-figure .fig-rule { margin: 14px 0 8px; }
 .answer-figure-src { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+/* "✓ verified" — the server reproduced this number from the query results.
+   Deliberately QUIET: --ok tints it apart from the source line without turning a
+   trust signal into a badge competing with the statistic. There is no paired
+   "unverified" state by design (see figure.js isFigureVerified), so this colour
+   never needs a --danger sibling. */
+.fig-verified { color: var(--ok); }
 
 /* layout */
 /* overflow:hidden pins the shell to the viewport so the PAGE never scrolls —

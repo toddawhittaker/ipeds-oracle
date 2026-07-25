@@ -545,7 +545,24 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   row without its nowrap cells sliding UNDER the chart (only the brief's compact
   recent-years strip — a couple of columns, a handful of rows — sits side-by-side;
   the earlier `> 4`-columns-only threshold let a 4-column ranking table overlap the
-  chart). Pinned in `frontend/e2e/answer-figure.spec.js`. The **chart toolbar is compact** so it fits a
+  chart). Pinned in `frontend/e2e/answer-figure.spec.js`.
+  **A reproduced figure is marked "✓ verified"** on its source line (S6). The
+  server already graded every figure, but the verdict lived only on `usage_log`,
+  so the person reading the number learned nothing. `messages.figure_grounding`
+  (migration 31, STATUS only) + the `done` SSE event carry it; `figure.js`'s
+  vitest-pinned `isFigureVerified` decides, and `Figure.jsx` renders the mark
+  (in the `aria-label` too — a sighted-only trust signal would be the wrong kind
+  of quiet). **POSITIVE-ONLY BY DESIGN, and the asymmetry is the contract**: an
+  ungrounded figure renders NO mark and NO warning. The kernel is observe-only
+  precisely because it has produced false negatives (#212 was a CORRECT figure
+  graded `ungrounded`), and a missing mark costs a little trust while a warning on
+  a correct number destroys it. **Don't confuse `figure_grounding` with
+  `figure_derivation`**: the former is only ever a BARE status
+  (`exact`/`rounded`/`derived`/`ungrounded`/…—every assignment in `llm.py` is
+  `check.status` or a constant); the latter is the composed provenance string
+  (`retry:ctx:sum(q3.awards)`) and stays backend-only telemetry. Writing prefix
+  parsing into the frontend predicate models a shape that never occurs.
+  The **chart toolbar is compact** so it fits a
   narrow side-by-side chart without overflowing: a single **`<select>`** collapses
   Line / Bar / **Line + trend** (trend is a line subtype, offered whenever the data is
   **trend-eligible** — a single numeric time-series with ≥3 points — **independent of
@@ -642,6 +659,19 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `cache_max_rows`, non-positive disables, OFFSET-based row cap, incremental-vacuum
   reclaim) and runs opportunistically on the **write** path only — a read must
   stay cheap. Pinned in `test_skills.py`.
+  **A cache hit carries its own evidence** (`query_cache.results` +
+  `results_truncated`, migration 31). It used to store the answer but not the ROWS
+  behind it, so the cached branch persisted `messages.results=NULL` and every
+  LATER turn in that conversation had nothing to ground a recited number against —
+  it silently graded `unchecked`, denting a rate the project steers by with no
+  visible failure. The rows are legitimate evidence for that answer (the replayed
+  prose is byte-identical to the turn that produced them), and they're already
+  capped by `_results_for_storage`, so there's no new size risk. Deliberately NOT
+  done: re-grading the cached figure on the hit — now possible, but it would move
+  the Grounded-figures denominator, and that shouldn't shift inside a plumbing
+  change. Pinned by `a cache hit keeps the conversation grounding chain intact`
+  (`test_chat_router.py`), which asserts `_load_prior_results` can actually read
+  them back — a non-NULL-column check would pass on a blob grounding can't parse.
 
 ### Auth & access control
 - Passwordless **magic link**, manual **allowlist**, email via a **pluggable

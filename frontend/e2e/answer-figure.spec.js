@@ -208,3 +208,64 @@ test("maximize opens the chart in a modal; Escape closes and restores focus", as
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(maxBtn).toBeFocused(); // focus returns to the opener
 });
+
+// The "verified" mark: the server already graded every hero figure
+// exact/rounded/derived/ungrounded, but only usage_log ever saw it, so the person
+// reading the number learned nothing about whether it reproduces from the data.
+//
+// POSITIVE-ONLY BY DESIGN, and that asymmetry is the contract worth pinning. The
+// grounding kernel is observe-only precisely because it has had false negatives
+// (#212 was a CORRECT figure graded `ungrounded`, caught only by reading real
+// answers). A mark that fails to appear costs a little trust; a warning on a
+// correct number destroys it. So the ungrounded case must render NOTHING —
+// no mark AND no warning — which is what the second test guards.
+test.describe("figure provenance mark", () => {
+  test("a reproduced figure is marked verified on the live turn", async ({ page }) => {
+    await signedIn(page);
+    await mockStreamChat(page, {
+      conversationId: 11, answer: ANSWER, figure: FIGURE,
+      messageId: 1, userMessageId: 2, figureGrounding: "exact" });
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("how many CS degrees?");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const fig = page.locator(".answer-figure");
+    await expect(fig).toBeVisible();
+    await expect(fig.locator(".fig-verified")).toHaveText(/verified/);
+    // The mark is in the accessible name too — a sighted-only trust signal
+    // would be the wrong kind of quiet.
+    await expect(fig).toHaveAttribute("aria-label", /verified against the query results/);
+  });
+
+  test("an ungrounded figure shows no mark AND no warning", async ({ page }) => {
+    await signedIn(page);
+    await mockStreamChat(page, {
+      conversationId: 12, answer: ANSWER, figure: FIGURE,
+      messageId: 1, userMessageId: 2, figureGrounding: "ungrounded" });
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("how many CS degrees?");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const fig = page.locator(".answer-figure");
+    await expect(fig).toBeVisible();
+    await expect(fig).toContainText("7,679");        // the figure still ships
+    await expect(fig.locator(".fig-verified")).toHaveCount(0);
+    await expect(fig).not.toContainText(/unverified|not verified|⚠/i);
+  });
+
+  test("the mark survives a reload (persisted like the figure itself)", async ({ page }) => {
+    await signedIn(page);
+    await mockConversation(page, 13, [
+      { role: "user", content: "how many CS degrees?" },
+      { role: "assistant", content: ANSWER, sql_log: ["SELECT 1"], figure: FIGURE,
+        figure_grounding: "derived" },
+    ]);
+    await page.goto("/chat/13");
+    const fig = page.locator(".answer-figure");
+    await expect(fig).toBeVisible();
+    // `derived` (a legitimate computed share/%-change) counts as reproduced,
+    // exactly like a verbatim cell — the mark says "the server reproduced this
+    // number", not "the number appeared literally in a row".
+    await expect(fig.locator(".fig-verified")).toHaveText(/verified/);
+  });
+});
