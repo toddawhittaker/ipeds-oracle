@@ -513,6 +513,69 @@ def test_check_table_never_raises_on_junk():
     grounding.check_table(_TABLE_MD, None)
 
 
+# --- Row-wise totals (the SECOND false `ungrounded` found in production) --------
+
+def _pivoted() -> QueryResult:
+    """A by-award-level breakdown — the canonical shape behind a peak-year hero
+    stat, and the exact result that produced the observed false negative."""
+    return QueryResult(
+        columns=["year", "associate", "bachelor", "master", "doctorate", "certificate"],
+        rows=[(2021, 84794, 159890, 50340, 10019, 9426),
+              (2022, 85506, 165493, 51554, 10931, 11091),
+              (2023, 83192, 162729, 51691, 12103, 11467),
+              (2024, 82966, 153519, 49832, 13051, 10005),
+              (2025, 85227, 153285, 48868, 13759, 11627)])
+
+
+def test_a_row_total_grounds():
+    """THE REGRESSION: every other op aggregates DOWN a column, so a figure that
+    totals ACROSS one row had no route and reported `ungrounded` despite being
+    exactly reproducible. Observed live: "324,575 — peak national nursing degrees
+    in 2022" is the row-wise sum of that year's five award-level columns. A kernel
+    that cannot reproduce a CORRECT number manufactures evidence of model error."""
+    r = grounding.check_figure(
+        {"value": "324,575", "label": "Peak national nursing degrees in 2022"}, [_pivoted()])
+    assert r.status == grounding.DERIVED, f"a reproducible row total must ground, got {r.status}"
+    assert r.derivation and r.derivation.op == "row_total", r.derivation
+    # It names WHICH row, so a reviewer can check the claim.
+    assert r.derivation.describe() == "row_total(q1.row2)", r.derivation.describe()
+
+
+def test_the_year_column_is_not_added_into_the_total():
+    """2022 + the five measures would be 326,597 — a different number. If the
+    dimension column leaked into the sum, THAT is what would ground."""
+    r = grounding.check_figure({"value": "326,597", "label": "bogus"}, [_pivoted()])
+    assert r.status == grounding.UNGROUNDED, \
+        f"a total that includes the year column must NOT ground, got {r.status}"
+
+
+def test_a_single_measure_column_has_no_row_total():
+    """With one measure column the 'row total' is just the cell, which `value`
+    already covers — adding a route here would only invent coincidental matches."""
+    one = QueryResult(columns=["year", "awards"], rows=[(2021, 500), (2022, 767)])
+    r = grounding.check_figure({"value": "767", "label": "x"}, [one])
+    assert r.status == grounding.EXACT and r.derivation.op == "value", \
+        f"expected the verbatim cell, got {r.status}/{r.derivation}"
+
+
+def test_a_verbatim_cell_still_beats_a_row_total():
+    """Ordering matters: row totals are the weakest route and must never displace
+    a cell that is present verbatim."""
+    r = grounding.check_figure({"value": "165,493", "label": "bachelor's in 2022"}, [_pivoted()])
+    assert r.status == grounding.EXACT and r.derivation.op == "value", \
+        f"expected the verbatim cell to win, got {r.status}/{r.derivation}"
+
+
+def test_table_cells_do_not_use_row_totals():
+    """Deliberately excluded from check_table: it grades hundreds of cells, so a
+    new match surface would inflate Grounded-cells with coincidental hits. The
+    figure is one value per turn, which is where the false negative was seen."""
+    md = "| Year | Total |\n| --- | --- |\n| 2022 | 324,575 |"
+    r = grounding.check_table(md, [_pivoted()])
+    assert r.cells_matched == 0, \
+        f"a row total must not silently ground a table cell (matched {r.cells_matched})"
+
+
 def run():
     print("Testing figure grounding (app/grounding.py)...")
     check("QueryResult storage round-trip preserves columns/cells",
@@ -593,6 +656,12 @@ def run():
           test_a_table_with_no_results_is_unchecked_with_zero_counts)
     check("a label-only table is no_table", test_a_label_only_table_is_no_table)
     check("check_table never raises on junk", test_check_table_never_raises_on_junk)
+    check("a row-wise total grounds (the observed false ungrounded)", test_a_row_total_grounds)
+    check("the year column is never added into a row total",
+          test_the_year_column_is_not_added_into_the_total)
+    check("a single measure column has no row total", test_a_single_measure_column_has_no_row_total)
+    check("a verbatim cell still beats a row total", test_a_verbatim_cell_still_beats_a_row_total)
+    check("table cells do not use row totals", test_table_cells_do_not_use_row_totals)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

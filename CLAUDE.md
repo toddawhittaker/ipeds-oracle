@@ -285,7 +285,7 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   once validated only its JSON *shape*. The check reproduces the figure's value from
   the turn's **retained** `QueryResult`s — verbatim, at the figure's display
   rounding, or via the derivation menu prompt step 6(ii) asks for
-  (`sum`/`mean`/`pct_change`/`share`/`max`/`min`) — recording
+  (`sum`/`mean`/`pct_change`/`diff`/`share`/`max`/`min`/`row_total`) — recording
   `exact`/`rounded`/`derived`/`ungrounded` (plus non-evidence
   `no_figure`/`unchecked`). Pure arithmetic (no DB/LLM/network), runs on every
   answer, no setting. **OBSERVE-ONLY — alters no answer, blocks nothing**; lands on
@@ -295,7 +295,18 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   would peg it near 100% and destroy the signal). Aggregations are barred over
   **dimension** columns (`year`/`unitid`/`cipcode`/… — `_DIMENSION_COL_RE`): `year`
   is in nearly every IPEDS result, and a real +25.0% trend once "verified" as
-  `share(year)` inside tolerance. Retention is the foundation: `AgentResult.results`
+  `share(year)` inside tolerance. **`row_total` is the SECOND op added after a LIVE
+  false `ungrounded`** (the first was `diff`): every other op aggregates DOWN a
+  column, so a figure totalling ACROSS one row of a PIVOTED result — the canonical
+  by-award-level breakdown, and exactly what step 6(ii) invites for a peak-year
+  hero stat — had no route and read as ungrounded despite being exactly
+  reproducible (observed: `324,575 — peak national nursing degrees in 2022`, the
+  row-wise sum of five award-level columns). Tried LAST (weakest route, never
+  displacing a verbatim cell), needs ≥2 measure columns, excludes dimension/rank
+  columns, and is **figure-only** — `check_table` grades hundreds of cells, so
+  widening its match surface would inflate Grounded-cells with coincidental hits.
+  A kernel that cannot reproduce a CORRECT number manufactures evidence of model
+  error, the most damaging way this measurement can be wrong. Retention is the foundation: `AgentResult.results`
   keeps every call's result (in call order), where `last_result` used to overwrite.
   **Grounding is CONVERSATION-scoped**: each turn's results are persisted
   (`messages.results`, migration 23, capped + backend-only) and the recent window is
