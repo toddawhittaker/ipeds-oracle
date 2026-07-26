@@ -28,11 +28,12 @@ describe("tableTrustNote", () => {
 
   it("says NOTHING when the check failed, however it failed", () => {
     // THE regression this guards, and it is a product decision, not an
-    // omission: a "% change" column is computed across a row while every
-    // reconciler op runs down a column, so a table whose every number is
-    // CORRECT grades `partial` — or `unmatched` when that derived column is the
-    // only measure. A caution keyed on either would call correct answers wrong.
-    // Pinned server-side in backend/tests/test_grounding.py ("KNOWN BLIND SPOT").
+    // omission. It began as a measured necessity — a correct row-wise "% change"
+    // column graded `partial`, so a caution would have called correct answers
+    // wrong. The reconciler now anchors each row and closes that gap, but the
+    // silence stays until someone has actually READ non-matches produced by the
+    // anchored kernel; no such corpus exists yet. See frontend/src/tabletruth.js
+    // for the full reasoning before flipping this.
     for (const status of ["partial", "unmatched"]) {
       expect(tableTrustNote({ status, cellsChecked: 22, cellsMatched: 9 })).toBeNull();
     }

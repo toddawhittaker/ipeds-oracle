@@ -12,13 +12,14 @@ import {
 // verdict only ever reached usage_log — an admin stat. The person about to copy
 // those numbers into a report saw nothing. This is the reader-facing half.
 //
-// The silence cases matter as much as the mark. tableTrustNote is POSITIVE-ONLY
-// and that is measured, not lazy: a "% change" column is computed across a row
-// while every reconciler op runs down a column, so a table whose every number is
-// CORRECT grades `partial` — or `unmatched` when that derived column is the only
-// measure. A caution keyed on either would call correct answers wrong. Pinned
-// server-side in backend/tests/test_grounding.py ("KNOWN BLIND SPOT") and in
-// tabletruth.test.js; these specs hold the line in the browser.
+// The silence cases matter as much as the mark. tableTrustNote is POSITIVE-ONLY:
+// `partial` and `unmatched` render nothing. That started as a measured necessity
+// (a correct row-wise "% change" column graded `partial`, so a caution would have
+// called correct answers wrong) and now continues as a deliberate wait — those
+// reconciler gaps are fixed, but no one has yet read a non-match produced by the
+// anchored kernel, so there is nothing to base a caution's wording on. See
+// frontend/src/tabletruth.js and backend/tests/test_grounding.py; these specs
+// hold the line in the browser.
 
 const USER = { email: "user@example.edu", is_admin: false };
 
