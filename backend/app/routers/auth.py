@@ -52,13 +52,23 @@ def verify_get(token: str):
     # follow the link must not burn a single-use sign-in link. Bounce to the
     # SPA confirmation page, which shows a button that POSTs to consume it.
     # (Kept so old-style /api/auth/verify links still land somewhere sensible.)
-    return RedirectResponse(url=f"/verify?token={token}", status_code=303)
+    #
+    # The redirect target uses a FRAGMENT, matching mint_login_link. A `?token=`
+    # target would be pointless here: the browser would follow it and the token
+    # would land in the access log on the redirected page load anyway, making
+    # the whole fix cosmetic.
+    return RedirectResponse(url=f"/verify#token={token}", status_code=303)
 
 
-@router.get("/verify-info")
-def verify_info(token: str):
+@router.post("/verify-info")
+def verify_info(body: VerifyRequest):
     # Non-consuming lookup so the confirmation page can name the account.
-    return auth.peek_login(token)
+    #
+    # POST, not GET, for the same reason the token moved to the fragment: a
+    # query-string token is written to the server's access log verbatim. No
+    # email ever pointed at this endpoint — only our own SPA calls it, and the
+    # SPA ships in the same image — so there is no legacy GET to keep alive.
+    return auth.peek_login(body.token)
 
 
 @router.post("/verify")

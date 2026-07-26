@@ -96,8 +96,10 @@ export const api = {
   version: () => j("GET", "/api/version"),
   requestLink: (email) => j("POST", "/api/auth/request", { email }),
   // Sign-in confirmation page: peek (non-consuming) then verify (consumes).
-  verifyInfo: (token) =>
-    j("GET", "/api/auth/verify-info?token=" + encodeURIComponent(token)),
+  // BOTH are POSTs with the token in the body — a token in a query string is
+  // written verbatim to the server's access log, which is how a live sign-in
+  // link became readable via `docker logs`.
+  verifyInfo: (token) => j("POST", "/api/auth/verify-info", { token }),
   verify: (token) => j("POST", "/api/auth/verify", { token }),
   logout: () => j("POST", "/api/auth/logout"),
 

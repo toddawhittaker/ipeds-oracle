@@ -153,8 +153,18 @@ def mint_login_link(con: sqlite3.Connection, email: str) -> str:
     # Point at the SPA confirmation page, not the consuming API endpoint: the
     # page shows a "Sign in" button that POSTs the token. Email link-scanners
     # that GET this URL therefore can't burn the single-use link.
+    #
+    # The token rides in the URL **FRAGMENT**, never the query string, and that
+    # is a security property rather than a style choice. `/verify` is an SPA
+    # route served by main.py's catch-all, so a `?token=` link wrote the raw
+    # single-use token into uvicorn's access log on PAGE LOAD — before any API
+    # call — and anyone who could read `docker logs` could replay it into an
+    # account takeover. A fragment is never transmitted to the server at all, so
+    # it cannot be logged by us, by the operator's reverse proxy, or by a
+    # tunnel — none of which we control, and all of which the README's
+    # self-hosting posture assumes. Verify.jsx reads it from location.hash.
     base_url = get_settings().app_public_url
-    return f"{base_url.rstrip('/')}/verify?token={token}"
+    return f"{base_url.rstrip('/')}/verify#token={token}"
 
 
 def request_login(email: str, tasks: BackgroundTasks) -> dict:

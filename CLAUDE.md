@@ -837,6 +837,31 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   attacker-controllable `Host` header, so an attacker could make the server email a
   victim a genuine signed link pointing at an attacker domain (link-poisoning →
   account takeover). Every email href is also HTML-attribute-escaped (`mailer.py`).
+- **The token rides in the URL FRAGMENT (`/verify#token=…`), never a query
+  string** — a security property, not a style choice. `/verify` is an SPA route
+  served by `main.py`'s catch-all, so a `?token=` link wrote the raw single-use
+  token into **uvicorn's access log on PAGE LOAD**, before any API call; anyone
+  who could read `docker logs` (routine on a self-hosted box) could replay it
+  into an account takeover. `logbuffer._REDACT_RE` could not help — it only
+  scrubs what reaches `logs.db`, and uvicorn sets `propagate: False` on
+  `uvicorn.access`. A fragment is **never transmitted to the server**, so it
+  can't be logged by us, by the operator's reverse proxy, or by a tunnel — none
+  of which we control. Three parts, all load-bearing: `mint_login_link` emits
+  the fragment; the legacy scanner-bounce 303 (`routers/auth.py`) redirects to a
+  fragment too (a `?token=` target would just move the leak to the redirected
+  page load); and **`verify-info` is a POST** with the token in the body (the
+  GET form is deleted — no email ever pointed at it). `Verify.jsx` reads
+  `location.hash` **with a `location.search` fallback**, which is what keeps
+  every link already sitting in an inbox working — without it the fix would be a
+  lockout. `logbuffer.install_access_log_redaction()` scrubs `token=` from the
+  **`uvicorn.access` logger only** (not root — `make up` prints the full link on
+  purpose, the documented local sign-in path) and rewrites **`record.args`, not
+  `record.msg`**: uvicorn logs a constant format string with the path in
+  `args[2]`, so a msg-only filter passes a naive test and leaks every token.
+  Pinned by `test_magic_link_token_never_appears_in_a_server_visible_url` +
+  `test_verify_info_takes_the_token_in_a_body_not_a_query_string` +
+  the access-log cases in `test_logbuffer.py` + the legacy-link case in
+  `frontend/e2e/auth-verify.spec.js`.
 - **Boot-time cookie-posture check.** `main._insecure_cookie_warning` logs a
   **CRITICAL** on startup when `app_public_url` is `https://` but `COOKIE_SECURE`
   is false (that combo serves an insecure cookie AND relaxes the CSRF loopback

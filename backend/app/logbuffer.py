@@ -250,3 +250,44 @@ def install(db_path: str | Path | None = None,
 
 def get_handler() -> SqliteLogHandler | None:
     return _handler
+
+
+class _AccessLogRedactor(logging.Filter):
+    """Scrub `token=...` out of uvicorn's access log line.
+
+    Sign-in links now carry the token in a URL fragment, which browsers never
+    transmit — so nothing reaches this filter from a link minted today. It
+    exists for the links already sitting in people's inboxes, which still carry
+    `?token=` and would otherwise write a live single-use credential to stdout
+    on page load.
+
+    It rewrites `record.args`, NOT `record.msg`, and that distinction is the
+    whole point. uvicorn's AccessFormatter logs a constant format string —
+    `'%s - "%s %s HTTP/%s" %d'` — and puts the request path in `args[2]`. A
+    filter that scrubbed `msg` would find nothing to change, pass a naive test
+    that asserts "no token in record.msg", and leak every token anyway. Every
+    `str` element is rewritten rather than just index 2, so a uvicorn version
+    that reorders its args cannot silently un-fix this.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args and isinstance(record.args, tuple):
+            record.args = tuple(
+                _REDACT_RE.sub(r"\1<redacted>", a) if isinstance(a, str) else a
+                for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = _REDACT_RE.sub(r"\1<redacted>", record.msg)
+        return True
+
+
+def install_access_log_redaction() -> None:
+    """Attach the redactor to uvicorn's access logger (idempotent).
+
+    Scoped to `uvicorn.access` deliberately, NOT the root logger: `make up`
+    prints the full sign-in link to the console on purpose — that is the
+    documented local sign-in path when no mail backend is configured — and a
+    root filter would break it.
+    """
+    log = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _AccessLogRedactor) for f in log.filters):
+        log.addFilter(_AccessLogRedactor())

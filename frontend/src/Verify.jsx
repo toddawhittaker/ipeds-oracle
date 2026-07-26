@@ -2,15 +2,30 @@ import React, { useEffect, useState } from "react";
 import { api } from "./api.js";
 import Wordmark from "./Wordmark.jsx";
 
-// Sign-in confirmation page (route: /verify?token=…). The magic-link email
+// Sign-in confirmation page (route: /verify#token=…). The magic-link email
 // points here. We do NOT consume the token on load — a deliberate click POSTs
 // it — so email link-scanners that merely GET the link can't burn it. The
 // token is stripped from the URL/history immediately so it doesn't linger in
 // bookmarks, history, or referrers.
+//
+// The token arrives in the FRAGMENT, which browsers never transmit — so it is
+// never written to the server's access log (nor the operator's proxy log) the
+// way a `?token=` page load was. See auth.mint_login_link.
+function readToken() {
+  const fromHash = new URLSearchParams(
+    window.location.hash.replace(/^#/, "")
+  ).get("token");
+  if (fromHash) return fromHash;
+  // Legacy fallback, and it is load-bearing: every link minted before this
+  // shipped is still sitting in someone's inbox with `?token=`. Without this
+  // those all fail with "missing its token" — turning a security fix into a
+  // lockout. Safe to keep indefinitely; the server redacts `token=` from its
+  // access log, so an old link leaks nothing new.
+  return new URLSearchParams(window.location.search).get("token") || "";
+}
+
 export default function Verify() {
-  const [token] = useState(
-    () => new URLSearchParams(window.location.search).get("token") || ""
-  );
+  const [token] = useState(readToken);
   const [email, setEmail] = useState(null);
   // Derive the initial state from the token synchronously so the effect never
   // has to setState in its body (react-hooks/set-state-in-effect).
@@ -20,8 +35,9 @@ export default function Verify() {
   );
 
   useEffect(() => {
-    // Drop the token from the address bar / history right away. Raw
-    // window.history.replaceState, deliberately bypassing react-router's
+    // Drop the token from the address bar / history right away. Replacing with
+    // the bare path clears the fragment AND any legacy query string in one go.
+    // Raw window.history.replaceState, deliberately bypassing react-router's
     // history object -- harmless today since nothing here reads
     // useLocation().search, but a future addition that does would see a
     // stale search string until the next real navigation.

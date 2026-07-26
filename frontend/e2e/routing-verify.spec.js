@@ -19,10 +19,13 @@ test.describe("/verify under the router", () => {
     await mockVerifyInfo(page, "prof@example.edu");
     const verify = await mockVerify(page, { is_admin: false });
 
-    await page.goto("/verify?token=tok-abc-123");
+    await page.goto("/verify#token=tok-abc-123");
 
     await expect(page.getByText("prof@example.edu")).toBeVisible();
+    // Both are stripped: the fragment the token now arrives in, and any legacy
+    // query string. replaceState to the bare path clears them together.
     await expect.poll(() => new URL(page.url()).search).toBe("");
+    await expect.poll(() => new URL(page.url()).hash).toBe("");
     expect(meCalls).toBe(0);
 
     // Re-point /me to a signed-in response for the post-sign-in reload, then
