@@ -751,6 +751,55 @@ def test_a_greater_than_hedge_reads_the_other_way():
         f"'>' must hold only where a value exceeds the bound: {got}"
 
 
+def test_a_cross_result_share_reproduces():
+    """The live failure: rows from one query, the denominator from another. All
+    eight unreproduced cells of an ordinary "what share does each of the top 5
+    account for?" answer were exact arithmetic across two results, as was its
+    hero figure — 11,620/45,883 = 25.3%, 45,883-30,568 = 15,315."""
+    top = QueryResult(columns=["instnm", "bachelors"],
+                      rows=[("Alpha", 11620), ("Beta", 6287)], row_count=2)
+    total = QueryResult(columns=["state_total"], rows=[(45883,)], row_count=1)
+    md = ("| Institution | Bachelor's | Share |\n| --- | --- | --- |\n"
+          "| Alpha | 11,620 | 25.3% |\n| Beta | 6,287 | 13.7% |\n")
+    got = grounding.check_table(md, [top, total])
+    assert (got.cells_matched, got.cells_checked) == (4, 4), got
+    # The complement — "all others" — and its share of the same total.
+    md2 = ("| Group | Degrees | Share |\n| --- | --- | --- |\n"
+           "| All others | 27,976 | 61.0% |\n")
+    got2 = grounding.check_table(md2, [top, total])
+    assert (got2.cells_matched, got2.cells_checked) == (2, 2), got2
+
+
+def test_a_cross_result_SHARE_needs_the_percent_marker():
+    """THE precision guard on the widest route in the module, pinned directly
+    because the aggregate probe cannot see it: the corpus is uneven enough that
+    removing this moved the total by 0.09pp while taking the REAL corpus from
+    0.9% to 10.4%.
+
+    A share is written "25.3%" and a count is not, so the marker the model
+    already writes decides which of the two cross routes may run. Without it,
+    every count in the answer is also tried as a ratio of every pair of totals."""
+    top = QueryResult(columns=["instnm", "bachelors"],
+                      rows=[("Alpha", 11620), ("Beta", 6287)], row_count=2)
+    total = QueryResult(columns=["state_total"], rows=[(45883,)], row_count=1)
+    md = ("| Institution | Bachelor's | Pct |\n| --- | --- | --- |\n"
+          "| Alpha | 11,620 | 25.3 |\n")
+    got = grounding.check_table(md, [top, total])
+    assert (got.cells_matched, got.cells_checked) == (1, 2), \
+        f"an unmarked ratio must not reach the cross-share route: {got}"
+
+
+def test_a_cross_result_share_over_100_percent_is_refused():
+    """The other guard: a share of a total cannot exceed the total, so a ratio
+    that lands above 100% is arithmetic that happened to work out, not a share."""
+    small = QueryResult(columns=["label", "n"], rows=[("x", 900)], row_count=1)
+    tiny = QueryResult(columns=["denominator"], rows=[(3,)], row_count=1)
+    # 900/3*100 = 30,000% — reachable only if the range guard is missing.
+    md = "| Label | Pct |\n| --- | --- |\n| x | 30,000% |\n"
+    got = grounding.check_table(md, [small, tiny])
+    assert got.cells_matched == 0, f"an impossible share must not ground: {got}"
+
+
 # --- The fabrication probe: an AGGREGATE bound on both directions -------------
 # The tests above pin named shapes. This one pins the property those shapes are
 # evidence for, because a change can widen the match surface without breaking any
@@ -766,6 +815,58 @@ def test_a_greater_than_hedge_reads_the_other_way():
 # BOTH bounds are asserted in one test, and that pairing is the point: a checker
 # that grounds nothing scores a perfect 0% on fabricated data, so a precision
 # bound alone could be satisfied by breaking the feature entirely.
+
+def _cross_pair() -> list[QueryResult]:
+    """The top-N-plus-a-separate-total shape: rows from one query, the
+    denominator from another `SELECT SUM(...)`. Its share column is only
+    reachable through the cross-result route, so it is the ONLY case here that
+    exercises it — and without it this probe is blind to that whole class.
+    Proven: the route's first draft took fabricated cells from 0.9% to 10.4% on
+    the real corpus while this probe moved 0.20% -> 0.23%."""
+    top = QueryResult(columns=["instnm", "bachelors"],
+                      rows=[("Alpha University", 11620), ("Beta College", 6287),
+                            ("Gamma State", 4515), ("Delta Institute", 4313),
+                            ("Epsilon University", 3833)], row_count=5)
+    total = QueryResult(columns=["state_total"], rows=[(45883,)], row_count=1)
+    return [top, total]
+
+
+def _many_scalars() -> list[QueryResult]:
+    """A ranking plus the SIX one-row probe queries a multi-step answer
+    accumulates (a max year, two counts, a national total, a min, a max).
+
+    This is the case that makes the cross-result route expensive: six totals
+    become six values plus fifteen pairwise complements, and every graded cell is
+    tried against all of them. Without a corpus entry this shape, the probe
+    passes the route's over-permissive first draft — measured: that draft took
+    the REAL corpus from 0.9% to 10.4% while the probe moved 0.20% -> 0.23%,
+    because a two-result entry offers only three scalars to collide with.
+    """
+    ranking = QueryResult(
+        columns=["instnm", "degrees"],
+        rows=[(f"College {i:02d}", 900 + i * 311) for i in range(40)], row_count=40)
+    scalars = [("max_year", 2025), ("institutions", 273), ("awarding", 157),
+               ("national_total", 128063), ("max_degrees", 16043), ("median", 4207)]
+    return [ranking] + [QueryResult(columns=[n], rows=[(v,)], row_count=1)
+                        for n, v in scalars]
+
+
+def _render_cross(results, rng=None) -> tuple[str, int]:
+    """The cross-result table: each row's own value plus its share of the OTHER
+    result's total. Only the two measure cells are perturbed — the label stays
+    correct, so the row still anchors and the cross route is what is under test."""
+    top, total = results[0], results[1].rows[0][0]
+    changed = 0
+    lines = ["| Institution | Bachelor's | Share |", "| --- | --- | --- |"]
+    for name, value in top.rows:
+        v, share = value, value / total * 100.0
+        if rng is not None:
+            v = round(value * rng.uniform(1.2, 1.9)) or value + 1
+            share = round(share * rng.uniform(1.2, 1.9), 1)
+            changed += 2
+        lines.append(f"| {name} | {v:,} | {share:.1f}% |")
+    return "\n".join(lines), changed
+
 
 def _synthetic_corpus() -> list[tuple[str, QueryResult]]:
     """Result shapes mirroring the ones measured on the real corpus."""
@@ -787,13 +888,18 @@ def _synthetic_corpus() -> list[tuple[str, QueryResult]]:
         rows=[(s, 40000 + i * 7300, 41000 + i * 7900)
               for i, s in enumerate(["CA", "TX", "NY", "FL", "OH", "PA", "IL", "MI"])],
         row_count=8)
-    return [("ranking", ranking), ("pivoted", pivoted), ("states", states)]
+    # (name, results, renderer) — an entry can carry SEVERAL results, because a
+    # single-result corpus cannot exercise anything cross-result.
+    return [("ranking", [ranking], _render), ("pivoted", [pivoted], _render),
+            ("states", [states], _render), ("cross-result", _cross_pair(), _render_cross),
+            ("many-scalars", _many_scalars(), _render)]
 
 
-def _render(result: QueryResult, rng: random.Random | None = None) -> tuple[str, int]:
-    """The result as a Markdown table. With `rng`, every MEASURE cell is scaled
-    into a different but plausible number; returns how many it changed so a probe
-    can never silently grade still-correct cells."""
+def _render(results, rng: random.Random | None = None) -> tuple[str, int]:
+    """The first result as a Markdown table. With `rng`, every MEASURE cell is
+    scaled into a different but plausible number; returns how many it changed so a
+    probe can never silently grade still-correct cells."""
+    result = results[0]
     measures = set(grounding.measure_columns(result))
     changed = 0
     lines = ["| " + " | ".join(result.columns) + " |",
@@ -822,9 +928,9 @@ _MAX_FALSE_GROUND_PCT = 2.0
 def test_fabricated_numbers_are_rejected_at_scale():
     corpus = _synthetic_corpus()
     checked = matched = 0
-    for name, result in corpus:
-        md, _ = _render(result)
-        got = grounding.check_table(md, [result])
+    for name, results, render in corpus:
+        md, _ = render(results)
+        got = grounding.check_table(md, results)
         assert got.status == grounding.TABLE_MATCHED, f"{name}: faithful table -> {got}"
         checked, matched = checked + got.cells_checked, matched + got.cells_matched
     assert matched == checked, \
@@ -832,12 +938,23 @@ def test_fabricated_numbers_are_rejected_at_scale():
 
     rng = random.Random(20260725)
     f_checked = f_matched = 0
-    for name, result in corpus:
+    for name, results, render in corpus:
+        c = m = 0
         for _ in range(20):
-            md, n = _render(result, rng)
+            md, n = render(results, rng)
             assert n, f"{name}: the probe changed nothing — it would prove nothing"
-            got = grounding.check_table(md, [result])
-            f_checked, f_matched = f_checked + got.cells_checked, f_matched + got.cells_matched
+            got = grounding.check_table(md, results)
+            c, m = c + got.cells_checked, m + got.cells_matched
+        # PER CASE, not just in aggregate. The corpus is deliberately uneven —
+        # the dense ranking contributes 2,400 of ~4,000 cells at 0%, so a case
+        # that doubled its false grounds moved the total by 0.09pp and sailed
+        # under the bound. A regression confined to one shape is the likely
+        # kind, so the shape it hits has to be what fails.
+        rate = 100.0 * m / c
+        assert rate <= _MAX_FALSE_GROUND_PCT, (
+            f"{name}: {rate:.1f}% of fabricated cells grounded ({m}/{c}) — over the "
+            f"{_MAX_FALSE_GROUND_PCT}% bound; the match surface has widened")
+        f_checked, f_matched = f_checked + c, f_matched + m
     rate = 100.0 * f_matched / f_checked
     assert rate <= _MAX_FALSE_GROUND_PCT, (
         f"{rate:.1f}% of fabricated cells grounded ({f_matched}/{f_checked}) — over the "
@@ -1062,6 +1179,13 @@ def run():
           test_a_hedge_no_value_satisfies_is_still_caught)
     check("a '>' hedge reads the other way",
           test_a_greater_than_hedge_reads_the_other_way)
+    print("  -- cross-result derivations (rows from one query, total from another) --")
+    check("a cross-result share reproduces",
+          test_a_cross_result_share_reproduces)
+    check("a cross-result SHARE needs the percent marker (precision guard)",
+          test_a_cross_result_SHARE_needs_the_percent_marker)
+    check("a cross-result share over 100% is refused",
+          test_a_cross_result_share_over_100_percent_is_refused)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

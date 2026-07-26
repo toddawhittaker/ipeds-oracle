@@ -138,10 +138,15 @@ def is_dimension(column: str) -> bool:
 class Derivation:
     """How a figure's number was reproduced from the data."""
     op: str
-    result_index: int      # which retained QueryResult (0-based)
+    result_index: int      # which retained QueryResult (0-based); -1 spans several
     column: str
 
     def describe(self) -> str:
+        # A cross-result derivation has no single owning result, and its column
+        # already names both operands ("q1.bachelors/q2.state_total"), so the
+        # usual q-prefix would double up into cross_share(q1.q1.x/q2.y).
+        if self.result_index < 0:
+            return f"{self.op}({self.column})"
         return f"{self.op}(q{self.result_index + 1}.{self.column})"
 
 
@@ -483,6 +488,85 @@ def _row_totals(result: QueryResult) -> list[tuple[int, float]]:
     return [(i, math.fsum(s)) for i, s in enumerate(row_series(result)) if s]
 
 
+# --- Cross-result derivations --------------------------------------------------
+# Every op so far works INSIDE one result. But the model routinely splits a
+# question across queries: get the top N rows from one, then the denominator from
+# a second `SELECT SUM(...)`. Each share is then one result's row over another
+# result's scalar, and nothing could reproduce it.
+#
+# Observed live on an ordinary question ("what share of Ohio's public bachelor's
+# degrees does each of the top 5 account for?"): all eight unreproduced cells AND
+# the hero figure were exact arithmetic across two results —
+# 11,620/45,883 = 25.3%, 30,568/45,883 = 66.6%, 45,883-30,568 = 15,315.
+#
+# The ingredient is a TOTAL: a measure column's sum, from any result. A one-row
+# `SELECT SUM(x)` result is just that with one value, so both come from the same
+# rule. Complements (T - S) are included because "all others" is the other half
+# of every share breakdown — and it is the numerator of the next share, which is
+# why a plain difference route is not enough.
+
+# Bounds on the candidate set. The routes below are quadratic in the number of
+# totals, and this runs on every answer, so a wide many-column result must not
+# turn into a large search — which would cost both time and precision.
+_MAX_CROSS_TOTALS = 12
+_MAX_FOR_COMPLEMENTS = 8
+
+
+def _cross_scalars(results: list[QueryResult]) -> list[tuple[str, float]]:
+    """(label, value) for every measure-column TOTAL across all results, plus
+    pairwise complements. The label names the derivation for telemetry."""
+    totals: list[tuple[str, float]] = []
+    for r_idx, result in enumerate(results):
+        for name, values in measure_columns(result).items():
+            dense = [v for v in values if v is not None]
+            if dense:
+                totals.append((f"q{r_idx + 1}.{name}", math.fsum(dense)))
+            if len(totals) >= _MAX_CROSS_TOTALS:
+                break
+        if len(totals) >= _MAX_CROSS_TOTALS:
+            break
+    out = list(totals)
+    if len(totals) <= _MAX_FOR_COMPLEMENTS:
+        for i, (na, a) in enumerate(totals):
+            for nb, b in totals[i + 1:]:
+                if a != b:
+                    out.append((f"{na}-{nb}", abs(a - b)))
+    return out
+
+
+def _match_cross_result(scalars, numerators, reproduces,
+                        is_pct: bool) -> tuple[str, str] | None:
+    """Reproduce a value from totals spanning several results.
+
+    Tried LAST everywhere it appears: it is the widest search in the module, so
+    it must never displace a verbatim cell or an in-result derivation.
+
+    `is_pct` — whether the value was WRITTEN as a percentage — splits the two
+    routes, and it is what makes this affordable. Unsplit, an answer with seven
+    results offered 11 totals plus 55 pairwise complements, and every cell was
+    tried against all 66 plus a share of each: fabricated cells went from 0.9% to
+    10.4% grounded, exactly the coincidental-match blowup this module's KNOWN
+    LIMITATION warns about. A share is written "25.3%" and a count is not, so the
+    marker the model already writes cuts the search roughly in half and refuses
+    the mismatched half outright.
+    """
+    if not is_pct:
+        for name, v in scalars:                   # an absolute: a total/complement
+            if reproduces(v):
+                return "cross", name
+        return None
+    for n_name, n_v in numerators:                # a percentage: a share of a total
+        for d_name, d_v in scalars:
+            if not d_v:
+                continue
+            got = n_v / d_v * 100.0
+            # A share of a total cannot exceed the total. Cheap, and it removes
+            # the ratios that only ever match by accident.
+            if 0.0 < got <= 100.0 and reproduces(got):
+                return "cross_share", f"{n_name}/{d_name}"
+    return None
+
+
 def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                      allow_dimension: bool = True) -> tuple[str, Derivation] | None:
     """Reproduce `target` from any column of any retained result, returning the
@@ -528,6 +612,26 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                 if _close(target, total) or (tol and abs(target - total) <= tol):
                     return DERIVED, Derivation(op="row_total", result_index=r_idx,
                                                column=f"row{row_i + 1}")
+    # Cross-result totals, absolutely last — the widest search here, so it may
+    # only run once every in-result route has failed. Numerators are the totals
+    # themselves: this reaches a summary line ("top 5 combined", "all others")
+    # and a headline share, both of which are one result's total over another's.
+    # A cell belonging to a specific ROW gets the richer numerator set in
+    # _match_at_row, which knows which row it is.
+    if best is None:
+        hedge = parse_hedge(raw_value)
+        tol = 0.0 if hedge else _displayed_precision_tol(raw_value, target)
+
+        def reproduces(got: float | None) -> bool:
+            if hedge:
+                return satisfies_hedge(hedge, target, got)
+            return got is not None and (_close(target, got) or abs(target - got) <= tol)
+
+        scalars = _cross_scalars(results)
+        hit = _match_cross_result(scalars, scalars, reproduces,
+                                  "%" in _strip_emphasis(raw_value))
+        if hit:
+            return DERIVED, Derivation(op=hit[0], result_index=-1, column=hit[1])
     return best
 
 
@@ -741,7 +845,8 @@ def _anchor_row(table_row: list[str], prep: _Prepared) -> int | None:
     return best if (t >= 1 or n >= 2) else None
 
 
-def _match_at_row(target: float, raw_value, prep: _Prepared, index: int) -> str | None:
+def _match_at_row(target: float, raw_value, prep: _Prepared, index: int,
+                  scalars: list[tuple[str, float]] = ()) -> str | None:
     """Reproduce `target` from ONE anchored result row. Returns the op that did
     it (telemetry/debugging only — check_table needs just the boolean) or None.
 
@@ -812,6 +917,17 @@ def _match_at_row(target: float, raw_value, prep: _Prepared, index: int) -> str 
                 return "prev_diff"
             if prev and reproduces((values[pos] - prev) / abs(prev) * 100.0):
                 return "prev_pct_change"
+    # 5. LAST: this row's own value over a total from ANOTHER result — the
+    #    canonical "share of the state/national total", where the denominator
+    #    came from a separate SELECT SUM(...). The row's cells are the numerators
+    #    that _reconcile_value's fallback cannot know about.
+    if scalars:
+        numerators = [(name, values[index]) for name, values in prep.measures.items()
+                      if index < len(values) and values[index] is not None]
+        hit = _match_cross_result(scalars, numerators + list(scalars), reproduces,
+                                  "%" in _strip_emphasis(raw_value))
+        if hit:
+            return f"{hit[0]}({hit[1]})"
     return None
 
 
@@ -858,6 +974,7 @@ def check_table(answer_markdown: str,
         return TableGroundingCheck(UNCHECKED)
 
     preps = [_prepare(result) for result in results]
+    scalars = _cross_scalars(results)
     anchors: dict[int, list[int | None]] = {}   # table row identity -> per-result anchor
     matched = 0
     for v, raw, row in cells:
@@ -866,7 +983,7 @@ def check_table(answer_markdown: str,
             anchors[key] = [_anchor_row(row, prep) for prep in preps]
         row_anchors = anchors[key]
         if any(a is not None for a in row_anchors):
-            ok = any(_match_at_row(v, raw, prep, a) is not None
+            ok = any(_match_at_row(v, raw, prep, a, scalars) is not None
                      for prep, a in zip(preps, row_anchors, strict=True) if a is not None)
         else:
             ok = _reconcile_value(v, raw, results, allow_dimension=False) is not None
