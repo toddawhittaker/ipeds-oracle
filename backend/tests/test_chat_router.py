@@ -1304,6 +1304,119 @@ def test_load_prior_results_respects_before_id_window():
         con.commit()
 
 
+def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
+    """THE regression this repo keeps paying for, mechanized.
+
+    A displayable field on an assistant message had to be added by hand to ~10
+    places — a migration, _persist's signature, the INSERT columns, its values
+    tuple, the `?` count, two call sites, the `done` dict, get_conversation's
+    SELECT, and three spots in Chat.jsx. Nothing checked any pair against any
+    other, and it shipped TWO defects: `results_truncated` (missed in the
+    SELECT) and `table_cells_matched` (missed on the live path).
+
+    The failure is ASYMMETRIC, which is why review keeps missing it: the reload
+    path inherits new fields for free (Chat.jsx spreads `...m`) while the live
+    `done` path enumerates them by hand — so a miss renders CORRECTLY after a
+    refresh and wrongly only on the turn that produced it.
+
+    Two halves:
+
+      1. SCHEMA PARITY (the load-bearing one) — the real messages table, minus
+         structural and explicitly backend-only columns, must equal
+         MESSAGE_READ_COLUMNS. Adding a migration column now fails HERE until
+         it is wired up or deliberately excluded. This is the half that catches
+         the NEXT field, not just the last two.
+      2. ROUND TRIP — a turn populating every field comes back intact from
+         get_conversation, and every DONE_EVENT_FIELDS entry is carried.
+    """
+    # Everything runs inside the TestClient context: the app's lifespan is what
+    # creates/migrates app.db, so PRAGMA table_info(messages) is EMPTY before it
+    # — and an empty schema would make the parity check below vacuously pass,
+    # which is the one failure mode a schema gate must not have.
+    with TestClient(app) as c:
+        con = connect()
+        conv = None
+        try:
+            # --- 1. schema parity (the load-bearing half) --------------------
+            actual = {r["name"] for r in con.execute("PRAGMA table_info(messages)")}
+            assert actual, "no messages schema to check against — the gate would be vacuous"
+            classified = set(chat_router.MESSAGE_TURN_COLUMNS) | chat_router._STRUCTURAL
+            unclassified = actual - classified
+            assert not unclassified, (
+                f"messages has column(s) {sorted(unclassified)} that no field list "
+                "knows about — add them to MESSAGE_TURN_COLUMNS (so they persist AND "
+                "reach the reader), or to _STRUCTURAL/_BACKEND_ONLY with a reason")
+            stale = classified - actual
+            assert not stale, f"field list names column(s) not in the schema: {sorted(stale)}"
+            assert set(chat_router.MESSAGE_READ_COLUMNS) == (
+                set(chat_router.MESSAGE_TURN_COLUMNS) - chat_router._BACKEND_ONLY)
+            # Everything the `done` event carries must also survive a reload, or
+            # the live turn and the reopened one disagree — the exact shape of
+            # both shipped bugs.
+            missing = (set(chat_router.DONE_EVENT_FIELDS)
+                       - set(chat_router.MESSAGE_READ_COLUMNS))
+            assert not missing, (
+                f"done event carries {sorted(missing)} which get_conversation never "
+                "returns: the field would render live and vanish on reload")
+
+            # --- 2. round trip ----------------------------------------------
+            # Own the conversation with the address _login already signs in as:
+            # a fresh user would not be allowlisted, so no magic link is minted
+            # and the sign-in silently has nothing to consume.
+            con.execute("INSERT OR IGNORE INTO users(email, created_at) "
+                        "VALUES ('admin@example.edu', 0)")
+            uid = con.execute("SELECT id FROM users WHERE email='admin@example.edu'"
+                              ).fetchone()["id"]
+            cur = con.execute("INSERT INTO conversations(user_id, title, created_at, "
+                              "updated_at) VALUES (?,'parity',0,0)", (uid,))
+            conv = cur.lastrowid
+            con.commit()
+        finally:
+            con.close()
+
+        _user_msg_id, msg_id = chat_router._persist(
+            uid, conv, "q", "a",
+            sql_log=["SELECT 1"], model="m", tokens=7, cached=False, ok=True,
+            thinking=[{"kind": "sql", "text": "SELECT 1"}],
+            figure={"value": 1, "label": "x"},
+            # Every field populated at once. A figure AND a clarify never occur
+            # together in a real turn — this exercises the PLUMBING, not the
+            # semantics, and any field left None would silently satisfy the
+            # "was it persisted?" check below.
+            suggestions=["more?"],
+            clarify={"question": "which?", "options": ["a", "b"]},
+            results=[{"columns": ["v"], "rows": [[1]]}],
+            duration_ms=1234, results_truncated=True, figure_grounding="exact",
+            table_grounding="matched", table_cells_checked=4, table_cells_matched=4)
+
+        con = connect()
+        try:
+            row = con.execute("SELECT * FROM messages WHERE id=?", (msg_id,)).fetchone()
+            for col in chat_router.MESSAGE_TURN_COLUMNS:
+                assert row[col] is not None, f"{col} was not persisted"
+        finally:
+            con.close()
+
+        # Read it back the way the browser does.
+        _login(c)
+        r = c.get(f"/api/chat/conversations/{conv}")
+        assert r.status_code == 200, r.text
+        assistant = [m for m in r.json() if m["role"] == "assistant"][-1]
+        for col in chat_router.MESSAGE_READ_COLUMNS:
+            assert col in assistant, f"get_conversation dropped {col}"
+            assert assistant[col] is not None, f"get_conversation returned NULL {col}"
+        for col in chat_router._BACKEND_ONLY:
+            assert col not in assistant, f"{col} is backend-only but reached the browser"
+
+        con = connect()
+        try:
+            con.execute("DELETE FROM messages WHERE conversation_id=?", (conv,))
+            con.execute("DELETE FROM conversations WHERE id=?", (conv,))
+            con.commit()
+        finally:
+            con.close()
+
+
 def test_the_two_recent_windows_are_measured_in_different_units():
     """PINS A KNOWN, DELIBERATE DISCREPANCY so it cannot drift further.
 
@@ -1446,6 +1559,8 @@ def run():
           test_load_prior_results_respects_before_id_window)
     check("the two recent windows are measured in different units (known)",
           test_the_two_recent_windows_are_measured_in_different_units)
+    check("every persisted turn field reaches the reader and the done event",
+          test_every_persisted_turn_field_reaches_the_reader_and_the_done_event)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

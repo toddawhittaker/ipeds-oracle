@@ -42,6 +42,61 @@ HISTORY_TURNS = 6
 RESULT_STORE_MAX_ROWS = 200
 RESULT_STORE_MAX_BYTES = 64_000
 
+# ---------------------------------------------------------------------------
+# The persisted-answer field list, in ONE place.
+#
+# Adding a displayable field to an assistant message used to mean hand-editing
+# ~10 sites: a migration, _persist's signature, the INSERT's column list, its
+# values tuple, the `?` count, the agent-path call, the cache-hit call, the
+# `done` SSE dict, get_conversation's SELECT, and three spots in Chat.jsx.
+# Nothing checked any pair against any other, and it has already shipped TWO
+# defects — `results_truncated` (missed in the SELECT) and `table_cells_matched`
+# (missed on the live path).
+#
+# The failure is asymmetric, which is what makes it nasty: the reload path
+# inherits new fields for free (Chat.jsx spreads `...m`) while the live `done`
+# path enumerates them by hand. So a miss looks CORRECT after a refresh and
+# wrong only during the turn that produced it — the hardest shape to notice.
+#
+# These three tuples drive the INSERT, the `done` event, and the SELECT, and a
+# test asserts them against the ACTUAL messages schema (see
+# test_every_persisted_turn_field_reaches_the_reader_and_the_done_event). A new
+# migration column therefore fails a test until it is either wired up or
+# explicitly excluded — a deliberate, reviewable act rather than a remembered
+# one.
+
+# Columns every persisted assistant turn writes, in INSERT order.
+MESSAGE_TURN_COLUMNS: tuple[str, ...] = (
+    "sql_log", "thinking", "figure", "suggestions", "clarify", "results",
+    "model_used", "tokens", "duration_ms", "results_truncated",
+    "figure_grounding", "table_grounding", "table_cells_checked",
+    "table_cells_matched",
+)
+
+# Written but deliberately NOT returned to the browser.
+#   results — the raw query rows, kept for cross-turn grounding only. Capped and
+#             backend-only by contract; shipping them would put a second copy of
+#             every table on the wire.
+#   tokens  — billing telemetry, not answer content.
+_BACKEND_ONLY: frozenset[str] = frozenset({"results", "tokens"})
+
+# Row identity/plumbing — not per-turn answer content, so not in the lists above.
+_STRUCTURAL: frozenset[str] = frozenset(
+    {"id", "conversation_id", "role", "content", "created_at"})
+
+# What get_conversation hands back for a reloaded turn.
+MESSAGE_READ_COLUMNS: tuple[str, ...] = tuple(
+    c for c in MESSAGE_TURN_COLUMNS if c not in _BACKEND_ONLY)
+
+# What the `done` SSE event carries so a LIVE turn renders every affordance
+# without waiting for a reload. Narrower than MESSAGE_READ_COLUMNS on purpose:
+# sql_log/thinking/figure/suggestions/clarify already arrived as their own
+# streamed events, and model_used rides `done` under the name "model".
+DONE_EVENT_FIELDS: tuple[str, ...] = (
+    "duration_ms", "results_truncated", "figure_grounding", "table_grounding",
+    "table_cells_checked", "table_cells_matched",
+)
+
 # Fire-and-forget async tasks (the feedback distiller below) need a strong
 # reference kept somewhere until they finish, or asyncio can garbage-collect a
 # still-pending Task and log "Task was destroyed but it is pending". A
@@ -601,30 +656,38 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "INSERT INTO messages(conversation_id, role, content, created_at) "
             "VALUES (?,?,?,?)", (conv_id, "user", question, now))
         user_msg_id = ucur.lastrowid
+        # One mapping, keyed by column name, so the column list and the values
+        # can't drift out of step and the `?` count is derived, never counted by
+        # hand. Ordered by MESSAGE_TURN_COLUMNS below.
+        turn_values = {
+            "sql_log": json.dumps(sql_log),
+            "thinking": json.dumps(thinking or []),
+            "figure": json.dumps(figure) if figure else None,
+            "suggestions": json.dumps(suggestions) if suggestions else None,
+            "clarify": json.dumps(clarify) if clarify else None,
+            "results": json.dumps(results) if results else None,
+            "model_used": model,
+            "tokens": tokens,
+            "duration_ms": duration_ms,
+            "results_truncated": int(bool(results_truncated)),
+            # STATUS only — the derivation string stays backend telemetry on
+            # usage_log. This is what lets a reproduced figure keep its
+            # "verified" mark across a reload.
+            "figure_grounding": figure_grounding or None,
+            # Same idea for the table: status + the two counts, so the answer can
+            # say how many of its numbers reproduced. NULL (not 0) when nothing
+            # was graded — a cache hit and a refusal pass table_grounding=None,
+            # and NULL is what renders no mark rather than a "0 values" claim.
+            "table_grounding": table_grounding or None,
+            "table_cells_checked": int(table_cells_checked) if table_grounding else None,
+            "table_cells_matched": int(table_cells_matched) if table_grounding else None,
+        }
+        cols = ("conversation_id", "role", "content", *MESSAGE_TURN_COLUMNS, "created_at")
         cur = con.execute(
-            "INSERT INTO messages(conversation_id, role, content, sql_log, "
-            "thinking, figure, suggestions, clarify, results, model_used, tokens, "
-            "duration_ms, results_truncated, figure_grounding, table_grounding, "
-            "table_cells_checked, table_cells_matched, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (conv_id, "assistant", answer, json.dumps(sql_log),
-             json.dumps(thinking or []),
-             json.dumps(figure) if figure else None,
-             json.dumps(suggestions) if suggestions else None,
-             json.dumps(clarify) if clarify else None,
-             json.dumps(results) if results else None, model, tokens,
-             duration_ms, int(bool(results_truncated)),
-             # STATUS only — the derivation string stays backend telemetry on
-             # usage_log. This is what lets a reproduced figure keep its
-             # "verified" mark across a reload.
-             figure_grounding or None,
-             # Same idea for the table: status + the two counts, so the answer can
-             # say how many of its numbers reproduced. NULL (not 0) when nothing
-             # was graded — a cache hit and a refusal pass table_grounding=None,
-             # and NULL is what renders no mark rather than a "0 values" claim.
-             table_grounding or None,
-             int(table_cells_checked) if table_grounding else None,
-             int(table_cells_matched) if table_grounding else None, now))
+            f"INSERT INTO messages({', '.join(cols)}) "
+            f"VALUES ({','.join('?' * len(cols))})",
+            (conv_id, "assistant", answer,
+             *(turn_values[c] for c in MESSAGE_TURN_COLUMNS), now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         con.execute(
@@ -678,9 +741,8 @@ def get_conversation(conv_id: int, user: sqlite3.Row = Depends(current_user)):
         if not owns:
             raise HTTPException(404, "Not found.")
         rows = con.execute(
-            "SELECT id, role, content, sql_log, thinking, figure, suggestions, clarify, "
-            "model_used, created_at, duration_ms, results_truncated, figure_grounding, "
-            "table_grounding, table_cells_checked, table_cells_matched "
+            "SELECT id, role, content, created_at, "
+            f"{', '.join(MESSAGE_READ_COLUMNS)} "
             "FROM messages WHERE conversation_id=? ORDER BY id", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:

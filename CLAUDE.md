@@ -1219,6 +1219,34 @@ frontend `Intl` (viewer tz) via `frontend/src/datetime.js`
 `.env` setting is only the graph's if-not-specified fallback (the browser normally
 provides its own).
 
+### The persisted-answer field list is DERIVED, not remembered
+Adding a displayable field to an assistant message used to mean hand-editing ~10
+sites (migration · `_persist` signature · INSERT columns · values tuple · the `?`
+count · the agent-path call · the cache-hit call · the `done` SSE dict ·
+`get_conversation`'s SELECT · three spots in `Chat.jsx`). Nothing checked any
+pair against another, and it **shipped two defects** — `results_truncated`
+(missed in the SELECT) and `table_cells_matched` (missed on the live path).
+The failure is **asymmetric**, which is why review kept missing it: the reload
+path inherits new fields free (`Chat.jsx` spreads `...m`) while the live `done`
+path enumerates by hand, so a miss renders CORRECTLY after a refresh and wrongly
+only on the turn that produced it. Now three tuples in `routers/chat.py` —
+`MESSAGE_TURN_COLUMNS` (drives the INSERT, whose `?` count is derived, never
+counted), `MESSAGE_READ_COLUMNS` (= turn columns minus `_BACKEND_ONLY`
+`{results, tokens}`, drives the SELECT), `DONE_EVENT_FIELDS` — are asserted
+against the **actual `messages` schema** by
+`test_every_persisted_turn_field_reaches_the_reader_and_the_done_event`. A new
+migration column fails that test until it is wired up **or** explicitly excluded
+with a reason: a reviewable act instead of a remembered one. Two things the test
+gets right on purpose: it runs inside the `TestClient` context (the app's
+lifespan is what creates the schema — checking before it would make the gate
+**vacuously pass**, the one failure mode a schema gate must not have), and it
+populates *every* field at once (a figure AND a clarify never co-occur in a real
+turn; this exercises the plumbing, and any field left None would silently
+satisfy the "was it persisted?" check). `_persist`'s keyword signature stays
+explicit — it's the readable, type-checkable seam — and the **cache-hit call
+stays enumerated**, because it is a deliberately different subset (a cache hit
+shows neither grounding mark, by contract).
+
 **Full details live in `CONTRIBUTING.md` and the README's Self-hosting section — read them, don't guess.**
 
 ## How we work (operating rules — follow these)
