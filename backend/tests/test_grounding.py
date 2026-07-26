@@ -18,6 +18,7 @@ Both directions are asserted below. parse_number is pinned against the formats
 the prompt actually asks for ("42,318", "+12.4%"), since a parse failure would
 silently turn every figure into no_figure and quietly zero out the metric.
 """
+import random
 import sys
 from pathlib import Path
 
@@ -684,6 +685,99 @@ def test_a_WRONG_year_over_year_change_is_still_caught():
         f"a wrong year-over-year change must not ground, got {got}"
 
 
+# --- The fabrication probe: an AGGREGATE bound on both directions -------------
+# The tests above pin named shapes. This one pins the property those shapes are
+# evidence for, because a change can widen the match surface without breaking any
+# individual case — which is exactly how the column-wide search stayed wrong for
+# two releases while every test passed.
+#
+# It renders each synthetic result as the table a faithful model would write,
+# then re-renders it with every MEASURE cell scaled by 1.2-1.9x. The label and
+# dimension cells are left alone on purpose: the realistic failure is a model
+# mistyping a number for the RIGHT entity, and keeping the row identifiable is
+# what forces the anchored path to be the thing under test.
+#
+# BOTH bounds are asserted in one test, and that pairing is the point: a checker
+# that grounds nothing scores a perfect 0% on fabricated data, so a precision
+# bound alone could be satisfied by breaking the feature entirely.
+
+def _synthetic_corpus() -> list[tuple[str, QueryResult]]:
+    """Result shapes mirroring the ones measured on the real corpus."""
+    # The dense ranking column: 120 spread values in one column is where a
+    # fabricated number found a coincidental EXACT hit 878 times.
+    ranking = QueryResult(
+        columns=["instnm", "total_degrees"],
+        rows=[(f"University {i:03d}", 60 + i * 53) for i in range(120)],
+        row_count=120)
+    # The pivoted by-award-level breakdown (several measure columns, few rows).
+    pivoted = QueryResult(
+        columns=["year", "certificate", "associate", "bachelor", "master"],
+        rows=[(2021, 9426, 84794, 159890, 50340), (2022, 11091, 85506, 165493, 51554),
+              (2023, 11467, 83192, 162729, 51691), (2024, 10005, 82966, 153519, 49832)],
+        row_count=4)
+    # A two-measure entity table (the "% change" shape's raw form).
+    states = QueryResult(
+        columns=["stabbr", "enroll_2021", "enroll_2024"],
+        rows=[(s, 40000 + i * 7300, 41000 + i * 7900)
+              for i, s in enumerate(["CA", "TX", "NY", "FL", "OH", "PA", "IL", "MI"])],
+        row_count=8)
+    return [("ranking", ranking), ("pivoted", pivoted), ("states", states)]
+
+
+def _render(result: QueryResult, rng: random.Random | None = None) -> tuple[str, int]:
+    """The result as a Markdown table. With `rng`, every MEASURE cell is scaled
+    into a different but plausible number; returns how many it changed so a probe
+    can never silently grade still-correct cells."""
+    measures = set(grounding.measure_columns(result))
+    changed = 0
+    lines = ["| " + " | ".join(result.columns) + " |",
+             "| " + " | ".join("---" for _ in result.columns) + " |"]
+    for row in result.rows:
+        cells = []
+        for name, cell in zip(result.columns, row, strict=True):
+            if rng is not None and name in measures and isinstance(cell, (int, float)):
+                scaled = round(cell * rng.uniform(1.2, 1.9))
+                cell = scaled if scaled != cell else cell + 1
+                changed += 1
+            cells.append(str(cell) if grounding.is_dimension(name) or
+                         not isinstance(cell, (int, float)) else f"{cell:,}")
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines), changed
+
+
+# Measured 0.20% on this corpus with the anchored kernel; 8.1% with anchoring
+# disabled (and 24% on the real corpus before this change). The bound sits an
+# order of magnitude above what passes and well below what regresses: loose
+# enough that adding a legitimate derivation op won't trip it, tight enough to
+# still be a gate rather than a rubber stamp.
+_MAX_FALSE_GROUND_PCT = 2.0
+
+
+def test_fabricated_numbers_are_rejected_at_scale():
+    corpus = _synthetic_corpus()
+    checked = matched = 0
+    for name, result in corpus:
+        md, _ = _render(result)
+        got = grounding.check_table(md, [result])
+        assert got.status == grounding.TABLE_MATCHED, f"{name}: faithful table -> {got}"
+        checked, matched = checked + got.cells_checked, matched + got.cells_matched
+    assert matched == checked, \
+        f"a faithfully rendered table must ground fully ({matched}/{checked})"
+
+    rng = random.Random(20260725)
+    f_checked = f_matched = 0
+    for name, result in corpus:
+        for _ in range(20):
+            md, n = _render(result, rng)
+            assert n, f"{name}: the probe changed nothing — it would prove nothing"
+            got = grounding.check_table(md, [result])
+            f_checked, f_matched = f_checked + got.cells_checked, f_matched + got.cells_matched
+    rate = 100.0 * f_matched / f_checked
+    assert rate <= _MAX_FALSE_GROUND_PCT, (
+        f"{rate:.1f}% of fabricated cells grounded ({f_matched}/{f_checked}) — over the "
+        f"{_MAX_FALSE_GROUND_PCT}% bound; the match surface has widened")
+
+
 def test_a_wrong_row_total_is_still_caught():
     """The other half: the row-wise route must reproduce the total, not accept
     any plausible number in its place."""
@@ -889,6 +983,8 @@ def run():
           test_a_year_over_year_change_column_grounds)
     check("a WRONG year-over-year change is still caught",
           test_a_WRONG_year_over_year_change_is_still_caught)
+    check("fabricated numbers are rejected at scale (aggregate bound, both directions)",
+          test_fabricated_numbers_are_rejected_at_scale)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")
