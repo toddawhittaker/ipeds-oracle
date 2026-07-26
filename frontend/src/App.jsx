@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, setUnauthenticatedHandler } from "./api.js";
 import { SERVER_UNREACHABLE, SESSION_EXPIRED } from "./authcopy.js";
@@ -6,6 +6,7 @@ import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import { AdminRoute } from "./Admin.jsx";
 import Verify from "./Verify.jsx";
+import { inflight } from "./inflight.js";
 import { ToastProvider } from "./Toast.jsx";
 import { ConfirmProvider } from "./ConfirmModal.jsx";
 import Wordmark from "./Wordmark.jsx";
@@ -191,6 +192,37 @@ function Shell() {
     // setAttention (stable); nothing else in it changes between renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
+
+  // Warn before a reload/close while a turn is still streaming.
+  //
+  // A refresh is not the same as navigating inside the app. In-app navigation
+  // keeps the fetch alive, so the server still reaches _persist and the answer
+  // is saved (that is the whole abandon-and-drain design). A reload TEARS THE
+  // REQUEST DOWN: the generator is cancelled, _persist never runs, and for a
+  // brand-new chat the shielded _delete_if_empty removes the conversation row
+  // outright. The question and its answer are simply gone, with nothing on
+  // screen having suggested that would happen.
+  //
+  // Keyed on the REGISTRY, not on Chat's `busy`, and hosted here rather than in
+  // Chat — three independent reasons:
+  //   * `busy` is cleared by Chat's render-time reset the instant the route
+  //     changes (midstream-nav pins that the composer frees immediately), so it
+  //     is false in exactly the situation this guard exists for;
+  //   * Chat UNMOUNTS on /admin, which is a page you might well refresh from
+  //     while an answer is still coming;
+  //   * the hazard is global — the turn dies whatever is on screen.
+  // hasLiveTurn stays true through a STOPPED turn too: that note promises the
+  // answer will be saved, and a refresh is what breaks the promise.
+  const anyTurnLive = useSyncExternalStore(inflight.subscribe, inflight.hasLiveTurn);
+  useEffect(() => {
+    if (!anyTurnLive) return undefined;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";   // legacy, still required by some engines
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [anyTurnLive]);
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";

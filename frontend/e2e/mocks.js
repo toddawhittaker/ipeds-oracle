@@ -313,6 +313,65 @@ export async function mockStreamChat(page, {
 }
 
 /**
+ * A stream that actually DRIPS: each entry of `events` is `{atMs, event}` and is
+ * delivered at that offset, so a spec can observe the app mid-stream.
+ *
+ * Why this exists: `route.fulfill` takes a complete body, so `mockStreamChat`
+ * delivers everything at once after `delayMs` — during its "in-flight" window
+ * ZERO events have arrived. That is fine for "did the view stay put", but it
+ * cannot test anything that depends on an event landing WHILE the turn runs.
+ * The case that forced it: a brand-new chat learns its conversation id only from
+ * the server's `conversation` event, so with a one-shot body the id never exists
+ * until the turn is already over.
+ *
+ * Implemented one layer lower than page.route — an init script patching
+ * `window.fetch` for /api/chat/stream only, returning a Response whose body is a
+ * ReadableStream enqueued on timers. Everything else falls through to the real
+ * fetch. That means it drives the SAME reader loop in api.js's streamChat that
+ * production uses, so it is a stronger test than the one-shot mock, not a weaker
+ * one — and it closes a standing blind spot: nothing in this suite had ever
+ * observed a partially-delivered stream.
+ *
+ * Returns `{ calls }` — request bodies, readable from the page at any time.
+ */
+export async function mockStreamChatDripped(page, events) {
+  await page.addInitScript((script) => {
+    const real = globalThis.fetch.bind(globalThis);
+    globalThis.__streamCalls = [];
+    globalThis.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input?.url || "";
+      if (!url.includes("/api/chat/stream")) return real(input, init);
+      try { globalThis.__streamCalls.push(JSON.parse(init?.body || "{}")); } catch { /* ignore */ }
+      const enc = new TextEncoder();
+      const body = new ReadableStream({
+        start(controller) {
+          let last = 0;
+          for (const { atMs, event } of script) {
+            last = Math.max(last, atMs);
+            setTimeout(() => {
+              try { controller.enqueue(enc.encode(`data: ${JSON.stringify(event)}\n\n`)); }
+              catch { /* closed */ }
+            }, atMs);
+          }
+          // Close AFTER the last event: streamChat finalizes the turn on
+          // body-close, so closing early would settle it before its own events
+          // had been read.
+          setTimeout(() => { try { controller.close(); } catch { /* closed */ } }, last + 30);
+        },
+      });
+      return Promise.resolve(new Response(body, {
+        status: 200, headers: { "Content-Type": "text/event-stream" },
+      }));
+    };
+  }, events);
+  return {
+    calls: {
+      async read() { return page.evaluate(() => globalThis.__streamCalls || []); },
+    },
+  };
+}
+
+/**
  * POST /api/chat/stream -> SSE stream WITHOUT a `conversation` event -- mirrors
  * backend/app/routers/chat.py's has_data:false guard, which streams only
  * status/answer/done and deliberately never assigns/returns a conversation id
