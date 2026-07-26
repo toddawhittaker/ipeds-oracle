@@ -1302,6 +1302,67 @@ def test_load_prior_results_respects_before_id_window():
         con.execute("DELETE FROM conversations WHERE id=?", (conv,))
         con.execute("DELETE FROM users WHERE email='prior-results@x.edu'")
         con.commit()
+
+
+def test_the_two_recent_windows_are_measured_in_different_units():
+    """PINS A KNOWN, DELIBERATE DISCREPANCY so it cannot drift further.
+
+    _load_history and _load_prior_results both LIMIT by HISTORY_TURNS, but they
+    count different rows: history counts ALL messages (so 6 = ~3 conversational
+    turns), while prior-results counts only rows WHERE results IS NOT NULL —
+    assistant rows that ran SQL — so 6 = ~6 turns. Grounding can therefore borrow
+    results from turns whose prose the model never had in context.
+
+    This is NOT asserting the discrepancy is correct. It is asserting the actual
+    measured behaviour, because the docstring claimed the windows matched
+    "EXACTLY" while they were ~2x apart, and nothing caught it. Whoever
+    eventually resolves it (see _load_prior_results' docstring for the decision
+    and what evidence it needs) will fail this test and must update it
+    deliberately — which is the whole point.
+    """
+    con = connect()
+    conv = None
+    try:
+        uid = con.execute(
+            "INSERT INTO users(email, created_at) VALUES "
+            "('two-windows@x.edu', 0)").lastrowid
+        cur = con.execute("INSERT INTO conversations(user_id, title, created_at, "
+                          "updated_at) VALUES (?,'t',0,0)", (uid,))
+        conv = cur.lastrowid
+        # Eight full turns: each a user message + an assistant message carrying
+        # one result. Long enough that BOTH windows saturate — the corpus in
+        # app.db is not, which is exactly why the measurement was inconclusive.
+        for n in range(1, 9):
+            con.execute("INSERT INTO messages(conversation_id, role, content, "
+                        "created_at) VALUES (?,?,?,?)", (conv, "user", f"q{n}", n))
+            blob = json.dumps([QueryResult(columns=["v"], rows=[(n,)],
+                                           row_count=1).to_storage()])
+            con.execute(
+                "INSERT INTO messages(conversation_id, role, content, results, "
+                "created_at) VALUES (?,?,?,?,?)", (conv, "assistant", f"a{n}", blob, n))
+        con.commit()
+
+        history = chat_router._load_history(con, conv)
+        results = [r.rows[0][0] for r in chat_router._load_prior_results(con, conv)]
+
+        # History: 6 MESSAGES = the last 3 turns (q6/a6 .. q8/a8).
+        assert len(history) == chat_router.HISTORY_TURNS, len(history)
+        assert [m["content"] for m in history] == ["q6", "a6", "q7", "a7", "q8", "a8"], \
+            [m["content"] for m in history]
+
+        # Prior results: 6 RESULT-BEARING rows = the last 6 turns.
+        assert results == [3, 4, 5, 6, 7, 8], results
+
+        # The measurable consequence: turns 3-5 contribute grounding evidence
+        # whose prose the model never saw. THIS is the asymmetry.
+        prose_turns = {int(m["content"][1:]) for m in history}
+        assert set(results) - prose_turns == {3, 4, 5}, set(results) - prose_turns
+    finally:
+        if conv is not None:
+            con.execute("DELETE FROM messages WHERE conversation_id=?", (conv,))
+            con.execute("DELETE FROM conversations WHERE id=?", (conv,))
+        con.execute("DELETE FROM users WHERE email='two-windows@x.edu'")
+        con.commit()
         con.close()
 
 
@@ -1383,6 +1444,8 @@ def run():
           test_cache_hit_keeps_the_conversation_grounding_chain_intact)
     check("_load_prior_results respects the before_id window",
           test_load_prior_results_respects_before_id_window)
+    check("the two recent windows are measured in different units (known)",
+          test_the_two_recent_windows_are_measured_in_different_units)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

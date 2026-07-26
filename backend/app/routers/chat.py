@@ -27,7 +27,14 @@ log = logging.getLogger("ipeds.chat")
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-HISTORY_TURNS = 6  # prior messages fed back to the model for context
+# The LIMIT both recent-context loaders apply. The name says TURNS and the
+# comment says MESSAGES, which is half the reason the two loaders below drifted
+# apart — READ THEIR DOCSTRINGS before reusing this. _load_history counts
+# MESSAGES (6 = ~3 turns); _load_prior_results counts ROWS THAT HAVE RESULTS,
+# which are assistant-only (6 = ~6 turns). The windows are therefore roughly 2x
+# apart. Renaming this constant does not fix that — only changing one of the
+# queries would, and that is a deliberate open question (see _load_prior_results).
+HISTORY_TURNS = 6
 # Per-turn caps on the result rows persisted for cross-turn grounding
 # (messages.results). Grounding needs the numbers, not the whole table, and a
 # wide brief could otherwise bloat app.db — so cap rows per result and the total
@@ -145,11 +152,41 @@ def _results_for_storage(results) -> list | None:
 def _load_prior_results(con: sqlite3.Connection, conv_id: int,
                         before_id: int | None = None) -> list:
     """Recent turns' persisted run_sql results, flattened, for CONVERSATION-SCOPED
-    figure grounding (app/grounding.py). Mirrors _load_history's before_id window
-    EXACTLY, so an edit/rerun grounds only against results that will survive the
-    pending delete — never against messages about to be dropped. Malformed/empty
-    JSON is skipped, never raised: this reads persisted data and must not break a
-    live turn."""
+    figure grounding (app/grounding.py).
+
+    The `before_id` semantics mirror _load_history exactly, so an edit/rerun
+    grounds only against results that will survive the pending delete — never
+    against messages about to be dropped.
+
+    The WINDOW SIZE does not, and this used to claim it did. Both pass
+    HISTORY_TURNS, but they count different things: _load_history LIMITs over ALL
+    messages (6 = ~3 conversational turns), while this LIMITs over rows WHERE
+    results IS NOT NULL — which only assistant rows ever are, and only when the
+    turn ran SQL. So this reaches back roughly 2x further, and can borrow results
+    from turns whose prose the model never had in context.
+
+    That asymmetry is a KNOWN OPEN QUESTION, deliberately left as-is:
+
+      * Narrowing it is defensible in principle — evidence the model could not
+        have seen cannot explain its number, so it can only add coincidental
+        matches, and both verdicts are now reader-facing (Figure's "verified"
+        mark and TableTrust's caution).
+      * But it was MEASURED and the measurement could not decide. Replaying
+        every graded turn in the retained corpus under both windows changed no
+        verdict — and 8 of the 9 turns were fed IDENTICAL inputs, because the
+        conversations are too short for the windows to diverge. "No change" was
+        therefore not evidence of safety.
+      * Shrinking the pool can only turn a reproduction into ungrounded/partial,
+        i.e. a FALSE caution on a correct answer — the most damaging way this
+        measurement can be wrong (see grounding.py, and the wording rationale in
+        frontend/src/tabletruth.js).
+
+    Changing it needs a corpus with several 6+ turn conversations; re-run the
+    both-windows replay before touching it. Until then the honest thing is an
+    accurate docstring rather than an unmeasured change.
+
+    Malformed/empty JSON is skipped, never raised: this reads persisted data and
+    must not break a live turn."""
     if before_id is not None:
         rows = con.execute(
             "SELECT results FROM messages WHERE conversation_id=? AND id<? "
