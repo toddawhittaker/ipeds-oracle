@@ -44,6 +44,42 @@ describe("tableTrustNote", () => {
     expect(note.title).toMatch(/ground truth/i);
   });
 
+  it("names the EARLIER query when this answer ran none", () => {
+    // FOUND LIVE (conversation 23, turn 3): a reshape of the previous table ran
+    // no SQL, yet the mark read "reproduced from the query result" — implying a
+    // query this answer never made. Grounding IS conversation-scoped on purpose
+    // (it's the only reason a transpose can be verified at all), so the claim is
+    // sound; the SOURCE clause was not. A reader who opened the SQL disclosure
+    // to check found nothing there, which is what made a correct ✓ look suspect.
+    const note = tableTrustNote({
+      status: "matched", cellsChecked: 15, cellsMatched: 15, hasSql: false });
+    expect(note.tone).toBe("ok");
+    expect(note.text).toContain("15 values reproduced from the earlier query result");
+    expect(note.title).toMatch(/earlier turn/i);
+    // Still a claim about reproduction, never about correctness.
+    expect(note.title).toMatch(/not that the original query/i);
+
+    // The default is unchanged for an ordinary turn — this must not reword
+    // every answer in the app.
+    const own = tableTrustNote({ status: "matched", cellsChecked: 15, cellsMatched: 15 });
+    expect(own.text).toBe("15 values reproduced from the query result");
+  });
+
+  it("points a caution at the earlier answer when this one has no SQL", () => {
+    // The instruction has to name a destination that EXISTS. On a reshape turn
+    // there is no SQL disclosure to open, and the CSV button exports only the
+    // transcribed rows (the server has no query to re-run — see Markdown.jsx's
+    // hasSql gate). Sending the reader to "the SQL or CSV" is sending them
+    // somewhere that isn't there.
+    const note = tableTrustNote({
+      status: "partial", cellsChecked: 22, cellsMatched: 9, hasSql: false });
+    expect(note.tone).toBe("warn");
+    expect(note.text).toBe("Check 13 of 22 values against the earlier answer's SQL or CSV");
+    // Still an instruction, still no claim about the numbers.
+    expect(note.text).toMatch(/^Check\b/);
+    expect(note.text).not.toMatch(/\b(wrong|incorrect|error|invalid|failed)\b/i);
+  });
+
   it("counts what needs checking, and names the total when only some do", () => {
     // 13 needs checking, not the 9 that passed — and naming 22 keeps the scale
     // honest, so "13 of 22" can't be read as "the whole table".

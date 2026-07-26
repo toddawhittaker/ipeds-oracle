@@ -535,7 +535,20 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   the same answer (the SQL disclosure below it, the CSV export on the table).
   **Don't reword it into a claim about the numbers unless the false-alarm rate has
   been measured at zero.** It also must not borrow the `--danger` treatment of a
-  genuinely failed turn; the answer is still an answer. **`unchecked`/`no_table` stay SILENT** (nothing was
+  genuinely failed turn; the answer is still an answer.
+  **BORROWED evidence says so.** Grounding is conversation-scoped, so a turn that
+  reshapes an earlier table runs no SQL and is checked against THAT turn's rows —
+  deliberate, and the only reason a transpose verifies at all. But the note read
+  "reproduced from **the** query result" on an answer whose `sql_log` is `[]`,
+  sending anyone who wanted to check to a SQL disclosure that isn't there (found
+  live; it made a CORRECT ✓ look suspect). `hasSql` (from `m.sql_log`) now picks
+  the source clause: "the **earlier** query result", and the caution points at
+  "the **earlier answer's** SQL or CSV" — the destinations have to EXIST, and on
+  a reshape the CSV button exports only the transcribed rows anyway (see
+  `Markdown.jsx`'s `hasSql` gate). Same claim, different source; only the source
+  clause changes. Pinned in `tabletruth.test.js` + a `table-grounding.spec.js`
+  case that fails if the prop is dropped in `Chat.jsx` — the plumbing is the part
+  that silently regresses. **`unchecked`/`no_table` stay SILENT** (nothing was
   compared, so neither tone applies), and so does any failure verdict whose counts
   are missing or contradict it: **`Number(null)` is `0` and finite**, so a
   pre-migration row's NULL counts read as "0 of N matched" and manufactured a caution

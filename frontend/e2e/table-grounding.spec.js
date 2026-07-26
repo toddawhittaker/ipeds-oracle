@@ -69,6 +69,36 @@ test.describe("table grounding mark", () => {
     await expect(mark(page)).toHaveAttribute("title", /not that the query/i);
   });
 
+  test("a reshape turn credits the EARLIER query, not one it never ran",
+    async ({ page }) => {
+      // FOUND LIVE (conversation 23, turn 3). Grounding is conversation-scoped,
+      // so a turn that reshapes the previous table is checked against THAT
+      // turn's rows — deliberate, and the only reason a transpose can verify at
+      // all. But the mark said "reproduced from the query result" on an answer
+      // whose sql_log is [], sending anyone who wanted to check to a SQL
+      // disclosure that isn't there.
+      //
+      // Browser truth for the PLUMBING: tabletruth.js gets the wording right in
+      // vitest, but only if TableTrust is actually told. hasSql rides from
+      // m.sql_log through Chat.jsx, and dropping it would silently restore the
+      // old text — the same shape as the table_cells_matched miss.
+      await mockMe(page, USER);
+      await mockVersion(page);
+      await mockAttention(page);
+      await mockConversations(page, [{ id: 5, title: "Awards", updated_at: 0 }]);
+      await mockConversation(page, 5, [
+        { id: 1, role: "user", content: "regroup that by year" },
+        { id: 2, role: "assistant", content: `Reshaped.\n\n${TABLE}`,
+          sql_log: [],   // ← the reshape: no query of its own
+          table_grounding: "matched", table_cells_checked: 4, table_cells_matched: 4 },
+      ]);
+      await page.goto("/chat/5");
+
+      await expect(mark(page)).toBeVisible();
+      await expect(mark(page)).toContainText("reproduced from the earlier query result");
+      await expect(mark(page)).not.toContainText(/reproduced from the query result$/);
+    });
+
   test("the mark is NOT inside the copy surface", async ({ page }) => {
     // Same contract as the hero figure: copying an answer must yield the answer,
     // not our annotation. `.md` is the node the copy actions target.

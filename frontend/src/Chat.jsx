@@ -177,8 +177,8 @@ function ThinkingTrace({ items }) {
 // harder than the sentence deserves and clash with the deliberate move away from
 // emoji-as-status elsewhere. The ✓ stays a plain glyph — it needs no emphasis,
 // and it is already shipped.
-function TableTrust({ status, cellsChecked, cellsMatched }) {
-  const note = tableTrustNote({ status, cellsChecked, cellsMatched });
+function TableTrust({ status, cellsChecked, cellsMatched, hasSql }) {
+  const note = tableTrustNote({ status, cellsChecked, cellsMatched, hasSql });
   if (!note) return null;
   return (
     <p className={"table-trust " + note.tone} role="note" title={note.title}>
@@ -1137,9 +1137,15 @@ export default function Chat({ me }) {
                             back to the client-side export of those rows. */}
                         <Markdown messageId={m.id} hasSql={m.sql_log?.length > 0}
                                   resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
+                        {/* hasSql: grounding is conversation-scoped, so a turn
+                            that reshapes an earlier table is checked against
+                            THAT turn's rows. Same claim, different source — and
+                            the note has to say which, or it points the reader at
+                            a SQL disclosure this answer doesn't have. */}
                         <TableTrust status={m.table_grounding}
                                     cellsChecked={m.table_cells_checked}
-                                    cellsMatched={m.table_cells_matched} />
+                                    cellsMatched={m.table_cells_matched}
+                                    hasSql={m.sql_log?.length > 0} />
                       </>
                     )}
                   </div>

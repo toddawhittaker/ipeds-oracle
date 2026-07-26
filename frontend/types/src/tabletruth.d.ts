@@ -22,13 +22,17 @@ export function csvLabel({ serverSide, rowsShown }: {
  *   note states a count, so a verdict without it renders nothing.
  * @param {number} [verdict.cellsMatched] How many of those reproduced. Required for the
  *   caution, which leads with the number that did NOT.
+ * @param {boolean} [verdict.hasSql] Whether THIS answer ran a query. False for a turn
+ *   that reshapes an earlier table from context: same claim, but the rows came from
+ *   the earlier turn, so the note says so instead of pointing at absent SQL.
  * @returns {{tone: string, text: string, title: string} | null} The line to render, or
  *   null for "say nothing" — the default for every unrecognised or malformed verdict.
  */
-export function tableTrustNote({ status, cellsChecked, cellsMatched }?: {
+export function tableTrustNote({ status, cellsChecked, cellsMatched, hasSql }?: {
     status?: string;
     cellsChecked?: number;
     cellsMatched?: number;
+    hasSql?: boolean;
 }): {
     tone: string;
     text: string;
