@@ -87,6 +87,20 @@ _ABS_TOL = 1e-9
 _DECORATION_RE = re.compile(r"[,\s  $£€%]")
 # A leading label like "approx." or "~" occasionally rides along.
 _LEADING_JUNK_RE = re.compile(r"^[~≈>≥<≤+]+")
+# Markdown emphasis wrapping a cell: "**30,568**", "`225`", "*4.3%*".
+#
+# Without this the cell does not parse and is DROPPED from grading entirely —
+# not counted, not checked, silently invisible. Measured on a live answer: 7 of
+# 14 numeric cells escaped because the model bolded them, which is its own
+# convention for the numbers that matter most. That undercounts the ✓ mark's
+# coverage while it sounds authoritative, and leaves the emphasized figures the
+# least verified thing in the table.
+_EMPHASIS_RE = re.compile(r"^[*_`~]+|[*_`~]+$")
+# A bound rather than a value: "<0.1%", ">1,000", "≤5". The model writes these
+# when a share rounds below its display precision, and reading the digits as an
+# exact quantity turns a CORRECT hedge into an unreproducible number — observed
+# live, where "<0.1%" stood for a true 0.0179% and graded as a miss.
+_HEDGE_RE = re.compile(r"^\s*([<≤>≥])")
 # Magnitude suffixes. The prompt asks for thousands separators, but models
 # routinely write a headline as "1.2M" anyway. Without these such a figure fails
 # to parse and is filed as `no_figure` — silently DROPPED from the measurement
@@ -143,6 +157,39 @@ class GroundingCheck:
         return self.status in (EXACT, ROUNDED, DERIVED)
 
 
+def _strip_emphasis(raw) -> str:
+    """A cell with its Markdown emphasis removed, both ends. See _EMPHASIS_RE."""
+    return _EMPHASIS_RE.sub("", str(raw if raw is not None else "").strip())
+
+
+def parse_hedge(raw) -> str | None:
+    """'<' or '>' when the cell states a BOUND, else None.
+
+    `≤`/`≥` normalize to `<`/`>`: the inclusive/exclusive distinction is
+    meaningless at display precision, and treating them alike keeps the
+    comparison one branch instead of four.
+    """
+    m = _HEDGE_RE.match(_strip_emphasis(raw))
+    if not m:
+        return None
+    return "<" if m.group(1) in "<≤" else ">"
+
+
+def satisfies_hedge(op: str, bound: float, candidate: float | None) -> bool:
+    """Does `candidate` satisfy a cell written as "<bound" / ">bound"?
+
+    The model claimed only an inequality, so verification can only check the
+    inequality — this is deliberately weaker evidence than an equality match, and
+    a hedged cell is correspondingly easier to satisfy. That is the honest
+    reading of the claim rather than a loosened tolerance: the alternative,
+    comparing the bound's digits as if they were the quantity, marks correct
+    answers wrong (see _HEDGE_RE).
+    """
+    if candidate is None:
+        return False
+    return candidate < bound if op == "<" else candidate > bound
+
+
 def parse_number(raw) -> float | None:
     """A figure's display string → float, or None when it carries no number.
 
@@ -157,7 +204,7 @@ def parse_number(raw) -> float | None:
         return None
     if isinstance(raw, (int, float)):
         return float(raw) if math.isfinite(raw) else None
-    s = _LEADING_JUNK_RE.sub("", str(raw).strip())
+    s = _LEADING_JUNK_RE.sub("", _strip_emphasis(raw))
     s = _DECORATION_RE.sub("", s)
     if not s:
         return None
@@ -323,14 +370,22 @@ def _match_in_column(target: float, raw_value, column: str,
     Ordered cheapest-and-most-certain first, so a verbatim cell is never
     reported as a coincidental derivation.
     """
-    for v in values:
-        if _close(target, v):
-            return EXACT, "value"
-    tol = _displayed_precision_tol(raw_value, target)
-    if tol:
+    # A hedged cell ("<0.1%") states a BOUND, so every route below tests the
+    # inequality instead of equality — see satisfies_hedge.
+    hedge = parse_hedge(raw_value)
+    tol = 0.0 if hedge else _displayed_precision_tol(raw_value, target)
+    if hedge:
         for v in values:
-            if abs(target - v) <= tol:
-                return ROUNDED, "value"
+            if satisfies_hedge(hedge, target, v):
+                return ROUNDED, "bound"
+    else:
+        for v in values:
+            if _close(target, v):
+                return EXACT, "value"
+        if tol:
+            for v in values:
+                if abs(target - v) <= tol:
+                    return ROUNDED, "value"
     # Aggregations only make sense over a MEASURE. See _DIMENSION_COL_RE.
     if is_dimension(column):
         return None
@@ -342,15 +397,17 @@ def _match_in_column(target: float, raw_value, column: str,
         precisely where a model rounds ("39%" for a true 39.45%). Checking
         derivations at full precision while forgiving cells would flag the
         rounding the prompt itself asks for."""
+        if hedge:
+            return satisfies_hedge(hedge, target, got)
         return got is not None and (_close(target, got) or abs(target - got) <= tol)
 
     for op in ("sum", "pct_change", "diff", "mean", "max", "min"):
         if reproduces(compute(op, values)):
-            return DERIVED, op
+            return DERIVED, f"bound_{op}" if hedge else op
     # `share` is row-scoped: any row's share of the column total.
     for i in range(len(values)):
         if reproduces(compute("share", values, index=i)):
-            return DERIVED, "share"
+            return DERIVED, "bound_share" if hedge else "share"
     return None
 
 
@@ -694,17 +751,23 @@ def _match_at_row(target: float, raw_value, prep: _Prepared, index: int) -> str 
     are only ~6 per column, and dropping them would cost recall on a row that
     legitimately carries one.
     """
-    tol = _displayed_precision_tol(raw_value, target)
+    # A hedged cell ("<0.1%") states a BOUND; every route tests the inequality.
+    hedge = parse_hedge(raw_value)
+    tol = 0.0 if hedge else _displayed_precision_tol(raw_value, target)
 
     def reproduces(got: float | None) -> bool:
+        if hedge:
+            return satisfies_hedge(hedge, target, got)
         return got is not None and (_close(target, got) or abs(target - got) <= tol)
 
     # 1. This row's own cells — the overwhelmingly common case: the model
     #    transcribed the number the query returned for this entity.
     for values in prep.measures.values():
         v = values[index] if index < len(values) else None
-        if v is not None and (_close(target, v) or (tol and abs(target - v) <= tol)):
-            return "value"
+        if v is None:
+            continue
+        if reproduces(v) if hedge else (_close(target, v) or (tol and abs(target - v) <= tol)):
+            return "bound" if hedge else "value"
     # 2. Derived ACROSS this row — the blind spot. A "% change"/"Total"/"Change"
     #    column is computed from the row's own measures in column order.
     series = prep.series[index] if index < len(prep.series) else []

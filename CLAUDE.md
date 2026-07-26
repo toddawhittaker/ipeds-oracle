@@ -393,6 +393,19 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   `total_degrees` column holding **506 values across three results**, where "somewhere
   in the column" is nearly free. After anchoring: **0.63%** (56/8920), with real cells
   unchanged at 446/446.
+  **Two cell FORMATS are handled, both found by driving live questions and
+  reading the cautions** (neither was visible to review, and each turned a CORRECT
+  answer into a warning): **(1) Markdown emphasis** — `parse_number` strips
+  `**bold**`/`` `code` ``/`*italic*` (`_EMPHASIS_RE`). Without it such a cell failed
+  to parse and was DROPPED — never counted, never checked; 7 of 14 numeric cells in
+  one live answer escaped because the model bolded them, which is its own convention
+  for the numbers that matter most, so the ✓ mark undercounted while sounding
+  authoritative. **(2) Hedged cells** — `<0.1%`/`≥5` state a BOUND, so
+  `parse_hedge`/`satisfies_hedge` test the INEQUALITY instead of the digits; reading
+  `<0.1%` as the quantity `0.1` compared it against a true 0.0179% and called a
+  correct hedge a miss. A bound is deliberately weaker evidence than an equality —
+  that asymmetry is the honest reading of what the model claimed, not a loosened
+  tolerance, and a bound nothing satisfies still fails.
   Anchoring scores (label matches, numeric matches), needs a UNIQUE best, and
   compares numbers by **IDENTITY, never `_close()`** — a relative tolerance made
   adjacent years indistinguishable (2023 is within 0.1% of 2021/2022/2024/2025), tying
