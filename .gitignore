@@ -48,6 +48,9 @@ frontend/.types-check/
 
 # --- Playwright e2e output ---
 frontend/test-results/
+# ...and the root-level copy Playwright leaves when run from the repo root,
+# which `git add -A` otherwise sweeps into a commit.
+test-results/
 frontend/playwright-report/
 
 # --- Claude Code local settings (agent definitions in .claude/agents/ ARE tracked) ---

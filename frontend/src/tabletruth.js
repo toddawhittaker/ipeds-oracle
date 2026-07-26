@@ -108,10 +108,9 @@ export function csvLabel({ serverSide, rowsShown }) {
 // is also why it needs no single-table gate (unlike truncation, whose flag maps
 // to one specific query result).
 const _CHECK_CAVEAT =
-  "A number lands here when this check could not re-derive it from the rows the "
-  + "query returned. That is usually a transcription slip, but a column computed "
-  + "in a way the check doesn't recognize will also land here — treat it as "
-  + "'worth verifying', not as proof of an error.";
+  "This check re-derives each number from the rows the query returned; these ones "
+  + "it could not. That may be a transcription slip, or simply a calculation the "
+  + "check doesn't recognize. The SQL and the CSV export are the ground truth.";
 
 /**
  * @param {object} [verdict] The message's persisted table-grounding verdict.
@@ -155,15 +154,29 @@ export function tableTrustNote({ status, cellsChecked, cellsMatched } = {}) {
   if (!Number.isFinite(matched) || matched < 0 || matched > n) return null;
   const missed = n - matched;
   if (missed <= 0) return null;   // a "failure" with nothing failing is malformed
-  // Leads with the count that did NOT reproduce, because that is the actionable
-  // half — and names the total so the scale is honest ("3 of 40" is not "40").
+  // Phrased as an INSTRUCTION, not a verdict, and that is the whole design.
+  //
+  // Every time this fired on real data it was a gap in the CHECKER, not an error
+  // by the model: bolded numbers it couldn't parse, a "<0.1%" it read as 0.1, a
+  // share whose denominator came from a second query, a header it mistook for an
+  // ID. Four correct answers flagged as suspect. A line saying the numbers
+  // "could not be reproduced" reads as "don't trust these", so it attacked work
+  // that was fine — and a warning that is usually wrong teaches people to ignore
+  // it, which costs exactly the day it is finally right.
+  //
+  // "Check these against the SQL or CSV" survives being wrong. If the check was
+  // merely blind, the reader looks, sees the numbers are fine, and has lost ten
+  // seconds. Both destinations are real controls on the same answer: the SQL
+  // disclosure below it, and the CSV export on the table itself.
+  //
+  // Keep it an instruction. Do not reword it into a claim about the numbers
+  // unless the checker's false-alarm rate has actually been measured at zero.
+  const subject = missed === n
+    ? `${missed === 1 ? "1 value" : `${missed.toLocaleString()} values`}`
+    : `${missed.toLocaleString()} of ${n.toLocaleString()} values`;
   return {
     tone: "warn",
-    text: missed === n
-      ? `${missed === 1 ? "1 value" : `${missed.toLocaleString()} values`} in this answer `
-        + "could not be reproduced from the query result"
-      : `${missed.toLocaleString()} of ${n.toLocaleString()} values `
-        + "could not be reproduced from the query result",
+    text: `Check ${subject} against the SQL or CSV`,
     title: _CHECK_CAVEAT,
   };
 }

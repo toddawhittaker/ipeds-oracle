@@ -458,13 +458,19 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   promise **reproduction, not correctness**. **TWO-SIDED since the reconciler was
   anchored:** `partial`/`unmatched` render a **⚠ caution** in `--warn`
   (`.table-trust.warn`, an inline `IconWarning` — the ⚠ codepoint renders as a colour
-  emoji on some platforms), leading with the count that did NOT reproduce and naming
-  the total ("13 of 22 values could not be reproduced from the query result"). Two
-  wording rules are load-bearing: it says **"could not be reproduced", never
-  "wrong"** — no checker reproduces every legitimate derivation, so a non-match is
-  evidence about THE CHECK, not a verdict on the number — and the tooltip says so
-  outright. It must not borrow the `--danger` treatment of a genuinely failed turn;
-  the answer is still an answer. **`unchecked`/`no_table` stay SILENT** (nothing was
+  emoji on some platforms) reading **`Check 13 of 22 values against the SQL or CSV`**.
+  **It is phrased as an INSTRUCTION, not a verdict, and that is the whole design.**
+  Every time it fired on real data it was a gap in the CHECKER, not a model error —
+  bolded numbers, a `<0.1%` read as `0.1`, a cross-query share, a header mistaken for
+  an ID: four correct answers flagged. A line claiming the numbers "could not be
+  reproduced" reads as *don't trust these* and attacks work that was fine, and a
+  warning that is usually wrong teaches people to ignore it — costing exactly the day
+  it is finally right. An instruction survives being wrong: the reader looks, sees the
+  numbers are fine, and has lost ten seconds. Both destinations are real controls on
+  the same answer (the SQL disclosure below it, the CSV export on the table).
+  **Don't reword it into a claim about the numbers unless the false-alarm rate has
+  been measured at zero.** It also must not borrow the `--danger` treatment of a
+  genuinely failed turn; the answer is still an answer. **`unchecked`/`no_table` stay SILENT** (nothing was
   compared, so neither tone applies), and so does any failure verdict whose counts
   are missing or contradict it: **`Number(null)` is `0` and finite**, so a
   pre-migration row's NULL counts read as "0 of N matched" and manufactured a caution
