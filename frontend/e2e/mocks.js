@@ -269,6 +269,7 @@ export async function mockStreamChat(page, {
   tableGrounding = null,
   tableCellsChecked = null,
   tableCellsMatched = null,
+  resultsTruncated = null,
   delayMs = 0,
 } = {}) {
   const calls = [];
@@ -304,7 +305,13 @@ export async function mockStreamChat(page, {
         // caution additionally needs how many MATCHED to name the misses.
         ...(tableGrounding != null ? { table_grounding: tableGrounding } : {}),
         ...(tableCellsChecked != null ? { table_cells_checked: tableCellsChecked } : {}),
-        ...(tableCellsMatched != null ? { table_cells_matched: tableCellsMatched } : {}) },
+        ...(tableCellsMatched != null ? { table_cells_matched: tableCellsMatched } : {}),
+        // Whether the turn's SQL returned more rows than the model transcribed.
+        // The LAST done-event field to get a mock: the truncation caption was
+        // only ever exercised through the RELOAD path (a messages row), so the
+        // live path — Chat.jsx reading it off this event — had zero coverage,
+        // which is exactly how it shipped broken once already.
+        ...(resultsTruncated != null ? { results_truncated: resultsTruncated } : {}) },
     ];
     const body = events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n") + "\n\n";
     await route.fulfill({ status: 200, contentType: "text/event-stream", body });

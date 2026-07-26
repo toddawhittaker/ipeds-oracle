@@ -90,3 +90,66 @@ test("asking a question streams a markdown answer with a table, exposes the SQL 
   await page.getByRole("menuitem", { name: "Copy Markdown" }).click();
   await expect(chartType).toHaveValue("bar");
 });
+
+// EVERY field the `done` event carries must reach the rendered turn, live.
+//
+// The persisted-answer field list is hand-maintained across ~10 sites, and #236
+// mechanized the BACKEND half — one list drives the INSERT, the SELECT and the
+// done payload, asserted against the real messages schema. Nothing does that for
+// the frontend: Chat.jsx's stream handler declares ~12 accumulators and spreads
+// them into one 400-character object literal, all by hand.
+//
+// The failure is ASYMMETRIC, which is why it keeps getting through review: the
+// RELOAD path inherits new fields for free (`...m` spread) while this live path
+// enumerates them. A dropped field therefore renders CORRECTLY after a refresh
+// and wrongly only on the turn that produced it — the hardest shape to notice,
+// and precisely how `table_cells_matched` and `results_truncated` both shipped
+// broken.
+//
+// This is the cheap half of that gate: one live turn carrying everything, with
+// an assertion per field. It cannot prove the two ends agree the way the backend
+// schema diff does, but it does catch a value that exists, is correct, and
+// simply never reaches the component.
+test("every field on the done event reaches the LIVE turn, not just a reload",
+  async ({ page }) => {
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
+    await mockConversations(page, []);
+    await mockStreamChat(page, {
+      conversationId: CONV_ID, messageId: MSG_ID, userMessageId: MSG_ID - 1,
+      sql: [SQL], answer: ANSWER_MD,
+      // Value verbatim, with separators — Figure renders what the MODEL wrote
+      // (the prompt asks for thousands separators); it applies no locale
+      // formatting of its own.
+      figure: { value: "12,345", unit: "degrees", label: "national total" },
+      suggestions: ["Which state grew fastest?"],
+      durationMs: 4200,
+      figureGrounding: "exact",
+      tableGrounding: "partial", tableCellsChecked: 22, tableCellsMatched: 9,
+      resultsTruncated: true,
+    });
+    await mockConversation(page, CONV_ID, []);   // never reloaded; this is the live path
+
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("nursing degrees by state");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("table")).toBeVisible();
+
+    // duration_ms -> "Thought for N seconds"
+    await expect(page.getByText(/Thought for \d+ second/)).toBeVisible();
+    // figure + figure_grounding -> the hero stat carrying its verified mark
+    await expect(page.locator(".figure")).toContainText("12,345");
+    // The mark lives in the figcaption, not the number itself.
+    await expect(page.locator(".fig-verified")).toBeVisible();
+    // table_grounding + BOTH counts -> the caution names the misses (13 of 22).
+    // table_cells_matched is the field that shipped broken: the done event
+    // carried it and Chat.jsx dropped it, so the count was right on reload and
+    // absent live.
+    await expect(page.locator(".table-trust")).toContainText("13 of 22");
+    // suggestions -> the drill-down chips
+    await expect(page.getByRole("button", { name: "Which state grew fastest?" })).toBeVisible();
+    // results_truncated -> the "First 200 rows" caption. Until this PR the mock
+    // could not even SEND this field, so the live path had no coverage at all.
+    await expect(page.getByText(/First 200 rows/)).toBeVisible();
+    // message_id -> the id that unlocks the server-side CSV
+    await expect(page.getByRole("button", { name: /Download full result/i })).toBeVisible();
+  });
