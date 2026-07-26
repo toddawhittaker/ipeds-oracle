@@ -16,6 +16,7 @@ import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
 import { turnErrorMessage } from "./authcopy.js";
 import { editConfirmBody, editConfirmLabel, laterTurnsLost } from "./turns.js";
+import { tableTrustNote } from "./tabletruth.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 import { collectionYearRange } from "./years.js";
 
@@ -148,6 +149,29 @@ function ThinkingTrace({ items }) {
         return <div key={j} className="thought-line muted">{t.text}</div>;
       })}
     </div>
+  );
+}
+
+// Whether this answer's numbers were reproduced from the rows its query
+// returned — the table's counterpart to the hero figure's "✓ verified".
+//
+// Rendered as a sibling AFTER <Markdown>, outside the .md node, for the same
+// reason <Figure> sits outside it: copying the answer must yield the answer, not
+// our annotation. ANSWER-scoped, not per-table — check_table returns one verdict
+// for every table in the answer (see tabletruth.js).
+//
+// POSITIVE-ONLY: tableTrustNote returns null for `partial`/`unmatched`, and that
+// silence is measured, not lazy — read the note in tabletruth.js before adding a
+// caution here. It is a plain note, deliberately NOT a live region: several
+// specs assert a single unscoped getByRole("status"), and a trust mark on a
+// settled answer is not an announcement.
+function TableTrust({ status, cellsChecked }) {
+  const note = tableTrustNote({ status, cellsChecked });
+  if (!note) return null;
+  return (
+    <p className={"table-trust " + note.tone} role="note" title={note.title}>
+      <span aria-hidden="true">✓ </span>{note.text}
+    </p>
   );
 }
 
@@ -699,6 +723,8 @@ export default function Chat({ me }) {
     let durationMs = null; // turn wall-clock from the done event → "Thought for N seconds"
     let resultsTruncated = false; // did this turn's SQL return more rows than shown?
     let figureGrounding = null;   // did the server reproduce the figure's number?
+    let tableGrounding = null;    // …and the table's numbers, with how many it checked
+    let tableCellsChecked = null;
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -775,6 +801,11 @@ export default function Chat({ me }) {
           // …and marks a reproduced figure "verified" without one, matching what
           // the message row stores so live and reloaded agree.
           if (ev.figure_grounding != null) figureGrounding = ev.figure_grounding;
+          // …and likewise for the table's numbers. The COUNT travels with the
+          // status because the note states it ("40 values reproduced"); a status
+          // without its count renders nothing.
+          if (ev.table_grounding != null) tableGrounding = ev.table_grounding;
+          if (ev.table_cells_checked != null) tableCellsChecked = ev.table_cells_checked;
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -797,7 +828,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, table_grounding: tableGrounding, table_cells_checked: tableCellsChecked, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -1007,6 +1038,8 @@ export default function Chat({ me }) {
                             null when the message carries no figure. */}
                         <Figure spec={m.figure} grounding={m.figure_grounding} />
                         <Markdown messageId={m.id} resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
+                        <TableTrust status={m.table_grounding}
+                                    cellsChecked={m.table_cells_checked} />
                       </>
                     )}
                   </div>

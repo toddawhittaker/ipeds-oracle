@@ -500,6 +500,80 @@ def test_a_table_with_no_results_is_unchecked_with_zero_counts():
     assert got.cells_checked == 0 and got.cells_matched == 0, got
 
 
+# --- KNOWN BLIND SPOT: row-wise derived columns -------------------------------
+# These tests PIN A LIMITATION, not a desired behaviour. They exist because the
+# limitation was measured and it decided a product question.
+#
+# Every op the reconciler can try (_match_in_column: sum/pct_change/diff/mean/
+# max/min, then share) runs DOWN a single result column. A "% change" column in
+# an answer table is computed ACROSS a row — (2024 - 2021) / 2021 for THAT row —
+# and there is no row-wise cross-column route (`_row_totals` is the only
+# row-wise thing and it is deliberately figure-only). So a table whose every
+# number is correct can still grade `partial`, or even `unmatched` when the
+# derived column is the only measure.
+#
+# That is why the user-facing table mark (Chat.jsx / tabletruth.js) is
+# POSITIVE-ONLY like the figure's: a caution keyed on `partial`/`unmatched`
+# would fire on correct answers of a shape prompt step 6(b) explicitly asks for.
+# Note the contrast with `share`, which IS reproducible — it is a column-scoped
+# op — so the gap is specifically cross-column, same-row arithmetic.
+#
+# If someone adds a row-wise route, these tests SHOULD fail. Update them, then
+# re-measure Grounded cells before shipping: widening check_table's match
+# surface risks coincidental hits across hundreds of cells, which is the same
+# reason row totals were kept figure-only.
+_ROWWISE = QueryResult(
+    columns=["stabbr", "enroll_2021", "enroll_2024"],
+    rows=[("CA", 100000, 110000), ("TX", 200000, 190000),
+          ("NY", 50000, 52500), ("FL", 80000, 88000)],
+    row_count=4)
+
+
+def test_a_correct_row_wise_pct_change_column_grades_partial():
+    # Raw counts verbatim, percentages arithmetically exact — 8 of 12 reproduce.
+    md = ("| State | 2021 | 2024 | % change |\n| --- | --- | --- | --- |\n"
+          "| CA | 100,000 | 110,000 | +10.0% |\n"
+          "| TX | 200,000 | 190,000 | -5.0% |\n"
+          "| NY | 50,000 | 52,500 | +5.0% |\n"
+          "| FL | 80,000 | 88,000 | +10.0% |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert got.status == grounding.TABLE_PARTIAL, got
+    assert (got.cells_matched, got.cells_checked) == (8, 12), got
+
+
+def test_a_correct_pct_change_column_ALONE_grades_unmatched():
+    # The sharper edge, and why a caution can't even be narrowed to `unmatched`:
+    # with no raw measure column beside it, a wholly CORRECT table reproduces
+    # nothing and is indistinguishable from a fabricated one.
+    md = ("| State | % change |\n| --- | --- |\n"
+          "| CA | +10.0% |\n| TX | -5.0% |\n| NY | +5.0% |\n| FL | +10.0% |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert got.status == grounding.TABLE_UNMATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (0, 4), got
+
+
+def test_a_correct_share_of_total_column_DOES_reproduce():
+    # The contrast that localizes the gap: `share` is column-scoped, so a
+    # correct share-of-total column grounds cleanly. Only cross-column,
+    # same-row arithmetic is unreachable.
+    md = ("| State | Enrollment | Share |\n| --- | --- | --- |\n"
+          "| CA | 110,000 | 25.0% |\n| TX | 190,000 | 43.1% |\n"
+          "| NY | 52,500 | 11.9% |\n| FL | 88,000 | 20.0% |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (8, 8), got
+
+
+def test_a_fabricated_table_is_still_caught():
+    # The kernel is not blind in general — numbers absent from the result are
+    # still unmatched. This is what the blind spot is NOT.
+    md = ("| State | 2021 | 2024 |\n| --- | --- | --- |\n"
+          "| CA | 123,456 | 234,567 |\n| TX | 345,678 | 456,789 |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert got.status == grounding.TABLE_UNMATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (0, 4), got
+
+
 def test_a_label_only_table_is_no_table():
     # No numeric cells to grade (an address/accreditor lookup rendered as a table).
     md = "| Field | Value |\n| --- | --- |\n| City | Columbus |\n| State | Ohio |\n"
@@ -662,6 +736,15 @@ def run():
     check("a single measure column has no row total", test_a_single_measure_column_has_no_row_total)
     check("a verbatim cell still beats a row total", test_a_verbatim_cell_still_beats_a_row_total)
     check("table cells do not use row totals", test_table_cells_do_not_use_row_totals)
+    print("  -- known blind spot: row-wise derived columns (see the block comment) --")
+    check("a CORRECT row-wise %-change column grades partial",
+          test_a_correct_row_wise_pct_change_column_grades_partial)
+    check("a CORRECT %-change column alone grades unmatched",
+          test_a_correct_pct_change_column_ALONE_grades_unmatched)
+    check("a CORRECT share-of-total column DOES reproduce (gap is cross-column only)",
+          test_a_correct_share_of_total_column_DOES_reproduce)
+    check("a fabricated table is still caught",
+          test_a_fabricated_table_is_still_caught)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

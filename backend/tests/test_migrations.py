@@ -398,6 +398,35 @@ def test_migration_32_drops_the_dead_messages_feedback_column():
         "a fresh install and an upgraded install disagree on messages' columns")
 
 
+def test_migration_33_adds_messages_table_grounding_columns():
+    """Table grounding, persisted per message so the READER can see it.
+
+    check_table already graded every measure cell on every turn, but the verdict
+    landed only on usage_log — it drove an admin stat and nothing else, so the
+    person about to put those numbers in a report learned nothing. Mirrors
+    migration 31's messages.figure_grounding: STATUS + counts only, never the
+    per-cell detail. Nullable because a cache hit and a refusal grade nothing,
+    and NULL correctly renders no mark at all.
+    """
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 32])
+    for c in ("table_grounding", "table_cells_checked", "table_cells_matched"):
+        assert c not in _cols(con, "messages"), (c, _cols(con, "messages"))
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+    for c in ("table_grounding", "table_cells_checked", "table_cells_matched"):
+        assert c in _cols(con, "messages"), (c, _cols(con, "messages"))
+    # An INSERT that omits them must still succeed and read back NULL — the
+    # cache/refusal paths do exactly that, and NULL is what renders no mark.
+    con.execute("INSERT INTO conversations(user_id, title, created_at, updated_at) "
+                "VALUES (1, 't', 0, 0)")
+    con.execute("INSERT INTO messages(conversation_id, role, content, created_at) "
+                "VALUES (1, 'assistant', 'a', 0)")
+    row = con.execute("SELECT table_grounding, table_cells_checked, table_cells_matched "
+                      "FROM messages WHERE role='assistant'").fetchone()
+    assert tuple(row) == (None, None, None), tuple(row)
+
+
 def test_fresh_db_advances_to_baseline_version_with_all_new_objects():
     con = sqlite3.connect(":memory:")
     v = _apply_migrations(con, MIGRATIONS)
@@ -1099,6 +1128,27 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0
       ],
       [
+        "table_cells_checked",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "table_cells_matched",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "table_grounding",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
         "thinking",
         "TEXT",
         0,
@@ -1735,6 +1785,8 @@ def run():
           test_migration_28_adds_chat_request_attempts_table)
     check("migration 32 drops the dead messages.feedback column (fresh == upgraded)",
           test_migration_32_drops_the_dead_messages_feedback_column)
+    check("migration 33 adds messages table-grounding columns (nullable)",
+          test_migration_33_adds_messages_table_grounding_columns)
     check("fresh db advances to the baseline version with all new objects",
           test_fresh_db_advances_to_baseline_version_with_all_new_objects)
     check("migration 6 rewrites terse seed lessons, leaves admin edits alone",

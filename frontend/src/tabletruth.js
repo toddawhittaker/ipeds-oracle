@@ -71,6 +71,58 @@ export function csvLabel({ serverSide, rowsShown }) {
   return `Download these ${rowsShown} rows (CSV)`;
 }
 
+// Whether the answer's numbers could be reproduced from the rows the query
+// actually returned — the table's equivalent of the hero figure's "✓ verified".
+//
+// The server grades every numeric MEASURE cell of the answer's tables against
+// the retained query results (backend/app/grounding.py check_table) and persists
+// the verdict plus two counts on the message. This turns that into the one line
+// the reader sees, or null for "say nothing".
+//
+// POSITIVE-ONLY, and this is the part to read before "improving" it. `partial`
+// and `unmatched` return null — NOT because a caution would be unhelpful, but
+// because it would fire on CORRECT answers. Every op the reconciler can try runs
+// DOWN a single result column, while a "% change" column in a table is computed
+// ACROSS a row ((2024 - 2021) / 2021 for that row). There is no row-wise
+// cross-column route, so a table whose every number is right grades `partial` —
+// or `unmatched` when the derived column is the only measure, which is why the
+// caution can't even be narrowed to `unmatched`. Measured, with the four cases
+// pinned in backend/tests/test_grounding.py under "KNOWN BLIND SPOT". Note
+// `share` DOES reproduce (a column-scoped op), so the gap is specifically
+// cross-column, same-row arithmetic. Fix that and this can gain a caution.
+//
+// ANSWER-scoped, not table-scoped: check_table flattens the cells of EVERY
+// table in the answer into one list and returns ONE status, so this renders once
+// per answer. Attaching it to a particular table would mis-attribute it, which
+// is also why it needs no single-table gate (unlike truncation, whose flag maps
+// to one specific query result).
+/**
+ * @param {object} [verdict] The message's persisted table-grounding verdict.
+ * @param {string} [verdict.status] Server verdict: matched|partial|unmatched|no_table|unchecked.
+ *   Only `matched` renders — see the positive-only note above before widening this.
+ * @param {number} [verdict.cellsChecked] How many numeric MEASURE cells were graded; the
+ *   note states this count, so a verdict without it renders nothing.
+ * @returns {{tone: string, text: string, title: string} | null} The line to render, or
+ *   null for "say nothing" — the default for every non-matched and malformed verdict.
+ */
+export function tableTrustNote({ status, cellsChecked } = {}) {
+  if (status !== "matched") return null;      // see the positive-only note above
+  const n = Number(cellsChecked);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Says the COUNT, never "all": check_table grades measure columns only — a
+  // rank ordinal and dimension columns (year/unitid/cipcode) are excluded — so
+  // "all values verified" would claim coverage the check doesn't have.
+  // And "reproduced from", not "correct": it means these numbers came from the
+  // rows the query returned, not that the query asked the right question.
+  return {
+    tone: "ok",
+    text: `${n.toLocaleString()} ${n === 1 ? "value" : "values"} reproduced from the query result`,
+    title: "Each number was re-derived from the rows this answer's query returned. "
+      + "It confirms the values were transcribed faithfully, not that the query "
+      + "asked the right question.",
+  };
+}
+
 // Why a CSV export failed, in a sentence. The export re-runs the query, so it
 // can time out or be rate-limited independently of the answer that produced it —
 // and those are the two likeliest failures, not bugs.

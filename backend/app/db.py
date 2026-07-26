@@ -424,6 +424,23 @@ MIGRATIONS: list[tuple[int, str]] = [
     #    DROP COLUMN rewrites the table; it needs sqlite >= 3.35 (2021), well
     #    under the floor every supported build already ships.
     (32, "ALTER TABLE messages DROP COLUMN feedback;"),
+    # 33: table grounding, per message, so the READER sees it.
+    #
+    # grounding.check_table already graded every numeric MEASURE cell of an
+    # answer's tables against the rows the turn actually queried — on every turn,
+    # for free — but the verdict landed only on usage_log, driving the Admin →
+    # Usage "Grounded cells" stat and nothing else. The person about to copy those
+    # numbers into a report learned nothing. Exactly the gap migration 31 closed
+    # for the hero figure, and the shape is deliberately identical: STATUS +
+    # counts only. There is no per-cell detail to store (check_table flattens
+    # every cell into one list and returns counts), and derivation-style
+    # provenance stays backend telemetry.
+    #
+    # Nullable: a cache hit and a refusal grade nothing, and NULL is what renders
+    # no mark at all — the same "not known" reading figure_grounding relies on.
+    (33, "ALTER TABLE messages ADD COLUMN table_grounding TEXT;\n"
+         "ALTER TABLE messages ADD COLUMN table_cells_checked INTEGER;\n"
+         "ALTER TABLE messages ADD COLUMN table_cells_matched INTEGER;"),
 ]
 
 

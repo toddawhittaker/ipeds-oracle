@@ -900,6 +900,12 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .sort-note.warn { color: var(--warn); font-weight: 600; }
 /* Row-cap caption, above the toolbar, in the mono micro-label device. */
 .table-caption { margin: 0 2px 4px; }
+/* "N values reproduced from the query result" — the table's counterpart to the
+   figure's ✓ mark, once per ANSWER (check_table grades the whole answer, not one
+   table). Quiet on purpose: it should reassure on inspection, not compete with
+   the numbers it vouches for. Same --ok as .fig-verified so the two trust marks
+   read as one idea. */
+.table-trust { margin: 8px 2px 0; font-size: 12px; color: var(--ok); }
 
 /* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
    that appears once rows are ticked, and the instant snapshot chart panel. */

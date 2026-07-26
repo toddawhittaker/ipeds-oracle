@@ -77,6 +77,17 @@ step "Lint: ruff check backend/app backend/tests scripts"
 step "Lint: eslint (frontend)"
 ( cd frontend && npm run --silent lint ) || fail "eslint"
 
+# Part of CI's Lint job, so it belongs here: frontend/types/ is COMMITTED, and
+# `typecheck` re-emits it and diffs. Adding an export or renaming a prop without
+# regenerating is a red CI check.
+#
+# This step was MISSING while CI had it (#220 added it to ci.yml only), which is
+# the one failure mode this whole script exists to prevent: a green local gate
+# and a red merge gate. Same "one list, not two" drift as the backend suite
+# lists — whenever a step is added to ci.yml, add it here in the SAME PR.
+step "Lint: types are in sync with the source (frontend)"
+( cd frontend && npm run --silent typecheck ) || fail "typecheck (run 'npm --prefix frontend run types' and commit frontend/types/)"
+
 # =========================================================================
 # Job 1b — web unit tests (vitest: the fast pure-logic tier + JS coverage floor)
 # =========================================================================

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { contrastRatio } from "./contrast.js";
 import {
   gotoAdmin,
   mockMe,
@@ -246,37 +247,6 @@ const GATED_IMPACTS = ["critical", "serious"];
 
 function gatedViolations(results) {
   return results.violations.filter((v) => GATED_IMPACTS.includes(v.impact));
-}
-
-// WCAG 2.x relative-luminance contrast for an element's rendered text against
-// the nearest painted ancestor background. Measures RESOLVED pixels, so it pins
-// the readability contract itself rather than a colour literal -- a later theme
-// or token change that happens to stay legible passes, and one that doesn't
-// fails no matter which declaration caused it.
-async function contrastRatio(page, selector) {
-  return page.evaluate((sel) => {
-    const el = globalThis.document.querySelector(sel);
-    if (!el) return null;
-    const channels = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
-    const luminance = (rgb) => {
-      const [r, g, b] = rgb.map((v) => {
-        const c = v / 255;
-        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-      });
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const opaque = (s) => s && s !== "transparent" && !/rgba\([^)]*,\s*0\s*\)$/.test(s);
-    let bg = null;
-    for (let n = el; n; n = n.parentElement) {
-      const c = globalThis.getComputedStyle(n).backgroundColor;
-      if (opaque(c)) { bg = channels(c); break; }
-    }
-    if (!bg) return null;
-    const fg = globalThis.getComputedStyle(el).color;
-    const [hi, lo] = [luminance(channels(fg)), luminance(bg)]
-      .sort((a, b) => b - a);
-    return (hi + 0.05) / (lo + 0.05);
-  }, selector);
 }
 
 test.describe("axe smoke scan", () => {
