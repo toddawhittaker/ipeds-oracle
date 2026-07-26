@@ -99,7 +99,28 @@ export function sortRows(rows, col, dir, numeric) {
 // (handled below) but must not appear as a bogus second line/bar.
 function isDimensionCol(header, vals) {
   const h = (header || "").trim();
-  if (/^(rank|#|no\.?|num|index|row|position|place|year|yr|fy|id|.*[ _]?id|code|.*code|cip|unitid|opeid|ipeds|zip|fips)$/i.test(h)) {
+  // NOTE the REQUIRED separator in `.*[ _]id`. It used to be optional
+  // (`.*[ _]?id`), which collapses the alternative to plain `.*id` — matching
+  // any header merely ENDING in those two letters. "Average Aid", "Total Aid",
+  // "Paid" and "Grid" all classified as identifiers, so chartSpecFromTable
+  // found no series and returned null, and both "Chart this" (Markdown.jsx) and
+  // compare mode (compare.js, which calls the same function) silently vanished
+  // from every financial-aid answer. Student Financial Aid (`sfa`) is a
+  // first-class IPEDS survey family and "average $" is one of its documented
+  // measure suffixes, so this was a real header, not a contrived one.
+  //
+  // The backend's equivalent classifier, grounding._DIMENSION_COL_RE, already
+  // requires the separator (`.*_id`) — so the two sides disagreed, and
+  // check_table graded an aid column as a measure while the browser called it
+  // an identifier.
+  //
+  // Two accepted gaps, both stated rather than discovered later:
+  //  * a run-together header with no separator ("ipedsid", "institutionid") no
+  //    longer matches the wildcard. The explicit alternatives cover
+  //    id|unitid|opeid|ipeds, and the backend has the identical gap.
+  //  * `.*code` keeps its wildcard. Same shape, but no observed false positive,
+  //    and tightening it would break zipcode/cipcode.
+  if (/^(rank|#|no\.?|num|index|row|position|place|year|yr|fy|id|.*[ _]id|code|.*code|cip|unitid|opeid|ipeds|zip|fips)$/i.test(h)) {
     return true;
   }
   const nums = vals.map(parseNum);
