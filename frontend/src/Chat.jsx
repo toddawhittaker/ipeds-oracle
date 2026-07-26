@@ -668,6 +668,24 @@ export default function Chat({ me }) {
       requestAnimationFrame(() => taRef.current?.focus());  // land focus in composer
     });
   }
+  // Asking from a suggestion / clarify chip.
+  //
+  // The chips are `disabled={busy}`, and submit() sets busy in the same tick —
+  // so the chip the user just activated disables itself WHILE FOCUSED and
+  // focus falls to <body>, dumping a keyboard or screen-reader user to the top
+  // of the document for the whole generation (WCAG 2.4.3).
+  //
+  // Worst on a clarify: those chips are the only UI for its answer phrases, so
+  // a user answering a blocking disambiguation is the one most likely to be
+  // navigating by keyboard through them. The composer is the documented
+  // free-text escape hatch for exactly these, which makes it the right landing
+  // spot rather than an arbitrary one.
+  //
+  // Focus moves BEFORE the state change, mirroring BulkBar's onFocusFallback.
+  function askFromChip(q) {
+    taRef.current?.focus();
+    submit(q);
+  }
   // Rerun a prior prompt as-is (e.g. after a failure), replacing from that point.
   function rerun(i) {
     if (busy) return;
@@ -676,6 +694,15 @@ export default function Chat({ me }) {
     confirmDestructive(laterTurnsLost(messages, i), "Rerun", () => {
       setMessages((m) => m.slice(0, i));
       submit(msg.content, { editMessageId: msg.id });
+      // Land focus in the composer, exactly as saveEdit does. Rerun is
+      // `disabled={busy}`, so submit() disables the very button that was just
+      // activated and focus falls to <body> — the user is dumped to the top of
+      // the document for the whole generation (WCAG 2.4.3).
+      //
+      // It also closes a second path: on the CONFIRM route, ConfirmModal
+      // correctly returns focus to its opener, but the opener is disabled by
+      // then, so the modal's own a11y still ends at <body>.
+      requestAnimationFrame(() => taRef.current?.focus());
     });
   }
 
@@ -1202,8 +1229,10 @@ export default function Chat({ me }) {
                       </div>
                     )}
                     {/* Drill-down chips — clicking one asks it as a follow-up turn
-                        (which gets its own brief), an exploration loop. */}
-                    <Suggestions items={m.suggestions} onAsk={(q) => submit(q)} disabled={busy} />
+                        (which gets its own brief), an exploration loop.
+                        askFromChip, not submit, so activating a chip doesn't
+                        strand focus on <body> when it disables itself. */}
+                    <Suggestions items={m.suggestions} onAsk={askFromChip} disabled={busy} />
                     {/* Disambiguation answer-phrase chips — clicking one submits the
                         short phrase verbatim as a follow-up turn. The composer stays
                         the free-text escape hatch. showQuestion is a defensive
@@ -1211,7 +1240,7 @@ export default function Chat({ me }) {
                         surrounding prose, m.content is empty and the chips would
                         otherwise be unlabeled — Clarify then shows its own
                         question as the heading instead of "Did you mean". */}
-                    <Clarify spec={m.clarify} onAsk={(q) => submit(q)} disabled={busy}
+                    <Clarify spec={m.clarify} onAsk={askFromChip} disabled={busy}
                              showQuestion={!m.content || !m.content.trim()} />
                   </>
                 )}
