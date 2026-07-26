@@ -391,7 +391,16 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   keeps every call's result (in call order), where `last_result` used to overwrite.
   **Grounding is CONVERSATION-scoped**: each turn's results are persisted
   (`messages.results`, migration 23, capped + backend-only) and the recent window is
-  re-hydrated (`_load_prior_results`, same `before_id` semantics as `_load_history`)
+  re-hydrated (`_load_prior_results`, same `before_id` semantics as `_load_history`
+  — but a **~2× WIDER window**, a known open question: both LIMIT `HISTORY_TURNS`,
+  yet history counts ALL messages (6 ≈ 3 turns) while prior-results counts only
+  result-bearing assistant rows (6 ≈ 6 turns), so grounding can borrow results
+  from turns whose prose the model never saw. Narrowing is defensible in
+  principle but was **measured and could not be decided** — 8 of the 9 graded
+  turns in the corpus were fed identical inputs, so "no change" proved nothing —
+  and shrinking the pool can only produce a FALSE caution on a correct answer.
+  Needs a corpus with several 6+ turn conversations; pinned meanwhile by
+  `test_the_two_recent_windows_are_measured_in_different_units`)
   into `stream_agent(prior_results=…)`. A figure is checked against THIS turn's
   results FIRST, then the borrowed prior ones (`_ground_results`), so a follow-up
   that recites a number without re-querying grounds against the earlier turn that
