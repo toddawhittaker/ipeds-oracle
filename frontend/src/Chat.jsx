@@ -1152,7 +1152,23 @@ export default function Chat({ me }) {
               <div className="skel skel-answer short" />
             </div>
           )}
-          {!loadingConvo && messages.length === 0 && pendingTurns.length === 0 && !me?.has_data && (
+          {/* BOTH empty states belong to the NO-CONVERSATION route, and that is
+              the whole gate. They are the "you haven't asked anything yet"
+              screen, so rendering them on a /chat/:id URL means the index page
+              is impersonating someone's conversation.
+              FOUND LIVE: the in-flight placeholder was replaced by this
+              greeting — heading, blurb and six example chips — on a /chat/:id
+              URL whose answer was already saved. `messages` being momentarily
+              empty on a conversation route is a transient the view must ride
+              out (the loader is mid-flight, or a turn hasn't persisted yet),
+              never a cue to offer a fresh start. Keyed on routeId, NOT convId:
+              convId is also null for a malformed id, where the notice is the
+              right thing to show and this is not.
+              This also stops a failed load rendering "That conversation isn't
+              available." AND "What would you like to know" together — a
+              contradiction the skeleton already guarded against with
+              !showNotice and these two never did. */}
+          {routeId === null && messages.length === 0 && !me?.has_data && (
             <div className="empty">
               <h2>No IPEDS data loaded yet</h2>
               <p>
@@ -1164,7 +1180,7 @@ export default function Chat({ me }) {
               </p>
             </div>
           )}
-          {!loadingConvo && messages.length === 0 && pendingTurns.length === 0 && me?.has_data && (
+          {routeId === null && messages.length === 0 && me?.has_data && (
             <div className="empty">
               <span className="field-label">Ask the record</span>
               <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>

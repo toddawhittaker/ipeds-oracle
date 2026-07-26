@@ -296,6 +296,57 @@ test.describe("chat empty state names the loaded collection years", () => {
   });
 });
 
+test.describe("the empty state belongs to the no-conversation route", () => {
+  test("a conversation route with no messages never shows the index greeting",
+    async ({ page }) => {
+      // FOUND LIVE: the in-flight placeholder was replaced by the new-chat
+      // greeting — heading, blurb and six example chips — while the URL was
+      // still /chat/:id and the answer was already saved. `messages` being
+      // momentarily empty on a conversation route is a transient to ride out
+      // (the loader is mid-flight, or a turn hasn't persisted yet), never a cue
+      // to offer a fresh start. The index page must not impersonate a chat.
+      await mockMe(page, USER);
+      await mockConversations(page, [{ id: 4, title: "A chat", updated_at: 0 }]);
+      await mockConversation(page, 4, []);   // genuinely empty, as a mid-flight turn reads
+      await page.goto("/chat/4");
+
+      await expect(page.getByText("What would you like to know")).toHaveCount(0);
+      await expect(page.locator(".examples-grid")).toHaveCount(0);
+      // ...and the route itself is unchanged; this is about what renders, not
+      // where we are.
+      expect(new URL(page.url()).pathname).toBe("/chat/4");
+    });
+
+  test("a failed conversation load says so INSTEAD of offering a fresh start",
+    async ({ page }) => {
+      // The two used to render together: "That conversation isn't available."
+      // above "What would you like to know about U.S. colleges?" — an error and
+      // an invitation, at once. The skeleton already guarded this with
+      // !showNotice; the empty states never did.
+      await mockMe(page, USER);
+      await mockConversations(page, [{ id: 4, title: "A chat", updated_at: 0 }]);
+      await mockConversation(page, 4, [], { httpStatus: 500 });
+      await page.goto("/chat/4");
+
+      // .notice specifically — the same text is deliberately duplicated into an
+      // sr-only live region, so a bare getByText is a strict-mode violation.
+      await expect(page.locator(".notice").filter({ hasText: /isn't available/ }))
+        .toBeVisible();
+      await expect(page.getByText("What would you like to know")).toHaveCount(0);
+    });
+
+  test("the greeting still shows on the no-conversation route", async ({ page }) => {
+    // The other half of the bound: scoping it must not delete the empty state
+    // from the one place it belongs, which is where every example chip lives.
+    await mockMe(page, USER);
+    await mockConversations(page, []);
+    await page.goto("/");
+
+    await expect(page.getByText("What would you like to know")).toBeVisible();
+    await expect(page.locator(".examples-grid")).toBeVisible();
+  });
+});
+
 test.describe("conversation-loading skeleton", () => {
   test("switching to a conversation shows the skeleton — never the "
     + "empty-state prompt — until messages land", async ({ page }) => {

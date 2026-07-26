@@ -335,7 +335,20 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   describe in `frontend/e2e/chat-interactions.spec.js`.
   Auto-scroll **follows only while the viewer is near the bottom** (scrolled
   up = never yanked; a "Jump to latest" pill is the way back). Conversation
-  switches show a skeleton, never the empty-state prompt. A printable key
+  switches show a skeleton, never the empty-state prompt. **Both empty states
+  belong to the NO-CONVERSATION route** (`routeId === null`) — they are the
+  "you haven't asked anything yet" screen, so rendering one on a `/chat/:id`
+  URL is the index page impersonating someone's conversation. Found live: the
+  in-flight placeholder was replaced by the greeting + six example chips on a
+  `/chat/:id` whose answer was already saved. `messages` being momentarily
+  empty on a conversation route is a TRANSIENT to ride out (loader in flight,
+  or a turn not yet persisted), never a cue to offer a fresh start — so the
+  worst case is now a blank thread, not a wrong one. Keyed on `routeId`, NOT
+  `convId`: convId is also null for a malformed id, where the notice is the
+  right thing to show. This also stops a failed load rendering "That
+  conversation isn't available." AND the greeting together — a contradiction
+  the skeleton already guarded with `!showNotice` and the empty states never
+  did. A printable key
   typed with nothing editable focused redirects into the composer
   (`typeahead.js`, vitest-pinned). The **composer is Markdown-highlighting** but
   stays a real `<textarea>`: `MarkdownTextarea.jsx` layers a transparent textarea
