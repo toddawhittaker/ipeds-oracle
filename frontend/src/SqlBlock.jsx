@@ -44,6 +44,18 @@ export default function SqlBlock({ code, className = "", format = true }) {
       useInlineStyles={false}
       PreTag="pre"
       className={`sqlblock ${className}`.trim()}
+      // A SQL block scrolls (.thought-sql caps at ~15em; .sqlblock scrolls
+      // horizontally on a wide query) and contains nothing focusable, so a
+      // keyboard-only user could not reach past the first visible lines —
+      // WCAG 2.1.1, Level A. Same treatment as .md .table-wrap in Markdown.jsx:
+      // make the scroll container itself a focusable, named region.
+      //
+      // These ride through SyntaxHighlighter onto the PreTag; that pass-through
+      // is asserted in the browser (a11y-scroll-regions.spec.js) rather than
+      // taken on faith from the library's docs.
+      tabIndex={0}
+      role="region"
+      aria-label="SQL query"
     >
       {shown}
     </SyntaxHighlighter>
