@@ -17,15 +17,18 @@ export function csvLabel({ serverSide, rowsShown }: {
 /**
  * @param {object} [verdict] The message's persisted table-grounding verdict.
  * @param {string} [verdict.status] Server verdict: matched|partial|unmatched|no_table|unchecked.
- *   Only `matched` renders — see the positive-only note above before widening this.
- * @param {number} [verdict.cellsChecked] How many numeric MEASURE cells were graded; the
- *   note states this count, so a verdict without it renders nothing.
+ *   `unchecked`/`no_table` render nothing — nothing was compared, so neither tone applies.
+ * @param {number} [verdict.cellsChecked] How many numeric MEASURE cells were graded; every
+ *   note states a count, so a verdict without it renders nothing.
+ * @param {number} [verdict.cellsMatched] How many of those reproduced. Required for the
+ *   caution, which leads with the number that did NOT.
  * @returns {{tone: string, text: string, title: string} | null} The line to render, or
- *   null for "say nothing" — the default for every non-matched and malformed verdict.
+ *   null for "say nothing" — the default for every unrecognised or malformed verdict.
  */
-export function tableTrustNote({ status, cellsChecked }?: {
+export function tableTrustNote({ status, cellsChecked, cellsMatched }?: {
     status?: string;
     cellsChecked?: number;
+    cellsMatched?: number;
 }): {
     tone: string;
     text: string;

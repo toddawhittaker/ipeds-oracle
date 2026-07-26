@@ -26,16 +26,50 @@ describe("tableTrustNote", () => {
     expect(note.title).toMatch(/not that the query/i);
   });
 
-  it("says NOTHING when the check failed, however it failed", () => {
-    // THE regression this guards, and it is a product decision, not an
-    // omission. It began as a measured necessity — a correct row-wise "% change"
-    // column graded `partial`, so a caution would have called correct answers
-    // wrong. The reconciler now anchors each row and closes that gap, but the
-    // silence stays until someone has actually READ non-matches produced by the
-    // anchored kernel; no such corpus exists yet. See frontend/src/tabletruth.js
-    // for the full reasoning before flipping this.
-    for (const status of ["partial", "unmatched"]) {
-      expect(tableTrustNote({ status, cellsChecked: 22, cellsMatched: 9 })).toBeNull();
+  it("cautions when some values did not reproduce, leading with the misses", () => {
+    const note = tableTrustNote({ status: "partial", cellsChecked: 22, cellsMatched: 9 });
+    expect(note.tone).toBe("warn");
+    // 13 failed, not 9 — leading with the count that PASSED would bury the
+    // actionable half under a reassuring number.
+    expect(note.text).toContain("13");
+    // …and it names the total, so "13 of 22" can't read as "everything".
+    expect(note.text).toContain("22");
+  });
+
+  it("cautions when nothing reproduced, without claiming the numbers are wrong", () => {
+    const note = tableTrustNote({ status: "unmatched", cellsChecked: 15, cellsMatched: 0 });
+    expect(note.tone).toBe("warn");
+    expect(note.text).toContain("15");
+    // THE wording contract, and the reason a caution was safe to ship at all: no
+    // checker reproduces every legitimate derivation, so a non-match means THIS
+    // CHECK could not re-derive the number — not that the number is wrong. A
+    // confident accusation on a correct answer costs far more than this
+    // under-claim. Assert the promise is about reproduction, never correctness.
+    expect(note.text).toMatch(/could not be reproduced/i);
+    expect(note.text).not.toMatch(/\b(wrong|incorrect|error|invalid)\b/i);
+    expect(note.title).toMatch(/not as proof of an error/i);
+  });
+
+  it("agrees in number, both when some failed and when all did", () => {
+    expect(tableTrustNote({ status: "partial", cellsChecked: 40, cellsMatched: 39 }).text)
+      .toMatch(/^1 of 40 values\b/);
+    expect(tableTrustNote({ status: "unmatched", cellsChecked: 1, cellsMatched: 0 }).text)
+      .toMatch(/^1 value in this answer\b/);
+    expect(tableTrustNote({ status: "unmatched", cellsChecked: 4, cellsMatched: 0 }).text)
+      .toMatch(/^4 values in this answer\b/);
+  });
+
+  it("stays SILENT on a failure verdict whose counts contradict it", () => {
+    // A `partial` that missed nothing, or counts outside the graded set, is a
+    // malformed verdict — a bug upstream, not a finding. Cautioning on it would
+    // put a warning on an answer nothing is actually wrong with, which is the
+    // exact failure this feature was held back to avoid.
+    for (const arg of [{ status: "partial", cellsChecked: 22, cellsMatched: 22 },
+                       { status: "partial", cellsChecked: 22, cellsMatched: 30 },
+                       { status: "partial", cellsChecked: 22, cellsMatched: -1 },
+                       { status: "unmatched", cellsChecked: 15 },
+                       { status: "partial", cellsChecked: 22, cellsMatched: null }]) {
+      expect(tableTrustNote(arg)).toBeNull();
     }
   });
 
