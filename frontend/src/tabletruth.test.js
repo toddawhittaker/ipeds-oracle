@@ -26,37 +26,42 @@ describe("tableTrustNote", () => {
     expect(note.title).toMatch(/not that the query/i);
   });
 
-  it("cautions when some values did not reproduce, leading with the misses", () => {
-    const note = tableTrustNote({ status: "partial", cellsChecked: 22, cellsMatched: 9 });
-    expect(note.tone).toBe("warn");
-    // 13 failed, not 9 — leading with the count that PASSED would bury the
-    // actionable half under a reassuring number.
-    expect(note.text).toContain("13");
-    // …and it names the total, so "13 of 22" can't read as "everything".
-    expect(note.text).toContain("22");
-  });
-
-  it("cautions when nothing reproduced, without claiming the numbers are wrong", () => {
+  it("asks the reader to CHECK, rather than claiming the numbers are wrong", () => {
+    // THE wording contract, and the whole reason a caution can ship at all.
+    // Every time this fired on real data it was a gap in the CHECKER, not a
+    // model error — four correct answers flagged. A verdict ("could not be
+    // reproduced") reads as "don't trust these" and attacks work that was fine;
+    // an instruction survives being wrong, because a reader who looks and finds
+    // the numbers correct has lost ten seconds and nothing else.
     const note = tableTrustNote({ status: "unmatched", cellsChecked: 15, cellsMatched: 0 });
     expect(note.tone).toBe("warn");
-    expect(note.text).toContain("15");
-    // THE wording contract, and the reason a caution was safe to ship at all: no
-    // checker reproduces every legitimate derivation, so a non-match means THIS
-    // CHECK could not re-derive the number — not that the number is wrong. A
-    // confident accusation on a correct answer costs far more than this
-    // under-claim. Assert the promise is about reproduction, never correctness.
-    expect(note.text).toMatch(/could not be reproduced/i);
-    expect(note.text).not.toMatch(/\b(wrong|incorrect|error|invalid)\b/i);
-    expect(note.title).toMatch(/not as proof of an error/i);
+    expect(note.text).toMatch(/^Check\b/);
+    // It points at the two real controls on the same answer.
+    expect(note.text).toMatch(/SQL/);
+    expect(note.text).toMatch(/CSV/);
+    // And it never asserts anything about the numbers themselves.
+    expect(note.text).not.toMatch(/\b(wrong|incorrect|error|invalid|unverified|failed)\b/i);
+    expect(note.title).toMatch(/ground truth/i);
+  });
+
+  it("counts what needs checking, and names the total when only some do", () => {
+    // 13 needs checking, not the 9 that passed — and naming 22 keeps the scale
+    // honest, so "13 of 22" can't be read as "the whole table".
+    const some = tableTrustNote({ status: "partial", cellsChecked: 22, cellsMatched: 9 });
+    expect(some.text).toContain("13 of 22");
+    // When every graded value needs checking there is no useful "of N" to add.
+    const all = tableTrustNote({ status: "unmatched", cellsChecked: 15, cellsMatched: 0 });
+    expect(all.text).toContain("15 values");
+    expect(all.text).not.toContain("of 15");
   });
 
   it("agrees in number, both when some failed and when all did", () => {
     expect(tableTrustNote({ status: "partial", cellsChecked: 40, cellsMatched: 39 }).text)
-      .toMatch(/^1 of 40 values\b/);
+      .toBe("Check 1 of 40 values against the SQL or CSV");
     expect(tableTrustNote({ status: "unmatched", cellsChecked: 1, cellsMatched: 0 }).text)
-      .toMatch(/^1 value in this answer\b/);
+      .toBe("Check 1 value against the SQL or CSV");
     expect(tableTrustNote({ status: "unmatched", cellsChecked: 4, cellsMatched: 0 }).text)
-      .toMatch(/^4 values in this answer\b/);
+      .toBe("Check 4 values against the SQL or CSV");
   });
 
   it("stays SILENT on a failure verdict whose counts contradict it", () => {

@@ -12,10 +12,11 @@ import {
 // verdict only ever reached usage_log — an admin stat. The person about to copy
 // those numbers into a report saw nothing. This is the reader-facing half.
 //
-// Two verdicts render: `matched` reassures, `partial`/`unmatched` caution. The
-// caution was deliberately withheld until the reconciler was row-anchored,
-// because before that a correct row-wise "% change" column graded `partial` and
-// a warning would have called correct answers wrong.
+// Two verdicts render: `matched` reassures, `partial`/`unmatched` ask the reader
+// to check. The caution is phrased as an INSTRUCTION ("Check N values against the
+// SQL or CSV") rather than a claim, because every time it fired on real data it
+// was a gap in the checker rather than a model error — an instruction survives
+// being wrong, a verdict does not.
 //
 // What still must NEVER render is the third case: a verdict with nothing behind
 // it. `unchecked`/`no_table` compared nothing, and a status whose counts are
@@ -78,18 +79,19 @@ test.describe("table grounding mark", () => {
     expect(await page.locator(".md .table-trust").count()).toBe(0);
   });
 
-  test("a partial verdict cautions, naming the count that did NOT reproduce",
+  test("a partial verdict asks the reader to check, naming the count",
     async ({ page }) => {
       await open(page, {
         table_grounding: "partial", table_cells_checked: 22, table_cells_matched: 9,
       });
       await expect(mark(page)).toBeVisible();
       await expect(mark(page)).toHaveClass(/warn/);
-      // 13, not 9: the actionable half leads. And the total, so the scale is honest.
+      // 13 needs checking, not the 9 that passed; the total keeps the scale honest.
       await expect(mark(page)).toContainText("13 of 22");
-      // It must never assert the numbers are WRONG — no checker reproduces every
-      // legitimate derivation, so this says only that the check couldn't.
-      await expect(mark(page)).toContainText(/could not be reproduced/i);
+      // An INSTRUCTION, never a verdict on the numbers. Every real firing so far
+      // was a gap in the checker, so the line has to survive being wrong.
+      await expect(mark(page)).toContainText(/^Check\b/);
+      await expect(mark(page)).toContainText(/SQL or CSV/);
     });
 
   test("an unmatched verdict cautions without reading as a failed answer",
