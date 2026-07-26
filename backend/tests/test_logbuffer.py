@@ -53,6 +53,37 @@ def run():
     check("bearer/api-key value redacted", "abc123" not in blob and "sk-or-v1-abc123" not in blob)
     check("non-secret content retained", any("kept-tail" in r["msg"] for r in recs))
 
+    # --- uvicorn access-log redaction (security regression) ----------------
+    # Sign-in links now carry the token in a URL fragment, which browsers never
+    # send — but every link minted BEFORE that change is still in an inbox with
+    # `?token=`, and `/verify` is an SPA route served by the catch-all, so
+    # opening one wrote a live single-use credential into uvicorn's access log
+    # on page load. Anyone able to read `docker logs` could replay it.
+    #
+    # THE REGRESSION THIS NAMES: uvicorn's AccessFormatter logs a CONSTANT
+    # format string and puts the request path in record.args[2]. A filter that
+    # scrubbed only record.msg finds nothing to change, passes a naive
+    # "no token in msg" assertion, and leaks every token anyway. So this builds
+    # a genuinely uvicorn-shaped record and asserts on the FORMATTED line.
+    logbuffer.install_access_log_redaction()
+    access = logging.getLogger("uvicorn.access")
+    uvicorn_rec = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:52014", "GET", "/verify?token=LIVETOKEN9876", "1.1", 200),
+        None)
+    for f in access.filters:
+        f.filter(uvicorn_rec)
+    line = uvicorn_rec.getMessage()
+    check("access-log token redacted in args, not just msg", "LIVETOKEN9876" not in line)
+    check("access-log line still usable", "/verify" in line and "200" in line)
+
+    # Idempotent: install() runs at import time and may run again in tests; a
+    # second filter would double-substitute and is a leak of a different kind.
+    before = len(access.filters)
+    logbuffer.install_access_log_redaction()
+    check("access-log redactor installs once", len(access.filters) == before)
+
     # --- log-injection scrub (security regression) ------------------------
     # A user-controlled value (email, entity label, upstream error) can carry a
     # newline to forge a second log line. emit() flattens CR/LF + other control

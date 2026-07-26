@@ -36,8 +36,14 @@ log = logging.getLogger("ipeds.app")
 
 # Keep recent log records in memory so admins can view them in the UI.
 from app.logbuffer import install as _install_logbuffer  # noqa: E402
+from app.logbuffer import install_access_log_redaction  # noqa: E402
 
 _install_logbuffer()
+# Scrub `token=` from uvicorn's access log. Sign-in links carry the token in a
+# URL fragment now (never sent to the server), so this is for the links already
+# in people's inboxes. Installed at import time so it covers every entrypoint —
+# docker-entrypoint.sh, `make up`, and the test client alike.
+install_access_log_redaction()
 
 WEB_DIST = ROOT / "frontend" / "dist"
 

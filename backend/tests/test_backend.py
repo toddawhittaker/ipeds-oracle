@@ -41,10 +41,11 @@ def run():
         assert r.status_code == 200, r.text
         link = captured["link"]
         # Emailed link lands on the SPA confirm page; a GET there never consumes.
-        assert "/verify?token=" in link, link
+        # The token rides in the FRAGMENT so it never reaches the access log.
+        assert "/verify#token=" in link, link
         token = link.split("token=")[1]
         g = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
-        assert g.status_code == 303 and "/verify?token=" in g.headers["location"], g.headers
+        assert g.status_code == 303 and "/verify#token=" in g.headers["location"], g.headers
         v = c.post("/api/auth/verify", json={"token": token})
         assert v.status_code == 200, v.text
         me = c.get("/api/auth/me")

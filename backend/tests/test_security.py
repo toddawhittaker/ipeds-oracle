@@ -370,17 +370,17 @@ def test_get_verify_does_not_consume_token() -> None:
         assert r.status_code == 200, r.text
         link = captured["link"]
         # Emailed link points at the SPA confirm route, not the consuming API GET.
-        assert "/verify?token=" in link and "/api/auth/verify" not in link, link
+        assert "/verify#token=" in link and "/api/auth/verify" not in link, link
         token = link.split("token=")[1]
 
         # A scanner GET must redirect to the confirm page and NOT consume.
         g = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
-        assert g.status_code == 303 and "/verify?token=" in g.headers["location"], (
+        assert g.status_code == 303 and "/verify#token=" in g.headers["location"], (
             f"GET should bounce to the SPA confirm page, got {g.status_code} "
             f"{g.headers.get('location')!r}")
 
         # Token is still live: the non-consuming peek names the account…
-        info = c.get(f"/api/auth/verify-info?token={token}")
+        info = c.post("/api/auth/verify-info", json={"token": token})
         assert info.status_code == 200 and info.json()["email"] == "admin@example.edu", (
             f"verify-info should name the pending account, got {info.status_code}: {info.text}")
 
@@ -393,6 +393,62 @@ def test_get_verify_does_not_consume_token() -> None:
         again = c.post("/api/auth/verify", json={"token": token})
         assert again.status_code == 400, (
             f"a consumed token must be rejected, got {again.status_code}: {again.text}")
+
+
+def test_magic_link_token_never_appears_in_a_server_visible_url() -> None:
+    """The raw sign-in token must never ride in a query string, anywhere.
+
+    THE REGRESSION: `/verify` is an SPA route served by main.py's catch-all, so
+    a `…/verify?token=<raw>` link wrote the live single-use token into uvicorn's
+    access log the moment the victim OPENED it — before any API call, and with
+    no way for logbuffer's redaction (which only guards logs.db) to help.
+    Anyone who could read `docker logs` — routine access on a self-hosted box —
+    could replay it into a full account takeover.
+
+    A URL fragment is never transmitted to the server, so it cannot be recorded
+    by us, by the operator's reverse proxy, or by a tunnel. This asserts the
+    property at every place the token is put into a URL.
+    """
+    with TestClient(app) as c:
+        r = c.post("/api/auth/request", json={"email": "admin@example.edu"})
+        assert r.status_code == 200, r.text
+        link = captured["link"]
+        assert "?token=" not in link, (
+            f"the emailed link puts the token in a query string, which the "
+            f"server logs on page load: {link!r}")
+        assert "#token=" in link, link
+
+        # The legacy scanner-bounce redirect must ALSO use a fragment. A
+        # `?token=` target would just move the leak to the redirected page load,
+        # making the whole fix cosmetic.
+        token = link.split("token=")[1]
+        g = c.get(f"/api/auth/verify?token={token}", follow_redirects=False)
+        loc = g.headers["location"]
+        assert "?token=" not in loc and "#token=" in loc, (
+            f"the 303 target re-leaks the token on the next page load: {loc!r}")
+
+
+def test_verify_info_takes_the_token_in_a_body_not_a_query_string() -> None:
+    """The peek endpoint must not accept a token in the URL.
+
+    Same regression as above, second surface: `GET /api/auth/verify-info?token=`
+    put the raw token in the request line of every access-log entry. No email
+    ever pointed at this endpoint — only our own SPA calls it, and it ships in
+    the same image — so the GET form is deleted outright rather than kept for
+    compatibility. If it comes back, this fails.
+    """
+    with TestClient(app) as c:
+        r = c.post("/api/auth/request", json={"email": "admin@example.edu"})
+        assert r.status_code == 200, r.text
+        token = captured["link"].split("token=")[1]
+
+        g = c.get(f"/api/auth/verify-info?token={token}")
+        assert g.status_code in (404, 405), (
+            f"verify-info must not accept a query-string token, got {g.status_code}")
+
+        p = c.post("/api/auth/verify-info", json={"token": token})
+        assert p.status_code == 200 and p.json()["email"] == "admin@example.edu", (
+            f"the POST form must still name the account, got {p.status_code}: {p.text}")
 
 
 def test_signing_in_purges_dead_auth_rows_only() -> None:
@@ -559,6 +615,10 @@ def run() -> None:
     print("\n7. magic-link verify: GET is non-consuming, POST consumes")
     check("GET verify never burns the token; POST signs in once",
           test_get_verify_does_not_consume_token)
+    check("the token never rides in a server-visible query string",
+          test_magic_link_token_never_appears_in_a_server_visible_url)
+    check("verify-info takes the token in a body, not the URL",
+          test_verify_info_takes_the_token_in_a_body_not_a_query_string)
 
     print("\n8. log injection: user-controlled tz param is scrubbed before logging")
     check("resolve_tz sanitizes control chars before the warning log",

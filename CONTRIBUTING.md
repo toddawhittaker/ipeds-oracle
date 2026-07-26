@@ -81,8 +81,11 @@ npm run dev                               # UI on http://localhost:5173 (proxies
 You need a built `ipeds.db` at the repo root for real queries (see
 [Working with the database](#working-with-the-database)). In dev with no
 `RESEND_API_KEY`, magic‑link emails are **logged to the console** instead of
-sent, so sign‑in works locally — copy the `…/verify?token=` link from the
+sent, so sign‑in works locally — copy the `…/verify#token=` link from the
 uvicorn log and open it (it lands on a "Sign in as …?" confirmation page).
+The token is in the URL **fragment** so it is never sent to the server and so
+never reaches an access log; the console line comes from the mail logger, which
+is deliberately exempt from redaction precisely so local sign‑in keeps working.
 
 For a quick **single‑port build to click around** (the SPA built and served from
 `:8000`, no Vite dev proxy), the repo‑root **`Makefile`** wraps it: `make up`

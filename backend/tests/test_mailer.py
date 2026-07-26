@@ -303,13 +303,22 @@ def _capture_one():
 
 def test_approved_email_carries_no_magic_link():
     """Approval no longer mints a token, so the approved email must carry NO
-    /verify?token= link — only the app's login URL, where the person self-requests
-    a one-time sign-in link. Regression guards against re-adding a link param."""
+    /verify link — only the app's login URL, where the person self-requests
+    a one-time sign-in link. Regression guards against re-adding a link param.
+
+    The needle is `token=` and `/verify` SEPARATELY, not the literal
+    `/verify?token=`: when the token moved to a URL fragment the old needle
+    stopped matching any real link, so this absence assertion would have passed
+    trivially while a genuine magic link sat in the email. An absence test whose
+    needle drifts out of existence is worse than no test — it reports safety it
+    is no longer checking.
+    """
     restore, sent = _capture_one()
     try:
         mailer.send_access_approved("approved@example.com")
-        assert "/verify?token=" not in sent["html"], "approved email leaked a magic link!"
-        assert "/verify?token=" not in (sent["text"] or ""), "approved TEXT leaked a magic link!"
+        for body, label in ((sent["html"], "HTML"), (sent["text"] or "", "TEXT")):
+            assert "token=" not in body, f"approved {label} leaked a sign-in token!"
+            assert "/verify" not in body, f"approved {label} leaked a verify link!"
         # It must still point people at the login page to get their own link.
         assert "https://ipeds.example.edu" in sent["html"], sent["html"]
         assert "https://ipeds.example.edu" in sent["text"], sent["text"]

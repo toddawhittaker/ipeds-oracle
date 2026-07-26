@@ -98,11 +98,16 @@ export async function mockRequestLink(page, message = "Check your email for a si
 }
 
 /**
- * GET /api/auth/verify-info?token=… -> 200 {email} (non-consuming peek) or a
+ * POST /api/auth/verify-info {token} -> 200 {email} (non-consuming peek) or a
  * 4xx {detail} for an invalid/expired token. Drives the /verify confirm page.
+ * Returns captured POST bodies so a spec can assert which token was peeked.
  */
 export async function mockVerifyInfo(page, email, { status = 200 } = {}) {
+  const calls = [];
   await page.route("**/api/auth/verify-info*", async (route) => {
+    // POST, not GET: a token in a query string lands in the server's access log.
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push(route.request().postDataJSON());
     if (status === 200) {
       await route.fulfill({ status: 200, contentType: "application/json",
         body: JSON.stringify({ email }) });
@@ -111,6 +116,7 @@ export async function mockVerifyInfo(page, email, { status = 200 } = {}) {
         body: JSON.stringify({ detail: "invalid" }) });
     }
   });
+  return { calls };
 }
 
 /**

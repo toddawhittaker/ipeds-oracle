@@ -226,7 +226,7 @@ def test_allowlisted_out_of_domain_address_still_gets_magic_link():
         auth_mod.send_access_request = orig_access
     assert "link" in link_captured, \
         "allowlisted address outside EMAIL_DOMAIN must still receive a magic link"
-    assert "/verify?token=" in link_captured["link"], link_captured
+    assert "/verify#token=" in link_captured["link"], link_captured
     # And no access-request row was filed for an address that has a real link.
     assert _requests_for("outsider@elsewhere.net") == []
 
@@ -392,7 +392,7 @@ def test_denied_then_allowlisted_gets_a_magic_link():
 
     assert "link" in link_captured, \
         "an allowlisted-but-previously-denied address must still get a magic link"
-    assert "/verify?token=" in link_captured["link"], link_captured
+    assert "/verify#token=" in link_captured["link"], link_captured
     # No NEW request row -- the allowlisted branch never inserts one.
     rows = _requests_for(email)
     assert len(rows) == 1, f"expected only the original denied row, got {rows}"
@@ -523,7 +523,7 @@ def test_allowlisted_send_is_scheduled_not_inline():
             f"(patched here via _MailSpy so we can identify it), got "
             f"{scheduled.func!r}")
         assert scheduled.args[0] == email, scheduled.args
-        assert "/verify?token=" in scheduled.args[1], scheduled.args
+        assert "/verify#token=" in scheduled.args[1], scheduled.args
     assert isinstance(result, dict) and "message" in result, result
 
 
