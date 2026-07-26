@@ -255,7 +255,17 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `useEffect` dep that could otherwise oscillate into a refetch loop.
   `clearForConversation` runs in the loader's `.then`/`.catch` so the placeholder
   dies in the **same commit** the real rows arrive (no flicker) but **keeps live
-  entries**. The unload guard keys on the registry, **not `busy`** — `busy` is
+  entries** — and **only when the fetch returned something**. An empty fetch has
+  nothing in it to replace the placeholder WITH: returning mid-flight issues a
+  fetch that correctly comes back `[]` (the turn hasn't persisted yet), and if
+  that lands after the turn settles, an unconditional clear deleted the entry and
+  committed empty messages together — **the placeholder was replaced by the
+  "What would you like to know" GREETING, on a `/chat/:id` URL, with the answer
+  already on disk** (found live, one hour after shipping). A settled entry
+  surviving an empty fetch is safe: the next fetch carrying the answer clears it,
+  and "settled but genuinely empty" can't really occur — a turn that persisted
+  nothing either had its NEW conversation removed by `_delete_if_empty` (so the
+  load 404s into the `.catch`) or left the earlier messages in place. The unload guard keys on the registry, **not `busy`** — `busy` is
   cleared by the render-time reset the instant the route changes, so it is false
   in exactly the situation the guard is for. Ceiling, stated: **a refresh still
   loses the turn** (the request is torn down, the generator cancelled, and

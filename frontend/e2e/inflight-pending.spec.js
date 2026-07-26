@@ -106,6 +106,67 @@ test.describe("a running turn stays visible across navigation", () => {
       await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
     });
 
+  test("an empty mid-flight fetch never replaces the placeholder with the greeting",
+    async ({ page }) => {
+      // FOUND LIVE. Returning mid-flight issues a conversation fetch that
+      // correctly comes back EMPTY — the turn hasn't persisted yet. If that
+      // response lands AFTER the turn settles, the entry is no longer live, so
+      // an unconditional clearForConversation deleted it and set empty messages
+      // in the same batch: the placeholder was replaced by "What would you like
+      // to know about U.S. colleges?" on a /chat/:id URL, with the answer
+      // already saved. Navigating away and back was the only way to see it.
+      //
+      // The conversation below is empty until the turn lands, which is what the
+      // server genuinely does — both message rows are written in ONE
+      // transaction at the very end.
+      await mockMe(page, { email: "user@example.edu", is_admin: false, has_data: true });
+      await mockVersion(page);
+      await mockAttention(page);
+      await mockConversations(page, [{ id: 26, title: "grad rate", updated_at: 9 }]);
+
+      let landed = false;
+      await page.route("**/api/chat/conversations/26", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const body = landed
+          ? [{ id: 1, role: "user", content: "grad rate question" },
+             { id: 2, role: "assistant", content: "The eventual answer." }]
+          : [];
+        await route.fulfill({ status: 200, contentType: "application/json",
+                              body: JSON.stringify(body) });
+      });
+      // Dripped so the turn is genuinely mid-flight while we navigate, and the
+      // rows appear (as the server's do) BEFORE the stream closes.
+      await mockStreamChatDripped(page, [
+        { atMs: 100, event: { type: "conversation", id: 26 } },
+        { atMs: 2600, event: { type: "answer", text: "The eventual answer." } },
+        { atMs: 2650, event: { type: "done", message_id: 2, user_message_id: 1 } },
+      ]);
+
+      await page.goto("/chat/26");
+      await ask(page, "grad rate question");
+      await page.waitForTimeout(250);
+      await page.getByRole("link", { name: "New chat" }).click({ force: true });
+      await page.waitForTimeout(150);
+      await page.getByRole("link", { name: /grad rate/ }).click();
+      await expect(pending(page)).toBeVisible();
+
+      // Let the turn SETTLE while the conversation still reads empty. That is
+      // the reproduced case: the reload it schedules comes back with nothing,
+      // and an unconditional clear then deletes the placeholder and commits
+      // empty messages together — leaving the greeting on a /chat/:id URL.
+      await page.waitForTimeout(3200);
+      await expect(page.getByText("What would you like to know")).toHaveCount(0);
+      await expect(pending(page)).toBeVisible();
+
+      // Once the rows really are there, the next load shows the answer.
+      landed = true;
+      await page.getByRole("link", { name: "New chat" }).click({ force: true });
+      await page.getByRole("link", { name: /grad rate/ }).click();
+      await expect(page.getByText("The eventual answer.")).toBeVisible({ timeout: 5000 });
+      await expect(pending(page)).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe("/chat/26");
+    });
+
   test("the owner watching its own turn sees no duplicate and triggers no reload",
     async ({ page }) => {
       // The anti-double-render. The owning view already draws its own pending
