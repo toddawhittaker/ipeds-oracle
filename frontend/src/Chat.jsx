@@ -467,9 +467,27 @@ export default function Chat({ me }) {
         if (cancelled) return;
         setMessages(hydrate(msgs));
         setLoadingConvo(false);
-        supersede();
+        // ONLY a fetch that came back with something may supersede the
+        // placeholder — there is nothing in an empty one to replace it WITH.
+        //
+        // Found live: returning mid-flight issues a fetch that correctly
+        // returns [] (the turn hasn't persisted yet). If that response lands
+        // AFTER the turn settles, the entry is no longer live, so an
+        // unconditional clear deleted it and set empty messages in the same
+        // batch — the placeholder was replaced by the "What would you like to
+        // know" greeting, on a /chat/:id URL, with the answer already on disk.
+        //
+        // A settled entry surviving an empty fetch is safe: the next fetch that
+        // carries the answer clears it. And "settled but genuinely empty" can't
+        // really happen — a turn that persisted nothing either had its NEW
+        // conversation removed by _delete_if_empty (so this 404s into the catch)
+        // or left the earlier messages in place (so this is non-empty).
+        if (msgs.length) supersede();
       })
       .catch(() => {
+        // The conversation is gone or unreadable; `notice` blanks convId, so no
+        // placeholder can render for it anyway. Clearing keeps the registry from
+        // holding an entry nothing will ever supersede.
         if (!cancelled) { setNotice(NOT_AVAILABLE); setLoadingConvo(false); supersede(); }
       });
     return () => { cancelled = true; };
