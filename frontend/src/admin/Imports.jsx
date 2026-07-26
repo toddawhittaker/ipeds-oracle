@@ -121,6 +121,7 @@ export default function Imports({ onDataChanged }) {
   const dragDepth = useRef(0);
   const poll = useRef();
   const noticeRef = useRef();
+  const lockedRef = useRef();
   // Read inside `tick` below (a long-lived interval closure), so it must stay
   // fresh across renders rather than closing over a stale `activeYears`.
   const activeYearsRef = useRef(null);
@@ -135,6 +136,7 @@ export default function Imports({ onDataChanged }) {
   // success and failure announcements below, and the just-integrated card's
   // checkbox no longer being in the DOM after a catalog refresh.
   useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
+  const wasLocked = useRef(false);
 
   const loadJobs = () => api.importJobs().then(setJobs);
   const loadCatalog = useCallback((refresh = false) => api.importCatalog(refresh)
@@ -149,6 +151,19 @@ export default function Imports({ onDataChanged }) {
 
   const jobRunning = active != null && !TERMINAL_JOB_STATUSES.includes(active.status);
   const locked = jobRunning || integrating;
+
+  // The case the notice effect above CANNOT cover: on the happy path
+  // submitIntegrate calls notify("") — an EMPTY notice — so that effect never
+  // fires, while setIntegrating(true) disables the button the admin just
+  // pressed. Focus would land on <body>, mid-import, with nothing explaining
+  // why the control vanished. Move it to the locked notice, which is exactly
+  // the element that answers that. Edge-triggered, so a re-render during a long
+  // import doesn't keep yanking focus back.
+  useEffect(() => {
+    const busy = locked || uploading;
+    if (busy && !wasLocked.current) lockedRef.current?.focus();
+    wasLocked.current = busy;
+  }, [locked, uploading]);
 
   function watch(id) {
     clearInterval(poll.current);
@@ -415,8 +430,14 @@ export default function Imports({ onDataChanged }) {
         <div ref={noticeRef} tabIndex={-1} role="status"
              className={"notice" + (noticeKind ? " " + noticeKind : "")}>{notice}</div>
       )}
-      {jobRunning && (
-        <div className="notice">
+      {/* Rendered for the whole locked window, not just jobRunning: pressing
+          "Integrate selected" or "Rebuild" disables that very button, so
+          without a landing spot focus falls to <body> and the admin is dumped
+          to the top of the page (WCAG 2.4.3) — mid-import, with no idea why
+          the control vanished. This notice is the thing that answers that, so
+          it is where focus goes (see the effect above). */}
+      {(locked || uploading) && (
+        <div ref={lockedRef} tabIndex={-1} className="notice" role="status">
           An import is running… controls are locked until it finishes.
         </div>
       )}

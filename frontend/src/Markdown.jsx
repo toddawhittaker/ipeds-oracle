@@ -223,8 +223,17 @@ function DataTable({ node, sideChart, pairChart, serverCsvId, truncated }) {
             the large download cap) instead of the ≤200 visible rows. Multi-table
             answers and live (not-yet-saved) turns fall back to the client-side
             CSV of exactly what's shown. */}
-        <button type="button" className="link" disabled={downloading}
+        {/* aria-disabled, not :disabled — a natively disabled button drops
+            focus to <body> the moment it disables itself on activation, so the
+            "Preparing…" state and any error toast land with the user stranded
+            at the top of the document (WCAG 2.4.3). The handler's own early
+            return is what actually prevents a double download; without it,
+            aria-disabled would leave a live button. Same pattern as
+            .lesson-edit .btn-verify. */}
+        <button type="button" className="link"
+                aria-disabled={downloading ? "true" : undefined}
                 onClick={async () => {
+                  if (downloading) return;
                   if (!serverCsvId) { downloadCsv(headers, rows); return; }
                   // The server path re-runs the query and can genuinely fail
                   // (400/404/429/504). It used to navigate the tab to a JSON
