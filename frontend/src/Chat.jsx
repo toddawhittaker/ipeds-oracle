@@ -1128,7 +1128,15 @@ export default function Chat({ me }) {
                             prose and stays out of the copy surface. Renders
                             null when the message carries no figure. */}
                         <Figure spec={m.figure} grounding={m.figure_grounding} />
-                        <Markdown messageId={m.id} resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
+                        {/* hasSql gates the SERVER-side CSV. A turn that
+                            reshapes an earlier table from context runs no SQL
+                            (sql_log is []), so the server has nothing to
+                            re-run — offering it there produced a button whose
+                            only outcome was "No query is associated with this
+                            answer." The table is still on screen, so it falls
+                            back to the client-side export of those rows. */}
+                        <Markdown messageId={m.id} hasSql={m.sql_log?.length > 0}
+                                  resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
                         <TableTrust status={m.table_grounding}
                                     cellsChecked={m.table_cells_checked}
                                     cellsMatched={m.table_cells_matched} />

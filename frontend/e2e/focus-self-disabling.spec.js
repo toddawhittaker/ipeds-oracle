@@ -99,7 +99,10 @@ test.describe("controls that disable themselves keep focus somewhere useful", ()
     await mockConversations(page, [{ id: 8, title: "T", updated_at: 0 }]);
     await mockConversation(page, 8, [
       { id: 1, role: "user", content: "q" },
-      { id: 2, role: "assistant",
+      // sql_log is REQUIRED for the server-side export path — without a query
+      // the button correctly falls back to the client-side CSV, which never
+      // enters the `downloading` state this test is about.
+      { id: 2, role: "assistant", sql_log: ["SELECT instnm, awards FROM c_a"],
         content: "Here.\n\n| Institution | Awards |\n| --- | --- |\n| Alpha | 12 |\n| Beta | 9 |" },
     ]);
     await page.goto("/chat/8");

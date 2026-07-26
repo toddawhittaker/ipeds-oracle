@@ -52,7 +52,12 @@ from app.db import connect  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import chat as chat_router  # noqa: E402
-from app.tools.sql import QueryResult  # noqa: E402
+from app.tools.sql import (  # noqa: E402
+    QueryResult,
+    SQLTimeoutError,
+    SQLValidationError,
+    run_sql,
+)
 
 FAILURES = []
 
@@ -1304,6 +1309,51 @@ def test_load_prior_results_respects_before_id_window():
         con.commit()
 
 
+def test_csv_export_survives_a_failed_query_in_the_answers_log():
+    """FOUND LIVE (conversation 23): an answer's CSV export failed permanently.
+
+    sql_log records EVERY query attempt, INCLUDING ones SQLite rejected — the
+    agent runs a query, gets an error, fixes it, re-runs, and all of that is
+    persisted. So a perfectly good answer routinely carries a query that cannot
+    run. The real one was `ambiguous column name: year`, from a c_a/hd JOIN the
+    model corrected on its very next attempt.
+
+    _select_table_sql probes every candidate but caught only
+    SQLValidationError/SQLTimeoutError, so a plain sqlite3.OperationalError
+    escaped both the loop AND download_csv's try/except. The export 500'd with
+    no `detail`, reaching the user as the generic "Couldn't build that CSV. Try
+    again in a moment." — and retrying could never help, because the failing
+    query is stored and failed identically every time.
+    """
+    good = "SELECT year, COUNT(*) AS n FROM _years GROUP BY year"
+    # The same shape that broke it: passes validation, fails at execution.
+    ambiguous = "SELECT year FROM _years a JOIN _years b ON a.year = b.year"
+
+    # Guard the fixture: if this ever stops raising, or starts raising something
+    # the OLD code already handled, the test below proves nothing.
+    raised = None
+    try:
+        run_sql(ambiguous, limit=1)
+    except Exception as e:  # noqa: BLE001
+        raised = e
+    assert raised is not None, "the fixture query no longer fails — pick another"
+    assert not isinstance(raised, (SQLValidationError, SQLTimeoutError)), (
+        f"fixture must raise what the OLD handler missed, got {type(raised).__name__}")
+
+    # Failing candidate FIRST, so the probe loop meets it before anything usable.
+    result = chat_router._select_table_sql([ambiguous, good], 2, 100)
+    assert result.columns == ["year", "n"], result.columns
+    assert result.rows, "the runnable candidate should have produced rows"
+
+    # With nothing runnable it still degrades to the clean 400 path rather than
+    # leaking a 500.
+    try:
+        chat_router._select_table_sql([ambiguous], 2, 100)
+        raise AssertionError("expected SQLValidationError when nothing runs")
+    except SQLValidationError:
+        pass
+
+
 def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
     """THE regression this repo keeps paying for, mechanized.
 
@@ -1559,6 +1609,8 @@ def run():
           test_load_prior_results_respects_before_id_window)
     check("the two recent windows are measured in different units (known)",
           test_the_two_recent_windows_are_measured_in_different_units)
+    check("CSV export survives a failed query in the answer's log",
+          test_csv_export_survives_a_failed_query_in_the_answers_log)
     check("every persisted turn field reaches the reader and the done event",
           test_every_persisted_turn_field_reaches_the_reader_and_the_done_event)
     print()
