@@ -12,7 +12,13 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // "100%" = one worker per available CPU. The old hardcoded 2 came in with the
+  // original scaffolding (73c9530), copied from Playwright's template — it was
+  // never a measured choice, and it left the runner idle: the suite is I/O-bound
+  // (page loads against a static server, every /api/** mocked in-process), not
+  // CPU-bound, so it parallelises nearly linearly. `list` prints the resolved
+  // worker count on every run, which is also how we learn the runner's size.
+  workers: process.env.CI ? "100%" : undefined,
   reporter: "list",
   timeout: 30_000,
   expect: { timeout: 5_000 },
@@ -52,12 +58,8 @@ export default defineConfig({
   // a trap this repo has hit before; a dev server re-transforms from disk and
   // does not have it, which is why reuse is still fine there.
   //
-  // Historical note on CI's motivation: `npm run dev` transforms modules ON DEMAND per route, and on CI's
-  // weak shared runner that first-load transform cost (paid over and over as
-  // tests navigate) is a large chunk of the e2e wall-clock. A prebuilt static
-  // server has none of it. `vite preview` keeps SPA history-fallback (appType
-  // 'spa'), so deep links like /admin/users/pending still resolve to index.html.
-  // Locally we keep the dev server for fast iteration + reuseExistingServer.
+  // `vite preview` keeps SPA history-fallback (appType 'spa'), so deep links
+  // like /admin/users/pending still resolve to index.html.
   webServer: {
     command: USE_PREVIEW
       ? "npm run build && npm run preview -- --port 5173 --strictPort"
