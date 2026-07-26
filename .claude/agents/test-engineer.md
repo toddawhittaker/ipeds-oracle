@@ -73,8 +73,11 @@ The test pyramid (see `CLAUDE.md` → "How we work"):
   table-driven input→output — functions and leaf modules with real behavior
   (e.g. `estimate.js`, `mdnorm.js`, `tabledata.js`, `announce.js`). Run with
   `npm run test:unit`; `frontend/vitest.config.js` enforces a per-file ≥80% line floor
-  over an **allowlist** of pure-logic modules — add a module to that list when
-  (and only when) it gets real unit tests.
+  over the pure-logic modules under test. That set is **derived from the
+  filesystem** — any `src/foo.js` with a co-located `src/foo.test.js` is gated, so
+  writing the test IS the whole opt-in, and there is no list to update. (The walk
+  is recursive; it has to be, or a module in a subdirectory like `src/admin/`
+  escapes the floor silently.)
 - **Genuine browser truth → Playwright** (`frontend/e2e/*.spec.js`, `npm run test:e2e`).
   Routing/navigation, focus management, aria-live/AT announcements, back/forward,
   SSE-driven DOM. jsdom's focus and history models are **not** the browser's, so
@@ -85,6 +88,8 @@ The test pyramid (see `CLAUDE.md` → "How we work"):
   key; a throwaway fixture `app.db`/`ipeds.db`): `test_sql_guards.py` (SQL safety
   + watchdog), `test_backend.py` (auth/admin/skills/cache/CSV), and the many
   others. Per-module ≥80% line coverage enforced by `scripts/coverage_check.sh`.
+  `scripts/run_backend_suites.sh` runs them all from **one glob** — adding a suite
+  is adding the file, never editing a list.
 - **NL→SQL accuracy → `backend/tests/eval_nl2sql.py`** (needs `LLM_API_KEY` + the real
   `ipeds.db`; the model-swap regression gate — CA public CS bachelor's = 7,679).
 
@@ -92,9 +97,16 @@ The test pyramid (see `CLAUDE.md` → "How we work"):
 truth jsdom will fake and get wrong.** When a behavior is pure logic currently
 pinned through a Playwright assertion, **move it down** to vitest and thin the
 now-redundant e2e logic check — keep the browser *flow* (focus, the aria-live
-announcement firing) around it. For pytest↔Playwright overlap the **lower
-(pytest) tier is the keeper**. Collapse intra-suite duplicates to the clearest
-one. Match each tier's existing conventions; both vitest and Playwright are
+announcement firing) around it. Where a backend suite and a Playwright spec
+overlap, the **lower (backend) tier is the keeper**. Collapse intra-suite
+duplicates to the clearest one.
+
+**Three ways a green test lies here, all of which have shipped a defect:** an
+auto-retrying matcher (`toHaveCount`) cannot assert "not true *right now*" — it
+waits the transient out, so count synchronously (`expect(await …count())`); a
+fixture that cannot express the failure proves nothing (ask what would look
+different if the bug were present); and a wait between two actions can hide a
+race a real user hits. See `frontend/e2e/README.md`. Match each tier's existing conventions; both vitest and Playwright are
 already installed and wired into `scripts/run_ci_local.sh` (the pre-push gate).
 
 ## Reporting back

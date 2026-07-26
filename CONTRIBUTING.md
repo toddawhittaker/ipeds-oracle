@@ -11,9 +11,10 @@ see [SCHEMA.md](docs/SCHEMA.md).
   (`LLM_BASE_URL`; [OpenRouter](https://openrouter.ai/) + DeepSeek by default).
   Local, CPU‑only embeddings via [fastembed](https://github.com/qdrant/fastembed)
   power skill retrieval and the semantic cache.
-- **Data** — two SQLite databases: `ipeds.db` (the ~1.9 GB survey data, opened
-  **read‑only + immutable**) and `app.db` (users, sessions, chats, learned
-  skills, usage — the only thing that's written to).
+- **Data** — three SQLite databases, all separate: `ipeds.db` (the ~1.9 GB survey
+  data, opened **read‑only**), `app.db` (users, sessions, chats, learned skills,
+  usage — the irreplaceable state, with a `PRAGMA user_version` migration runner),
+  and `logs.db` (persistent server logs behind the admin Logs tab).
 - **Frontend** — React 19 + [Vite](https://vitejs.dev/), [React Router](https://reactrouter.com/)
   (declarative `react-router` v8) for routing, Recharts for charts, react‑markdown
   for answers.
@@ -31,6 +32,13 @@ backend/              the Python side (all Python tooling runs from here)
     llm.py            the tool-calling agent loop
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
+    guard.py          topical guardrail in FRONT of the agent (off-topic never hits the DB)
+    critic.py         post-answer review that can force one revision round
+    feedback.py       distills a user's corrective feedback into a lesson
+    version.py        cached, fail-open "is a newer release out?" check against GitHub
+    csrf.py           \
+    secheaders.py      | three pure-ASGI layers, outermost first:
+    bodylimit.py      /  security headers -> CSRF origin check -> request-body cap
     grounding.py      figure + table grounding: can the answer's hero number and
                       its results-table cells be reproduced from the query results
                       (this turn's + the recent conversation window)? observe-only;
@@ -41,20 +49,27 @@ backend/              the Python side (all Python tooling runs from here)
     skills.py         skill library + semantic cache (fastembed)
     importer.py       background "load a new year" job (upload + NCES integrate)
     nces.py           fetch IPEDS .accdb releases from nces.ed.gov (SSRF-hardened)
-    db.py             schema + PRAGMA user_version migrations
-    logbuffer.py      in-memory log ring buffer (admin Logs view)
+    db.py             schema + PRAGMA user_version migrations (forward-only; a
+                      too-new app.db REFUSES to boot rather than write damage)
+    logbuffer.py      persistent server logs (logs.db) + access-log redaction
   tests/              backend test suites + the NL→SQL accuracy harness
   pyproject.toml      ruff config; requirements.txt / -dev.txt / .lock
 frontend/             React + Vite front end
   src/                Chat, Admin, Chart, Markdown, Login, … — client-side
                       routed (react-router); route table in App.jsx
-                      ("/", "/chat/:id", "/admin", "/admin/:tab", "/verify",
-                      catch-all -> "/"); co-located *.test.js are vitest units.
-                      App-wide UI services mounted once at the root: Toast.jsx
+                      ("/", "/chat/:id", "/admin", "/admin/:tab",
+                      "/admin/:tab/:sub", "/verify", catch-all -> "/");
+                      co-located *.test.js are vitest units. App-wide UI
+                      services are mounted once at the root: Toast.jsx
                       (useToast) for transient result toasts; ConfirmModal.jsx
                       (useConfirm) — the SINGLE confirmation mechanism
+    admin/            the five Admin pages (Admin.jsx itself is a ~110-line
+                      SHELL) + the pure admin/format.js helpers
+    inflight.js       the app's one module-level store: turns still streaming,
+                      kept outside React because Chat UNMOUNTS on /admin
   e2e/                Playwright specs (network-mocked)
-docs/               SCHEMA.md (data model + query guide)
+docs/               SCHEMA.md (data model + query guide), USER_GUIDE.md,
+                    ADMIN_GUIDE.md, AI_ASSISTED_ENGINEERING.md, images/
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
 data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
 .github/workflows/  CI (lint · secrets · sast · backend · unit · e2e · image) +
@@ -126,31 +141,59 @@ failure) and need **no** API key — most build a tiny throwaway `app.db` and a
 fixture `ipeds.db`.
 
 ```bash
-# Backend suites (any/all)
+# Every backend suite, from ONE list (a glob — adding a suite is adding the file)
+scripts/run_backend_suites.sh
+
+# Or run one directly while iterating
 .venv/bin/python backend/tests/test_sql_guards.py          # SQL sandbox + timeout watchdog
 .venv/bin/python backend/tests/test_backend.py             # auth, admin, skills, cache, CSV
 .venv/bin/python backend/tests/test_security.py            # path traversal, de-auth, IDOR, …
-.venv/bin/python backend/tests/test_agent_loop.py          # tool-loop synthesis fallback
-# also: test_sql_guards_hardening, test_rate_limit, test_migrations,
-#       test_result_isolation, test_backup, test_logbuffer, test_mailer, test_guard,
-#       test_estimate (disk/time estimator contract, shared with frontend/src/estimate.js)
+.venv/bin/python backend/tests/test_grounding.py           # figure + table reproduction
 
 # Web unit tests — the FAST pure-logic tier (vitest + jsdom, no browser)
 cd frontend && npm run test:unit          # runs with the JS coverage floor
 cd frontend && npm run test:unit:watch    # watch mode for iterating
 
 # End-to-end UI (network-mocked; no key, no ipeds.db needed)
-cd frontend && npm run test:e2e
+cd frontend && npm run test:e2e                     # dev server: fast start, for iterating
+cd frontend && E2E_PREVIEW=1 npm run test:e2e       # static build: ~3.4x faster over a FULL run
 
 # Full NL→SQL accuracy (needs LLM_API_KEY + a real ipeds.db)
 .venv/bin/python backend/tests/eval_nl2sql.py
 ```
+
+> **The backend suite list is a glob on purpose.** It replaced a hand-kept array
+> in `run_ci_local.sh` *plus* ~30 hand-written steps in `ci.yml`, which had
+> already drifted: `test_grounding.py` and `test_version.py` were in neither, so
+> a grounding regression surfaced as a bare non-zero exit from a step labelled
+> "Coverage gate". Add a suite by adding the file.
+
+**Which e2e server to use.** `E2E_PREVIEW=1` builds the app and serves the static
+bundle — measurably faster across the whole suite (107s → 31s), because
+`npm run dev` re-transforms modules per route on every `page.goto`. The dev
+server stays the default for iterating (instant start, and `reuseExistingServer`
+keeps a warm one between runs). **Reuse is deliberately off in preview mode**: a
+lingering preview server serves whatever was built when it started, so reusing
+one runs the suite against stale source and reports a false green.
 
 **Test pyramid.** Pure input→output logic goes in **vitest** (`frontend/src/*.test.js`,
 table-driven, no browser). Genuine browser truth — routing, focus, aria-live/AT,
 back/forward, SSE-driven DOM — stays in **Playwright** (`frontend/e2e/`); jsdom's focus
 and history models aren't the browser's. Pick the lowest tier that can actually
 catch the regression.
+
+**The axe gate** (`frontend/e2e/a11y.spec.js`) fails on `critical` **and
+`serious`**, and scans the app as it actually renders: a full answer with its
+disclosures open, a mid-stream answer, and all seven admin paths, in **both
+themes** (19 scans: 7 paths x 2 themes, plus Login, Chat, Chat-in-dark, an
+answer, and a mid-stream answer). It used to see only Login and the *empty* Chat state — the
+two least-populated screens in the product — which is how two whole classes of
+defect shipped past a green suite. Two fixture rules the scans depend on: mock
+admin lists with **content, not empty arrays** (an empty table renders none of
+the elements whose contrast could be wrong), and the answer fixture must carry a
+**chart**. Note also that axe files a one-character element as `incomplete`
+rather than a violation, so a count badge's contrast needs a direct
+computed-style assertion — the gate alone won't catch it.
 
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
@@ -174,8 +217,8 @@ tests and stay silently ungated, with no failure and no signal.) Browser-tested
 components stay out of the floor: they have no `*.test.js`, and Playwright covers
 them.
 
-**Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces all
-three CI jobs locally (it's also wired as a `.githooks/pre-push` hook via
+**Before pushing, run the whole gate:** `scripts/run_ci_local.sh` reproduces
+every CI job locally (it's also wired as a `.githooks/pre-push` hook via
 `git config core.hooksPath .githooks`). Bypass with `git push --no-verify`; skip
 just the slow e2e job with `SKIP_E2E=1`. A **deletion-only push**
 (`git push origin --delete <branch>`, e.g. pruning a merged branch) skips the gate
