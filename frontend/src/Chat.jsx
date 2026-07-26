@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash,
-         IconChevronLeft, IconChevronRight, IconPlus } from "./icons.jsx";
+         IconChevronLeft, IconChevronRight, IconPlus, IconWarning } from "./icons.jsx";
 import Markdown from "./Markdown.jsx";
 import MarkdownTextarea from "./MarkdownTextarea.jsx";
 import Figure from "./Figure.jsx";
@@ -165,12 +165,21 @@ function ThinkingTrace({ items }) {
 // caution here. It is a plain note, deliberately NOT a live region: several
 // specs assert a single unscoped getByRole("status"), and a trust mark on a
 // settled answer is not an announcement.
-function TableTrust({ status, cellsChecked }) {
-  const note = tableTrustNote({ status, cellsChecked });
+// The answer-level verdict on whether its numbers came from the query result.
+// The caution's mark is an inline SVG rather than a ⚠ character: the codepoint
+// renders as a colour emoji on several platforms, which would drag the eye
+// harder than the sentence deserves and clash with the deliberate move away from
+// emoji-as-status elsewhere. The ✓ stays a plain glyph — it needs no emphasis,
+// and it is already shipped.
+function TableTrust({ status, cellsChecked, cellsMatched }) {
+  const note = tableTrustNote({ status, cellsChecked, cellsMatched });
   if (!note) return null;
   return (
     <p className={"table-trust " + note.tone} role="note" title={note.title}>
-      <span aria-hidden="true">✓ </span>{note.text}
+      {note.tone === "warn"
+        ? <IconWarning className="tt-icon" aria-hidden="true" />
+        : <span aria-hidden="true">✓ </span>}
+      {note.text}
     </p>
   );
 }
@@ -725,6 +734,7 @@ export default function Chat({ me }) {
     let figureGrounding = null;   // did the server reproduce the figure's number?
     let tableGrounding = null;    // …and the table's numbers, with how many it checked
     let tableCellsChecked = null;
+    let tableCellsMatched = null; // needed by the caution, which leads with the misses
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -806,6 +816,7 @@ export default function Chat({ me }) {
           // without its count renders nothing.
           if (ev.table_grounding != null) tableGrounding = ev.table_grounding;
           if (ev.table_cells_checked != null) tableCellsChecked = ev.table_cells_checked;
+          if (ev.table_cells_matched != null) tableCellsMatched = ev.table_cells_matched;
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -828,7 +839,7 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, table_grounding: tableGrounding, table_cells_checked: tableCellsChecked, pending: false, error: failed };
+        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, table_grounding: tableGrounding, table_cells_checked: tableCellsChecked, table_cells_matched: tableCellsMatched, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });
@@ -1039,7 +1050,8 @@ export default function Chat({ me }) {
                         <Figure spec={m.figure} grounding={m.figure_grounding} />
                         <Markdown messageId={m.id} resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
                         <TableTrust status={m.table_grounding}
-                                    cellsChecked={m.table_cells_checked} />
+                                    cellsChecked={m.table_cells_checked}
+                                    cellsMatched={m.table_cells_matched} />
                       </>
                     )}
                   </div>

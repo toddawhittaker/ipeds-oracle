@@ -12,14 +12,18 @@ import {
 // verdict only ever reached usage_log — an admin stat. The person about to copy
 // those numbers into a report saw nothing. This is the reader-facing half.
 //
-// The silence cases matter as much as the mark. tableTrustNote is POSITIVE-ONLY:
-// `partial` and `unmatched` render nothing. That started as a measured necessity
-// (a correct row-wise "% change" column graded `partial`, so a caution would have
-// called correct answers wrong) and now continues as a deliberate wait — those
-// reconciler gaps are fixed, but no one has yet read a non-match produced by the
-// anchored kernel, so there is nothing to base a caution's wording on. See
-// frontend/src/tabletruth.js and backend/tests/test_grounding.py; these specs
-// hold the line in the browser.
+// Two verdicts render: `matched` reassures, `partial`/`unmatched` caution. The
+// caution was deliberately withheld until the reconciler was row-anchored,
+// because before that a correct row-wise "% change" column graded `partial` and
+// a warning would have called correct answers wrong.
+//
+// What still must NEVER render is the third case: a verdict with nothing behind
+// it. `unchecked`/`no_table` compared nothing, and a status whose counts are
+// NULL (a pre-migration message) is not a failure — Number(null) being 0 makes
+// that one look exactly like "0 of N matched". Those silence cases are asserted
+// below alongside the caution, because they are the same false-alarm risk the
+// caution was held back for. See frontend/src/tabletruth.js for the wording
+// contract.
 
 const USER = { email: "user@example.edu", is_admin: false };
 
@@ -74,20 +78,41 @@ test.describe("table grounding mark", () => {
     expect(await page.locator(".md .table-trust").count()).toBe(0);
   });
 
-  test("a partial or unmatched verdict shows NOTHING — no mark and no warning",
+  test("a partial verdict cautions, naming the count that did NOT reproduce",
     async ({ page }) => {
-      // The false-alarm guard. A correct answer carrying a row-wise % change
-      // column lands here, so anything rendered would be an accusation.
-      for (const [status, checked, matched] of [["partial", 22, 9], ["unmatched", 15, 0]]) {
-        await open(page, {
-          table_grounding: status, table_cells_checked: checked, table_cells_matched: matched,
-        });
-        await expect(page.getByRole("table")).toBeVisible();
-        expect(await mark(page).count()).toBe(0);
-        // Nothing warning-shaped anywhere in the answer either.
-        expect(await page.locator(".msg.assistant .warn").count()).toBe(0);
-      }
+      await open(page, {
+        table_grounding: "partial", table_cells_checked: 22, table_cells_matched: 9,
+      });
+      await expect(mark(page)).toBeVisible();
+      await expect(mark(page)).toHaveClass(/warn/);
+      // 13, not 9: the actionable half leads. And the total, so the scale is honest.
+      await expect(mark(page)).toContainText("13 of 22");
+      // It must never assert the numbers are WRONG — no checker reproduces every
+      // legitimate derivation, so this says only that the check couldn't.
+      await expect(mark(page)).toContainText(/could not be reproduced/i);
     });
+
+  test("an unmatched verdict cautions without reading as a failed answer",
+    async ({ page }) => {
+      // The answer is still an answer; some of its numbers want checking. It must
+      // not borrow the --danger treatment a genuinely failed turn uses, or every
+      // caution reads as "this reply broke".
+      await open(page, {
+        table_grounding: "unmatched", table_cells_checked: 15, table_cells_matched: 0,
+      });
+      await expect(mark(page)).toBeVisible();
+      await expect(mark(page)).toContainText("15 values");
+      expect(await page.locator(".msg.assistant.failed").count()).toBe(0);
+    });
+
+  test("a failure verdict with NULL counts stays silent", async ({ page }) => {
+    // The false-alarm guard that survives the caution. A pre-migration message
+    // carries a status with NULL counts; Number(null) is 0, so a naive check
+    // reads it as "0 of N matched" and accuses an answer nothing ever graded.
+    await open(page, { table_grounding: "unmatched", table_cells_checked: 15 });
+    await expect(page.getByRole("table")).toBeVisible();
+    expect(await mark(page).count()).toBe(0);
+  });
 
   test("an ungraded answer shows nothing", async ({ page }) => {
     // `unchecked` (no retained rows to compare) and a pre-migration/cached
@@ -119,6 +144,21 @@ test.describe("table grounding mark", () => {
   });
 
   for (const theme of ["light", "dark"]) {
+    test(`the CAUTION meets AA contrast in the ${theme} theme`, async ({ page }) => {
+      // --warn on the bubble background is a different pairing from the ✓ mark's
+      // --ok, and axe cannot cover either: the element only renders when the
+      // mocked conversation carries a verdict, which a11y.spec.js's fixtures
+      // don't. A caution nobody can read is worse than no caution.
+      await page.emulateMedia({ colorScheme: theme });
+      await open(page, {
+        table_grounding: "partial", table_cells_checked: 22, table_cells_matched: 9,
+      });
+      await expect(mark(page)).toBeVisible();
+      const ratio = await contrastRatio(page, ".table-trust");
+      expect(ratio, `.table-trust.warn contrast was ${ratio?.toFixed(2)}:1 in ${theme}`)
+        .toBeGreaterThanOrEqual(4.5);
+    });
+
     test(`the mark meets AA contrast in the ${theme} theme`, async ({ page }) => {
       // The axe scan cannot cover this element: it only renders when the mocked
       // conversation carries a grounding verdict, which a11y.spec.js's fixtures
@@ -136,20 +176,25 @@ test.describe("table grounding mark", () => {
     });
   }
 
-  test("a live turn the server could not verify stays silent", async ({ page }) => {
-    await mockMe(page, USER);
-    await mockVersion(page);
-    await mockAttention(page);
-    await mockConversations(page, []);
-    await mockStreamChat(page, {
-      conversationId: 9, messageId: 2, userMessageId: 1,
-      answer: `Here are the leaders.\n\n${TABLE}`,
-      tableGrounding: "partial", tableCellsChecked: 4,
+  test("a live turn the server could not verify cautions without a reload",
+    async ({ page }) => {
+      // The done-event half of the caution. table_cells_matched rides that event
+      // and the client used to DROP it, so the caution could name a count on
+      // reload but not on the turn that produced it.
+      await mockMe(page, USER);
+      await mockVersion(page);
+      await mockAttention(page);
+      await mockConversations(page, []);
+      await mockStreamChat(page, {
+        conversationId: 9, messageId: 2, userMessageId: 1,
+        answer: `Here are the leaders.\n\n${TABLE}`,
+        tableGrounding: "partial", tableCellsChecked: 4, tableCellsMatched: 1,
+      });
+      await page.goto("/");
+      await page.getByRole("textbox", { name: /ask/i }).fill("top institutions by awards");
+      await page.keyboard.press("Enter");
+      await expect(mark(page)).toBeVisible();
+      await expect(mark(page)).toHaveClass(/warn/);
+      await expect(mark(page)).toContainText("3 of 4");
     });
-    await page.goto("/");
-    await page.getByRole("textbox", { name: /ask/i }).fill("top institutions by awards");
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("table")).toBeVisible();
-    expect(await mark(page).count()).toBe(0);
-  });
 });

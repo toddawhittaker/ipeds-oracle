@@ -906,6 +906,13 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    the numbers it vouches for. Same --ok as .fig-verified so the two trust marks
    read as one idea. */
 .table-trust { margin: 8px 2px 0; font-size: 12px; color: var(--ok); }
+/* The caution half. Same size and place as the reassurance -- a reader should
+   find the verdict in one spot either way -- but --warn and 600 weight, matching
+   .sort-note.warn, the established in-answer caution. It must not read as an
+   error condition (.msg.assistant.failed's --danger edge): the answer is still
+   an answer, some of its numbers just want checking. */
+.table-trust.warn { color: var(--warn); font-weight: 600; }
+.table-trust .tt-icon { width: 13px; height: 13px; vertical-align: -2px; margin-right: 3px; }
 
 /* compare mode: a leading checkbox column on comparable (entity-row) tables, a bar
    that appears once rows are ticked, and the instant snapshot chart panel. */

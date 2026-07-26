@@ -427,14 +427,22 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   needs no single-table gate (unlike the truncation caption, whose flag maps to one
   query result). Wording rules in the pure `tabletruth.js` (`tableTrustNote`,
   vitest): state the **count, never "all"** (measure columns only were graded), and
-  promise **reproduction, not correctness**. **STILL POSITIVE-ONLY — the silence on
-  `partial`/`unmatched` outlived its original reason and now waits on evidence.** The
-  two known false-negative shapes are fixed (above), so a ⚠ caution is no longer
-  disqualified in principle; what's missing is a corpus. Every historical
-  `partial`/`unmatched` turn was graded by the OLD kernel and its messages are
-  deleted, so nothing yet shows what a non-match means under anchoring. **Let
-  `partial`/`unmatched` turns accumulate, read them, and only then decide** — turning
-  the caution on now would repeat, in reverse, the assumption that Phase 0 caught. A
+  promise **reproduction, not correctness**. **TWO-SIDED since the reconciler was
+  anchored:** `partial`/`unmatched` render a **⚠ caution** in `--warn`
+  (`.table-trust.warn`, an inline `IconWarning` — the ⚠ codepoint renders as a colour
+  emoji on some platforms), leading with the count that did NOT reproduce and naming
+  the total ("13 of 22 values could not be reproduced from the query result"). Two
+  wording rules are load-bearing: it says **"could not be reproduced", never
+  "wrong"** — no checker reproduces every legitimate derivation, so a non-match is
+  evidence about THE CHECK, not a verdict on the number — and the tooltip says so
+  outright. It must not borrow the `--danger` treatment of a genuinely failed turn;
+  the answer is still an answer. **`unchecked`/`no_table` stay SILENT** (nothing was
+  compared, so neither tone applies), and so does any failure verdict whose counts
+  are missing or contradict it: **`Number(null)` is `0` and finite**, so a
+  pre-migration row's NULL counts read as "0 of N matched" and manufactured a caution
+  against an answer nothing ever graded — the same trap `years.js` hit, caught here
+  by a test, not by review. `table_cells_matched` had to be plumbed onto the live
+  turn (the `done` event carried it; `Chat.jsx` dropped it). A
   cache hit shows NEITHER mark (it passes no grounding, like
   `figure_grounding`). Pinned in `frontend/e2e/table-grounding.spec.js` (incl. a
   direct contrast assertion — the axe scan never renders this element, and light
