@@ -653,6 +653,76 @@ def test_a_row_total_column_grounds_for_tables_now():
         f"a correct row total must ground in an anchored row, got {got}"
 
 
+# The live shape from conversation 23: a LONG result the model rendered as a
+# PIVOT — one table row per year, one column per modality.
+_PIVOT_LONG = QueryResult(
+    columns=["year", "modality", "bachelors"],
+    rows=[(2021, "fully-online", 6181), (2021, "not-online", 24538),
+          (2021, "some-online", 3094), (2022, "fully-online", 6002),
+          (2022, "not-online", 24771), (2022, "some-online", 4410)],
+    row_count=6)
+# The DECOY, and the test is worthless without it: a superseded two-way split
+# the model had already replaced. It holds ONE of each year row's numbers, so it
+# anchors uniquely — while the result above ties three ways on the same year and
+# used to be refused as "ambiguous".
+_PIVOT_SUPERSEDED = QueryResult(
+    columns=["year", "modality", "bachelors"],
+    rows=[(2021, "fully-online", 6181), (2021, "not-fully-online", 27632),
+          (2022, "fully-online", 6002), (2022, "not-fully-online", 29181)],
+    row_count=4)
+
+
+def test_a_pivoted_table_row_grounds_against_the_group_it_describes():
+    """FOUND LIVE (conversation 23): a ⚠ caution on a table whose every number
+    was correct and present in the turn's own results.
+
+    A pivoted table row describes SEVERAL result rows at once — its three
+    numbers live in three different rows of the long result. Anchoring to a
+    single row then graded all three against one of them, so a correct row
+    scored 1 of 3: five year rows, 5 of 15 cells, `partial`.
+
+    Two halves compounded, and the decoy result is what reproduces the second:
+
+      * the result that actually holds all the numbers ties three ways per year
+        and was REFUSED as ambiguous;
+      * the superseded result matches exactly one row per year, so it anchored
+        UNIQUELY and won;
+      * and because SOMETHING anchored, check_table took the anchored path and
+        never consulted the right result at all.
+
+    Without _PIVOT_SUPERSEDED in the list this passes with the bug still present
+    — the ambiguous-refusal alone would fall through to the unrestricted search
+    and rescue the row. That is exactly how the first draft of this test fooled
+    me.
+    """
+    md = ("| Year | Fully-Online | Some Online | Not Online |\n"
+          "| --- | --- | --- | --- |\n"
+          "| 2021 | 6,181 | 3,094 | 24,538 |\n"
+          "| 2022 | 6,002 | 4,410 | 24,771 |\n")
+    got = grounding.check_table(md, [_PIVOT_SUPERSEDED, _PIVOT_LONG])
+    assert (got.cells_matched, got.cells_checked) == (6, 6), \
+        f"every pivoted cell is in the results and must ground, got {got}"
+    assert got.status == grounding.TABLE_MATCHED, got.status
+
+
+def test_grouping_still_refuses_another_rows_value():
+    """The precision half of the group change, and the bound that makes the
+    recall half safe to want.
+
+    A group is every result row sharing the table row's identity — NOT the whole
+    column. So a cell copied off a DIFFERENT entity's row must still fail, or
+    grouping would have quietly re-opened the column-wide search that row
+    anchoring was introduced to close.
+    """
+    md = ("| Year | Fully-Online | Some Online | Not Online |\n"
+          "| --- | --- | --- | --- |\n"
+          # 24,771 belongs to 2022, not 2021.
+          "| 2021 | 6,181 | 3,094 | 24,771 |\n")
+    got = grounding.check_table(md, [_PIVOT_LONG])
+    assert (got.cells_matched, got.cells_checked) == (2, 3), \
+        f"a value from another year's row must not ground, got {got}"
+
+
 _YOY = QueryResult(columns=["year", "awards"],
                    rows=[(2021, 500), (2022, 550), (2023, 610), (2024, 700)],
                    row_count=4)
@@ -1185,6 +1255,10 @@ def run():
           test_a_fabricated_table_is_still_caught)
     check("a value from ANOTHER row does not ground (precision regression)",
           test_a_value_from_ANOTHER_row_does_not_ground)
+    check("a PIVOTED row grounds against the group it describes (live ⚠)",
+          test_a_pivoted_table_row_grounds_against_the_group_it_describes)
+    check("grouping still refuses another row's value (precision bound)",
+          test_grouping_still_refuses_another_rows_value)
     check("adjacent years do not tie the anchor (live false negative)",
           test_adjacent_years_do_not_tie_the_anchor)
     check("a merged table anchors in every result it draws from",

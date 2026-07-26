@@ -469,7 +469,24 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   and fabricated grounds went **0.9% → 10.4%**), and a share must land **in
   (0,100]**. Applies to the FIGURE too, so Grounded figures moves — correctly: it
   was reporting a false `ungrounded` on a right answer.
-  Anchoring scores (label matches, numeric matches), needs a UNIQUE best, and
+  Anchoring scores (label matches, numeric matches) and returns the **GROUP** of
+  rows tied at the best score — not a unique winner. A **PIVOTED** table row
+  legitimately describes several result rows at once (one row per year, one
+  column per category), so demanding uniqueness was backwards and the two halves
+  compounded: the result actually holding all the numbers tied N ways and was
+  REFUSED as ambiguous, a SUPERSEDED result matched one row and anchored
+  UNIQUELY, and because *something* anchored the right result was never
+  consulted. Measured live (conversation 23): a table whose every number was
+  correct and present graded **5/15 `partial`** — a ⚠ on correct work, the one
+  thing the caution must never do. Grouping is bounded by `_MAX_ANCHOR_GROUP`
+  (12): a group spanning most of the result is the unrestricted column search
+  under another name. **Measured both ways on the retained corpus: recall
+  83.3% → 98.0%, fabricated-ground rate UNCHANGED at 1.33%** — two false
+  cautions removed (msgs 108 and 100, the latter the long-tracked "pivot gap")
+  with no precision cost; it is in fact TIGHTER for pivot rows, which used to
+  fall through to the column-wide search. The regression test carries a DECOY
+  superseded result on purpose — without it the case passes with the bug still
+  present. Anchoring still needs a label or ≥2 numeric matches, and
   compares numbers by **IDENTITY, never `_close()`** — a relative tolerance made
   adjacent years indistinguishable (2023 is within 0.1% of 2021/2022/2024/2025), tying
   every row of a by-year result and DROPPING correct cells. An unanchorable row (a
