@@ -127,11 +127,32 @@ _DIMENSION_COL_RE = re.compile(
     r"^(year|.*_year|unitid|opeid|id|.*_id|cipcode|awlevel|majornum|control|"
     r"sector|fips|zip|rank|row_?num.*)$", re.IGNORECASE)
 
+# The same dimensions as written by a HUMAN, for Markdown table headers:
+# `cipcode` arrives as "CIP" or "CIP Code", `awlevel` as "Award Level".
+# Observed live — a "CIP" column of codes (52, 51, 13…) was graded as a measure,
+# could never ground (its only match is a dimension column, which check_table
+# bars), and produced five false misses on a correct answer plus one false GROUND
+# where the code 11 collided with a share.
+#
+# EXACT membership, deliberately, with no suffix wildcards. Reusing the regex
+# above against a space-normalized header instead looked tidier and was wrong:
+# "Change from Prior Year" became "Change_from_Prior_Year", hit `.*_year`, and
+# five legitimate measure cells went SILENTLY UNGRADED — the same invisible
+# non-coverage the emphasis fix had just removed. The two naming domains are
+# different and the wildcards only make sense in the snake_case one.
+_DIMENSION_HEADERS = frozenset({
+    "cip", "cipcode", "awlevel", "awardlevel", "unitid", "opeid", "id", "year",
+    "rank", "majornum", "control", "sector", "fips", "zip", "rownum",
+})
+
 
 def is_dimension(column: str) -> bool:
     """True when a numeric column is an identifier/dimension rather than a
     measure, so aggregating it would produce a meaningless number."""
-    return bool(_DIMENSION_COL_RE.match((column or "").strip()))
+    name = (column or "").strip()
+    if _DIMENSION_COL_RE.match(name):
+        return True
+    return re.sub(r"[\s_]+", "", name).lower() in _DIMENSION_HEADERS
 
 
 @dataclass(frozen=True)

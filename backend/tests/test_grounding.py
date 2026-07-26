@@ -751,6 +751,39 @@ def test_a_greater_than_hedge_reads_the_other_way():
         f"'>' must hold only where a value exceeds the bound: {got}"
 
 
+def test_a_human_written_dimension_header_is_not_graded():
+    """Observed live: a "CIP" column of codes (52, 51, 13…) was graded as a
+    measure. It can never ground — its only match is a dimension column, which
+    check_table bars — so it produced five false misses on a correct answer, and
+    one false GROUND where the code 11 collided with a share.
+
+    The dimension list was written for snake_case result columns (`cipcode`);
+    a table header is written for a human."""
+    r = QueryResult(columns=["cipcode", "masters"],
+                    rows=[("52", 201792), ("51", 150393)], row_count=2)
+    md = ("| CIP | Program | Master's Degrees |\n| --- | --- | --- |\n"
+          "| 52 | Business | 201,792 |\n| 51 | Health | 150,393 |\n")
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (2, 2), \
+        f"a human-written code column must not be graded as a measure: {got}"
+
+
+def test_a_measure_header_that_ENDS_in_year_is_still_graded():
+    """The other direction, and a defect I introduced fixing the one above:
+    matching the snake_case dimension regex against a space-normalized header
+    turned "Change from Prior Year" into "Change_from_Prior_Year", which hits
+    `.*_year`. Five legitimate measure cells went SILENTLY ungraded — the same
+    invisible non-coverage the emphasis fix had just removed."""
+    r = QueryResult(columns=["year", "degrees"],
+                    rows=[(2020, 30422), (2021, 33500)], row_count=2)
+    md = ("| Year | Degrees | Change from Prior Year |\n| --- | --- | --- |\n"
+          "| 2021 | 33,500 | +3,078 |\n")
+    got = grounding.check_table(md, [r])
+    assert got.cells_checked == 2, \
+        f"a measure column whose name ends in 'Year' must still be graded: {got}"
+    assert got.cells_matched == 2, got
+
+
 def test_a_cross_result_share_reproduces():
     """The live failure: rows from one query, the denominator from another. All
     eight unreproduced cells of an ordinary "what share does each of the top 5
@@ -1179,6 +1212,10 @@ def run():
           test_a_hedge_no_value_satisfies_is_still_caught)
     check("a '>' hedge reads the other way",
           test_a_greater_than_hedge_reads_the_other_way)
+    check("a human-written dimension header is not graded",
+          test_a_human_written_dimension_header_is_not_graded)
+    check("a measure header ENDING in 'Year' is still graded",
+          test_a_measure_header_that_ENDS_in_year_is_still_graded)
     print("  -- cross-result derivations (rows from one query, total from another) --")
     check("a cross-result share reproduces",
           test_a_cross_result_share_reproduces)
