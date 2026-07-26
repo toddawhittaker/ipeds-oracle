@@ -7,9 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.config import get_settings
 from app.tools.sql import (
+    SQL_MAX_VALUE_BYTES,
+    SQLResultTooLargeError,
     SQLTimeoutError,
     SQLValidationError,
+    _connect_ro,
     has_ipeds_data,
     ipeds_years,
     run_sql,
@@ -64,6 +68,42 @@ except SQLTimeoutError as e:
     dt = time.time() - t0
     print(f"  ✓ interrupted after {dt:.1f}s: {e}")
     assert dt < 6, "watchdog did not fire promptly"
+
+print("\n== single-value size cap (memory exhaustion, SEC review 2026-07-26) ==")
+# THE REGRESSION: the row cap bounds how MANY rows come back, never how BIG one
+# is. `SELECT length(hex(zeroblob(400000000)))` allocated 1,155 MB RSS in 1.0s
+# against the real dataset -- and the 25s watchdog cannot fire inside a
+# one-second allocation, so nothing stopped it. With the 200-row model cap
+# (200 x 5 MB) or the 100k-row CSV cap it is an OOM-kill of the container.
+t0 = time.time()
+try:
+    run_sql("SELECT length(hex(zeroblob(400000000)))", timeout=25.0)
+    print("  ✗ an oversized single value was NOT refused")
+    sys.exit(1)
+except SQLResultTooLargeError as e:
+    dt = time.time() - t0
+    print(f"  ✓ oversized value refused in {dt:.2f}s: {str(e)[:60]}…")
+    # Refused by the LIMIT, not by the watchdog. If this ever takes ~25s the
+    # cap stopped working and the timeout is doing the job instead — which is
+    # exactly the state that could not stop the 1.0s allocation.
+    assert dt < 5, f"refusal took {dt:.1f}s — that is the watchdog, not the cap"
+
+# The other half of the bound, and the reason it isn't set tighter: a cap that
+# broke a real aggregate would be a silent data-availability bug, not a fix.
+# ~800 KB is well past anything IPEDS holds (the largest real value is
+# vartable.longdescription at 7,469 bytes) and still returns.
+r = run_sql("SELECT length(hex(zeroblob(400000))) AS n")
+assert r.rows[0][0] == 800000, f"a large-but-legitimate value must survive, got {r.rows}"
+print(f"  ✓ a large but legitimate value still returns ({r.rows[0][0]:,} chars)")
+
+# The limit has to live on the connection the queries actually run on. A
+# refactor that builds a connection some other way would silently drop it.
+# Resolve the path from settings, never a literal "ipeds.db": CI runs against a
+# fixture DB via IPEDS_DB_PATH, so a hardcoded relative path is the classic
+# passes-locally / fails-in-CI shape.
+_lim = _connect_ro(get_settings().ipeds_db_path).getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+assert _lim == SQL_MAX_VALUE_BYTES, f"read-only connection lost the cap: {_lim}"
+print(f"  ✓ read-only connections carry the cap ({_lim:,} bytes)")
 
 print("\n== ipeds_years / has_ipeds_data: fresh-deploy 'no data' probes ==")
 # Non-raising probes for the "no dataset loaded yet" state. Built entirely on

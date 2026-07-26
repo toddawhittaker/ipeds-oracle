@@ -9,7 +9,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.tools import schema as sch
-from app.tools.sql import SQLTimeoutError, SQLValidationError, run_sql
+from app.tools.sql import (
+    SQLResultTooLargeError,
+    SQLTimeoutError,
+    SQLValidationError,
+    run_sql,
+)
 
 
 def _tool_run_sql(sql: str, sink: dict[str, Any] | None = None) -> str:
@@ -19,6 +24,8 @@ def _tool_run_sql(sql: str, sink: dict[str, Any] | None = None) -> str:
         return f"SQL REJECTED: {e}"
     except SQLTimeoutError as e:
         return f"SQL TIMEOUT: {e}"
+    except SQLResultTooLargeError as e:
+        return f"SQL TOO LARGE: {e}"
     except Exception as e:  # surface the sqlite error text to the model
         return f"SQL ERROR: {type(e).__name__}: {e}"
     # Hand the exact result back to the caller (per-request), so the API layer
