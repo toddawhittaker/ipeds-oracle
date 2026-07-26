@@ -1398,7 +1398,7 @@ Playwright covers them. The derivation walks `src/` **recursively**; it must, or
 module in a subdirectory escapes the floor silently (see the `src/admin/` note above).
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
 and now SCANS THE APP** — a rendered answer with its disclosures open, a
-MID-STREAM answer, and all seven admin pages in **both themes** (17 scans).
+MID-STREAM answer, and all seven admin paths in **both themes** (19 scans).
 It previously saw only Login and the EMPTY Chat state, i.e. the two
 least-populated screens: every control the product is made of, and every
 admin page, sat outside the gate. That is a COVERAGE hole, not a threshold
@@ -1449,8 +1449,11 @@ Similarly `.env.example` is pinned against `config.Settings` in both directions 
 CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on
 `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
 **vitest** unit tests; the `backend/tests/` backend suites against a fixture DB;
-Playwright e2e). A `.githooks/pre-push` hook runs it automatically (bypass:
-`git push --no-verify`; skip e2e: `SKIP_E2E=1`). A **deletion-only push** skips the
+Playwright e2e — run against a **prebuilt static bundle**, `E2E_PREVIEW=1`, which
+is 3.4× faster over a full run than the dev server that re-transforms modules per
+`page.goto`; reuse is off in that mode or the suite runs against **stale source
+and reports a false green**). A `.githooks/pre-push` hook runs it automatically
+(bypass: `git push --no-verify`; skip e2e: `SKIP_E2E=1`). A **deletion-only push** skips the
 gate — it ships no code — while a push mixing a deletion with commits still runs it
 (`test_pre_push_hook.py`). It's a **fast pre-check** so failures
 surface before CI — but since the repo went public the **authoritative gate is

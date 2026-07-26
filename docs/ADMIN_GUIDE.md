@@ -173,7 +173,11 @@ The dashboard shows **three** cache figures — don't confuse them:
 
 - **Answer cache** — a *count* of questions answered straight from the app's own
   semantic cache of past answers, with **no LLM call at all**. A repeat or
-  near-repeat question is served instantly and for free.
+  near-repeat question is served instantly and for free. The cache is **scoped to
+  the person who asked**: one colleague's stored answer is never replayed to
+  another, since the prose is theirs and could reveal what they asked. That
+  deliberately lowers the hit rate — a popular question is answered once per
+  person rather than once per deployment.
 - **Schema cache** — a *percentage* measured on the **first** model call of each
   question: how much of that call's prompt the LLM provider served from **its own
   cache**. Every request carries a large, identical block of schema instructions up

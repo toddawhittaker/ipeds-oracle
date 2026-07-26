@@ -16,6 +16,7 @@ tools — see the [Admin guide](ADMIN_GUIDE.md).)
 - [Signing in](#signing-in)
 - [Asking a question](#asking-a-question)
 - [Reading an answer](#reading-an-answer)
+- [Checked numbers](#checked-numbers)
 - [Charts](#charts)
 - [Tables and CSV](#tables-and-csv)
 - [Comparing rows](#comparing-rows)
@@ -94,6 +95,31 @@ the assistant worked on it.
 
 ---
 
+## Checked numbers
+
+The numbers in an answer are written out by a language model reading its own
+query results — so after every answer, the app tries to **reproduce them from
+those results itself**. It's ordinary arithmetic, not a second opinion from the
+AI, and what it finds is shown to you:
+
+- **✓ verified** on the hero figure's source line — that number was found in the
+  data, either exactly, at the rounding shown, or as a straightforward derivation
+  (a total, an average, a percentage change, a share).
+- **A line under a results table** counting how many values reproduced —
+  *"✓ 40 values reproduced from the query result."*
+
+When some values couldn't be reproduced, the line instead asks you to
+**check them against the SQL or CSV**, and names how many. Read that as a prompt
+to look, **not as a claim that anything is wrong** — most of the time it means
+the answer did something the checker can't reproduce, not that the number is
+bad. It takes ten seconds to confirm with **Thinking → SQL** or the CSV.
+
+The reverse is also true and worth knowing: **no mark is not a warning.** A hero
+figure with no ✓ simply wasn't reproduced — and answers with nothing numeric to
+check, or served from the cache, carry no mark at all.
+
+---
+
 ## Charts
 
 Charts appear automatically for trends and comparisons (and you can add one to any
@@ -118,9 +144,10 @@ over the whole range.
 
 Every result table has its own toolbar:
 
-- **Download full result (CSV)** / **Download these N rows (CSV)** — the label tells you which you get: the complete query result from the server, or just the rows shown on screen (multi-table answers). When a result is large, the chat
-  shows a readable preview (the first rows) with a note of the full size, but the
-  CSV always contains the **complete result set**, not just the rows on screen.
+- **Download full result (CSV)** / **Download these N rows (CSV)** — the label
+  tells you which you get. The first re-runs the query on the server and gives
+  you the **complete result set**; the second exports only the rows displayed
+  (that's what you get on an answer with several tables).
 - **Chart this** — when a table has a numeric column and the answer didn't
   already draw a chart, this renders one on demand.
 
@@ -133,7 +160,12 @@ Every result table has its own toolbar:
 **Click any column header to sort** by that column (click again to reverse); a
 small arrow shows the active sort. Long tables scroll within their own area — the
 header row stays pinned as you scroll — so even a big ranking never breaks the
-page. **Copy Markdown** and **Copy HTML** (below) also carry the full data set.
+page.
+
+> **Only the full-result CSV goes beyond what's on screen.** Sorting, **Chart
+> this**, **Compare**, and the **Copy** actions all work from the rows displayed,
+> so on a paged result they cover that page, not the whole query. When you need
+> everything, use **Download full result (CSV)** — or just ask for the top N.
 
 ---
 
@@ -174,7 +206,9 @@ The **Copy** menu under each answer copies the whole thing two ways:
 - **Copy rich HTML** — the answer with its table and chart formatting preserved,
   so it pastes cleanly into **Word, Outlook, or Google Docs**.
 
-Either way you get the full answer, including every row of a large table.
+Both copy the answer **as it appears**, so if a table was shown as a page of a
+larger result, that's what you paste. Use **Download full result (CSV)** for the
+complete data.
 
 ---
 
@@ -216,6 +250,11 @@ automatically from your first question.
 
 - Click any conversation to reopen it — answers, tables, charts, and the Thinking
   trace are all preserved.
+- **A running question keeps going if you navigate away.** Open another
+  conversation or the Admin console and come back: you'll see your question with
+  *"Still working on your question…"*, replaced by the answer when it lands.
+  (Reloading the page is different — that cancels the question, so the browser
+  warns you first.)
 - **Rename** a conversation inline to something memorable.
 - **Delete** any you don't need.
 - **Collapse** the sidebar (the « button) for more room.

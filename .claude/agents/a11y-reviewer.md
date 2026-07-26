@@ -55,6 +55,16 @@ Allowlist/Imports/Usage/Skills/Logs), `Markdown.jsx`
 - Read the JSX and CSS directly; trace each interactive element's markup and
   styles. Don't assume a control is accessible — check its actual element,
   labeling, and focus handling.
+- **Treat a green axe gate as weak evidence, and treat "pinned by e2e" as weak
+  evidence for a11y semantics specifically.** `frontend/e2e/a11y.spec.js` fails on
+  `critical` + `serious` across 19 scans (a full answer, a mid-stream answer, all
+  seven admin paths, both themes), but three known blind spots survive it: axe
+  files a **one-character element** as `incomplete` rather than a violation (a
+  2.43:1 count badge was invisible to it — contrast on those needs a direct
+  computed-style assertion); sampling **mid-animation** measures a blended colour,
+  not the resting one; and **Playwright's role engine does not prune
+  presentational children**, so `getByRole` finds controls that ARIA has stripped
+  from the a11y tree — assert containment instead.
 - For each finding: the component + `file:line`, the WCAG criterion it violates,
   who it affects and how, severity, and a one-line remediation direction.
 - Rank most-severe first (blocks a user vs. minor polish). Note quick wins.

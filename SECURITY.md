@@ -23,8 +23,9 @@ volunteer-maintained project — there is no bug-bounty program.
 Most relevant areas: the magic-link auth and session handling (`backend/app/auth.py`,
 `security.py`), the allowlist / access-request flow, the per-IP (auth) and
 per-user (chat) rate limiting and `X-Forwarded-For` handling (`ratelimit.py`), the
-CSRF and security-headers middleware (`csrf.py`, `secheaders.py`), and the
-read-only SQL execution sandbox the agent uses (`tools/sql.py`, `tools/sqllint.py`).
+CSRF, security-headers, and body-limit middleware (`csrf.py`, `secheaders.py`,
+`bodylimit.py`), the admin import/upload path, and the read-only SQL execution
+sandbox the agent uses (`tools/sql.py`, `tools/sqllint.py`).
 
 ## For operators
 

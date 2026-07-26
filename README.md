@@ -59,33 +59,53 @@ Ask a question in the box at the bottom and watch the answer stream in.
 
 - **Answers** lead with the direct result, then a compact table, then a short
   note on how it was calculated. Expand **Thinking** to see the steps and the
-  exact SQL the assistant ran.
-- **Tables** — each result table has its own **Download CSV** button, and
-  **Chart this** when the data suits a graph. Click a column header to **sort**;
-  long tables scroll with a pinned header. A big result shows a readable preview
-  on screen, but the CSV (and the copy actions below) always carry the **full
-  data set**.
+  exact SQL the assistant ran. Suggested follow-ups appear below; one click asks
+  the next question.
+- **"Did you mean"** — if a question could reasonably be read two ways that would
+  change the headline number (bachelor's-only vs. every award level, say), the
+  assistant asks a short clarifying question with one-click answers instead of
+  quietly picking one.
+- **Tables** — each result table has its own CSV button and **Chart this** when
+  the data suits a graph. Click a column header to **sort**; long tables scroll
+  with a pinned header. A big result is shown as a **page** — captioned *"First
+  200 rows · the full result is larger"* — and the button says which data you
+  get: **Download full result (CSV)** re-runs the query server-side for the
+  complete set, while **Download these N rows (CSV)** exports just what's on
+  screen.
 - **Charts** — pick the chart type (**Line**, **Bar**, or **Line + trend**),
   toggle **data labels**, **maximize** for a bigger view, and **copy the image**
   to paste straight into an email, doc, or slide (clean in light or dark mode).
+  Tick 2–4 rows of a ranking table to **compare** just those, charted instantly
+  from the numbers already on screen.
 - **Copy** a whole answer as **Markdown** or **rich HTML** (the HTML keeps the
   table and chart formatting when pasted into Word, Outlook, or Google Docs).
+  Copy takes the answer **as displayed**, so on a paged result use the full-result
+  CSV instead.
+- **Checked numbers** — where the app can reproduce an answer's numbers from the
+  rows its own query returned, it says so: a **✓ verified** on a hero figure, and
+  a line under a table counting the values that reproduced. Where some didn't, it
+  asks you to **check them against the SQL or CSV** — a prompt to look, not a
+  claim that anything is wrong.
 - **Edit** or **Rerun** any of your earlier prompts to refine a question — the
   new answer replaces the old one in place. Re-asking a question part-way up the
   conversation also removes the exchanges below it (they followed from it), so
   the app confirms first and says how many.
 - **Conversations** are saved in the sidebar (named automatically), and you can
-  delete any you don't need. Collapse the sidebar for more room.
-- **Light or dark mode** — toggle in the top bar; your choice is remembered.
+  rename or delete any of them. Collapse the sidebar for more room. A question
+  still running keeps working if you navigate away — come back and you'll see it
+  in progress, then the answer.
+- **Your account menu** — the avatar in the top-right holds **light/dark mode**
+  (remembered), **About**, **Sign out**, and **Admin** for administrators.
 
 A repeat of a near‑identical question may return instantly from a cache, but the
 numbers are always re‑checked against the live data.
 
 ## Data coverage & accuracy
 
-The database holds the most recent IPEDS collection years, covering the main
-surveys. When a new year is published, an administrator loads it and the app
-picks it up automatically.
+Each deployment chooses which IPEDS collection years it loads, so the coverage is
+whatever your administrator has integrated — the app states the loaded range on
+the start screen rather than assuming one. When a new year is published, an
+administrator loads it and the app picks it up automatically, no restart.
 
 The assistant sanity‑checks magnitudes before answering (for example, ~1 million
 associate's degrees are awarded nationally per year), but it's a tool, not an
@@ -95,23 +115,37 @@ numbers.
 
 ## For administrators
 
-Signed‑in admins get an **Admin** tab:
+Signed‑in admins get an **Admin** entry in the account menu:
 
-- **Allowlist** — approve or remove people, and act on access requests.
-- **Imports** — upload a new year's IPEDS file; it builds and validates in the
-  background and swaps in only if the checks pass (the live data is never
-  disturbed mid‑import).
+- **Users** — approve, promote, or remove people across three sub‑tabs (current
+  users, pending requests, blocked addresses), one at a time or in bulk.
+- **Imports** — pick years from a live NCES catalog, or upload a year's IPEDS
+  file; it builds and validates in the background and swaps in only if the checks
+  pass (the live data is never disturbed mid‑import). Integrated years can be
+  removed again.
 - **Usage** — queries, tokens, and **spend** over a chosen time range
-  (hour / day / 7 / 30 days / custom), with a chart and per‑user breakdown.
-- **Skills** — review and curate the learned NL→SQL examples.
+  (hour / day / 7 / 30 days / custom), with a chart and per‑user breakdown, plus
+  the data‑integrity rates (how many answers' figures and table cells could be
+  reproduced from the query results).
+- **Skills** — review and curate the lessons the assistant has learned.
 - **Logs** — recent server activity.
+
+Wherever something is waiting — access requests, unverified lessons, new problems
+in the logs, an available update — a **count badge** appears on the avatar and on
+the relevant Admin section, and clears when you act on it.
+
+The [Admin guide](docs/ADMIN_GUIDE.md) covers all of this in depth.
 
 ## Under the hood
 
 A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
 SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
 charts. It's designed to be cheap to run and safe by construction — the model
-can only issue read‑only queries, guarded by a timeout. Details in
+can only issue read‑only queries, bounded by a timeout, a row cap, and a
+per‑value size cap. Answers are additionally checked after the fact: a
+deterministic pass tries to reproduce each answer's hero figure and table cells
+from the rows the queries actually returned, which is what the ✓ mark and the
+Admin → Usage integrity rates report. Details in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [Self-hosting](#self-hosting) below; the
 data model and query conventions are documented in [SCHEMA.md](docs/SCHEMA.md).
 
@@ -143,7 +177,7 @@ docker compose up -d --build             # --build until you pull a published im
 ```
 
 Open the app, sign in with an address in `ADMIN_EMAILS` (auto‑allowlisted + admin
-on first boot), and add colleagues under **Admin → Allowlist**. Update later with
+on first boot), and add colleagues under **Admin → Users**. Update later with
 `docker compose pull && docker compose up -d` (pin a release via `IPEDS_TAG`).
 
 ### Data
@@ -165,6 +199,13 @@ rclone; set `BACKUP_REMOTE`). The one thing the app does automatically is
 snapshot `app.db` **before applying migrations** on an upgrade, keeping the two
 most recent (`app.db.pre-v<N>`), so a bad upgrade is reversible. That is an
 upgrade safety net, not a backup: it does nothing for ordinary data loss.
+
+> **Rolling back to an older image refuses to start** — deliberately. Migrations
+> are forward-only, so once `app.db` has been upgraded, an older build cannot
+> understand its schema; rather than run against it and silently write damage
+> into your irreplaceable state, the app logs a CRITICAL naming both versions and
+> exits. To actually go back, restore the matching `app.db.pre-v<N>` snapshot
+> alongside the older image.
 
 ### HTTPS
 
@@ -222,6 +263,7 @@ commented list. The essentials:
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
+| `CHAT_RATE_MAX_PER_USER` | per-user question cap per window (default 30/60s) — the guard against one runaway script burning your provider spend |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
 

@@ -1,14 +1,14 @@
 # Playwright e2e suite
 
-End-to-end browser tests for the React UI in `frontend/src`. These drive the real
-app (via Vite dev server) but intercept every `/api/**` request with
-`page.route(...)` (see `mocks.js`), so the suite runs deterministically with
-**no `LLM_API_KEY` and no `ipeds.db`** — no backend process is started.
+End-to-end browser tests for the React UI in `frontend/src`. They drive the real
+app but intercept every `/api/**` request with `page.route(...)` (see
+`mocks.js`), so the suite runs deterministically with **no `LLM_API_KEY`, no
+`ipeds.db`, and no backend process**.
 
 ## Running
 
 ```sh
-cd web
+cd frontend
 npm install
 npx playwright install chromium   # one-time browser download
 npm run test:e2e
@@ -17,72 +17,73 @@ npm run test:e2e
 Useful variants:
 
 ```sh
-npx playwright test --list                 # list specs without running them
-npx playwright test e2e/auth-login.spec.js  # run a single file
-npx playwright test --ui                    # interactive UI mode
-npx playwright show-report                  # open the HTML report after a run
+npx playwright test --list                    # list every spec without running
+npx playwright test e2e/auth-login.spec.js    # one file
+npx playwright test -g "stop generating"      # one describe/test by name
+npx playwright test --ui                      # interactive UI mode
+npx playwright show-report                    # the HTML report after a run
+E2E_PREVIEW=1 npm run test:e2e                # static build (see below)
 ```
 
-`playwright.config.js` starts `npm run dev -- --port 5173 --strictPort` as the
-`webServer` and points `baseURL` at it. The dev server's `/api` proxy to
-`:8000` (see `frontend/vite.config.js`) is never actually used — every API call is
-fulfilled by a mock before it leaves the page.
+### Which server backs the run
 
-## Specs
+`playwright.config.js` starts the `webServer` itself; `baseURL` points at it. The
+dev server's `/api` proxy to `:8000` is never used — every API call is fulfilled
+by a mock before it leaves the page.
 
-- `auth-login.spec.js` — logged-out state renders `<Login/>`; requesting a
-  sign-in link shows the `.notice` message.
-- `app-shell-roles.spec.js` — Admin tab visibility keyed off `is_admin`; sign
-  out returns to Login.
-- `chat-happy-path.spec.js` — ask a question, watch the SSE-streamed markdown
-  answer (with a table) render, expand the SQL log, then confirm the
-  follow-up conversation fetch attaches the message id that unlocks the
-  CSV download link.
-- `admin-tabs.spec.js` — click through Allowlist / Imports / Usage / Skills
-  and assert each panel's mocked content; submit the add-allowlist form and
-  assert the POST body. Also carries the Skills-tab-unmount crash regression
-  test (see comment in that file for the bug history).
-- `nces-catalog.spec.js` — the Imports tab's NCES year catalog: per-year
-  cards' selectable/integrated state, the "Integrate selected (N)" button, the
-  disk-headroom meter, per-file download progress, "update"-status cards, and
-  keyboard/selection styling.
-- `year-remove.spec.js` — the trashcan (`.year-remove`, DELETE
-  `/api/admin/import/year/{start_year}` via `mockDeintegrate`) that removes an
-  already-integrated year: button visibility gated on integrated/update
-  status, the confirm-dialog gate, and the resulting job poll/success notice;
-  plus the rebuild progress bar (`[data-testid="rebuild-progress"]`) driven by
-  a polled job's `progress.rebuild` JSON.
-- `a11y.spec.js` — coverage for the accessibility fixes: conversation list
-  items are real links (with `aria-current` on the active one -- see
-  `nav-links.spec.js` for the full link-conversion contract), the
-  streamed assistant answer container has `aria-live`, the Login/Chat/Admin
-  inputs are reachable via `getByLabel`/`getByRole`, primary-nav and Admin
-  subtab active state uses `aria-current`, the markdown result-table wrapper
-  is a focusable `role="region"`, Admin has a `main` landmark, and the Login
-  notice becomes `role="alert"` after submission. Also runs a couple of
-  `@axe-core/playwright` smoke scans (Login, Chat) asserting no *critical*
-  violations.
-- `admin-lessons.spec.js` — the Learned-lessons admin view: the headline
-  leads, the longer description collapses behind its own "Details", the SQL
-  worked example stays collapsed under "Example query", and verify/reject
-  actions (incl. the destructive-delete confirm dialog).
-- `nav-links.spec.js` — the three nav surfaces (top-nav Chat/Admin, Admin
-  subtabs, sidebar conversation rows + "+ New chat") are real react-router
-  `<a href>` links, not click-only buttons: correct `href` per control,
-  `aria-current="page"` on the active one only, the sidebar trash button
-  stays a DOM sibling of the row link (never nested inside it), keyboard
-  Enter activates a focused link (Space does not), and a modifier/middle
-  click on a conversation row or "+ New chat" fires no client-side
-  side-effects (no navigation, no thread reset, no turnToken abandonment) --
-  letting the browser's native new-tab handling take over instead.
-- `delete-focus.spec.js` — focus management after deleting a conversation:
-  deleting the open chat navigates to `/` and focuses the composer; deleting a
-  different chat focuses whatever now occupies the deleted row's index (next
-  sibling, else previous, else "+ New chat", never `<body>`); a dedicated
-  bare-`aria-live` "delete-announcer" region reports what happened (with a
-  remaining-chat count so two same-titled deletes in a row still produce
-  distinct announcements); dismissing the confirm or a failed DELETE leave
-  focus sane and never falsely announce "Deleted"; an unrelated later
-  `refreshConvos()` must not steal focus back into the sidebar; and the
-  pre-existing unscoped `[role="status"].sr-only` locator must keep resolving
-  to exactly one node.
+- **Default: `npm run dev`.** Instant start, and `reuseExistingServer` keeps a
+  warm one between runs. Right for iterating on one spec.
+- **`E2E_PREVIEW=1` (and always on CI): the static production build.** Measurably
+  faster over a full run — **107s → 31s** — because `npm run dev` transforms
+  modules on demand per route and re-pays that on every `page.goto` across 342
+  tests. `scripts/run_ci_local.sh` sets it.
+
+> **Reuse is deliberately OFF in preview mode.** A lingering preview server keeps
+> serving whatever was built when it started, so reusing one runs the suite
+> against **stale source and reports a false green**. The dev server re-reads from
+> disk, which is why reuse is safe there. If a local run disagrees with CI,
+> `pgrep -af 'vite|npm run dev'` before believing it.
+
+## What's here
+
+Specs are named for the surface they cover (`admin-*`, `chat-*`, `auth-*`, …);
+`npx playwright test --list` is the current index, and each spec's header comment
+explains the regression it exists for. Two files carry more than their name
+suggests:
+
+- **`mocks.js`** — every fixture. `mockStreamChat` fulfils an SSE body in one
+  shot after a delay; **`mockStreamChatDripped`** patches `window.fetch` and
+  enqueues into a `ReadableStream` on timers, which is the only way to observe a
+  *partially delivered* stream (with the one-shot mock, a brand-new chat's id
+  never arrives until the turn is over).
+- **`a11y.spec.js`** — the axe gate. Fails on `critical` **and `serious`**, and
+  scans the app as it actually renders: a full answer with its disclosures open,
+  a mid-stream answer, and all seven admin paths, in **both themes** (19 scans).
+
+## Four traps that make a spec pass while the product is broken
+
+Every one of these has shipped a defect past a green suite here.
+
+1. **Auto-retrying matchers cannot assert "not true right now."**
+   `expect(locator).toHaveCount(1)` retries until it matches, so against a 1.5s
+   stream it simply waits the turn out and passes having never seen the
+   duplicate. For anything transient by construction, count synchronously:
+   `expect(await locator.count()).toBe(1)`.
+2. **A fixture that can't express the failure proves nothing.** A "the finished
+   answer must not replace the stopped note" test passed with the fix deleted,
+   because its mocked conversation never contained that answer. Ask: *if the bug
+   were present, would anything in this fixture look different?*
+3. **A wait between actions can hide a real race.** Polling for the URL between
+   two arrow-key presses is what hid a 100%-reproducible keyboard bug — a real
+   user holding an arrow key performs no such wait. Ask whether a user would
+   pause there; if not, the wait is hiding a race, not stabilizing a test.
+4. **Playwright's role engine does not prune presentational children.** ARIA's
+   presentational-children rule strips descendants of a `role="img"` from the
+   a11y tree, but `getByRole` still finds them — so toolbar specs passed the
+   entire time the toolbar was hidden from assistive tech. For a11y semantics,
+   assert *containment* (`[role="img"] .chart-head` → 0), not role.
+
+Also: mock admin lists with **content, not empty arrays** — an empty table
+renders none of the elements whose contrast could be wrong, so the axe scan sees
+nothing. And axe files a one-character element as `incomplete` rather than a
+violation, so a count badge's contrast needs a direct computed-style assertion.
