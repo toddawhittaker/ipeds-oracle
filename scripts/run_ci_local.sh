@@ -134,7 +134,16 @@ if [ "${SKIP_E2E:-0}" = "1" ]; then
   printf '%s\n' "${YEL}Skipping e2e (SKIP_E2E=1).${RST}"
 else
   step "e2e: playwright (frontend)"
-  ( cd frontend && npm run --silent test:e2e ) || fail "playwright e2e"
+  # E2E_PREVIEW=1 runs the suite against a prebuilt static bundle instead of the
+  # Vite dev server, matching CI. The dev server transforms modules on demand
+  # PER ROUTE, and the suite pays that on every page.goto across 300+ tests --
+  # measured as the bulk of a run whose fastest test is 2.8s. The one-off build
+  # is amortised over the whole suite, so it only makes sense here (the full
+  # gate), not for iterating on a single spec.
+  #
+  # It also turns OFF reuseExistingServer, so this can never run against a stale
+  # preview server -- see the note in playwright.config.js.
+  ( cd frontend && E2E_PREVIEW=1 npm run --silent test:e2e ) || fail "playwright e2e"
 fi
 
 printf '%s\n' "${BOLD}${GRN}All CI checks passed.${RST}"
