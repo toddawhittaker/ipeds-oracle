@@ -406,6 +406,21 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   correct hedge a miss. A bound is deliberately weaker evidence than an equality —
   that asymmetry is the honest reading of what the model claimed, not a loosened
   tolerance, and a bound nothing satisfies still fails.
+  **CROSS-RESULT derivations** (`_cross_scalars`/`_match_cross_result`) close the
+  last live gap: the model routinely takes rows from one query and the denominator
+  from a second `SELECT SUM(...)`, so every share was one result's row over another
+  result's scalar and nothing could reproduce it. Observed on an ordinary question
+  — all eight unreproduced cells AND the hero figure were exact
+  (`11,620/45,883 = 25.3%`, `45,883-30,568 = 15,315`). The ingredient is a TOTAL:
+  every measure column's sum from any result, plus pairwise **complements** ("all
+  others" is the other half of every share breakdown *and* the numerator of the
+  next share). It is the WIDEST search in the module and runs absolutely LAST, with
+  two precision guards that are **individually pinned because the aggregate probe
+  cannot see them**: a share must be **written with a `%`** (the marker splits the
+  two routes — unsplit, one answer offered 11 totals + 55 complements to every cell
+  and fabricated grounds went **0.9% → 10.4%**), and a share must land **in
+  (0,100]**. Applies to the FIGURE too, so Grounded figures moves — correctly: it
+  was reporting a false `ungrounded` on a right answer.
   Anchoring scores (label matches, numeric matches), needs a UNIQUE best, and
   compares numbers by **IDENTITY, never `_close()`** — a relative tolerance made
   adjacent years indistinguishable (2023 is within 0.1% of 2021/2022/2024/2025), tying
