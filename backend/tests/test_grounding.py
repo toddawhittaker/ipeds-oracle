@@ -685,6 +685,72 @@ def test_a_WRONG_year_over_year_change_is_still_caught():
         f"a wrong year-over-year change must not ground, got {got}"
 
 
+# --- Cell formats found in LIVE answers ---------------------------------------
+# Both of these were found by driving real questions through the app and reading
+# the cautions, not by review. Each turned a CORRECT answer into a warning.
+
+def test_an_emphasized_cell_is_graded_not_skipped():
+    """A bolded cell used to fail parse_number entirely, so it was DROPPED —
+    never counted, never checked, invisible. Measured on a live answer: 7 of 14
+    numeric cells escaped because the model bolded them, which is its own
+    convention for the numbers that matter most. Silent non-coverage is the worst
+    shape for a trust mark: it undercounts while sounding authoritative."""
+    r = QueryResult(columns=["stabbr", "awards"],
+                    rows=[("CA", 11620), ("TX", 6287)], row_count=2)
+    md = ("| State | Awards |\n| --- | --- |\n"
+          "| CA | **11,620** |\n| TX | `6,287` |\n")
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (2, 2), \
+        f"emphasized cells must be graded, not skipped: {got}"
+
+
+def test_an_emphasized_WRONG_cell_is_still_caught():
+    """The other half — grading them must not mean waving them through."""
+    r = QueryResult(columns=["stabbr", "awards"],
+                    rows=[("CA", 11620), ("TX", 6287)], row_count=2)
+    md = "| State | Awards |\n| --- | --- |\n| CA | **99,999** |\n"
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (0, 1), got
+
+
+def test_a_hedged_cell_is_checked_as_a_BOUND():
+    """"<0.1%" is a correct hedge for a share that rounds below the displayed
+    precision. Reading its digits as an exact quantity compared 0.1 against a
+    true 0.0179 and called a correct answer a miss — observed live.
+
+    Verification can only check what was claimed, and an inequality is a weaker
+    claim than an equality; that asymmetry is the honest reading, not a loosened
+    tolerance."""
+    r = QueryResult(columns=["awlevel", "awards"],
+                    rows=[(3, 3), (5, 11620), (7, 2697)], row_count=3)
+    md = ("| Award level | Awards | Share |\n| --- | --- | --- |\n"
+          "| Associate's | 3 | <0.1% |\n")
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (2, 2), \
+        f"a correct hedge must not read as a miss: {got}"
+
+
+def test_a_hedge_no_value_satisfies_is_still_caught():
+    """The guard that keeps the hedge from being a free pass: an inequality is
+    only satisfied if something in the data actually satisfies it. Nothing here
+    is below 0.1, so the claim fails."""
+    r = QueryResult(columns=["stabbr", "share_pct"],
+                    rows=[("CA", 40.0), ("TX", 35.0), ("NY", 25.0)], row_count=3)
+    md = "| State | share_pct |\n| --- | --- |\n| CA | <0.1 |\n"
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (0, 1), \
+        f"an unsatisfiable bound must not ground: {got}"
+
+
+def test_a_greater_than_hedge_reads_the_other_way():
+    r = QueryResult(columns=["stabbr", "awards"],
+                    rows=[("CA", 11620), ("TX", 6287)], row_count=2)
+    md = "| State | Awards |\n| --- | --- |\n| CA | >10,000 |\n| TX | >99,000 |\n"
+    got = grounding.check_table(md, [r])
+    assert (got.cells_matched, got.cells_checked) == (1, 2), \
+        f"'>' must hold only where a value exceeds the bound: {got}"
+
+
 # --- The fabrication probe: an AGGREGATE bound on both directions -------------
 # The tests above pin named shapes. This one pins the property those shapes are
 # evidence for, because a change can widen the match surface without breaking any
@@ -985,6 +1051,17 @@ def run():
           test_a_WRONG_year_over_year_change_is_still_caught)
     check("fabricated numbers are rejected at scale (aggregate bound, both directions)",
           test_fabricated_numbers_are_rejected_at_scale)
+    print("  -- cell formats found in LIVE answers (each was a false caution) --")
+    check("an emphasized cell is graded, not silently skipped",
+          test_an_emphasized_cell_is_graded_not_skipped)
+    check("an emphasized WRONG cell is still caught",
+          test_an_emphasized_WRONG_cell_is_still_caught)
+    check("a hedged cell is checked as a BOUND",
+          test_a_hedged_cell_is_checked_as_a_BOUND)
+    check("a hedge nothing satisfies is still caught",
+          test_a_hedge_no_value_satisfies_is_still_caught)
+    check("a '>' hedge reads the other way",
+          test_a_greater_than_hedge_reads_the_other_way)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")
