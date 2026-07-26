@@ -500,28 +500,24 @@ def test_a_table_with_no_results_is_unchecked_with_zero_counts():
     assert got.cells_checked == 0 and got.cells_matched == 0, got
 
 
-# --- KNOWN BLIND SPOT: row-wise derived columns -------------------------------
-# These tests PIN A LIMITATION, not a desired behaviour. They exist because the
-# limitation was measured and it decided a product question.
+# --- Row-anchored table grounding ---------------------------------------------
+# A table row DESCRIBES a result row, and grading it against THAT row rather than
+# against every value in the column is what fixes two opposite defects at once.
 #
-# Every op the reconciler can try (_match_in_column: sum/pct_change/diff/mean/
-# max/min, then share) runs DOWN a single result column. A "% change" column in
-# an answer table is computed ACROSS a row — (2024 - 2021) / 2021 for THAT row —
-# and there is no row-wise cross-column route (`_row_totals` is the only
-# row-wise thing and it is deliberately figure-only). So a table whose every
-# number is correct can still grade `partial`, or even `unmatched` when the
-# derived column is the only measure.
+# 1. FALSE NEGATIVES (the old KNOWN BLIND SPOT). Every op used to run DOWN a
+#    column, while a "% change" column is computed ACROSS a row —
+#    (2024 - 2021) / 2021 for THAT row. A table whose every number was correct
+#    graded `partial`, or `unmatched` when the derived column was the only
+#    measure. That measurement is why the shipped table mark is positive-only.
+# 2. FALSE POSITIVES. Measured on the retained corpus: scaling every number in
+#    eight real answers by 1.2-1.9x still left 24.0% of the cells "grounded"
+#    (2142/8920), and 34% on the widest turn — 878 of those were plain EXACT hits
+#    on a `total_degrees` column holding 506 values across three results. At that
+#    density "somewhere in the column" is nearly free. After anchoring: 0.63%
+#    (56/8920), with real cells unchanged at 446/446.
 #
-# That is why the user-facing table mark (Chat.jsx / tabletruth.js) is
-# POSITIVE-ONLY like the figure's: a caution keyed on `partial`/`unmatched`
-# would fire on correct answers of a shape prompt step 6(b) explicitly asks for.
-# Note the contrast with `share`, which IS reproducible — it is a column-scoped
-# op — so the gap is specifically cross-column, same-row arithmetic.
-#
-# If someone adds a row-wise route, these tests SHOULD fail. Update them, then
-# re-measure Grounded cells before shipping: widening check_table's match
-# surface risks coincidental hits across hundreds of cells, which is the same
-# reason row totals were kept figure-only.
+# The tests below hold BOTH directions, because a fix that only chased one would
+# have been easy and wrong.
 _ROWWISE = QueryResult(
     columns=["stabbr", "enroll_2021", "enroll_2024"],
     rows=[("CA", 100000, 110000), ("TX", 200000, 190000),
@@ -529,33 +525,36 @@ _ROWWISE = QueryResult(
     row_count=4)
 
 
-def test_a_correct_row_wise_pct_change_column_grades_partial():
-    # Raw counts verbatim, percentages arithmetically exact — 8 of 12 reproduce.
+def test_a_correct_row_wise_pct_change_column_grounds():
+    """WAS the blind spot: 8/12, because nothing could compute across a row.
+    Each % is (2024 - 2021)/2021 for its OWN row, reachable only once the row is
+    anchored."""
     md = ("| State | 2021 | 2024 | % change |\n| --- | --- | --- | --- |\n"
           "| CA | 100,000 | 110,000 | +10.0% |\n"
           "| TX | 200,000 | 190,000 | -5.0% |\n"
           "| NY | 50,000 | 52,500 | +5.0% |\n"
           "| FL | 80,000 | 88,000 | +10.0% |\n")
     got = grounding.check_table(md, [_ROWWISE])
-    assert got.status == grounding.TABLE_PARTIAL, got
-    assert (got.cells_matched, got.cells_checked) == (8, 12), got
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (12, 12), got
 
 
-def test_a_correct_pct_change_column_ALONE_grades_unmatched():
-    # The sharper edge, and why a caution can't even be narrowed to `unmatched`:
-    # with no raw measure column beside it, a wholly CORRECT table reproduces
-    # nothing and is indistinguishable from a fabricated one.
+def test_a_correct_pct_change_column_ALONE_grounds():
+    """The sharper edge: with no raw measure column beside it the row anchors on
+    its LABEL alone. This case graded `unmatched` — a wholly correct table
+    indistinguishable from a fabricated one — which is why the caution could not
+    even be narrowed to `unmatched`."""
     md = ("| State | % change |\n| --- | --- |\n"
           "| CA | +10.0% |\n| TX | -5.0% |\n| NY | +5.0% |\n| FL | +10.0% |\n")
     got = grounding.check_table(md, [_ROWWISE])
-    assert got.status == grounding.TABLE_UNMATCHED, got
-    assert (got.cells_matched, got.cells_checked) == (0, 4), got
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (4, 4), got
 
 
-def test_a_correct_share_of_total_column_DOES_reproduce():
-    # The contrast that localizes the gap: `share` is column-scoped, so a
-    # correct share-of-total column grounds cleanly. Only cross-column,
-    # same-row arithmetic is unreachable.
+def test_a_correct_share_of_total_column_still_reproduces():
+    """`share` is column-scoped but ROW-INDEXED, so the anchoring rewrite had to
+    keep it and pin it to the anchored row. If it were dropped (or left free to
+    match any row's share) this correct table would break."""
     md = ("| State | Enrollment | Share |\n| --- | --- | --- |\n"
           "| CA | 110,000 | 25.0% |\n| TX | 190,000 | 43.1% |\n"
           "| NY | 52,500 | 11.9% |\n| FL | 88,000 | 20.0% |\n")
@@ -565,13 +564,136 @@ def test_a_correct_share_of_total_column_DOES_reproduce():
 
 
 def test_a_fabricated_table_is_still_caught():
-    # The kernel is not blind in general — numbers absent from the result are
-    # still unmatched. This is what the blind spot is NOT.
+    """Numbers absent from the result stay unmatched — the floor the widened
+    match surface must not erode."""
     md = ("| State | 2021 | 2024 |\n| --- | --- | --- |\n"
           "| CA | 123,456 | 234,567 |\n| TX | 345,678 | 456,789 |\n")
     got = grounding.check_table(md, [_ROWWISE])
     assert got.status == grounding.TABLE_UNMATCHED, got
     assert (got.cells_matched, got.cells_checked) == (0, 4), got
+
+
+def test_a_value_from_ANOTHER_row_does_not_ground():
+    """THE precision regression, and the one worth the whole rewrite: CA's row
+    carries TX's 190,000. Every digit of it is present in the result, so the old
+    column-wide search called it `exact` and the ✓ mark shipped — the single
+    likeliest real transcription error (copying a number off the wrong row) was
+    the one the check could never see.
+
+    190,000 is also the column MAX, which is why `max`/`min` had to leave the
+    anchored op set: they would have re-admitted exactly this cell."""
+    md = ("| State | 2021 | 2024 |\n| --- | --- | --- |\n"
+          "| CA | 100,000 | 190,000 |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert (got.cells_matched, got.cells_checked) == (1, 2), \
+        f"another row's value must not ground, got {got}"
+
+
+def test_adjacent_years_do_not_tie_the_anchor():
+    """A LIVE false negative found while measuring, and the reason the anchor
+    compares by identity instead of _close(): with a relative tolerance, 2023 is
+    within 0.1% of 2021/2022/2024/2025, so every row of a by-year result tied,
+    the anchor was refused as ambiguous, and correct cells that used to ground
+    stopped grounding. False negatives are the direction that would make a
+    caution cry wolf, so this one mattered more than the false positives.
+
+    Every cell here needs the anchor to be worth anything: the Total is a
+    row-wise sum, which the unrestricted fallback deliberately refuses. Without
+    that the fallback would rescue the row and this test would pass with the bug
+    still in place — which is exactly what its first draft did.
+    """
+    by_year = QueryResult(columns=["year", "bachelor", "master"],
+                          rows=[(2023, 1290, 1295), (2024, 1289, 1296)], row_count=2)
+    md = ("| Year | Bachelor | Master | Total |\n| --- | --- | --- | --- |\n"
+          "| 2023 | 1,290 | 1,295 | 2,585 |\n")
+    got = grounding.check_table(md, [by_year])
+    assert (got.cells_matched, got.cells_checked) == (3, 3), \
+        f"adjacent years must not make the anchor ambiguous, got {got}"
+
+
+def test_a_merged_table_anchors_in_every_result_it_draws_from():
+    """The msg82 shape, which is what surfaced the tie bug: the model builds ONE
+    table from several queries. The row must anchor independently per result, or
+    the column that came from the second query can never ground."""
+    awards = QueryResult(columns=["year", "bachelor", "master"],
+                         rows=[(2023, 72757, 16813), (2024, 68382, 16269)], row_count=2)
+    insts = QueryResult(columns=["year", "institutions"],
+                        rows=[(2023, 1290), (2024, 1289)], row_count=2)
+    md = ("| Year | Bachelor | Master | Institutions |\n| --- | --- | --- | --- |\n"
+          "| 2023 | 72,757 | 16,813 | 1,290 |\n"
+          "| 2024 | 68,382 | 16,269 | 1,289 |\n")
+    got = grounding.check_table(md, [awards, insts])
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (6, 6), got
+
+
+def test_an_unanchorable_summary_row_falls_back_to_the_column_search():
+    """A row that describes no result row — a Total line — has no anchor, so it
+    must fall through to the unrestricted search rather than being marked wrong.
+    This fallback is what keeps reshaped and summary tables grounding as before."""
+    md = ("| State | Enrollment |\n| --- | --- |\n"
+          "| CA | 110,000 |\n| TX | 190,000 |\n| **Total** | 440,500 |\n")
+    got = grounding.check_table(md, [_ROWWISE])
+    assert got.status == grounding.TABLE_MATCHED, \
+        f"a column-total row must still ground via the fallback, got {got}"
+
+
+def test_a_row_total_column_grounds_for_tables_now():
+    """Row totals were figure-only because an unanchored row-wise search across
+    hundreds of cells invited coincidences. Anchored, the row is known, so a
+    Total column costs one candidate value — and this is the canonical
+    by-award-level table shape."""
+    md = ("| Year | Bachelor | Master | Total |\n| --- | --- | --- | --- |\n"
+          "| 2023 | 72,757 | 16,813 | 89,570 |\n")
+    awards = QueryResult(columns=["year", "bachelor", "master"],
+                         rows=[(2023, 72757, 16813)], row_count=1)
+    got = grounding.check_table(md, [awards])
+    assert (got.cells_matched, got.cells_checked) == (3, 3), \
+        f"a correct row total must ground in an anchored row, got {got}"
+
+
+_YOY = QueryResult(columns=["year", "awards"],
+                   rows=[(2021, 500), (2022, 550), (2023, 610), (2024, 700)],
+                   row_count=4)
+
+
+def test_a_year_over_year_change_column_grounds():
+    """A SECOND blind spot of the same class, found by probing the anchored
+    kernel for what it still couldn't reproduce. A "% vs prior year" column is
+    computed against the PREVIOUS ROW — not across the row (the cross-column
+    route) and not a whole-column aggregate — so a correct one graded 3/6.
+
+    Both forms appear in real answers, so both are pinned: the percentage and
+    the absolute change."""
+    pct = ("| Year | Awards | % vs prior |\n| --- | --- | --- |\n"
+           "| 2022 | 550 | +10.0% |\n| 2023 | 610 | +10.9% |\n| 2024 | 700 | +14.8% |\n")
+    got = grounding.check_table(pct, [_YOY])
+    assert (got.cells_matched, got.cells_checked) == (6, 6), got
+    absolute = ("| Year | Awards | Change |\n| --- | --- | --- |\n"
+                "| 2022 | 550 | +50 |\n| 2023 | 610 | +60 |\n| 2024 | 700 | +90 |\n")
+    got = grounding.check_table(absolute, [_YOY])
+    assert (got.cells_matched, got.cells_checked) == (6, 6), got
+
+
+def test_a_WRONG_year_over_year_change_is_still_caught():
+    """The route reproduces the change; it does not accept any plausible number
+    in its place. 610 from 550 is +10.9%, not +25.0%."""
+    md = "| Year | Awards | % vs prior |\n| --- | --- | --- |\n| 2023 | 610 | +25.0% |\n"
+    got = grounding.check_table(md, [_YOY])
+    assert (got.cells_matched, got.cells_checked) == (1, 2), \
+        f"a wrong year-over-year change must not ground, got {got}"
+
+
+def test_a_wrong_row_total_is_still_caught():
+    """The other half: the row-wise route must reproduce the total, not accept
+    any plausible number in its place."""
+    md = ("| Year | Bachelor | Master | Total |\n| --- | --- | --- | --- |\n"
+          "| 2023 | 72,757 | 16,813 | 91,000 |\n")
+    awards = QueryResult(columns=["year", "bachelor", "master"],
+                         rows=[(2023, 72757, 16813)], row_count=1)
+    got = grounding.check_table(md, [awards])
+    assert (got.cells_matched, got.cells_checked) == (2, 3), \
+        f"a wrong row total must not ground, got {got}"
 
 
 def test_a_label_only_table_is_no_table():
@@ -640,14 +762,19 @@ def test_a_verbatim_cell_still_beats_a_row_total():
         f"expected the verbatim cell to win, got {r.status}/{r.derivation}"
 
 
-def test_table_cells_do_not_use_row_totals():
-    """Deliberately excluded from check_table: it grades hundreds of cells, so a
-    new match surface would inflate Grounded-cells with coincidental hits. The
-    figure is one value per turn, which is where the false negative was seen."""
+def test_an_UNANCHORED_table_cell_still_does_not_use_row_totals():
+    """Row totals reach table cells ONLY through an anchored row (see
+    test_a_row_total_column_grounds_for_tables_now). The unrestricted fallback
+    still refuses them, which is what keeps the original reasoning intact: an
+    unanchored search across hundreds of cells is where a free-floating row-wise
+    route would manufacture coincidental hits.
+
+    This row cannot anchor — its only identity is the year 2022, one numeric
+    match, and a lone numeric match is deliberately not enough."""
     md = "| Year | Total |\n| --- | --- |\n| 2022 | 324,575 |"
     r = grounding.check_table(md, [_pivoted()])
     assert r.cells_matched == 0, \
-        f"a row total must not silently ground a table cell (matched {r.cells_matched})"
+        f"an unanchored row total must not ground a table cell (matched {r.cells_matched})"
 
 
 def run():
@@ -735,16 +862,33 @@ def run():
           test_the_year_column_is_not_added_into_the_total)
     check("a single measure column has no row total", test_a_single_measure_column_has_no_row_total)
     check("a verbatim cell still beats a row total", test_a_verbatim_cell_still_beats_a_row_total)
-    check("table cells do not use row totals", test_table_cells_do_not_use_row_totals)
-    print("  -- known blind spot: row-wise derived columns (see the block comment) --")
-    check("a CORRECT row-wise %-change column grades partial",
-          test_a_correct_row_wise_pct_change_column_grades_partial)
-    check("a CORRECT %-change column alone grades unmatched",
-          test_a_correct_pct_change_column_ALONE_grades_unmatched)
-    check("a CORRECT share-of-total column DOES reproduce (gap is cross-column only)",
-          test_a_correct_share_of_total_column_DOES_reproduce)
+    check("an UNANCHORED table cell still does not use row totals",
+          test_an_UNANCHORED_table_cell_still_does_not_use_row_totals)
+    print("  -- row-anchored table grounding (was the KNOWN BLIND SPOT) --")
+    check("a CORRECT row-wise %-change column grounds",
+          test_a_correct_row_wise_pct_change_column_grounds)
+    check("a CORRECT %-change column ALONE grounds (anchors on its label)",
+          test_a_correct_pct_change_column_ALONE_grounds)
+    check("a CORRECT share-of-total column still reproduces",
+          test_a_correct_share_of_total_column_still_reproduces)
     check("a fabricated table is still caught",
           test_a_fabricated_table_is_still_caught)
+    check("a value from ANOTHER row does not ground (precision regression)",
+          test_a_value_from_ANOTHER_row_does_not_ground)
+    check("adjacent years do not tie the anchor (live false negative)",
+          test_adjacent_years_do_not_tie_the_anchor)
+    check("a merged table anchors in every result it draws from",
+          test_a_merged_table_anchors_in_every_result_it_draws_from)
+    check("an unanchorable summary row falls back to the column search",
+          test_an_unanchorable_summary_row_falls_back_to_the_column_search)
+    check("a row-total column grounds for tables now",
+          test_a_row_total_column_grounds_for_tables_now)
+    check("a wrong row total is still caught",
+          test_a_wrong_row_total_is_still_caught)
+    check("a year-over-year change column grounds (second blind spot)",
+          test_a_year_over_year_change_column_grounds)
+    check("a WRONG year-over-year change is still caught",
+          test_a_WRONG_year_over_year_change_is_still_caught)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

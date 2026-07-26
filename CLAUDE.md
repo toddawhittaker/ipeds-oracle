@@ -380,15 +380,33 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   result-column, never a code/dimension column it merely collides with (a small
   count "3" must not ground against an `awlevel` 3 — the figure path keeps
   `allow_dimension=True`, since a headline can legitimately BE a year/code).
-  **KNOWN BLIND SPOT — a CORRECT table can grade `partial`.** Every op the
-  reconciler tries runs DOWN one result column, so a **share**-of-total column
-  grounds (column-scoped) but a **row-wise `% change`** column — `(2024-2021)/2021`
-  for *that row* — has no route at all, and a table whose only measure is such a
-  column grades **`unmatched`**. Measured, and pinned by the four
-  `KNOWN BLIND SPOT` cases in `test_grounding.py`; fixing it means a row-wise
-  cross-column route, after which **re-measure Grounded cells** (widening the match
-  surface across hundreds of cells invites coincidental hits — the same reason
-  `row_total` is figure-only). Records a per-turn
+  **A table row is ANCHORED to the result row it describes** (`_anchor_row`), and
+  graded against that row alone. This replaced a column-wide search that was wrong
+  in BOTH directions, and one mechanism fixed both:
+  **(a) false negatives** — every op ran DOWN a column, so a row-wise `% change`
+  column (`(2024-2021)/2021` for *that row*) had no route and a CORRECT table graded
+  `partial`, or `unmatched` when such a column was its only measure. That
+  measurement is why the reader-facing mark is positive-only.
+  **(b) false positives** — measured on the retained corpus, scaling every number in
+  eight real answers by 1.2–1.9× still left **24.0%** of cells "grounded"
+  (2142/8920), 34% on the widest turn; 878 of those were plain `exact` hits on a
+  `total_degrees` column holding **506 values across three results**, where "somewhere
+  in the column" is nearly free. After anchoring: **0.63%** (56/8920), with real cells
+  unchanged at 446/446.
+  Anchoring scores (label matches, numeric matches), needs a UNIQUE best, and
+  compares numbers by **IDENTITY, never `_close()`** — a relative tolerance made
+  adjacent years indistinguishable (2023 is within 0.1% of 2021/2022/2024/2025), tying
+  every row of a by-year result and DROPPING correct cells. An unanchorable row (a
+  `Total` line, a reshape) falls back to the old unrestricted search, so those keep
+  grounding as before. An anchored cell may use: its own row's cells; row-wise
+  `sum`/`pct_change`/`diff`/`mean`/`share` (**the fix for (a)**); `prev_diff`/
+  `prev_pct_change` against the PREVIOUS row (a "% vs prior year" column — a SECOND
+  blind spot of the same class, found by probing the fix, which graded 3/6); and
+  column `sum`/`mean`/`share`-at-this-row. **`max`/`min` are deliberately barred** —
+  the row legitimately holding the column max grounds via its own cell, so they add no
+  recall while re-admitting the likeliest real error (copying the top row's number
+  down a column). Costs ~2× runtime (45→106 ms on the widest real turn), all of it
+  off the LLM critical path. Records a per-turn
   status (`matched`/`partial`/`unmatched`/`no_table`/`unchecked` — the last means
   neither this turn nor the window retained anything) + numeric-cell counts on
   `usage_log.table_grounding`/`table_cells_checked`/`table_cells_matched`
@@ -409,10 +427,15 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   needs no single-table gate (unlike the truncation caption, whose flag maps to one
   query result). Wording rules in the pure `tabletruth.js` (`tableTrustNote`,
   vitest): state the **count, never "all"** (measure columns only were graded), and
-  promise **reproduction, not correctness**. **POSITIVE-ONLY, and the silence on
-  `partial`/`unmatched` is the blind spot above, not laziness** — a caution keyed on
-  either would fire on correct answers of a shape prompt step 6(b) asks for; fix the
-  reconciler first. A cache hit shows NEITHER mark (it passes no grounding, like
+  promise **reproduction, not correctness**. **STILL POSITIVE-ONLY — the silence on
+  `partial`/`unmatched` outlived its original reason and now waits on evidence.** The
+  two known false-negative shapes are fixed (above), so a ⚠ caution is no longer
+  disqualified in principle; what's missing is a corpus. Every historical
+  `partial`/`unmatched` turn was graded by the OLD kernel and its messages are
+  deleted, so nothing yet shows what a non-match means under anchoring. **Let
+  `partial`/`unmatched` turns accumulate, read them, and only then decide** — turning
+  the caution on now would repeat, in reverse, the assumption that Phase 0 caught. A
+  cache hit shows NEITHER mark (it passes no grounding, like
   `figure_grounding`). Pinned in `frontend/e2e/table-grounding.spec.js` (incl. a
   direct contrast assertion — the axe scan never renders this element, and light
   theme clears AA by only ~0.07) + `tabletruth.test.js` + `test_chat_router.py`.

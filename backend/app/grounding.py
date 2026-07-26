@@ -231,6 +231,36 @@ def _as_number(cell) -> float | None:
     return None
 
 
+def aligned_numeric_columns(result: QueryResult) -> dict[str, list[float | None]]:
+    """Per-column numeric cells kept ALIGNED TO ROW INDEX — None where the cell
+    is null or the row is short.
+
+    Row alignment is what lets a value be looked up by the row it belongs to
+    rather than anywhere in the column (see _anchor_row). numeric_columns() is
+    this with the Nones dropped; keeping one definition means the two can't drift
+    on which columns count as numeric.
+    """
+    if not result or not result.columns:
+        return {}
+    out: dict[str, list[float | None]] = {}
+    for idx, name in enumerate(result.columns):
+        values: list[float | None] = []
+        usable = True
+        for row in result.rows:
+            cell = row[idx] if idx < len(row) else None
+            if cell is None:
+                values.append(None)
+                continue
+            v = _as_number(cell)
+            if v is None:
+                usable = False
+                break
+            values.append(v)
+        if usable and any(v is not None for v in values):
+            out[name] = values
+    return out
+
+
 def numeric_columns(result: QueryResult) -> dict[str, list[float]]:
     """Per-column numeric cells, in ROW ORDER (pct_change depends on it).
 
@@ -238,26 +268,8 @@ def numeric_columns(result: QueryResult) -> dict[str, list[float]]:
     mixed label column ("2024", "provisional") never masquerades as a series.
     Nulls are skipped rather than disqualifying the column.
     """
-    if not result or not result.columns:
-        return {}
-    out: dict[str, list[float]] = {}
-    for idx, name in enumerate(result.columns):
-        values: list[float] = []
-        usable = True
-        for row in result.rows:
-            if idx >= len(row):
-                continue
-            cell = row[idx]
-            if cell is None:
-                continue
-            v = _as_number(cell)
-            if v is None:
-                usable = False
-                break
-            values.append(v)
-        if usable and values:
-            out[name] = values
-    return out
+    return {name: [v for v in values if v is not None]
+            for name, values in aligned_numeric_columns(result).items()}
 
 
 def compute(op: str, values: list[float], index: int | None = None) -> float | None:
@@ -368,31 +380,50 @@ def check_figure(figure: dict | None,
     return GroundingCheck(status, derivation, target)
 
 
-def _row_totals(result: QueryResult) -> list[float]:
-    """Row-wise totals across a result's MEASURE columns, in row order.
+def measure_columns(result: QueryResult) -> dict[str, list[float | None]]:
+    """The row-aligned MEASURE columns of a result — numeric columns minus the
+    dimension/rank ones. The unit both the row-wise routes work in."""
+    aligned = aligned_numeric_columns(result)
+    return {name: values for name, values in aligned.items()
+            if _is_measure_column(name, [v for v in values if v is not None])}
 
-    Computed from row INDICES rather than numeric_columns(), which skips null
-    cells per column and would therefore misalign columns against each other —
-    summing row 3 of one column with row 4 of the next.
 
-    Requires at least two measure columns: with one, the "row total" is just that
-    cell, which `value` already covers. Dimension and rank columns are excluded
-    (year + 85,506 is not a total), reusing the same _is_measure_column guard
-    that keeps `share(year)` from manufacturing matches.
+def row_series(result: QueryResult) -> list[list[float]]:
+    """Every result ROW's measure values, in COLUMN order — one list per row.
+
+    The row-wise counterpart to a column's value list, and the series every
+    row-wise op runs over. Built from row-ALIGNED columns because a per-column
+    null-skip would misalign the columns against each other — pairing row 3 of
+    one column with row 4 of the next.
+
+    A row's series is empty unless at least two measure columns supply a value:
+    with one, the "series" is a single cell, which the `value` route already
+    covers. Computed for the whole result at once because the callers grade many
+    cells against it and rebuilding the column map per cell is quadratic.
     """
     if not result or not result.columns:
         return []
-    cols = numeric_columns(result)
-    idxs = [i for i, name in enumerate(result.columns)
-            if name in cols and _is_measure_column(name, cols[name])]
-    if len(idxs) < 2:
+    cols = list(measure_columns(result).values())
+    if len(cols) < 2:
         return []
-    totals: list[float] = []
-    for row in result.rows:
-        vals = [_as_number(row[i]) if i < len(row) else None for i in idxs]
-        if all(v is not None for v in vals):
-            totals.append(sum(vals))
-    return totals
+    out: list[list[float]] = []
+    for i in range(len(result.rows)):
+        vals = [c[i] for c in cols if i < len(c)]
+        out.append([] if any(v is None for v in vals) or len(vals) < 2
+                   else [v for v in vals if v is not None])
+    return out
+
+
+def _row_totals(result: QueryResult) -> list[tuple[int, float]]:
+    """(row index, row total) for every row whose measure cells are all present.
+
+    Now just `sum` over each row's series — row totals were the first row-wise
+    route and had their own bespoke implementation; folding them into row_series
+    keeps ONE definition of "a row's measure values" for every row-wise op. The
+    row INDEX rides along so the derivation can name the actual result row rather
+    than a position in this filtered list.
+    """
+    return [(i, math.fsum(s)) for i, s in enumerate(row_series(result)) if s]
 
 
 def _reconcile_value(target: float, raw_value, results: list[QueryResult],
@@ -436,7 +467,7 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
     if allow_dimension:
         tol = _displayed_precision_tol(raw_value, target)
         for r_idx, result in enumerate(results):
-            for row_i, total in enumerate(_row_totals(result)):
+            for row_i, total in _row_totals(result):
                 if _close(target, total) or (tol and abs(target - total) <= tol):
                     return DERIVED, Derivation(op="row_total", result_index=r_idx,
                                                column=f"row{row_i + 1}")
@@ -543,6 +574,184 @@ def _is_measure_column(header: str, values: list[float]) -> bool:
     return True
 
 
+# --- Row anchoring -------------------------------------------------------------
+# A table row DESCRIBES a result row. Matching it to that row is what turns
+# grounding from "does this number appear anywhere in the column?" into "is this
+# the number the query returned FOR THIS ENTITY?" — and the difference is not
+# academic. Measured on the retained corpus before this change: fabricating every
+# number in a real answer (scaling each by 1.2-1.9x) still left 41% of the cells
+# "grounded", and on the widest turn 60% — 878 of those false grounds were plain
+# EXACT hits on `total_degrees`, a column carrying 506 values across three
+# results. At that density, "this value is somewhere in the column" is nearly
+# free, and the ✓ mark it feeds was correspondingly weak.
+#
+# Anchoring also happens to be what makes a row-wise derived column reachable:
+# a "% change" cell is (last - first) / first FOR ITS OWN ROW, so it can only be
+# reproduced once you know which row that is. One mechanism, both problems.
+#
+# When a row CANNOT be anchored the old unrestricted search still runs, so a
+# reshaped/pivoted/summary table (the conversation-scoped borrow case, a "Total"
+# row) keeps grounding exactly as before.
+
+# Markdown emphasis around a label ("**Ohio State**") is decoration, not identity.
+_LABEL_DECOR_RE = re.compile(r"[*_`~]+")
+
+# The column-scoped ops an ANCHORED row may still use: only the ones that can
+# legitimately repeat on every entity row (a national total or average carried
+# alongside). `max`/`min` and `pct_change`/`diff` are excluded — see _match_at_row.
+_ANCHORED_COLUMN_OPS = ("sum", "mean")
+
+
+def _norm_label(value) -> str:
+    """A cell → a comparable label. Case/whitespace/emphasis-insensitive."""
+    s = _LABEL_DECOR_RE.sub("", str(value if value is not None else ""))
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """Per-result lookups built ONCE, because check_table grades every cell of
+    every row against every result and rebuilding these per cell is quadratic."""
+    measures: dict[str, list[float | None]]    # row-aligned measure columns
+    dense: dict[str, list[float]]              # the same, nulls dropped (for aggregates)
+    dense_pos: dict[str, dict[int, int]]       # row index -> position in `dense`
+    aggs: dict[str, tuple[float | None, ...]]  # per column: the row-INDEPENDENT aggregates
+    series: list[list[float]]                  # per row: measure values, column order
+    row_labels: list[set[str]]                 # per row: normalized text cells
+    row_numbers: list[set[float]]              # per row: numeric cells, for O(1) lookup
+
+
+def _prepare(result: QueryResult) -> _Prepared:
+    measures = measure_columns(result)
+    dense: dict[str, list[float]] = {}
+    dense_pos: dict[str, dict[int, int]] = {}
+    for name, values in measures.items():
+        d, pos = [], {}
+        for i, v in enumerate(values):
+            if v is not None:
+                pos[i] = len(d)
+                d.append(v)
+        dense[name] = d
+        dense_pos[name] = pos
+    # sum/mean don't depend on the row, so computing them per graded cell was
+    # re-running fsum over a 200-value column hundreds of times.
+    aggs = {name: tuple(compute(op, d) for op in _ANCHORED_COLUMN_OPS)
+            for name, d in dense.items()}
+    labels, numbers = [], []
+    for row in (result.rows if result else []):
+        labels.append({lbl for cell in row
+                       if _as_number(cell) is None and (lbl := _norm_label(cell))})
+        numbers.append({v for cell in row if (v := _as_number(cell)) is not None})
+    return _Prepared(measures, dense, dense_pos, aggs, row_series(result),
+                     labels, numbers)
+
+
+def _anchor_row(table_row: list[str], prep: _Prepared) -> int | None:
+    """Which result row does this table row describe? None when it's ambiguous.
+
+    Scored on (label matches, numeric matches) and requires a UNIQUE best. A
+    label match is worth more than a numeric one because an entity name is
+    identity while a number can collide, so a lone numeric match (score (0,1))
+    is refused — anchoring to the wrong row would reject correct cells, turning
+    a false positive into the far more damaging false negative. Ambiguity falls
+    through to the unrestricted search rather than guessing.
+    """
+    labels = {lbl for cell in table_row
+              if parse_number(cell) is None and (lbl := _norm_label(cell))}
+    numbers = [v for cell in table_row if (v := parse_number(cell)) is not None]
+    best_score, best, ties = (0, 0), None, 0
+    for i, row_labels in enumerate(prep.row_labels):
+        t = sum(1 for lbl in labels if lbl in row_labels)
+        # IDENTITY, not the display tolerance _close() applies. Anchoring on a
+        # relative tolerance made adjacent years indistinguishable — 2023 is
+        # within 0.1% of 2021/2022/2024/2025 — so every row of a by-year result
+        # tied and the anchor was refused, dropping cells that had grounded
+        # before. A transcribed value either IS the returned one or the row
+        # falls back to the unrestricted search.
+        # Set membership, which is that identity test in O(1): both sides reach
+        # float() through the same decimal text, so a value that came from this
+        # row compares equal. A hypothetical representation drift costs only the
+        # anchor (the row falls back), never a wrong answer.
+        n = sum(1 for x in numbers if x in prep.row_numbers[i])
+        score = (t, n)
+        if score > best_score:
+            best_score, best, ties = score, i, 1
+        elif score == best_score and score > (0, 0):
+            ties += 1
+    if best is None or ties > 1:
+        return None
+    t, n = best_score
+    return best if (t >= 1 or n >= 2) else None
+
+
+def _match_at_row(target: float, raw_value, prep: _Prepared, index: int) -> str | None:
+    """Reproduce `target` from ONE anchored result row. Returns the op that did
+    it (telemetry/debugging only — check_table needs just the boolean) or None.
+
+    What this deliberately does NOT offer, versus the unrestricted search: a
+    `value` or `share` at any OTHER row index. Those two are the entire
+    false-ground mechanism measured above. Whole-column aggregates stay — there
+    are only ~6 per column, and dropping them would cost recall on a row that
+    legitimately carries one.
+    """
+    tol = _displayed_precision_tol(raw_value, target)
+
+    def reproduces(got: float | None) -> bool:
+        return got is not None and (_close(target, got) or abs(target - got) <= tol)
+
+    # 1. This row's own cells — the overwhelmingly common case: the model
+    #    transcribed the number the query returned for this entity.
+    for values in prep.measures.values():
+        v = values[index] if index < len(values) else None
+        if v is not None and (_close(target, v) or (tol and abs(target - v) <= tol)):
+            return "value"
+    # 2. Derived ACROSS this row — the blind spot. A "% change"/"Total"/"Change"
+    #    column is computed from the row's own measures in column order.
+    series = prep.series[index] if index < len(prep.series) else []
+    if series:
+        for op in ("sum", "pct_change", "diff", "mean"):
+            if reproduces(compute(op, series)):
+                return f"row_{op}"
+        for i in range(len(series)):
+            if reproduces(compute("share", series, index=i)):
+                return "row_share"
+    # 3. Derived DOWN a column: only the ops that can legitimately REPEAT on an
+    #    entity row — a national total or average carried beside each row — plus
+    #    `share` pinned to THIS row (a share-of-column-total column is
+    #    row-indexed, and pinning it is what keeps it from matching any row's
+    #    share).
+    #
+    #    `max`/`min` are deliberately absent. The row that legitimately holds the
+    #    column max grounds through route 1 (its own cell), so they add no recall
+    #    — while for every OTHER row, matching the column max is precisely the
+    #    mistranscription this check exists to catch (copying the top row's
+    #    number down a column). Same for `pct_change`/`diff`, which describe a
+    #    column's trend and are meaningless on one entity's row.
+    for name, values in prep.dense.items():
+        aggs = prep.aggs[name]
+        for op, got in zip(_ANCHORED_COLUMN_OPS, aggs, strict=True):
+            if reproduces(got):
+                return op
+        # share, from the already-summed total rather than compute(), which would
+        # re-fsum the whole column once per graded cell.
+        pos = prep.dense_pos[name].get(index)
+        total = aggs[0]
+        if pos is not None and total and reproduces(values[pos] / total * 100.0):
+            return "share"
+        # 4. Change against the PREVIOUS ROW — a "% vs prior year" / "Change"
+        #    column, which is neither across the row (route 2) nor a whole-column
+        #    aggregate. Found by probing the anchored kernel for what it still
+        #    could not reproduce: a correct year-over-year column graded 3/6.
+        #    Both ends are pinned to the anchored row, so it costs two candidates.
+        if pos is not None and pos > 0:
+            prev = values[pos - 1]
+            if reproduces(values[pos] - prev):
+                return "prev_diff"
+            if prev and reproduces((values[pos] - prev) / abs(prev) * 100.0):
+                return "prev_pct_change"
+    return None
+
+
 def check_table(answer_markdown: str,
                 results: list[QueryResult] | None) -> TableGroundingCheck:
     """Can the MEASURE cells of the answer's Markdown table(s) be reproduced from
@@ -555,26 +764,50 @@ def check_table(answer_markdown: str,
     _reconcile_value with `allow_dimension=False`: a measure cell must be verified
     by a MEASURE result-column, never by a code/dimension column it merely
     collides with (a small count "3" is not grounded by an `awlevel` 3).
+    Each row is first ANCHORED to the result row it describes (see _anchor_row);
+    an anchored cell is graded against that row alone, which is what makes a
+    row-wise derived column reachable and what stops a value from grounding
+    against an unrelated row of a long column. A row that can't be anchored falls
+    back to the unrestricted search, so reshaped and summary tables are unaffected.
+
     NO_TABLE/UNCHECKED carry no counts so they don't move the rate."""
-    cells: list[tuple[float, str]] = []
+    # (value, raw, table_row) — the row is kept so the cell can be anchored.
+    cells: list[tuple[float, str, list[str]]] = []
     for header, body in parse_markdown_tables(answer_markdown or ""):
         width = max((len(r) for r in body), default=0)
+        gradable: list[int] = []
         for ci in range(width):
             col_head = header[ci] if ci < len(header) else ""
-            col = [(raw, parse_number(raw))
-                   for r in body if ci < len(r) for raw in (r[ci],)]
-            nums = [(raw, v) for raw, v in col if v is not None]
+            nums = [v for r in body if ci < len(r)
+                    for v in (parse_number(r[ci]),) if v is not None]
             if not nums:
                 continue  # a label column (states, institutions) — nothing to grade
-            if not _is_measure_column(col_head, [v for _, v in nums]):
+            if not _is_measure_column(col_head, nums):
                 continue  # a rank ordinal or dimension — not a transcribed measure
-            cells.extend((v, raw) for raw, v in nums)
+            gradable.append(ci)
+        for r in body:
+            for ci in gradable:
+                if ci < len(r) and (v := parse_number(r[ci])) is not None:
+                    cells.append((v, r[ci], r))
     if not cells:
         return TableGroundingCheck(NO_TABLE)
     if not results:
         return TableGroundingCheck(UNCHECKED)
-    matched = sum(1 for v, raw in cells
-                  if _reconcile_value(v, raw, results, allow_dimension=False) is not None)
+
+    preps = [_prepare(result) for result in results]
+    anchors: dict[int, list[int | None]] = {}   # table row identity -> per-result anchor
+    matched = 0
+    for v, raw, row in cells:
+        key = id(row)
+        if key not in anchors:
+            anchors[key] = [_anchor_row(row, prep) for prep in preps]
+        row_anchors = anchors[key]
+        if any(a is not None for a in row_anchors):
+            ok = any(_match_at_row(v, raw, prep, a) is not None
+                     for prep, a in zip(preps, row_anchors, strict=True) if a is not None)
+        else:
+            ok = _reconcile_value(v, raw, results, allow_dimension=False) is not None
+        matched += 1 if ok else 0
     checked = len(cells)
     if matched == checked:
         status = TABLE_MATCHED

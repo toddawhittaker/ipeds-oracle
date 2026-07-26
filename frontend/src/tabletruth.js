@@ -80,16 +80,23 @@ export function csvLabel({ serverSide, rowsShown }) {
 // the reader sees, or null for "say nothing".
 //
 // POSITIVE-ONLY, and this is the part to read before "improving" it. `partial`
-// and `unmatched` return null — NOT because a caution would be unhelpful, but
-// because it would fire on CORRECT answers. Every op the reconciler can try runs
-// DOWN a single result column, while a "% change" column in a table is computed
-// ACROSS a row ((2024 - 2021) / 2021 for that row). There is no row-wise
-// cross-column route, so a table whose every number is right grades `partial` —
-// or `unmatched` when the derived column is the only measure, which is why the
-// caution can't even be narrowed to `unmatched`. Measured, with the four cases
-// pinned in backend/tests/test_grounding.py under "KNOWN BLIND SPOT". Note
-// `share` DOES reproduce (a column-scoped op), so the gap is specifically
-// cross-column, same-row arithmetic. Fix that and this can gain a caution.
+// and `unmatched` return null.
+//
+// The ORIGINAL reason was that a caution would fire on CORRECT answers: every
+// reconciler op ran down a single result column, so a row-wise "% change" column
+// ((2024 - 2021) / 2021 for that row) had no route and a correct table graded
+// `partial` — or `unmatched` when that column was its only measure. Those shapes
+// are FIXED: the reconciler now anchors each table row to the result row it
+// describes and derives across it (backend/app/grounding.py, _anchor_row /
+// _match_at_row), and the same pass fixed a second one, a "% vs prior year"
+// column.
+//
+// So a caution is no longer disqualified in principle — it is waiting on
+// evidence. Every historical partial/unmatched turn was graded by the OLD kernel
+// and those messages are gone, so nobody has yet SEEN what a non-match means
+// under anchoring. Let some accumulate, read them, then decide. Switching this
+// on beforehand would repeat, in the opposite direction, the assumption that
+// measuring caught the first time.
 //
 // ANSWER-scoped, not table-scoped: check_table flattens the cells of EVERY
 // table in the answer into one list and returns ONE status, so this renders once
