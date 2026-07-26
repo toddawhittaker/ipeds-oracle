@@ -1396,7 +1396,27 @@ opt-in and a tested module can't stay silently ungated. Browser-tested component
 (`Chat.jsx`, `src/admin/*.jsx`, …) have no `*.test.js` and so stay out of the floor —
 Playwright covers them. The derivation walks `src/` **recursively**; it must, or a
 module in a subdirectory escapes the floor silently (see the `src/admin/` note above).
-**The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`.**
+**The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
+and now SCANS THE APP** — a rendered answer with its disclosures open, a
+MID-STREAM answer, and all seven admin pages in **both themes** (17 scans).
+It previously saw only Login and the EMPTY Chat state, i.e. the two
+least-populated screens: every control the product is made of, and every
+admin page, sat outside the gate. That is a COVERAGE hole, not a threshold
+one — and it is how two whole classes of defect shipped past a green suite.
+Widening it immediately found two `serious` violations on `main`: the hidden
+PNG-export chart (`aria-hidden-focus` — recharts renders a focusable svg, so a
+keyboard user could Tab into an invisible chart that announces nothing; fixed
+with **`inert` AS WELL AS `aria-hidden`**, the pair being the point — one
+removes it from the a11y tree, the other from the focus order), and an
+`aria-label` on a **roleless `<span>`** in Admin → Skills
+(`aria-prohibited-attr` — silently IGNORED, so the ▲/▼ vote counts reached a
+screen reader as bare glyphs; replaced with `.sr-only` text rather than
+`role="img"`, which prunes descendants). Two fixture rules the scans depend
+on: mock admin lists with **CONTENT, not empty arrays** (an empty table
+renders none of the elements whose contrast could be wrong — the WARNING log
+level at 2.52:1 needed a WARNING record to exist), and the answer fixture must
+carry a **CHART** (the shared table-only one left the chart defect outside the
+gate even after the answer scan was added).
 `critical`-only was not a strict threshold but a shaped blind spot: axe rates
 colour-contrast, `aria-prohibited-attr`, `scrollable-region-focusable` and
 `heading-order` as **`serious`**, i.e. the whole class this suite exists to catch

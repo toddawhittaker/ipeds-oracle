@@ -13,7 +13,57 @@ import {
   mockAccessRequests,
   mockImportJobs,
   mockAttention,
+  mockDeniedRequests,
+  mockSkills,
+  mockLogs,
+  mockMarkLogsSeen,
+  mockImportCatalog,
+  mockVersion,
 } from "./mocks.js";
+
+// Everything the five admin sections fetch on mount, with CONTENT rather than
+// empty lists: an empty table renders none of the elements whose contrast or
+// semantics could be wrong. The Logs fixture carries all three levels because
+// the WARNING one sat at 2.52:1 and no scan had ever rendered it.
+async function adminA11yMocks(page) {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockVersion(page);
+  await mockAttention(page, { users: 2, skills: 1, logs: 4 });
+  await mockConversations(page, []);
+  await mockAllowlist(page, [
+    { email: "prof@example.edu", note: "Faculty", added_by: "admin@example.edu", added_at: 1 },
+  ]);
+  await mockAccessRequests(page, [
+    { id: 1, email: "new@example.edu", canon_email: "new@example.edu", created_at: 1, status: "pending" },
+  ]);
+  await mockDeniedRequests(page, [
+    { id: 2, email: "no@example.edu", canon_email: "no@example.edu", created_at: 1, denied_at: 2 },
+  ]);
+  await mockSkills(page, [
+    { id: 1, headline: "Match an exact 6-digit CIP", description: "…", sql_example: "SELECT 1",
+      verified: 0, created_by: "critic", created_at: 1,
+      // Real counts: without them the row renders "undefined upvotes", which is
+      // a fixture defect that would read as a product one.
+      upvotes: 3, downvotes: 1, hits: 12 },
+  ]);
+  await mockLogs(page, [
+    { ts: 1700000000, level: "INFO", name: "ipeds.app", msg: "started" },
+    { ts: 1700000100, level: "WARNING", name: "ipeds.app", msg: "something looks off" },
+    { ts: 1700000200, level: "ERROR", name: "ipeds.app", msg: "it failed" },
+  ]);
+  await mockMarkLogsSeen(page);
+  await mockImportJobs(page, [
+    { id: 3, filename: "integrate:2024", status: "swapped", updated_at: 1 },
+  ]);
+  await mockImportCatalog(page, {
+    probed_at: 0, partial: false,
+    years: [{ start_year: 2024, year: 2025, year_label: "2024-25", status: "final",
+              integrated: false, available: true, release: "Final", selectable: true,
+              zip_bytes: 1000 }],
+    disk: { free_bytes: 9e11, total_bytes: 1e12, used_bytes: 1e11 },
+    calibration: null,
+  });
+}
 
 // Coverage for the a11y fixes the implementer landed across App.jsx, Chat.jsx,
 // Login.jsx, Admin.jsx and Markdown.jsx. Every assertion here uses role/label/
@@ -44,6 +94,31 @@ async function askAndUnlockAnswer(page, { convId = 42, msgId = 7 } = {}) {
   );
   convos.setList([{ id: convId, title: "Associate's degrees in Registered Nursing by state" }]);
   await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("table")).toBeVisible();
+}
+
+
+// A RICH answer: figure + table + chart + a ```sql fence. The scan below is
+// meant to cover the answer surface, and the shared ANSWER_MD is table-only —
+// so without this the chart (and the aria-hidden-focus defect on its hidden
+// PNG-export copy) sat outside the gate even after the scan was added.
+async function openRichAnswer(page, { convId = 5 } = {}) {
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
+  await mockConversations(page, [{ id: convId, title: "Nursing", updated_at: 0 }]);
+  await mockConversation(page, convId, [
+    { id: 1, role: "user", content: "nursing degrees by state" },
+    { id: 2, role: "assistant", sql_log: [SQL],
+      thinking: [{ kind: "status", text: "Thinking…" }, { kind: "sql", text: SQL }],
+      suggestions: ["Which state grew fastest?"],
+      figure: { value: 12345, unit: "degrees", label: "national total" },
+      figure_grounding: "exact", table_grounding: "matched",
+      table_cells_checked: 2, table_cells_matched: 2,
+      content: ANSWER_MD + "\n```chart\n"
+        + '{"type":"bar","x":"State","y":["Total"],'
+        + '"data":[{"State":"CA","Total":100},{"State":"NY","Total":50}]}'
+        + "\n```\n" },
+  ]);
+  await page.goto(`/chat/${convId}`);
   await expect(page.getByRole("table")).toBeVisible();
 }
 
@@ -299,6 +374,107 @@ test.describe("axe smoke scan", () => {
 
       const found = gatedViolations(await new AxeBuilder({ page }).analyze());
       expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
+  // THE SCANS ABOVE ONLY EVER SAW THE EMPTY STATE.
+  //
+  // Login and an empty Chat are the app's two least-populated screens. Every
+  // control the product is actually made of — the result table, the chart and
+  // its toolbar, SqlBlock, Figure, TableTrust, CopyMenu, the chips — and every
+  // admin page were outside the gate entirely. That is a COVERAGE hole, not a
+  // threshold one: axe rates scrollable-region-focusable, colour-contrast and
+  // aria-hidden-focus as `serious`, which this gate already fails on. It simply
+  // never rendered a state where they could fire, which is how two whole
+  // classes of defect shipped past a green suite.
+  //
+  // Adding the answer scan immediately found `aria-hidden-focus` on the hidden
+  // PNG-export chart (recharts renders a focusable svg surface), i.e. a
+  // keyboard user could Tab into an invisible chart that announces nothing.
+  test("a rendered answer, with its disclosures open, has no critical or serious violations",
+    async ({ page }) => {
+      await openRichAnswer(page);
+      // The trace and SQL panels only EXIST once opened, so scanning the
+      // settled answer alone would still miss SqlBlock entirely.
+      await page.getByRole("button", { name: /Thinking/i }).click();
+      await page.getByRole("button", { name: /^SQL/i }).click();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
+  test("a MID-STREAM answer has no critical or serious violations", async ({ page }) => {
+    // The live pending bubble is the ONLY state where .thought-list is
+    // scrollable — styles.css unsets its max-height inside .trace-panel — so a
+    // scan of a settled answer structurally cannot see it, and
+    // scrollable-region-focusable would never fire however many settled answers
+    // were scanned.
+    await mockMe(page, { email: "user@example.edu", is_admin: false });
+    await mockConversations(page, []);
+    await mockStreamChat(page, { conversationId: 9, delayMs: 4000, answer: "Later." });
+    await page.goto("/");
+    await page.getByPlaceholder("Ask about IPEDS data…").fill("a slow question");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
+
+    const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+    expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+  });
+
+  for (const [path, ready] of [
+    ["/admin/users/current", /Users/i],
+    ["/admin/users/pending", /Users/i],
+    ["/admin/users/blocked", /Users/i],
+    ["/admin/imports", /Load IPEDS years/i],
+    ["/admin/usage", /Usage/i],
+    ["/admin/skills", /Learned lessons/i],
+    ["/admin/logs", /Server logs/i],
+  ]) {
+    for (const theme of ["light", "dark"]) {
+      test(`${path} has no critical or serious violations (${theme})`, async ({ page }) => {
+        // No admin page was scanned at all before this. Both themes, because the
+        // app's contrast defects have twice been dark-only or light-only — a
+        // single-theme sweep is half a sweep.
+        await adminA11yMocks(page);
+        if (theme === "dark") {
+          await page.addInitScript(() => globalThis.localStorage.setItem("theme", "dark"));
+        }
+        await page.goto(path);
+        // attached, not visible: Usage's <h2> is deliberately sr-only, so a
+        // visibility wait would hang on the one page whose heading is invisible
+        // BY DESIGN.
+        await expect(page.getByRole("heading", { name: ready }).first()).toBeAttached();
+
+        const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+        expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+      });
+    }
+  }
+
+  test("the hidden PNG-export chart is out of the FOCUS order, not just the a11y tree",
+    async ({ page }) => {
+      // Asserted directly as well as via the scan above, because this is a
+      // two-attribute contract and axe only proves the pair is currently
+      // consistent. Drop `inert` and the scan catches it; drop `aria-hidden`
+      // and it also catches it — but neither tells you WHY both are needed, and
+      // a future "simplify" that keeps one is exactly the plausible mistake.
+      // Tabbing must never land inside an offscreen chart.
+      await openRichAnswer(page);
+      const src = page.locator(".chart-export-src");
+      await expect(src).toHaveAttribute("aria-hidden", "true");
+      await expect(src).toHaveAttribute("inert", /.*/);
+
+      const focusableInside = await page.evaluate(() => {
+        const el = globalThis.document.querySelector(".chart-export-src");
+        if (!el) return -1;
+        return el.querySelectorAll(
+          'a[href], button, input, select, textarea, svg[tabindex], [tabindex]:not([tabindex="-1"])'
+        ).length;
+      });
+      // recharts DOES render a focusable surface in there; `inert` is what makes
+      // it unreachable. This asserts the element exists to be guarded, so the
+      // test can't quietly pass on a chart that never rendered.
+      expect(focusableInside).toBeGreaterThanOrEqual(0);
+      expect(await src.count()).toBe(1);
     });
 
   // axe CANNOT catch the badge, which is why this is a separate, explicit

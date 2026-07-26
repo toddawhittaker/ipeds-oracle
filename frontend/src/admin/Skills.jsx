@@ -163,8 +163,18 @@ export default function Skills({ onAttentionChanged }) {
                 ? <span className="tag ok">verified</span>
                 : <span className="tag warn">unverified</span>}
               <span className="tag">from {s.created_by || "?"}</span>
-              <span className="tag" aria-label={`${s.upvotes} upvotes, ${s.downvotes} downvotes`}>
+              {/* sr-only text rather than aria-label: an aria-label on a
+                  roleless <span> is PROHIBITED and simply ignored, so the counts
+                  reached a screen reader as bare ▲/▼ glyphs or not at all (axe
+                  aria-prohibited-attr, serious — found the moment the scans
+                  started covering admin pages). role="img" would also be valid
+                  but prunes descendants, and this repo has been bitten by that
+                  once already on the chart figure. */}
+              <span className="tag">
                 <span aria-hidden="true">▲{s.upvotes} ▼{s.downvotes}</span>
+                <span className="sr-only">
+                  {s.upvotes} upvotes, {s.downvotes} downvotes
+                </span>
               </span>
               <span className="tag">hits {s.hits}</span>
             </span>
