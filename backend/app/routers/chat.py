@@ -819,7 +819,21 @@ def _select_table_sql(sql_list: list[str], cols: int | None, cap: int):
     for i, sql in enumerate(sql_list):
         try:
             probe = run_sql(sql, limit=1)
-        except (SQLValidationError, SQLTimeoutError):
+        except Exception:  # noqa: BLE001 — see below; a bad candidate is normal
+            # ANY failure skips the candidate, not just validation/timeout.
+            #
+            # A FAILED query in sql_log is the normal case, not the exceptional
+            # one: the agent runs a query, SQLite rejects it, the agent fixes it
+            # and re-runs — and sql_log records EVERY attempt, errors included.
+            # A real answer therefore routinely carries a query that cannot run.
+            #
+            # This used to catch only SQLValidationError/SQLTimeoutError, so a
+            # plain sqlite3.OperationalError ("ambiguous column name: year",
+            # from a JOIN the model corrected on its next attempt) escaped both
+            # this loop AND the caller's try/except, and the export 500'd with
+            # no detail — reaching the user as the generic "Couldn't build that
+            # CSV. Try again in a moment." Waiting could never help: the failing
+            # query is persisted, so it failed identically every time.
             continue
         key = (cols is not None and len(probe.columns) == cols, len(probe.columns) > 1)
         if best_key is None or key >= best_key:  # >= → a later tie wins (last match)

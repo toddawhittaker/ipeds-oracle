@@ -85,6 +85,48 @@ test.describe("sorting a truncated table warns that it isn't a ranking", () => {
 });
 
 test.describe("the CSV button says what it will actually do", () => {
+  test("an answer that ran NO query offers the rows on screen, not a server "
+    + "export it cannot produce", async ({ page }) => {
+    // FOUND LIVE (conversation 23, turn 3): a follow-up that reshaped the
+    // previous table from context ran no SQL at all — sql_log was []. The
+    // frontend chose the SERVER export purely from `messageId != null &&
+    // tableCount === 1`, never asking whether a query existed, so the button
+    // was offered and its only possible outcome was the server's 400,
+    // "No query is associated with this answer."
+    //
+    // The table is still on screen, so the honest fallback is the client-side
+    // export of those rows — and the LABEL is the tell: "these N rows" rather
+    // than "full result".
+    await mockMe(page, USER);
+    await mockVersion(page);
+    await mockAttention(page);
+    await mockConversations(page, [{ id: 5, title: "Awards", updated_at: 0 }]);
+    await mockConversation(page, 5, [
+      { id: 1, role: "user", content: "regroup that by year" },
+      { id: 2, role: "assistant", content: `Reshaped.\n\n${TABLE}`, sql_log: [] },
+    ]);
+
+    // Any hit on the server export is a failure of this contract.
+    let serverCalls = 0;
+    await page.route("**/download.csv**", async (route) => {
+      serverCalls += 1;
+      await route.fulfill({
+        status: 400, contentType: "application/json",
+        body: JSON.stringify({ detail: "No query is associated with this answer." }),
+      });
+    });
+
+    await page.goto("/chat/5");
+    await expect(page.getByRole("button", { name: /Download these 3 rows/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Download full result/i })).toHaveCount(0);
+
+    await page.getByRole("button", { name: /Download these 3 rows/i }).click();
+    // Client-side export: no request, and therefore no error toast.
+    expect(serverCalls).toBe(0);
+    await expect(page.getByText(/No query is associated/)).toHaveCount(0);
+  });
+
+
   test("a single-table answer offers the FULL result, and a failure toasts "
     + "instead of navigating away", async ({ page }) => {
     await open(page, { truncated: true });
