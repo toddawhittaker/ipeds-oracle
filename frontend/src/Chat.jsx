@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, streamChat } from "./api.js";
 import { IconClose, IconEdit, IconRerun, IconSend, IconTrash,
@@ -16,6 +16,7 @@ import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
 import { turnErrorMessage } from "./authcopy.js";
 import { editConfirmBody, editConfirmLabel, laterTurnsLost } from "./turns.js";
+import { inflight } from "./inflight.js";
 import { tableTrustNote } from "./tabletruth.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 import { collectionYearRange } from "./years.js";
@@ -194,6 +195,16 @@ function TableTrust({ status, cellsChecked, cellsMatched, hasSql }) {
 // else (e.g. "abc") is a malformed URL, not a real conversation, and must
 // never reach the network -- same notice, zero fetch.
 const NUMERIC_ID = /^\d+$/;
+
+// Server rows -> the shape the view uses. The JSON columns arrive as strings.
+const hydrate = (msgs) => msgs.map((m) => ({
+  ...m,
+  sql_log: m.sql_log ? JSON.parse(m.sql_log) : [],
+  thinking: m.thinking ? JSON.parse(m.thinking) : [],
+  figure: m.figure ? JSON.parse(m.figure) : null,
+  suggestions: m.suggestions ? JSON.parse(m.suggestions) : null,
+  clarify: m.clarify ? JSON.parse(m.clarify) : null,
+}));
 const NOT_AVAILABLE = "That conversation isn't available.";
 
 export default function Chat({ me }) {
@@ -270,7 +281,17 @@ export default function Chat({ me }) {
   // be true for both, and the stale turn would write its ids onto the new
   // turn's messages (the finalize writes are positional -- c.length-1 /
   // c.length-2 -- so "the last two messages" is whoever is there NOW).
-  const turnKeySeq = useRef(0);
+  //
+  // The counter itself now lives in inflight.js, minted by startTurn(). It was a
+  // useRef seeded at 0, which is fine while keys are component-local -- but Chat
+  // UNMOUNTS on /admin, so a remount minted key 1 again while an abandoned turn
+  // from the previous mount still held key 1. Harmless then; a real collision
+  // now that the same key indexes a module-level map.
+  //
+  // Everything the registry holds is state that must OUTLIVE this component,
+  // which is exactly why it can't be React state: the navigation this feature
+  // exists for is the one that unmounts us.
+  const inflightSnap = useSyncExternalStore(inflight.subscribe, inflight.getSnapshot);
   // Marks the CURRENT turn's own self-navigation (the "conversation" SSE
   // handler's / -> /chat/:id URL flip for a brand-new conversation) so the
   // [routeId] turnToken effect below doesn't mistake it for the user
@@ -327,6 +348,21 @@ export default function Chat({ me }) {
   const showNotice = notice || (badFormat ? NOT_AVAILABLE : "");
   const convId = routeId !== null && !badFormat && !notice ? Number(routeId) : null;
 
+  // Turns still running in THIS conversation that this view isn't already
+  // drawing itself. Rendered as a question + spinner after the loaded messages,
+  // so leaving a running question and coming back shows something rather than
+  // the thread as it was before you asked.
+  //
+  // The filter is the anti-double-render: a turn stamps `_turn` on the pair it
+  // appends, so while its own view is watching it, the placeholder is
+  // suppressed. It self-heals in every direction without any extra bookkeeping —
+  // navigating clears `messages`, a refetch replaces them with server rows that
+  // carry no `_turn`, and edit/rerun slices them off. Same self-scoping argument
+  // as the abandoned-turn id lookup in submit().
+  const localTurnKeys = new Set(messages.map((m) => m._turn).filter(Boolean));
+  const pendingTurns = inflight.pendingFor(convId, inflightSnap)
+    .filter((t) => !localTurnKeys.has(t.key));
+
   // A11y (WCAG 4.1.3): the always-mounted live region that actually announces
   // showNotice. A role="status" node that's already populated at first paint
   // (the sync /chat/abc path) or that mounts brand-new inside an async
@@ -374,7 +410,9 @@ export default function Chat({ me }) {
     if (!nearBottom.current) return;
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     bottom.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
-  }, [messages, status]);
+    // pendingTurns.length so the placeholder appearing/disappearing respects
+    // the near-bottom pin like any other content change.
+  }, [messages, status, pendingTurns.length]);
 
   // Track whether the viewer is near the bottom of the thread (within ~1.5
   // messages). Drives both the auto-scroll gate above and the pill's
@@ -402,28 +440,40 @@ export default function Chat({ me }) {
   // assigned (loadedFor is set to it directly in the `conversation` event
   // handler below, before the URL flip, precisely so this effect no-ops for
   // an id it already has fully in memory).
+  // ...and re-run when an abandoned turn for THIS conversation settles. The
+  // counter only ever increases (see inflight.js), because a value that could
+  // go back down would make this effect refetch in a loop.
+  const reloadSeq = convId === null ? 0 : (inflightSnap.reloads[convId] ?? 0);
+  const loadedSeq = useRef(0);
   useEffect(() => {
     if (routeId === null) { loadedFor.current = null; return; }
-    if (loadedFor.current === routeId) return;
+    // Both halves must agree: the id guard alone would block the reload, and
+    // the dep alone would refetch on every unrelated snapshot change.
+    if (loadedFor.current === routeId && loadedSeq.current === reloadSeq) return;
     loadedFor.current = routeId;
+    loadedSeq.current = reloadSeq;
     if (!NUMERIC_ID.test(routeId)) return;
     let cancelled = false;
+    // A full server load supersedes any SETTLED placeholder for this
+    // conversation — dropped in the same batch as setMessages, so the
+    // placeholder disappears in the same commit the real rows appear and the
+    // handover doesn't flicker. Live turns survive it (inflight.js): the fetch
+    // returns the thread as it stands now, and a turn that is still running
+    // must keep its spinner. Safe to reload on settle because _persist commits
+    // BEFORE the `done` event is yielded, so the rows are always there by then.
+    const supersede = () => inflight.clearForConversation(Number(routeId));
     api.conversation(routeId)
       .then((msgs) => {
         if (cancelled) return;
-        setMessages(msgs.map((m) => ({
-          ...m,
-          sql_log: m.sql_log ? JSON.parse(m.sql_log) : [],
-          thinking: m.thinking ? JSON.parse(m.thinking) : [],
-          figure: m.figure ? JSON.parse(m.figure) : null,
-          suggestions: m.suggestions ? JSON.parse(m.suggestions) : null,
-          clarify: m.clarify ? JSON.parse(m.clarify) : null,
-        })));
+        setMessages(hydrate(msgs));
         setLoadingConvo(false);
+        supersede();
       })
-      .catch(() => { if (!cancelled) { setNotice(NOT_AVAILABLE); setLoadingConvo(false); } });
+      .catch(() => {
+        if (!cancelled) { setNotice(NOT_AVAILABLE); setLoadingConvo(false); supersede(); }
+      });
     return () => { cancelled = true; };
-  }, [routeId]);
+  }, [routeId, reloadSeq]);
 
   // Land focus in the composer on mount and whenever the viewed conversation
   // changes (sidebar click, "+ New chat", Back/Forward) — asking is the
@@ -616,6 +666,16 @@ export default function Chat({ me }) {
   // chat later shows the completed answer — the stopped note says so.
   function stopGenerating() {
     turnToken.current++;
+    // Drop the placeholder but leave the stream marked live.
+    //
+    // Without this the stopped turn would settle like any abandoned one,
+    // schedule a reload, and the finished answer would replace the "Stopped."
+    // note — pulling a full answer in under someone who deliberately stopped
+    // watching, which is the same yank the scroll containment exists to prevent.
+    // `live` stays true so the unload guard remains armed: this note PROMISES
+    // the answer will be saved, and refreshing now is what breaks that promise.
+    const stoppedKey = messages[messages.length - 1]?._turn;
+    if (stoppedKey) inflight.hideTurn(stoppedKey);
     setBusy(false); setStatus("");
     setMessages((m) => {
       const c = [...m]; const i = c.length - 1;
@@ -761,7 +821,7 @@ export default function Chat({ me }) {
     // it can find them again even after being abandoned. Client-only: never
     // sent to the server, never persisted, and absent from server-loaded rows —
     // which is exactly what makes the lookup self-scoping (see the finalize).
-    const turnKey = ++turnKeySeq.current;
+    const turnKey = inflight.startTurn({ question: q, conversationId: convId });
     setBusy(true); setStatus("Thinking…");
     // Stamp the user turn with the client send time (unix seconds) — displayed in
     // the viewer's own tz; the server persists a near-identical created_at.
@@ -792,6 +852,23 @@ export default function Chat({ me }) {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
         if (ev.type === "conversation") {
           newConvId = ev.id;
+          // BOTH of these run ABOVE the abandonment gate below, deliberately.
+          //
+          // A brand-new chat's turn starts with no conversation id at all -- the
+          // server mints it and announces it here. If this backfill were gated,
+          // an abandoned first turn would keep convId: null forever, so it could
+          // never be drawn in any conversation and never schedule its reload:
+          // the exact case with the worst symptom (nothing in the sidebar, so
+          // nowhere to go back TO).
+          inflight.attachConversation(turnKey, ev.id);
+          // ...and put it in the sidebar straight away, so an abandoned first
+          // turn is reachable while it runs. The row already exists server-side
+          // (chat.py creates it at the top of the generator, titled from the
+          // question), so this is a plain re-list, not a new write. Only for a
+          // brand-new chat: a follow-up adds no row, and re-listing on every
+          // turn would be a pointless GET that also races the model-generated
+          // title patch at the end of this function.
+          if (convId === null) refreshConvos();
           // The viewer may have already abandoned this turn -- "+ New chat"
           // mid-stream, a sidebar click to a different chat, browser Back/
           // Forward, or deleting the open chat -- before this event landed.
@@ -879,6 +956,19 @@ export default function Chat({ me }) {
       answer = turnErrorMessage(err?.status, err?.detail);
       failed = true;
     }
+    // The stream is done (or threw). One call, one join point, both paths.
+    //
+    // `rendered` says the owning view painted the result itself, so there is
+    // nothing to reload -- that is what keeps a turn from refetching the very
+    // conversation it just created (pinned by midstream-nav's conv7.calls === 0).
+    // Otherwise the entry stays as a placeholder and schedules exactly one
+    // reload for whoever is looking at that conversation.
+    //
+    // Deliberately NOT keyed on `failed`: _persist commits BEFORE the `done`
+    // event is yielded, so a connection drop between the two throws here while
+    // the answer IS on disk. Reloading and letting the server say what exists is
+    // the only reading that can't be wrong.
+    inflight.settleTurn(turnKey, { rendered: isMine() });
     // VIEW writes -- gated: a stale (abandoned) turn's final answer must not
     // land in whatever conversation is now on screen, and must not leave
     // that conversation's composer stuck disabled. The stream still drained
@@ -1030,7 +1120,8 @@ export default function Chat({ me }) {
               aria-atomic is the same announcement to AT without a second status. */}
           <div className="sr-only" aria-live="polite" aria-atomic="true"
                data-testid="generating-status">
-            {busy ? (status || "Generating response…") : ""}
+            {busy ? (status || "Generating response…")
+              : pendingTurns.length ? "Still working on your earlier question…" : ""}
           </div>
           {/* Switching chats: skeleton bubbles until the fetch settles, so the
               empty-state prompt never flashes over a conversation that's
@@ -1043,7 +1134,7 @@ export default function Chat({ me }) {
               <div className="skel skel-answer short" />
             </div>
           )}
-          {!loadingConvo && messages.length === 0 && !me?.has_data && (
+          {!loadingConvo && messages.length === 0 && pendingTurns.length === 0 && !me?.has_data && (
             <div className="empty">
               <h2>No IPEDS data loaded yet</h2>
               <p>
@@ -1055,7 +1146,7 @@ export default function Chat({ me }) {
               </p>
             </div>
           )}
-          {!loadingConvo && messages.length === 0 && me?.has_data && (
+          {!loadingConvo && messages.length === 0 && pendingTurns.length === 0 && me?.has_data && (
             <div className="empty">
               <span className="field-label">Ask the record</span>
               <h2 className="empty-prompt">What would you like to know about U.S. colleges?</h2>
@@ -1260,6 +1351,40 @@ export default function Chat({ me }) {
                 )}
               </div>
             </div>
+          ))}
+          {/* A turn still running that this view isn't drawing itself — you
+              asked, wandered off, and came back.
+
+              Rendered OUTSIDE messages.map on purpose. `i` is load-bearing in
+              six places (React key, mdRefs, the openTrace key AND the
+              `trace-${i}` DOM id, edit/rerun indices, the copy key), so keeping
+              these rows out of the loop means none of that can collide —
+              structurally, not by being careful. Keys are registry-minted and
+              globally unique.
+
+              The user row deliberately has no .msg-actions: Edit and Rerun index
+              into `messages`, and this row isn't in it and has no server id yet.
+              Reuses the live bubble's CSS so the spinner is pixel-identical, but
+              with fixed copy rather than `status` — we don't park the live
+              trace, and replaying a stale "Running query…" would be a lie. */}
+          {pendingTurns.map((t) => (
+            <React.Fragment key={`pending-${t.key}`}>
+              <div className="msg user">
+                <div className="bubble"><Markdown>{t.question}</Markdown></div>
+              </div>
+              <div className="msg assistant">
+                <div className="bubble">
+                  <div aria-live="polite" aria-busy="true">
+                    <div className="thinking-live">
+                      <div className="thinking-head">
+                        <span className="spinner" aria-hidden="true" />
+                        <span className="muted">Still working on your question…</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </React.Fragment>
           ))}
           <div ref={bottom} />
           </div>

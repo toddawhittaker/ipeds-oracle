@@ -227,7 +227,52 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `frontend/e2e/user-menu.spec.js` + `admin-update-banner.spec.js` +
   `backend/tests/test_version.py` + `initials.test.js`.
   Chat interaction contracts (all Playwright-pinned in
-  `frontend/e2e/chat-interactions.spec.js`): **Stop generating is
+  `frontend/e2e/chat-interactions.spec.js`):
+  **A RUNNING TURN SURVIVES NAVIGATION, VISIBLY** (`frontend/src/inflight.js`).
+  A turn lives only in the browser until it finishes — `_persist` writes both
+  message rows in ONE transaction at the END — so mid-flight the server has no
+  question, no progress, nothing to fetch. Meanwhile navigating clears
+  `messages` and bumps `turnToken` (both deliberate, below), and **nothing ever
+  refetched the open thread**, so leaving a running question and coming back
+  showed the thread as it was BEFORE you asked and stayed that way *indefinitely*
+  — even once the answer was on disk. `inflight.js` is a **module-level
+  registry** (the app's first; `useSyncExternalStore`) holding just the question
+  text + bookkeeping: enough to draw a **question + "Still working on your
+  question…" placeholder**, schedule **exactly one** reload when the turn lands,
+  and arm a **`beforeunload` guard**. It is module-level because **Chat UNMOUNTS
+  on `/admin`** — the very navigation the feature exists for — so React state
+  cannot carry it. Four things that look incidental and are not: the placeholder
+  renders **OUTSIDE `messages.map`** (`i` is load-bearing in six places
+  including the `trace-${i}` DOM id, so staying out of the loop makes collision
+  *structurally* impossible) and carries **no `.msg-actions`** (Edit/Rerun index
+  into `messages`); an entry carries **two booleans** — `live` (stream open →
+  arms the unload guard, **stays true through Stop**, whose note *promises* the
+  answer will be saved) and `show` (drawn → **false after Stop**, or the finished
+  answer would replace the stopped note, the same yank scroll containment
+  prevents); `settleTurn(rendered:true)` **must not** bump the reload counter or
+  a turn refetches the conversation it just created (`midstream-nav`'s
+  `conv7.calls === 0`); and the counter is **monotonic**, since it is a
+  `useEffect` dep that could otherwise oscillate into a refetch loop.
+  `clearForConversation` runs in the loader's `.then`/`.catch` so the placeholder
+  dies in the **same commit** the real rows arrive (no flicker) but **keeps live
+  entries**. The unload guard keys on the registry, **not `busy`** — `busy` is
+  cleared by the render-time reset the instant the route changes, so it is false
+  in exactly the situation the guard is for. Ceiling, stated: **a refresh still
+  loses the turn** (the request is torn down, the generator cancelled, and
+  `_delete_if_empty` removes a new chat's row) — surviving that needs the turn to
+  outlive its request. Pinned in `inflight.test.js` +
+  `frontend/e2e/inflight-pending.spec.js`, the latter using a new
+  **`mockStreamChatDripped`** (patches `window.fetch` for the stream route and
+  enqueues into a `ReadableStream` on timers) because `mockStreamChat` fulfils
+  the whole body at once — with it, a brand-new chat's id never arrives until the
+  turn is over, so turn 1 was untestable *by construction*.
+  **Two testing traps this cost, both of which made a test pass with the bug
+  present:** Playwright matchers **auto-retry**, so `toHaveCount(1)` against a
+  1.5 s stream simply waits the turn out and goes green having never seen the
+  duplicate — assert mid-stream counts **synchronously** (`expect(await
+  …count()).toBe(n)`); and a fixture that never contains the answer cannot reveal
+  a yank, so the Stop test must re-mock the conversation **with** the answer.
+  **Stop generating is
   abandon-and-drain, never a network abort** — it bumps the existing
   `turnToken` so the view detaches while the request drains and the server
   still persists the answer. (Historically an aborted mid-turn request was
