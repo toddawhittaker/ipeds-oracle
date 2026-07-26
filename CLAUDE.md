@@ -242,6 +242,30 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   `test_interrupted_new_turn_leaves_no_phantom_conversation` +
   `test_interrupted_edit_turn_keeps_the_old_exchange_intact` in
   `backend/tests/test_chat_router.py`.)
+  **An abandoned turn still applies its server message IDS** — and nothing else.
+  `stopGenerating` bumps `turnToken`, so `isMine()` is false and the finalize
+  (the ONLY place `msgId`/`userMsgId` were written) was skipped, leaving the
+  stopped user message with no `id`. Rerun then sent `edit_message_id: null`,
+  `_persist` skipped its DELETE and **APPENDED** — so the DB silently grew a
+  duplicate of the question the user was replacing, while the client had already
+  `slice`d it away. Silent because a stopped turn is the LAST turn, so
+  `laterTurnsLost` is 0 and no confirmation fires. The ids are targeted by a
+  **per-turn `_turn` key** stamped on the two messages a turn appends
+  (client-only, never sent or persisted) — NOT positionally, and NOT by
+  `turnToken`. Both alternatives are wrong for a specific reason: the finalize
+  writes `c.length-1`/`c.length-2`, which by then may belong to a conversation
+  the user has since opened; and **`submit()` never bumps `turnToken`**, so a
+  turn started AFTER a stop captures the same value — a token-equality gate is
+  true for both and leaks the stale ids onto the new turn. The `findIndex` lookup
+  IS the scope check: navigation, "+ New chat", an edit/rerun slice, and a
+  refetch all leave no `_turn` to match, so the write self-cancels with no
+  separate "still the right conversation?" test to get wrong. Content /
+  `pending` / `stopped` are deliberately NOT written — the user chose to stop,
+  and pulling the finished answer in under them is the same yank the scroll
+  containment exists to prevent. Pinned by the three cases in the
+  `stop generating` describe of `frontend/e2e/chat-interactions.spec.js`, each
+  proven load-bearing: **without** the fix the duplicate case fails; under a
+  naive **positional** fix the other two fail.
   **Edit/Rerun is destructive beyond the turn it touches** — it drops that turn
   AND every later one, client-side (`slice(0, i)`) and server-side (`_persist`'s
   `DELETE … id>=?`), permanently, with no tombstone or undo. Re-asking the LAST

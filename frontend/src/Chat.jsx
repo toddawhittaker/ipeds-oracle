@@ -254,6 +254,17 @@ export default function Chat({ me }) {
   // it before yanking the viewer to the new /chat/:id -- see the "'+ New
   // chat' mid-stream" fix in submit() below.
   const turnToken = useRef(0);
+  // A per-turn identity stamped onto the two messages a turn appends, so a turn
+  // that finishes while ABANDONED can still find its own messages.
+  //
+  // turnToken can't do this job. It marks "is this turn still the live one",
+  // which is the right question for VIEW writes but the wrong one for identity:
+  // submit() never bumps it, so a turn started AFTER a stop captures the same
+  // value the stopped turn is comparing against. Any token-equality check would
+  // be true for both, and the stale turn would write its ids onto the new
+  // turn's messages (the finalize writes are positional -- c.length-1 /
+  // c.length-2 -- so "the last two messages" is whoever is there NOW).
+  const turnKeySeq = useRef(0);
   // Marks the CURRENT turn's own self-navigation (the "conversation" SSE
   // handler's / -> /chat/:id URL flip for a brand-new conversation) so the
   // [routeId] turnToken effect below doesn't mistake it for the user
@@ -713,11 +724,16 @@ export default function Chat({ me }) {
     // the user has moved on, so they don't bleed into whatever conversation
     // is now on screen.
     const isMine = () => turnToken.current === myTurn;
+    // This turn's own identity, stamped on the two messages it appends below so
+    // it can find them again even after being abandoned. Client-only: never
+    // sent to the server, never persisted, and absent from server-loaded rows —
+    // which is exactly what makes the lookup self-scoping (see the finalize).
+    const turnKey = ++turnKeySeq.current;
     setBusy(true); setStatus("Thinking…");
     // Stamp the user turn with the client send time (unix seconds) — displayed in
     // the viewer's own tz; the server persists a near-identical created_at.
-    setMessages((m) => [...m, { role: "user", content: q, created_at: Math.floor(Date.now() / 1000) },
-                              { role: "assistant", content: "", sql_log: [], thinking: [], pending: true }]);
+    setMessages((m) => [...m, { role: "user", content: q, created_at: Math.floor(Date.now() / 1000), _turn: turnKey },
+                              { role: "assistant", content: "", sql_log: [], thinking: [], pending: true, _turn: turnKey }]);
 
     // Immutably patch the in-flight (last) message.
     const patchLast = (patch) => setMessages((m) => {
@@ -844,6 +860,37 @@ export default function Chat({ me }) {
         return c;
       });
       setBusy(false); setStatus("");
+    } else {
+      // ABANDONED turn -- almost always "Stop generating", which bumps
+      // turnToken without the viewer going anywhere.
+      //
+      // Write the server ids and NOTHING else. The ids are identity, not
+      // content: without them the stopped turn's user message has no `id`, so
+      // Rerun sends editMessageId: undefined -> chat.py sets edit_from = None
+      // -> _persist skips its DELETE and APPENDS. The client had already done
+      // slice(0, i), so the DB grows a duplicate of the question the user was
+      // trying to replace, and nothing says so (a stopped turn is the LAST
+      // turn, so laterTurnsLost() is 0 and no confirmation fires).
+      //
+      // Deliberately NOT written: content, pending, stopped, error, busy,
+      // status. The user chose to stop; pulling the finished answer in under
+      // them is the same yank the scroll containment exists to prevent.
+      //
+      // Targeted by LOOKUP, never by position, and the lookup IS the scope
+      // check -- there is no separate "is this still the right conversation?"
+      // test to get wrong. Navigating away clears messages (the render-time
+      // reset), "+ New chat" clears them, edit/rerun slices them off, and a
+      // refetch replaces them with server rows that carry no _turn. In every
+      // one of those cases findIndex misses and this is a no-op.
+      setMessages((m) => {
+        const ai = m.findIndex((x) => x._turn === turnKey && x.role === "assistant");
+        const ui = m.findIndex((x) => x._turn === turnKey && x.role === "user");
+        if (ai < 0 && ui < 0) return m;
+        const c = [...m];
+        if (ai >= 0 && msgId) c[ai] = { ...c[ai], id: msgId };
+        if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
+        return c;
+      });
     }
     // Ungated -- these touch only the sidebar list/titles, never the viewed
     // thread, and stay useful even for an abandoned-but-persisted turn (its
