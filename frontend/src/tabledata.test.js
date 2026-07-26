@@ -139,6 +139,35 @@ describe("chartSpecFromTable", () => {
     );
     expect(seq.y).toEqual(["Pop"]);
   });
+
+  it("plots a measure whose name merely ENDS in 'id', like Average Aid", () => {
+    // THE REGRESSION: the dimension-name alternative was `.*[ _]?id` with an
+    // OPTIONAL separator, which collapses to plain `.*id` — so any header
+    // ending in those two letters was treated as an identifier. "Average Aid",
+    // "Total Aid", "Paid" and "Grid" all matched, chartSpecFromTable found no
+    // series and returned null, and BOTH "Chart this" and compare mode
+    // disappeared from every financial-aid answer. Student Financial Aid is a
+    // first-class IPEDS survey family, so these are real headers.
+    const spec = chartSpecFromTable(
+      ["Institution", "Average Aid", "Total Aid"],
+      [["Ohio State", "12,345", "9,000,000"], ["Miami", "9,876", "4,000,000"]],
+    );
+    expect(spec).not.toBeNull();
+    expect(spec.x).toBe("Institution");
+    expect(spec.y).toEqual(["Average Aid", "Total Aid"]);
+  });
+
+  it("still treats a SEPARATED id header as a dimension", () => {
+    // The other half of the bound: the fix must not stop recognising genuine
+    // identifier columns. A cap that over-corrected would plot unitids as a
+    // data series — the failure the regex exists to prevent.
+    const spec = chartSpecFromTable(
+      ["University", "Unit ID", "Degrees"],
+      [["Ohio State", "204796", "1,234"], ["Miami", "204024", "567"]],
+    );
+    expect(spec.y).toEqual(["Degrees"]);
+    expect(spec.y).not.toContain("Unit ID");
+  });
 });
 
 describe("countMarkdownTables", () => {
