@@ -63,6 +63,140 @@ test.describe("stop generating", () => {
     await expect(page.getByText("The eventual answer.")).toHaveCount(0);
     await expect(page).toHaveURL("/");
   });
+
+  // THE REGRESSION, in full: stopGenerating() bumps turnToken, so isMine() is
+  // false at the finalize -- and that block was the ONLY place msgId /
+  // userMsgId were applied. The stopped turn's user message therefore kept no
+  // `id`, so Rerun sent editMessageId: undefined -> chat.py set
+  // edit_from = None -> _persist skipped its DELETE and APPENDED. The client
+  // had already done slice(0, i), so the DB silently grew a second copy of the
+  // question with a different answer, visible only after a reload. Silent
+  // because a stopped turn is the LAST turn: laterTurnsLost() is 0, so the
+  // destructive-edit confirmation never fires.
+  test("a stopped turn's Rerun REPLACES it instead of appending a duplicate",
+    async ({ page }) => {
+      await mockMe(page, USER);
+      await mockConversations(page, []);
+      const stream = await mockStreamChat(page, {
+        conversationId: 7, delayMs: 900, answer: "The eventual answer.",
+        messageId: 42, userMessageId: 41,
+      });
+      await page.goto("/");
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+      await expect(page.getByText(/^Stopped\./)).toBeVisible();
+
+      // Let the abandoned stream drain — that is when the done event (and so
+      // the ids) actually arrives.
+      await expect.poll(() => stream.calls.length).toBe(1);
+      await page.waitForTimeout(1200);
+
+      // Rerun the stopped question. It is the last turn, so no modal.
+      await page.getByRole("button", { name: "Rerun" }).click();
+
+      await expect.poll(() => stream.calls.length).toBe(2);
+      expect(stream.calls[1].edit_message_id).toBe(41);
+    });
+
+  test("ids from a turn stopped in one chat never land in another chat",
+    async ({ page }) => {
+      // The finalize writes were POSITIONAL (c.length-1 / c.length-2), i.e.
+      // "the last two messages" — whoever those happen to be by the time a
+      // drained stream returns. Applying the ids ungated would therefore stamp
+      // them onto a conversation the user has since opened. The fix targets by
+      // per-turn lookup instead, so this is a no-op rather than corruption.
+      await mockMe(page, USER);
+      await mockConversations(page, [{ id: 3, title: "Other chat", updated_at: 0 }]);
+      await mockConversation(page, 3, [
+        { id: 900, role: "user", content: "a question in the other chat" },
+        { id: 901, role: "assistant", content: "its answer" },
+      ]);
+      const stream = await mockStreamChat(page, {
+        conversationId: 7, delayMs: 900, answer: "The eventual answer.",
+        messageId: 42, userMessageId: 41,
+      });
+      await page.goto("/");
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+      await expect(page.getByText(/^Stopped\./)).toBeVisible();
+
+      // Navigate away while the abandoned stream is still draining.
+      await page.getByRole("link", { name: /Other chat/ }).click();
+      await expect(page.getByText("a question in the other chat")).toBeVisible();
+      await page.waitForTimeout(1200);
+
+      // Content is intact...
+      await expect(page.getByText("slow question")).toHaveCount(0);
+      await expect(page.getByText("The eventual answer.")).toHaveCount(0);
+      await expect(page.getByText("a question in the other chat")).toBeVisible();
+
+      // ...and so are the IDS, which is the half that actually matters and is
+      // invisible on screen. Rerunning this conversation's own question must
+      // carry its own message id (900). Under a positional write it would have
+      // been overwritten with the stopped turn's 41, and every later edit or
+      // rerun in THIS conversation would then target the wrong row server-side.
+      await page.getByRole("button", { name: "Rerun" }).click();
+      await expect.poll(() => stream.calls.length).toBe(2);
+      expect(stream.calls[1].edit_message_id).toBe(900);
+    });
+
+  test("a NEW question asked after a stop does not inherit the stopped turn's ids",
+    async ({ page }) => {
+      // THIS is the case a turnToken-equality gate cannot catch, and the reason
+      // the fix keys on per-message identity. submit() never bumps turnToken,
+      // so the turn started after the stop captures the SAME token value the
+      // stopped turn compares against — a "was I the stopped turn?" check is
+      // true for both, and the stale turn's ids would land on the new turn's
+      // messages (which are now the last two in the array).
+      await mockMe(page, USER);
+      await mockConversations(page, []);
+      // The two turns MUST return different ids, or this test cannot detect the
+      // leak it exists for: with one shared id, a stale write and a correct
+      // write are indistinguishable and the assertion passes either way.
+      const calls = [];
+      let nth = 0;
+      await page.route("**/api/chat/stream", async (route) => {
+        calls.push(route.request().postDataJSON());
+        const turn = ++nth;
+        // Turn 1 is the one that gets stopped, and it drains slowly so it
+        // settles AFTER turn 2 has appended its own messages.
+        const [uid, mid, delay, answer] = turn === 1
+          ? [41, 42, 900, "The eventual answer."]
+          : [51, 52, 0, "The second answer."];
+        if (delay) await new Promise((r) => setTimeout(r, delay));
+        const body = [
+          { type: "conversation", id: 7 },
+          { type: "answer", text: answer },
+          { type: "done", message_id: mid, user_message_id: uid, model: "t", tokens: 0 },
+        ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+        await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+      });
+      await page.goto("/");
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+      await expect(page.getByText(/^Stopped\./)).toBeVisible();
+
+      // Ask again immediately, while the first stream is still draining, then
+      // let the abandoned one land.
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("second question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await expect(page.getByText("The second answer.")).toBeVisible();
+      await page.waitForTimeout(1200);
+
+      // Rerunning the SECOND question must carry the second turn's own id (51).
+      // If the stopped turn's ids had been applied positionally they would have
+      // landed on these messages and this would read 41.
+      await page.getByRole("button", { name: "Rerun" }).last().click();
+      await expect.poll(() => calls.length).toBe(3);
+      expect(calls[2].question).toBe("second question");
+      expect(calls[2].edit_message_id).toBe(51);
+    });
 });
 
 test.describe("scroll containment", () => {
