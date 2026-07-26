@@ -559,7 +559,11 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .msg.assistant.failed .bubble {
   border-left: 3px solid var(--danger);
   padding-left: 12px;
-  color: var(--fg);
+  /* var(--text). `--fg` is not a token this app defines anywhere — the
+     declaration was invalid-at-computed-value-time, so `color` silently fell
+     back to inherit. Harmless today only because the inherited colour happens
+     to be right; it becomes a live bug the moment any ancestor sets a colour. */
+  color: var(--text);
 }
 .msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 8px; }
 .msg-actions .spacer { flex: 1; }
@@ -1031,13 +1035,38 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   box-shadow: inset 0 0 0 1px var(--muted);
   position: relative; cursor: pointer; transition: background .15s ease;
 }
+/* The THUMB carries the state (its position), so its boundary against the track
+   must clear 3:1 non-text contrast (WCAG 1.4.11) in every state. A hardcoded
+   #fff failed two of the four: light-OFF 1.66 (white on --line-strong) and
+   dark-ON 2.43 (white on the lighter dark-theme --accent — the same #fff-on-
+   accent pairing that put the avatar badge at 2.43).
+
+   No single fill can fix it. In the light theme the thumb would need luminance
+   >= 0.296 to clear the --accent track AND <= 0.161 to clear the --line-strong
+   track — a contradiction. So the treatment is state-dependent:
+
+     ON  -> --on-fg, the token that exists to sit on an --accent fill and is
+            theme-flipped for it (light 8.53, dark 7.70).
+     OFF -> --on-fg has no contrast on the pale/dark --line-strong track
+            (1.56 / 1.74), so a --muted ring supplies the boundary instead
+            (3.42 / 3.91). Dropped when checked, where the fill already carries
+            it — the same device the track itself uses two rules up.
+
+   Measured, not guessed; pinned in a11y.spec.js because axe files a
+   pseudo-element with no text as `incomplete`, never a violation. */
 .switch input[type="checkbox"]::before {
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  border-radius: 50%; background: var(--on-fg);
+  box-shadow: 0 0 0 1px var(--muted), 0 1px 2px rgba(0, 0, 0, .25);
   transition: transform .15s ease;
 }
 .switch input[type="checkbox"]:checked { background: var(--accent); box-shadow: none; }
-.switch input[type="checkbox"]:checked::before { transform: translateX(14px); }
+/* Ring dropped when ON: --on-fg already clears 3:1 on the --accent track in both
+   themes, and keeping a --muted ring there would REDUCE the boundary (it sits at
+   1.61 light / 1.13 dark against --accent). */
+.switch input[type="checkbox"]:checked::before {
+  transform: translateX(14px); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+}
 .switch input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .switch input[type="checkbox"], .switch input[type="checkbox"]::before { transition: none; }
@@ -1581,6 +1610,12 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
 .loglvl { flex: none; width: 62px; color: var(--muted); }
 .logname { flex: none; color: var(--accent); }
 .logmsg { flex: 1; }
-.logline.lvl-WARNING .loglvl { color: #c98a1a; }
+/* var(--warn), not a hardcoded hex: #c98a1a measured 2.52:1 on the light theme's
+   --bg — under the 4.5 floor, on the admin's primary triage signal, on the one
+   screen whose entire job is "is something wrong". --warn is the token already
+   used for this exact semantic everywhere else and is theme-aware (4.65 light /
+   8.61 dark). It was invisible to the axe gate because no scan renders a
+   WARNING log record. */
+.logline.lvl-WARNING .loglvl { color: var(--warn); }
 .logline.lvl-ERROR { color: var(--danger); }
 .logline.lvl-ERROR .loglvl { color: var(--danger); }
