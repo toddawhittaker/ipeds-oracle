@@ -107,10 +107,25 @@ export function csvLabel({ serverSide, rowsShown }) {
 // per answer. Attaching it to a particular table would mis-attribute it, which
 // is also why it needs no single-table gate (unlike truncation, whose flag maps
 // to one specific query result).
+// BORROWED EVIDENCE. Grounding is conversation-scoped: a turn that reshapes an
+// earlier table — transpose, regroup, "bars per year instead" — runs no SQL of
+// its own and is checked against the EARLIER turn's rows. That is deliberate
+// and is the only reason such a reshape can be verified at all.
+//
+// But the wording has to say so. "reproduced from the query result" reads as
+// THIS answer's query, and a reader who then opens the SQL disclosure finds
+// nothing there — which is exactly what made a correct ✓ look suspect in real
+// use. The mark is the same claim about the same numbers; only its source
+// differs, so only the source clause changes.
 const _CHECK_CAVEAT =
   "This check re-derives each number from the rows the query returned; these ones "
   + "it could not. That may be a transcription slip, or simply a calculation the "
   + "check doesn't recognize. The SQL and the CSV export are the ground truth.";
+const _CHECK_CAVEAT_BORROWED =
+  "This answer reshapes data from an earlier turn rather than running its own "
+  + "query, so each number was re-derived from THAT turn's rows; these ones it "
+  + "could not. That may be a transcription slip, or simply a calculation the "
+  + "check doesn't recognize. The earlier answer's SQL and CSV are the ground truth.";
 
 /**
  * @param {object} [verdict] The message's persisted table-grounding verdict.
@@ -120,10 +135,14 @@ const _CHECK_CAVEAT =
  *   note states a count, so a verdict without it renders nothing.
  * @param {number} [verdict.cellsMatched] How many of those reproduced. Required for the
  *   caution, which leads with the number that did NOT.
+ * @param {boolean} [verdict.hasSql] Whether THIS answer ran a query. False for a turn
+ *   that reshapes an earlier table from context: same claim, but the rows came from
+ *   the earlier turn, so the note says so instead of pointing at absent SQL.
  * @returns {{tone: string, text: string, title: string} | null} The line to render, or
  *   null for "say nothing" — the default for every unrecognised or malformed verdict.
  */
-export function tableTrustNote({ status, cellsChecked, cellsMatched } = {}) {
+export function tableTrustNote({ status, cellsChecked, cellsMatched,
+                                 hasSql = true } = {}) {
   // Guard the empties BEFORE Number(): Number(null) is 0 and 0 is finite, so a
   // message whose counts are NULL — a pre-migration row, a cache hit, a verdict
   // written before these columns existed — would read as "0 matched" and produce
@@ -142,10 +161,16 @@ export function tableTrustNote({ status, cellsChecked, cellsMatched } = {}) {
     // rows the query returned, not that the query asked the right question.
     return {
       tone: "ok",
-      text: `${n.toLocaleString()} ${n === 1 ? "value" : "values"} reproduced from the query result`,
-      title: "Each number was re-derived from the rows this answer's query returned. "
-        + "It confirms the values were transcribed faithfully, not that the query "
-        + "asked the right question.",
+      text: `${n.toLocaleString()} ${n === 1 ? "value" : "values"} reproduced from `
+        + (hasSql ? "the query result" : "the earlier query result"),
+      title: hasSql
+        ? "Each number was re-derived from the rows this answer's query returned. "
+          + "It confirms the values were transcribed faithfully, not that the query "
+          + "asked the right question."
+        : "This answer reshapes data from an earlier turn rather than running its "
+          + "own query, so each number was re-derived from THAT turn's rows. It "
+          + "confirms the values carried over faithfully, not that the original "
+          + "query asked the right question.",
     };
   }
   if (status !== "partial" && status !== "unmatched") return null;
@@ -174,10 +199,17 @@ export function tableTrustNote({ status, cellsChecked, cellsMatched } = {}) {
   const subject = missed === n
     ? `${missed === 1 ? "1 value" : `${missed.toLocaleString()} values`}`
     : `${missed.toLocaleString()} of ${n.toLocaleString()} values`;
+  // The destinations have to EXIST. On a reshape turn there is no SQL
+  // disclosure to open and the CSV button exports only the transcribed rows
+  // (the server has no query to re-run — see Markdown.jsx's hasSql gate), so
+  // "check against the SQL or CSV" sends the reader somewhere that isn't there.
+  // The earlier answer is where both controls actually live.
   return {
     tone: "warn",
-    text: `Check ${subject} against the SQL or CSV`,
-    title: _CHECK_CAVEAT,
+    text: hasSql
+      ? `Check ${subject} against the SQL or CSV`
+      : `Check ${subject} against the earlier answer's SQL or CSV`,
+    title: hasSql ? _CHECK_CAVEAT : _CHECK_CAVEAT_BORROWED,
   };
 }
 
