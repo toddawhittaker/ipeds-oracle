@@ -13,11 +13,19 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   // "100%" = one worker per available CPU. The old hardcoded 2 came in with the
-  // original scaffolding (73c9530), copied from Playwright's template — it was
-  // never a measured choice, and it left the runner idle: the suite is I/O-bound
-  // (page loads against a static server, every /api/** mocked in-process), not
-  // CPU-bound, so it parallelises nearly linearly. `list` prints the resolved
-  // worker count on every run, which is also how we learn the runner's size.
+  // original scaffolding (73c9530), copied from Playwright's template — never a
+  // measured choice, and it left half the runner idle (GitHub's ubuntu-latest
+  // gives 4 vCPUs, which the `list` reporter's "using N workers" line confirms).
+  //
+  // MEASURED, and the number is worth knowing before anyone tunes this again:
+  // 2 workers ran the suite in ~161s, 4 in ~132s. That is 1.22x from doubling,
+  // NOT the ~2x you would predict — so the runner is CPU-saturated, and this
+  // suite does not scale by adding workers to one box. Going past 100% would
+  // only oversubscribe 4 cores and trade wall-clock for flake.
+  //
+  // The remaining lever is more MACHINES (`--shard`), not more workers. That
+  // costs a branch-protection edit: the required check is pinned by the exact
+  // name "Playwright e2e (network-mocked UI)", and a matrix renames it.
   workers: process.env.CI ? "100%" : undefined,
   reporter: "list",
   timeout: 30_000,
