@@ -805,7 +805,10 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
                       Everything else is false.</li>
                     <li>A blank <code>note</code> becomes <em>Imported on {"{date}"}</em>.</li>
                   </ul>
-                  <pre>{`email,note,admin
+                  {/* .help-body pre scrolls; nothing inside is focusable, so a
+                      keyboard user could not scroll it (WCAG 2.1.1, Level A). */}
+                  <pre tabIndex={0} role="region"
+                       aria-label="CSV format example">{`email,note,admin
 alex@example.com,Department chair,yes
 jamie@example.com,External reviewer,`}</pre>
                 </div>

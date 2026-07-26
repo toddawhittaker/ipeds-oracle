@@ -313,7 +313,12 @@ function Pre({ node, suppressChart, ...props }) {
   if (isChart && suppressChart) return null; // rendered beside the table (brief)
   if (spec) return <Chart spec={spec} />;
   if (isSql) return <SqlBlock code={raw.replace(/\n$/, "")} format={false} />;
-  return <pre {...props} />;
+  // A non-SQL code fence scrolls (.md pre) and holds nothing focusable, so it
+  // is unreachable by keyboard without this (WCAG 2.1.1, Level A). The spread
+  // comes FIRST so these three always win: react-markdown does not pass a
+  // role/tabIndex today, but if it ever did, silently losing the focusability
+  // would restore the bug with nothing to show for it.
+  return <pre {...props} tabIndex={0} role="region" aria-label="Code block" />;
 }
 
 const Anchor = ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />;

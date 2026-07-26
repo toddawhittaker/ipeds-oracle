@@ -629,7 +629,10 @@ export default function Imports({ onDataChanged }) {
           {active.report && <pre className="report">{active.report}</pre>}
           <details open>
             <summary>Log</summary>
-            <pre className="log thin-scroll">{active.log || "…"}</pre>
+            {/* Caps at 40vh with nothing focusable inside — unreachable by
+                keyboard without this (WCAG 2.1.1, Level A). */}
+            <pre className="log thin-scroll" tabIndex={0} role="region"
+                 aria-label="Import job log">{active.log || "…"}</pre>
           </details>
         </div>
       )}

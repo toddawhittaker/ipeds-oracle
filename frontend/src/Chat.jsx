@@ -142,7 +142,13 @@ async function copyHtml(node, plain) {
 function ThinkingTrace({ items }) {
   if (!items?.length) return null;
   return (
-    <div className="thought-list thin-scroll">
+    // Focusable + named: the live trace caps at 260px and holds no focusable
+    // children, so a keyboard-only user could not read past the first few lines
+    // (WCAG 2.1.1, Level A). Only scrollable in the LIVE pending bubble —
+    // styles.css unsets the cap inside .trace-panel — which is why the axe scan
+    // that covers it has to be taken mid-stream.
+    <div className="thought-list thin-scroll" tabIndex={0} role="region"
+         aria-label="Thinking trace">
       {items.map((t, j) => {
         if (t.kind === "sql") return <SqlBlock key={j} code={t.text} className="thought-sql" />;
         if (t.kind === "reason") return <p key={j} className="thought-reason">{t.text}</p>;

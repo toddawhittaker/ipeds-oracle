@@ -92,7 +92,11 @@ export default function Logs({ onAttentionChanged }) {
         <button onClick={load}>Refresh</button>
         {filtered && <button onClick={clearFilters}>Clear filters</button>}
       </div>
-      <div className="log logbox thin-scroll">
+      {/* Focusable + named: the log viewer caps at 60vh and its rows hold no
+          focusable children, so without this a keyboard-only admin can read
+          only the first screenful of the server log (WCAG 2.1.1, Level A). */}
+      <div className="log logbox thin-scroll" tabIndex={0} role="region"
+           aria-label="Server log">
         {records.length === 0
           ? (err
               ? <p className="denied-error" role="alert">{err}</p>
