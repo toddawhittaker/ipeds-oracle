@@ -45,6 +45,31 @@ class SQLTimeoutError(RuntimeError):
     """Raised when a query exceeds the configured timeout and is interrupted."""
 
 
+class SQLResultTooLargeError(RuntimeError):
+    """Raised when a single value in the result exceeds SQL_MAX_VALUE_BYTES."""
+
+
+# Ceiling on the size of ONE value SQLite will produce (SQLITE_LIMIT_LENGTH).
+#
+# The row cap bounds how MANY rows come back, never how BIG one is, and that
+# gap was reachable in a single query: `SELECT length(hex(zeroblob(400000000)))`
+# allocated 1,155 MB RSS in 1.0 s against the real dataset, and the 25 s
+# watchdog structurally cannot fire inside a one-second allocation. Multiply by
+# the 200-row model cap (200 x 5 MB) or the 100k-row CSV cap and it is an
+# OOM-kill of the container.
+#
+# 1 MiB is ~140x the largest value in the real dataset (vartable.longdescription
+# at 7,469 bytes) and ~4x the widest plausible legitimate aggregate (a national
+# group_concat of every institution name is ~270 KB), so nothing a real question
+# asks for comes close. It does not replace the watchdog — it RESTORES it: with
+# each value bounded, obtaining serious memory now takes thousands of values and
+# therefore long enough for con.interrupt() to land.
+#
+# Deliberately a module constant, not a setting: no operator has a reason to
+# raise it, and raising it re-opens the hole.
+SQL_MAX_VALUE_BYTES = 1 << 20
+
+
 @dataclass
 class QueryResult:
     columns: list[str]
@@ -151,6 +176,10 @@ def _connect_ro(db_path: Path) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode=ro&immutable=1"
     con = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=1.0)
     con.execute("PRAGMA query_only = ON")
+    # Bound the size of any single value the query can produce. See
+    # SQL_MAX_VALUE_BYTES — this is what keeps one crafted expression from
+    # allocating a gigabyte faster than the timeout watchdog can interrupt it.
+    con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, SQL_MAX_VALUE_BYTES)
     return con
 
 
@@ -231,6 +260,17 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
         rows = cur.fetchmany(limit + 1)
         truncated = len(rows) > limit
         rows = rows[:limit]
+    except sqlite3.DataError as e:
+        # SQLITE_LIMIT_LENGTH surfaces as DataError ("string or blob too big"),
+        # NOT OperationalError — so it needs its own branch or it falls through
+        # to registry's generic handler and the model gets no steer about what
+        # to do differently.
+        raise SQLResultTooLargeError(
+            f"A single value in the result exceeded "
+            f"{SQL_MAX_VALUE_BYTES // (1 << 20)} MiB. Aggregate it in SQL "
+            "(count/sum/avg) or trim it with substr(), rather than selecting "
+            "the whole value."
+        ) from e
     except sqlite3.OperationalError as e:
         if timed_out.is_set():
             raise SQLTimeoutError(

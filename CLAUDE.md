@@ -68,6 +68,21 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   usually means an aggregation-level mistake.
 
 ### Critical query gotchas (details in `docs/SCHEMA.md`)
+- **One VALUE is capped at 1 MiB** (`SQL_MAX_VALUE_BYTES`, applied via
+  `con.setlimit(SQLITE_LIMIT_LENGTH, …)` in `tools/sql.py`'s `_connect_ro`). The
+  row cap bounds how MANY rows come back, never how BIG one is, and that gap was
+  reachable in a single query: `SELECT length(hex(zeroblob(400000000)))`
+  allocated **1,178 MB RSS in 0.98 s** (measured; capped it refuses in 0.000 s at
+  34 MB). The `sql_timeout_seconds` watchdog **structurally cannot fire** inside a
+  one-second allocation, so nothing stopped it — and 200 rows × 5 MB, or the
+  100k-row CSV cap, is an OOM-kill of the container. The cap does not replace the
+  watchdog, it **restores** it: with each value bounded, serious memory now needs
+  thousands of values and therefore long enough for `con.interrupt()` to land.
+  Surfaces as **`sqlite3.DataError`**, NOT `OperationalError` — it needs its own
+  `except` branch (`SQLResultTooLargeError` → `"SQL TOO LARGE: …"` in
+  `tools/registry.py`) or it falls through to the generic handler and the model
+  gets no steer. A module constant on purpose, not a setting: raising it re-opens
+  the hole. Pinned by the single-value-size-cap block in `test_sql_guards.py`.
 - **"Recent N years" = a constant bound**, never a join:
   `WHERE year > (SELECT MAX(year)-3 FROM _years)`. A `JOIN (SELECT DISTINCT
   year …)` makes SQLite full-scan the 8M-row `c_a` and effectively hang.
