@@ -309,7 +309,7 @@ def aligned_numeric_columns(result: QueryResult) -> dict[str, list[float | None]
     is null or the row is short.
 
     Row alignment is what lets a value be looked up by the row it belongs to
-    rather than anywhere in the column (see _anchor_row). numeric_columns() is
+    rather than anywhere in the column (see _anchor_rows). numeric_columns() is
     this with the Nones dropped; keeping one definition means the two can't drift
     on which columns count as numeric.
     """
@@ -529,6 +529,15 @@ def _row_totals(result: QueryResult) -> list[tuple[int, float]]:
 # Bounds on the candidate set. The routes below are quadratic in the number of
 # totals, and this runs on every answer, so a wide many-column result must not
 # turn into a large search — which would cost both time and precision.
+# How many result rows one table row may anchor to. A PIVOT is the reason a
+# group exists at all: one table row per year, one column per category, means
+# that row's numbers live in as many result rows as there are categories. Real
+# pivots are narrow — a handful of categories — so a group larger than this is
+# not "this row's rows", it is most of the result, i.e. the unrestricted column
+# search under another name. Refusing it keeps the precision row anchoring was
+# introduced to buy back.
+_MAX_ANCHOR_GROUP = 12
+
 _MAX_CROSS_TOTALS = 12
 _MAX_FOR_COMPLEMENTS = 8
 
@@ -828,20 +837,45 @@ def _prepare(result: QueryResult) -> _Prepared:
                      labels, numbers)
 
 
-def _anchor_row(table_row: list[str], prep: _Prepared) -> int | None:
-    """Which result row does this table row describe? None when it's ambiguous.
+def _anchor_rows(table_row: list[str], prep: _Prepared) -> list[int]:
+    """Which result rows does this table row describe? [] when nothing matches.
 
-    Scored on (label matches, numeric matches) and requires a UNIQUE best. A
-    label match is worth more than a numeric one because an entity name is
-    identity while a number can collide, so a lone numeric match (score (0,1))
-    is refused — anchoring to the wrong row would reject correct cells, turning
-    a false positive into the far more damaging false negative. Ambiguity falls
-    through to the unrestricted search rather than guessing.
+    Returns a GROUP — every row tied at the best admissible score — not a single
+    row, because a PIVOTED table row legitimately describes several result rows
+    at once. A long result of (year, modality, bachelors) rendered as one row per
+    year with a column per modality means that row's three numbers live in three
+    DIFFERENT result rows.
+
+    Requiring a unique winner (the previous behaviour) got this exactly
+    backwards, and the two halves compounded. Observed live on conversation 23:
+
+      * result 5 — (year, modality, bachelors), the result that actually holds
+        all 15 numbers — scored a three-way tie for "2021" and was REFUSED as
+        ambiguous;
+      * result 3 — a superseded two-way split the model had already replaced —
+        matched exactly one row, so it anchored UNIQUELY and won;
+      * and because SOMETHING anchored, check_table took the anchored path and
+        never consulted result 5 at all.
+
+    Each of the 5 year rows was then graded against a single result row holding
+    one of its three numbers: 5 of 15 cells, a `partial` caution on a table whose
+    every number was correct and present in the turn's own results.
+
+    So ambiguity in the right result IS the pivot group. Grading against the
+    group keeps the anti-false-positive property that matters — cells are still
+    confined to result rows describing THIS entity, never "anywhere in the
+    column" — while letting a pivot reproduce.
+
+    Scored on (label matches, numeric matches). A label match outranks a numeric
+    one because an entity name is identity while a number can collide, and a lone
+    numeric match (0,1) is still refused: anchoring on one coincidental number
+    would reject correct cells, turning a false positive into the far more
+    damaging false negative.
     """
     labels = {lbl for cell in table_row
               if parse_number(cell) is None and (lbl := _norm_label(cell))}
     numbers = [v for cell in table_row if (v := parse_number(cell)) is not None]
-    best_score, best, ties = (0, 0), None, 0
+    best_score, best_rows = (0, 0), []
     for i, row_labels in enumerate(prep.row_labels):
         t = sum(1 for lbl in labels if lbl in row_labels)
         # IDENTITY, not the display tolerance _close() applies. Anchoring on a
@@ -857,13 +891,20 @@ def _anchor_row(table_row: list[str], prep: _Prepared) -> int | None:
         n = sum(1 for x in numbers if x in prep.row_numbers[i])
         score = (t, n)
         if score > best_score:
-            best_score, best, ties = score, i, 1
+            best_score, best_rows = score, [i]
         elif score == best_score and score > (0, 0):
-            ties += 1
-    if best is None or ties > 1:
-        return None
+            best_rows.append(i)
     t, n = best_score
-    return best if (t >= 1 or n >= 2) else None
+    if not (t >= 1 or n >= 2):
+        return []
+    # A group that spans (nearly) the whole result is not an anchor — it is the
+    # unrestricted column search wearing an anchor's clothes, which is exactly
+    # the precision the row anchoring was introduced to buy back. Refuse it and
+    # let the explicit fallback handle the row, so the behaviour stays honest
+    # about which search actually ran.
+    if len(best_rows) > _MAX_ANCHOR_GROUP:
+        return []
+    return best_rows
 
 
 def _match_at_row(target: float, raw_value, prep: _Prepared, index: int,
@@ -964,7 +1005,7 @@ def check_table(answer_markdown: str,
     _reconcile_value with `allow_dimension=False`: a measure cell must be verified
     by a MEASURE result-column, never by a code/dimension column it merely
     collides with (a small count "3" is not grounded by an `awlevel` 3).
-    Each row is first ANCHORED to the result row it describes (see _anchor_row);
+    Each row is first ANCHORED to the result row it describes (see _anchor_rows);
     an anchored cell is graded against that row alone, which is what makes a
     row-wise derived column reachable and what stops a value from grounding
     against an unrelated row of a long column. A row that can't be anchored falls
@@ -996,16 +1037,25 @@ def check_table(answer_markdown: str,
 
     preps = [_prepare(result) for result in results]
     scalars = _cross_scalars(results)
-    anchors: dict[int, list[int | None]] = {}   # table row identity -> per-result anchor
+    anchors: dict[int, list[list[int]]] = {}   # table row identity -> per-result groups
     matched = 0
     for v, raw, row in cells:
         key = id(row)
         if key not in anchors:
-            anchors[key] = [_anchor_row(row, prep) for prep in preps]
+            anchors[key] = [_anchor_rows(row, prep) for prep in preps]
         row_anchors = anchors[key]
-        if any(a is not None for a in row_anchors):
-            ok = any(_match_at_row(v, raw, prep, a, scalars) is not None
-                     for prep, a in zip(preps, row_anchors, strict=True) if a is not None)
+        # Anchored rows are searched ACROSS every result, so the result holding
+        # this row's numbers is consulted even when another result also anchored.
+        # That is the second half of the live failure: a superseded result
+        # anchored uniquely and wrongly, and because SOMETHING anchored, the
+        # result with the real numbers never got a look in. Grouping fixes it at
+        # the source — that result is no longer refused as "ambiguous" — so this
+        # stays a strict either/or and the unrestricted search is still reserved
+        # for rows that anchor nowhere.
+        if any(row_anchors):
+            ok = any(_match_at_row(v, raw, prep, i, scalars) is not None
+                     for prep, group in zip(preps, row_anchors, strict=True)
+                     for i in group)
         else:
             ok = _reconcile_value(v, raw, results, allow_dimension=False) is not None
         matched += 1 if ok else 0
