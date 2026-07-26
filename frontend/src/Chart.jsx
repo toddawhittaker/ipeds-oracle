@@ -346,8 +346,15 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
         </ResponsiveContainer>
       </div>
 
-      {/* Hidden, fixed-size, LIGHT, no-animation chart — the source for the PNG. */}
-      <div className="chart-export-src" aria-hidden="true" ref={exportRef}>
+      {/* Hidden, fixed-size, LIGHT, no-animation chart — the source for the PNG.
+          `inert` as well as aria-hidden, and the pair is the point: recharts
+          renders a FOCUSABLE svg surface, so aria-hidden alone left a keyboard
+          user able to Tab into an invisible offscreen chart that announces
+          nothing (axe `aria-hidden-focus`, serious — caught the moment the scans
+          started covering a rendered answer). aria-hidden takes it out of the
+          a11y tree; inert takes it out of the focus order. Same device the
+          modals use on the background. */}
+      <div className="chart-export-src" aria-hidden="true" inert ref={exportRef}>
         <VisChart width={EXPORT_W} height={longLabels ? 380 : EXPORT_H} data={chartData} margin={margin}>
           {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true, trendKey, longLabels })}
         </VisChart>
