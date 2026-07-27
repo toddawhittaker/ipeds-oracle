@@ -39,7 +39,7 @@ async function mockAdminUsersTab(page, { isAdmin = true } = {}) {
   await mockMe(page, { email: "admin@example.edu", is_admin: isAdmin });
   await mockConversations(page, []);
   await mockAllowlist(page, [
-    { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
   await mockAccessRequests(page, []);
   await mockDeniedRequests(page, []);

@@ -8,8 +8,8 @@ test("admin cannot demote or remove themselves from the allowlist UI", async ({ 
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockConversations(page, []);
   await mockAllowlist(page, [
-    { email: "admin@example.edu", note: "owner", is_admin: true, last_login: 1700000000 },
-    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "admin@example.edu", note: "owner", is_admin: true, last_login: 1700000000, last_active: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
   await mockAccessRequests(page, []);
 

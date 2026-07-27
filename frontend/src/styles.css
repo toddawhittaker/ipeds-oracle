@@ -1472,7 +1472,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    short columns get explicit widths; Email + Note split the rest and truncate. */
 .grid.data { table-layout: fixed; }
 .grid.data .col-admin { width: 132px; }
-.grid.data .col-login { width: 116px; }
+/* Last active carries a date AND a time ("7/27/2026, 2:47:03 PM"), which the
+   116px the date alone needed cannot hold. Email/Note split whatever is left
+   and truncate, so the extra width comes out of them, not out of the layout. */
+.grid.data .col-active { width: 190px; }
 .grid.data .col-actions { width: 96px; }
 .grid.data td.cell-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Keep "✓ Admin (you)" on one line so it can't wrap the row taller than one line. */

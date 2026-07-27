@@ -19,7 +19,7 @@ test("admin tabs render mocked content and the add-allowlist form posts", async 
   await mockConversations(page, []);
 
   const allowlist = await mockAllowlist(page, [
-    { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "user@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
   await mockAccessRequests(page, [{ id: 1, email: "newperson@example.edu" }]);
   // SEC #3 (round-3 security review): Admin.jsx's load() swallows a failed

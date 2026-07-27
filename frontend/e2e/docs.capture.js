@@ -135,13 +135,13 @@ async function adminMocks(page) {
   await mockConversation(page, 7, NURSING_TURN);
   await mockAllowlist(page, [
     { email: "taylor.rivera@example.edu", note: "Institutional Research", is_admin: 0,
-      added_by: "admin@example.edu", added_at: 1_755_000_000, last_login: 1_759_990_000 },
+      added_by: "admin@example.edu", added_at: 1_755_000_000, last_login: 1_759_990_000, last_active: 1_759_990_000 },
     { email: "jordan.avery@example.edu", note: "Provost's office", is_admin: 0,
-      added_by: "admin@example.edu", added_at: 1_754_000_000, last_login: 1_759_900_000 },
+      added_by: "admin@example.edu", added_at: 1_754_000_000, last_login: 1_759_900_000, last_active: 1_759_900_000 },
     { email: "admin@example.edu", note: "Owner", is_admin: 1,
-      added_by: "bootstrap", added_at: 1_750_000_000, last_login: 1_760_000_000 },
+      added_by: "bootstrap", added_at: 1_750_000_000, last_login: 1_760_000_000, last_active: 1_760_000_000 },
     { email: "sam.okafor@example.edu", note: "Enrollment", is_admin: 0,
-      added_by: "admin@example.edu", added_at: 1_756_000_000, last_login: null },
+      added_by: "admin@example.edu", added_at: 1_756_000_000, last_login: null, last_active: null },
   ]);
   await mockAccessRequests(page, [
     { id: 11, email: "casey.nguyen@example.edu", canon_email: "casey.nguyen@example.edu",

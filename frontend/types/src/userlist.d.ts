@@ -24,6 +24,6 @@ declare namespace COMPARATORS {
     function email(a: any, b: any): any;
     function note(a: any, b: any): any;
     function admin(a: any, b: any): number;
-    function last_login(a: any, b: any): number;
+    function last_active(a: any, b: any): number;
 }
 import { paginate } from "./datatable.js";

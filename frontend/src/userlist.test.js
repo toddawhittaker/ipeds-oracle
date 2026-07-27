@@ -8,6 +8,10 @@ import { filterUsers, sortUsers, paginate, rangeLabel, viewUsers } from "./userl
 const U = (email, opts = {}) => ({
   email, note: opts.note ?? "", is_admin: opts.admin ? 1 : 0,
   last_login: opts.login ?? null,
+  // Defaults to the sign-in stamp, which is what last_active collapses to for a
+  // user who has signed in and done nothing else — so a test that only cares
+  // about ordering can keep passing `login`.
+  last_active: opts.active ?? opts.login ?? null,
 });
 
 describe("filterUsers", () => {
@@ -58,19 +62,34 @@ describe("sortUsers", () => {
     expect(sortUsers(rows, "admin", "desc").map((r) => r.is_admin)).toEqual([1, 0, 0]);
   });
 
-  // The one behavior the spec pins: never-logged-in users go to the END when
+  // The one behavior the spec pins: never-active users go to the END when
   // sorting most-recent-first.
-  it("last_login desc puts null (never logged in) at the end", () => {
+  it("last_active desc puts null (never active) at the end", () => {
     const rows = [U("never@x.edu"), U("old@x.edu", { login: 100 }),
       U("new@x.edu", { login: 900 })];
-    expect(sortUsers(rows, "last_login", "desc").map((r) => r.email)).toEqual(
+    expect(sortUsers(rows, "last_active", "desc").map((r) => r.email)).toEqual(
       ["new@x.edu", "old@x.edu", "never@x.edu"]);
   });
-  it("last_login asc groups null at the start (consistent grouping)", () => {
+  it("last_active asc groups null at the start (consistent grouping)", () => {
     const rows = [U("old@x.edu", { login: 100 }), U("never@x.edu"),
       U("new@x.edu", { login: 900 })];
-    expect(sortUsers(rows, "last_login", "asc").map((r) => r.email)).toEqual(
+    expect(sortUsers(rows, "last_active", "asc").map((r) => r.email)).toEqual(
       ["never@x.edu", "old@x.edu", "new@x.edu"]);
+  });
+
+  // The sort has to read the SAME field the cell renders. A user whose activity
+  // is a question rather than a sign-in has last_login null and last_active set;
+  // a comparator still keyed on last_login would file them with the
+  // never-active rows while their cell showed a recent date — the column
+  // contradicting itself. Ordered so that reading last_login inverts the
+  // result rather than coincidentally matching it.
+  it("sorts on last_active, not last_login, when the two disagree", () => {
+    const rows = [
+      U("asked-today@x.edu", { login: null, active: 900 }),
+      U("signed-in-long-ago@x.edu", { login: 500, active: 500 }),
+    ];
+    expect(sortUsers(rows, "last_active", "desc").map((r) => r.email)).toEqual(
+      ["asked-today@x.edu", "signed-in-long-ago@x.edu"]);
   });
 
   it("breaks ties on the unique email, NOT the incoming order — so an unstable "
