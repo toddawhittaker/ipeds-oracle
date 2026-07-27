@@ -157,6 +157,29 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   state *and* its lifted selection **survive a tab switch**, resetting only when
   the admin leaves the Users section — the spec's persistence contract, with no
   new state plumbing. Pinned in `frontend/e2e/admin-users-tabs.spec.js`.
+  The Current-users table's **"Last active"** column is **DERIVED read-side** in
+  `admin.list_allowlist`, not stored: the latest of `users.last_login`, the
+  user's newest `conversations.updated_at`, and their newest
+  `usage_log.created_at`, as two pre-aggregated `LEFT JOIN`s (one scan each for
+  the whole page, not a correlated subquery per row). No migration, no write on
+  the request path, and it reads **retroactively** over history already in
+  `app.db`. Two traps, both pinned in `test_admin_router.py`: SQLite's **scalar
+  `max()` returns NULL if ANY argument is NULL**, so each arm is `COALESCE`d to
+  0 first (otherwise a user who never signed in reports as never *active*,
+  despite having conversations) — and the 0 is `NULLIF`d back out, or a
+  never-active user renders as 1 Jan 1970 and sorts as the OLDEST activity
+  instead of grouping with the nulls. `usage_log` is in the max even though
+  `_persist` writes it in the same transaction as the `conversations` bump
+  (normally redundant) because **deleting a conversation leaves the usage rows**,
+  and without that arm a user who tidies their chat list reads as never active.
+  Stated non-goal: it is **not a "last page hit"** — a sign-in-and-browse session
+  shows only the sign-in, since nothing on that path writes. Tracking that needs
+  a stamp written from `auth._user_from_request`, deliberately not done: the 30s
+  admin attention poll alone would keep any open tab looking active, so the
+  column would mean "had a tab open" for admins and "used the app" for everyone
+  else. `userlist.js`'s comparator reads `last_active`, **never `last_login`**
+  (they differ for anyone whose latest activity was a question), or the sort
+  contradicts the date in the same cell — vitest-pinned.
   **Admin "attention" indicators** surface where work is waiting: a total badge
   on the top-bar **user-badge avatar** (live on every page, Chat included — see
   the shell paragraph below) and a

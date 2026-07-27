@@ -56,14 +56,14 @@ async function openUsers(page, rows, me = { email: "admin@example.edu", is_admin
 function bulkRows(n) {
   return Array.from({ length: n }, (_, i) => ({
     email: `user${String(i).padStart(2, "0")}@example.edu`,
-    note: `note ${i}`, is_admin: false, last_login: 1_700_000_000 + i,
+    note: `note ${i}`, is_admin: false, last_login: 1_700_000_000 + i, last_active: 1_700_000_000 + i,
   }));
 }
 
 test("search filters live, shows the miss message, and clears", async ({ page }) => {
   await openUsers(page, [
-    { email: "alice@example.edu", note: "Registrar", is_admin: false, last_login: 1700000000 },
-    { email: "bob@example.edu", note: "Provost office", is_admin: false, last_login: 1700000000 },
+    { email: "alice@example.edu", note: "Registrar", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
+    { email: "bob@example.edu", note: "Provost office", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
 
   const search = page.getByRole("searchbox", { name: "Search email or note" });
@@ -90,9 +90,9 @@ test("a non-admin's Admin cell is blank — never a literal 0", async ({ page })
   // Regression: is_admin is a NUMBER, so `{r.is_admin && ...}` rendered a stray
   // "0" in every non-admin's Admin cell.
   await openUsers(page, [
-    { email: "plain@example.edu", note: "staff", is_admin: 0, last_login: null },
+    { email: "plain@example.edu", note: "staff", is_admin: 0, last_login: null, last_active: null },
   ]);
-  // .nth(3): [checkbox, email, note, admin, last_login, actions] -- the H1 a11y
+  // .nth(3): [checkbox, email, note, admin, last_active, actions] -- the H1 a11y
   // fix (per-row checkbox moved from <th scope="row"> to a leading plain <td>)
   // shifted every subsequent cell's positional index up by one.
   const adminCell = page.getByRole("row", { name: /plain@example\.edu/ }).getByRole("cell").nth(3);
@@ -103,9 +103,9 @@ test("a non-admin's Admin cell is blank — never a literal 0", async ({ page })
 
 test("clicking a header sorts and toggles direction with aria-sort", async ({ page }) => {
   await openUsers(page, [
-    { email: "carol@example.edu", note: "c", is_admin: false, last_login: 1700000000 },
-    { email: "alice@example.edu", note: "a", is_admin: false, last_login: 1700000000 },
-    { email: "bob@example.edu", note: "b", is_admin: false, last_login: 1700000000 },
+    { email: "carol@example.edu", note: "c", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
+    { email: "alice@example.edu", note: "a", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
+    { email: "bob@example.edu", note: "b", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
 
   // Default is Email ascending.
@@ -157,6 +157,33 @@ test("pagination pages through and disables Prev/Next at the ends", async ({ pag
   expect((await table.boundingBox()).height).toBe(fullHeight);
 });
 
+// The pagination test above caught this, but only on CI: it compares a full page
+// against a padded one, so it goes red only once a REAL row outgrows a filler
+// row — and whether the timestamp wraps depends on the font, so the same fixture
+// fit on a dev box and wrapped in the Playwright container. That is the worst
+// shape of failure: invisible locally, red only after the push.
+//
+// This pins the mechanism directly and deterministically, with the widest
+// ordinary en-US timestamp (measured: 174px of text + 20px padding = 194px, which
+// is why the first attempt at 190px overflowed). It fails on ANY machine if the
+// cell is allowed to wrap.
+test("a wide timestamp never wraps the Last active cell taller than one row", async ({ page }) => {
+  // 12/31, 11:59:59 PM — two-digit everything, the widest en-US rendering.
+  const widest = Math.floor(new Date("2023-12-31T23:59:59").getTime() / 1000);
+  await openUsers(page, [
+    { email: "a@example.edu", note: "n", is_admin: false,
+      last_login: widest, last_active: widest },
+  ]);
+
+  const cell = page.locator("#userpanel-current tbody tr td").nth(4);
+  await expect(cell).toHaveText(/2023/);
+  // One row, at the table's uniform 49px. A wrapped two-line cell exceeds it.
+  expect((await cell.boundingBox()).height).toBe(49);
+  // And the cause, asserted directly rather than inferred from the height: the
+  // cell must be nowrap, so no font or locale can make it wrap.
+  expect(await cell.evaluate((el) => globalThis.getComputedStyle(el).whiteSpace)).toBe("nowrap");
+});
+
 test("changing page size returns to page 1 and resizes the window", async ({ page }) => {
   await openUsers(page, bulkRows(30));
   await page.getByRole("button", { name: "Next page" }).click();
@@ -174,7 +201,7 @@ test("changing page size returns to page 1 and resizes the window", async ({ pag
 
 test("Make admin issues a PATCH and the row becomes an admin", async ({ page }) => {
   const api = await openUsers(page, [
-    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
 
   await page.getByRole("button", { name: "Promote admin" }).click();
@@ -189,7 +216,7 @@ test("promoting returns focus to the row's action button, not the top notice", a
   // Promote->Demote admin) and focus must land back on that button after the
   // reload — not on <body> (briefly-disabled button) or the top flash notice.
   await openUsers(page, [
-    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
   await page.getByRole("button", { name: "Promote admin" }).click();
   const removeAdmin = page.getByRole("button", { name: "Demote admin" });
@@ -208,8 +235,8 @@ test("paging to the last page moves focus off the now-disabled Next", async ({ p
 
 test("Remove user confirms by email, then deletes the row", async ({ page }) => {
   const api = await openUsers(page, [
-    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000 },
-    { email: "other@example.edu", note: "x", is_admin: false, last_login: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
+    { email: "other@example.edu", note: "x", is_admin: false, last_login: 1700000000, last_active: 1700000000 },
   ]);
 
   // The confirmation modal must name the affected email. Its confirm button is
@@ -235,7 +262,7 @@ test("an admin's trash button is disabled + explains why; removing is a no-op un
   // colleague is a DIFFERENT admin than the signed-in one, so their row shows
   // actions (your own row shows none). You must demote before you can remove.
   const api = await openUsers(page, [
-    { email: "colleague@example.edu", note: "staff", is_admin: true, last_login: 1700000000 },
+    { email: "colleague@example.edu", note: "staff", is_admin: true, last_login: 1700000000, last_active: 1700000000 },
   ]);
 
   const trash = page.getByRole("button", { name: "Can't remove an admin — demote first" });

@@ -41,12 +41,47 @@ class AllowlistAdd(BaseModel):
 
 @router.get("/allowlist")
 def list_allowlist():
+    """Every allowlisted address, with `last_active` — the admin Users table's
+    "when did this person last use the app?" column.
+
+    DERIVED here, not stored: it is the latest of the three activity stamps the
+    app already writes — the users.last_login stamp, the user's most recent
+    conversation, and their most recent usage_log row. That means no migration,
+    no write on the request path, and it works RETROACTIVELY against history
+    already in app.db.
+
+    Two things it deliberately is not. It is not a "last page hit": a user who
+    signs in and only reads old threads shows their sign-in, not the browsing,
+    because nothing on that path writes. Tracking that needs a stamp written
+    from auth._user_from_request, which is a different (and noisier) signal —
+    the 30s admin attention poll alone would keep any open tab looking active.
+    And it is not last_login renamed: last_login is still reported alongside it.
+
+    usage_log is in the max even though _persist writes it in the same
+    transaction as the conversations bump — normally redundant, but a user can
+    DELETE a conversation, and their usage rows survive that.
+    """
     con = connect()
     try:
         rows = con.execute(
             "SELECT a.email, a.note, a.added_by, a.added_at, "
-            "COALESCE(u.is_admin,0) AS is_admin, u.last_login "
+            "COALESCE(u.is_admin,0) AS is_admin, u.last_login, "
+            # SQLite's SCALAR max() returns NULL if ANY argument is NULL, so
+            # every arm is COALESCEd to 0 first -- otherwise one missing stamp
+            # (a user who has never signed in, say) collapses the whole
+            # expression and reports an active user as never active. NULLIF
+            # converts the all-absent case back to NULL so the UI renders "—"
+            # rather than 1 Jan 1970.
+            "NULLIF(MAX(COALESCE(u.last_login,0), COALESCE(c.last_conv,0), "
+            "            COALESCE(q.last_query,0)), 0) AS last_active "
             "FROM allowlist a LEFT JOIN users u ON u.email=a.email "
+            # Pre-aggregated and joined, NOT correlated subqueries in the SELECT
+            # list: each of these scans its table ONCE for the whole page rather
+            # than once per allowlisted user.
+            "LEFT JOIN (SELECT user_id, MAX(updated_at) AS last_conv "
+            "           FROM conversations GROUP BY user_id) c ON c.user_id=u.id "
+            "LEFT JOIN (SELECT user_id, MAX(created_at) AS last_query "
+            "           FROM usage_log GROUP BY user_id) q ON q.user_id=u.id "
             # email is the tiebreak so a batch of CSV-imported rows (all sharing
             # one added_at) comes back in a STABLE order, not an arbitrary one that
             # shuffles between requests.

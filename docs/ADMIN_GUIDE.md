@@ -63,7 +63,17 @@ Either way, the person gets a friendly *"you're approved"* email pointing them a
 the sign-in page — approval itself never emails a sign-in link; people request
 their own one-time link when they're ready.
 
-Each row shows the note, whether the person is an admin, and their last sign-in.
+Each row shows the note, whether the person is an admin, and when they were
+**last active** — the most recent of their sign-in, their latest conversation,
+and their latest question, with the date *and* time. Sort by that column to find
+accounts worth offboarding; someone who was allowlisted and never came reads as
+**—**.
+
+> "Last active" tracks things people *do*, not pages they open. A colleague who
+> signs in and only re-reads old answers shows their sign-in time, not the
+> browsing — so treat a stale date as "hasn't asked anything lately", which is
+> usually the question you're actually asking.
+
 The action buttons **promote/demote** an admin or **remove** a user. Tick the
 checkboxes to act on **many rows at once** (promote, demote, or remove in bulk).
 

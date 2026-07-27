@@ -29,11 +29,11 @@ const ADMIN = { email: "admin@example.edu", is_admin: true };
 
 function userRows() {
   return [
-    { email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000 },
-    { email: "alice@example.edu", note: "", is_admin: false, last_login: 1_700_000_000 },
-    { email: "bob@example.edu", note: "", is_admin: false, last_login: 1_700_000_000 },
-    { email: "carol@example.edu", note: "", is_admin: false, last_login: 1_700_000_000 },
-    { email: "dave@example.edu", note: "", is_admin: false, last_login: 1_700_000_000 },
+    { email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000, last_active: 1_700_000_000 },
+    { email: "alice@example.edu", note: "", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
+    { email: "bob@example.edu", note: "", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
+    { email: "carol@example.edu", note: "", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
+    { email: "dave@example.edu", note: "", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
   ];
 }
 
@@ -103,10 +103,10 @@ test.describe("select-all-matching", () => {
     // set genuinely spans more than one page. Select-all-matching is a MULTI-PAGE
     // affordance: on a single page the header checkbox already selects everything,
     // so there is nothing more to offer and the banner must NOT appear.
-    const rows = [{ email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000 }];
+    const rows = [{ email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000, last_active: 1_700_000_000 }];
     for (let i = 1; i <= 12; i++) {
       rows.push({ email: `user${String(i).padStart(2, "0")}@example.edu`,
-        note: "", is_admin: false, last_login: 1_700_000_000 });
+        note: "", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 });
     }
     await openUsersBulk(page, { rows });
     await page.getByRole("combobox", { name: "Users per page" }).selectOption("10");
@@ -255,13 +255,13 @@ test.describe("cross-table refresh", () => {
     await mockMe(page, ADMIN);
     await mockConversations(page, []);
     const users = await mockAllowlistBulk(page, [
-      { email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000 },
+      { email: "admin@example.edu", note: "me", is_admin: true, last_login: 1_700_000_000, last_active: 1_700_000_000 },
     ]);
     const pending = await mockAccessRequestsBulk(page, [
       { id: 1, email: "newcomer@example.edu", reason: null, status: "pending", created_at: 1_700_000_000 },
     ], {
       onApprove: (row) => users.addRow(
-        { email: row.email, note: null, is_admin: false, last_login: null }),
+        { email: row.email, note: null, is_admin: false, last_login: null, last_active: null }),
     });
     await mockDeniedRequestsBulk(page, []);
     await page.goto("/");

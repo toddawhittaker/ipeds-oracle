@@ -18,8 +18,8 @@ import {
 const ADMIN = { email: "admin@example.edu", is_admin: true };
 
 const USERS = [
-  { email: "alice@example.edu", note: "staff", is_admin: false, last_login: 1_700_000_000 },
-  { email: "bob@example.edu", note: "faculty", is_admin: false, last_login: 1_700_000_000 },
+  { email: "alice@example.edu", note: "staff", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
+  { email: "bob@example.edu", note: "faculty", is_admin: false, last_login: 1_700_000_000, last_active: 1_700_000_000 },
 ];
 const PENDING = [
   { id: 1, email: "p1@example.edu", reason: null, status: "pending", created_at: 1_700_000_000 },

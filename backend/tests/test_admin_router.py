@@ -995,6 +995,180 @@ def test_allowlist_add_delivery_already_allowlisted_on_reaadd_no_send_attempted(
         assert row["note"] == "updated note", row
 
 
+# --- last_active (Admin -> Users "Last active" column) ------------------------
+# Derived read-side in list_allowlist from data the app already writes: the
+# users.last_login stamp, the user's most recent conversation activity, and
+# their most recent usage_log row. No new column, no write path, and it works
+# retroactively against history already in app.db.
+
+
+def _seed_allowlisted_user(email):
+    """An allowlist row + its users row, the pairing list_allowlist LEFT JOINs.
+    Returns the user id so a caller can seed activity against it."""
+    con = connect()
+    try:
+        con.execute("INSERT OR IGNORE INTO allowlist(email, added_at) VALUES (?,?)",
+                    (email, time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return _get_or_create_user(email)
+
+
+def _seed_conversation(user_id, updated_at):
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO conversations(user_id, title, created_at, updated_at) "
+            "VALUES (?,?,?,?)", (user_id, "seeded", updated_at, updated_at))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _set_last_login(email, ts):
+    con = connect()
+    try:
+        con.execute("UPDATE users SET last_login=? WHERE email=?", (ts, email))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _allowlist_row(c, email):
+    """The one listed row for `email`. Asserts presence rather than letting
+    next() raise StopIteration: a row VANISHING is a real failure mode of this
+    query (see the no-users-row case below), and it should read as a named
+    assertion, not an unhandled exception that aborts the whole runner."""
+    rows = c.get("/api/admin/allowlist").json()
+    match = [x for x in rows if x["email"] == email]
+    assert match, f"{email} is missing from the allowlist listing entirely"
+    return match[0]
+
+
+def test_last_active_takes_the_latest_of_login_conversation_and_usage():
+    """The derivation's whole job: whichever signal is most recent wins. Seeded
+    so the WINNER is a conversation -- i.e. later than both the login stamp and
+    the usage row -- so an implementation that just re-reports last_login (the
+    column that already existed) fails instead of coincidentally passing."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "latest-wins@example.edu"
+        uid = _seed_allowlisted_user(email)
+        _set_last_login(email, 1_000)
+        _seed_usage_log(email, "q", created_at=2_000)
+        _seed_conversation(uid, 3_000)
+
+        row = _allowlist_row(c, email)
+        assert row["last_active"] == 3_000, row
+        # last_login is still reported unchanged -- last_active adds a field,
+        # it does not redefine the existing one.
+        assert row["last_login"] == 1_000, row
+
+
+def test_last_active_survives_a_null_last_login():
+    """SQLite's SCALAR max() returns NULL if ANY argument is NULL, so
+    max(u.last_login, <conv>, <usage>) collapses to NULL for every user whose
+    last_login was never stamped -- reporting 'never active' for someone with
+    conversations on file. Each arm has to be COALESCEd before the max, and
+    nothing else in the suite would catch it: the users rows other tests create
+    all go through the login path, which sets last_login."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "no-login-stamp@example.edu"
+        uid = _seed_allowlisted_user(email)
+        _seed_conversation(uid, 4_242)
+
+        row = _allowlist_row(c, email)
+        assert row["last_login"] is None, row
+        assert row["last_active"] == 4_242, row
+
+
+def test_last_active_is_per_user_not_a_global_maximum():
+    """A subquery that forgets to correlate on user_id -- MAX(updated_at) over
+    the whole conversations table -- hands EVERY user the busiest user's
+    timestamp, so the column reads plausibly while being uniformly wrong. A
+    single-user fixture cannot see this; it needs a second, busier user."""
+    with TestClient(app) as c:
+        _login(c)
+        quiet, busy = "quiet@example.edu", "busy@example.edu"
+        quiet_id = _seed_allowlisted_user(quiet)
+        busy_id = _seed_allowlisted_user(busy)
+        _seed_conversation(quiet_id, 5_000)
+        _seed_conversation(busy_id, 9_999_000)
+        _seed_usage_log(busy, "q", created_at=9_999_500)
+
+        assert _allowlist_row(c, quiet)["last_active"] == 5_000, "leaked a peer's activity"
+        assert _allowlist_row(c, busy)["last_active"] == 9_999_500
+
+
+def test_last_active_counts_usage_after_the_conversation_is_deleted():
+    """Why usage_log is in the derivation at all rather than conversations
+    alone: _persist writes both in one transaction, so they are normally
+    redundant -- but DELETE /api/chat/conversations/{id} removes the
+    conversation row and leaves usage_log intact. Without the usage arm, a user
+    who asks questions and tidies up their chat list reads as never active."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "tidy@example.edu"
+        uid = _seed_allowlisted_user(email)
+        _seed_conversation(uid, 6_000)
+        _seed_usage_log(email, "q", created_at=6_000)
+        con = connect()
+        try:
+            con.execute("DELETE FROM conversations WHERE user_id=?", (uid,))
+            con.commit()
+        finally:
+            con.close()
+
+        assert _allowlist_row(c, email)["last_active"] == 6_000
+
+
+def test_an_allowlisted_address_with_no_users_row_still_appears():
+    """The COMMON "—" row, and the one whose failure is worst. A users row is
+    only created on first sign-in (or on promote-to-admin), so someone invited
+    who has not yet come has an allowlist row and NOTHING else. last_active
+    hangs two more LEFT JOINs off that already-LEFT-JOINed users row; if any of
+    them were tightened to an inner join, every not-yet-signed-in invitee would
+    DISAPPEAR from Admin -> Users — an admin would think the invite never went
+    out and re-send. A wrong timestamp is a cosmetic bug; a missing row is not,
+    so this asserts presence first and the value second."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "invited-no-users-row@example.edu"
+        con = connect()
+        try:
+            con.execute("INSERT OR IGNORE INTO allowlist(email, added_at) VALUES (?,?)",
+                        (email, time.time()))
+            con.commit()
+        finally:
+            con.close()
+        # Precondition: the thing that makes this case distinct from the one below.
+        con = connect()
+        try:
+            assert con.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone() is None
+        finally:
+            con.close()
+
+        row = _allowlist_row(c, email)   # raises StopIteration if the row vanished
+        assert row["last_active"] is None, row
+
+
+def test_last_active_is_null_never_zero_for_a_user_who_has_done_nothing():
+    """COALESCE(...,0) is how the NULL-propagation above is defused, so the 0
+    has to be converted back to NULL on the way out. Leaking it would render as
+    1 Jan 1970 in the admin table instead of the '—' the column shows for a
+    never-active user -- and would sort as the OLDEST activity rather than
+    grouping with the nulls."""
+    with TestClient(app) as c:
+        _login(c)
+        email = "invited-never-came@example.edu"
+        _seed_allowlisted_user(email)
+
+        row = _allowlist_row(c, email)
+        assert row["last_active"] is None, row
+
+
 def test_allowlist_add_delivery_already_allowlisted_never_emits_failure_warning():
     """The exact regression being fixed: before this change, `invited=False`
     for an already-allowlisted re-add was indistinguishable from a genuine
@@ -3455,6 +3629,18 @@ def run():
           test_bulk_allowlist_promote_happy_path_and_skip_reasons)
     check("bulk allowlist demote: happy path + skip reason (not an administrator)",
           test_bulk_allowlist_demote_happy_path_and_skip_reasons)
+    check("last_active: the latest of login / conversation / usage wins",
+          test_last_active_takes_the_latest_of_login_conversation_and_usage)
+    check("last_active: a NULL last_login does not collapse the whole max",
+          test_last_active_survives_a_null_last_login)
+    check("last_active: per-user, never a global maximum",
+          test_last_active_is_per_user_not_a_global_maximum)
+    check("last_active: usage still counts after the conversation is deleted",
+          test_last_active_counts_usage_after_the_conversation_is_deleted)
+    check("last_active: NULL (never 0) for a user who has done nothing",
+          test_last_active_is_null_never_zero_for_a_user_who_has_done_nothing)
+    check("an allowlisted address with NO users row still appears in the list",
+          test_an_allowlisted_address_with_no_users_row_still_appears)
     check("bulk allowlist demote: self included -> 400, nothing changes",
           test_bulk_allowlist_demote_rejects_self_included_400_nothing_changes)
     check("bulk allowlist delete: self included -> 400, nothing changes",

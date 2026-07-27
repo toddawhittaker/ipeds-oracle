@@ -31,7 +31,7 @@ async function openUsers(page, rows, { patchStatus = 200 } = {}) {
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
 }
 
-const ONE = [{ email: "colleague@example.edu", note: "staff", is_admin: 0, last_login: null }];
+const ONE = [{ email: "colleague@example.edu", note: "staff", is_admin: 0, last_login: null, last_active: null }];
 
 test("a successful action shows an ok-colored toast that can be dismissed", async ({ page }) => {
   await openUsers(page, ONE);
@@ -58,8 +58,8 @@ test("dismissing a mid-stack toast hands focus to a sibling, not <body>", async 
   // Two persistent error toasts (errors don't auto-dismiss); dismissing the
   // first must move focus to the second's Dismiss button, never drop to <body>.
   await openUsers(page, [
-    { email: "aa@example.edu", note: "", is_admin: 0, last_login: null },
-    { email: "bb@example.edu", note: "", is_admin: 0, last_login: null },
+    { email: "aa@example.edu", note: "", is_admin: 0, last_login: null, last_active: null },
+    { email: "bb@example.edu", note: "", is_admin: 0, last_login: null, last_active: null },
   ], { patchStatus: 500 });
 
   await page.getByRole("row", { name: /aa@example\.edu/ }).getByRole("button", { name: "Promote admin" }).click();

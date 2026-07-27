@@ -901,7 +901,7 @@ jamie@example.com,External reviewer,`}</pre>
         emptyNoData="No users yet."
         emptyNoMatch="No users match your search."
         initialSort={{ key: "email", dir: "asc" }}
-        sortLabels={{ email: "email", note: "note", admin: "admin status", last_login: "last login" }}
+        sortLabels={{ email: "email", note: "note", admin: "admin status", last_active: "last active" }}
         selectable
         selectionId={(r) => r.email}
         selectionMode={usersSel.mode}
@@ -939,8 +939,19 @@ jamie@example.com,External reviewer,`}</pre>
                 {me && r.email === me.email ? "✓ Admin (you)" : "✓ Admin"}
               </span>
             ) : null) },
-          { key: "last_login", label: "Last login", sortable: true, colClass: "col-login",
-            render: (r) => (r.last_login ? new Date(r.last_login * 1000).toLocaleDateString() : "—") },
+          // Last ACTIVITY, not last sign-in: the server derives it as the
+          // latest of the sign-in stamp, the user's most recent conversation,
+          // and their most recent question, so a colleague who signed in months
+          // ago and has been asking questions since reads as current. Rendered
+          // through the shared fmtDateTime (date + time, viewer locale, "—" on
+          // null) — the date alone couldn't answer "are they using it today?".
+          // cell-trunc (nowrap + ellipsis) is not cosmetic here: a timestamp is
+          // one atomic value, and letting it wrap grows the row past its 49px
+          // floor, which breaks the pixel-exact pagination height invariant on
+          // whichever font happens to be wider. See .col-active in styles.css.
+          { key: "last_active", label: "Last active", sortable: true, colClass: "col-active",
+            cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.last_active),
+            render: (r) => fmtDateTime(r.last_active) },
         ]}
         renderActions={(r) => {
           const isSelf = me && r.email === me.email;
