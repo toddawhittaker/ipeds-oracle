@@ -9,6 +9,11 @@ const USE_PREVIEW = !!process.env.CI || process.env.E2E_PREVIEW === "1";
 // ipeds.db is required to run this suite.
 export default defineConfig({
   testDir: "./e2e",
+  // e2e/docs.capture.js photographs the app for docs/images/ — it asserts
+  // nothing and writes into the repo, so it must never run as part of the
+  // suite. It has its own config (playwright.docs.config.js) and entry point
+  // (scripts/docs-shots.sh).
+  testIgnore: "**/*.capture.js",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
