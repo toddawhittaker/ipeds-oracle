@@ -22,6 +22,7 @@ a deterministic bag-of-words vector where needed — this exercises the cosine
 dedup/retrieval paths reproducibly, and also covers the no-embeddings fallbacks.
 """
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -57,6 +58,7 @@ def _reset():
     con = connect()
     con.execute("DELETE FROM skills")
     con.execute("DELETE FROM meta WHERE key='skills_embed_source_version'")
+    con.execute("DELETE FROM meta WHERE key=?", (skills._SEED_APPLIED_KEY,))
     con.commit()
     con.close()
 
@@ -554,12 +556,147 @@ def test_seed_from_schema_examples_inserts_verified_seed_rows():
         assert np.allclose(got, want), "seed embedding must derive from headline+description"
 
 
-def test_seed_from_schema_examples_is_noop_when_table_not_empty():
+def test_seed_from_schema_examples_is_idempotent():
     _reset()
     _with_embed(lambda: skills.seed_from_schema_examples())
-    n = _with_embed(lambda: skills.seed_from_schema_examples())  # table is no longer empty
-    assert n == 0, "seeding must only ever run once, on an empty table"
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+    assert n == 0, "every seed was already applied — the second call must insert nothing"
     assert _count() == len(SEED_EXAMPLES), "a second seed call must not add rows"
+
+
+def test_seeding_ships_a_lesson_added_in_a_later_release():
+    """THE upgrade bug (found live on 0.2.0): seeding used to bail whenever the
+    skills table held ANY row, so a seed added in a later release reached fresh
+    installs only. Every existing deployment had rows, so the gate never
+    reopened and new exemplars silently never arrived."""
+    _reset()
+    # A deployment seeded by an older release that shipped all but the last
+    # lesson, and which has since accumulated a critic lesson of its own.
+    shipped_then = SEED_EXAMPLES[:-1]
+    new_in_this_release = SEED_EXAMPLES[-1]
+    for s in shipped_then:
+        _with_embed(lambda s=s: skills.save_skill(
+            s.question, s.commented_sql, headline=s.headline, lesson=s.description,
+            created_by="seed", verified=True))
+    _with_embed(lambda: skills.save_skill(
+        "a question a user asked", "SELECT 1", headline="A rule the critic found.",
+        lesson="Some generalized description.", created_by="critic", verified=False))
+
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+
+    assert n == 1, f"exactly the one new lesson should ship, got {n}"
+    con = connect()
+    headlines = [r[0] for r in con.execute(
+        "SELECT headline FROM skills WHERE created_by='seed'")]
+    con.close()
+    assert new_in_this_release.headline in headlines, "the new seed never arrived"
+    assert len(headlines) == len(SEED_EXAMPLES), \
+        f"the already-present seeds must not be duplicated: {len(headlines)}"
+
+
+def test_seeding_an_already_seeded_db_adds_nothing_and_records_the_backfill():
+    """A database seeded before slug tracking existed has no marker at all. It
+    must be recognized from its existing rows, not re-seeded from scratch —
+    save_skill does no dedup, so a miss here means 8 duplicate lessons."""
+    _reset()
+    for s in SEED_EXAMPLES:
+        _with_embed(lambda s=s: skills.save_skill(
+            s.question, s.commented_sql, headline=s.headline, lesson=s.description,
+            created_by="seed", verified=True))
+    con = connect()  # the marker-less state a pre-upgrade db is actually in
+    con.execute("DELETE FROM meta WHERE key=?", (skills._SEED_APPLIED_KEY,))
+    con.commit()
+    con.close()
+
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+
+    assert n == 0, f"an already-seeded db must gain nothing, got {n} duplicate(s)"
+    assert _count(created_by="seed") == len(SEED_EXAMPLES)
+    con = connect()
+    marker = get_meta(con, skills._SEED_APPLIED_KEY)
+    con.close()
+    assert marker is not None, "the backfill must be recorded, or it re-runs every boot"
+    assert set(json.loads(marker)) == {s.slug for s in SEED_EXAMPLES}, marker
+
+
+def test_a_deleted_seed_is_not_resurrected_on_the_next_boot():
+    """An admin deleting a seed from the Skills tab is a decision, not drift.
+    Deriving "what's missing" from the table alone would undo it every restart."""
+    _reset()
+    _with_embed(lambda: skills.seed_from_schema_examples())
+    con = connect()
+    con.execute("DELETE FROM skills WHERE headline=?", (SEED_EXAMPLES[0].headline,))
+    con.commit()
+    con.close()
+
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+
+    assert n == 0, "a deliberately deleted seed must stay deleted"
+    assert _count(created_by="seed") == len(SEED_EXAMPLES) - 1
+
+
+def test_backfill_matches_a_seed_row_an_admin_edited():
+    """The backfill matches on headline OR question because the Skills tab lets
+    an admin rewrite either. Matching on headline alone would re-insert an
+    edited lesson beside the admin's own version of it."""
+    _reset()
+    for s in SEED_EXAMPLES:
+        _with_embed(lambda s=s: skills.save_skill(
+            s.question, s.commented_sql, headline=s.headline, lesson=s.description,
+            created_by="seed", verified=True))
+    con = connect()
+    con.execute("UPDATE skills SET headline=? WHERE headline=?",
+                ("An admin's own wording of this rule.", SEED_EXAMPLES[0].headline))
+    con.execute("UPDATE skills SET question=? WHERE question=?",
+                ("an admin's own scenario", SEED_EXAMPLES[1].question))
+    con.execute("DELETE FROM meta WHERE key=?", (skills._SEED_APPLIED_KEY,))
+    con.commit()
+    con.close()
+
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+
+    assert n == 0, f"an admin-edited seed must not be re-inserted, got {n}"
+    assert _count(created_by="seed") == len(SEED_EXAMPLES)
+
+
+def test_backfill_recognizes_a_v1_row_without_the_upgrade_running_first():
+    """A database still carrying pre-migration-6 seed rows has NULL headlines,
+    so the backfill would miss them if headline were its only match key —
+    inserting duplicates beside them. It matches `question` too, which NO
+    upgrade path rewrites (migration 6 and upgrade_seed_lessons touch only
+    lesson/notes/headline/canonical_sql), so recognition does not depend on
+    lifespan running the upgrade first."""
+    _reset()
+    v1_description, v2 = SEED_LESSON_UPGRADES[0]
+    con = connect()
+    con.execute(
+        "INSERT INTO skills(question, canonical_sql, notes, lesson, headline, "
+        "created_by, verified, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (v2.question, "OLD SQL EXAMPLE", v1_description, v1_description, None,
+         "seed", 1, 0))
+    con.commit()
+    con.close()
+
+    n = _with_embed(lambda: skills.seed_from_schema_examples())
+
+    assert n == len(SEED_EXAMPLES) - 1, \
+        f"the v1 row's own lesson must not be re-inserted, got {n} inserts"
+    con = connect()
+    dupes = con.execute(
+        "SELECT COUNT(*) FROM skills WHERE question=?", (v2.question,)).fetchone()[0]
+    con.close()
+    assert dupes == 1, f"the v1 seed was duplicated ({dupes} rows for one lesson)"
+
+
+def test_seed_slugs_are_unique_and_stable():
+    """A slug is a seed's only durable identity across text rewrites; a duplicate
+    or empty one silently collapses two lessons into one applied-marker entry."""
+    slugs = [s.slug for s in SEED_EXAMPLES]
+    assert all(slugs), f"every seed needs a slug: {slugs}"
+    assert len(set(slugs)) == len(slugs), f"seed slugs must be unique: {slugs}"
+    for k in slugs:
+        assert k == k.lower().strip(), f"slug should be lowercase: {k!r}"
+        assert " " not in k, f"slug should not contain spaces: {k!r}"
 
 
 # --- seed/embedding backfills ----------------------------------------------------
@@ -865,8 +1002,19 @@ def run():
           test_save_skill_null_embedding_when_headline_and_lesson_both_empty)
     check("seed_from_schema_examples inserts verified seed rows (headline+embedding)",
           test_seed_from_schema_examples_inserts_verified_seed_rows)
-    check("seed_from_schema_examples is a no-op when the table isn't empty",
-          test_seed_from_schema_examples_is_noop_when_table_not_empty)
+    check("seed_from_schema_examples is idempotent",
+          test_seed_from_schema_examples_is_idempotent)
+    check("a seed added in a later release reaches an upgraded deployment",
+          test_seeding_ships_a_lesson_added_in_a_later_release)
+    check("an already-seeded db gains nothing and records the backfill",
+          test_seeding_an_already_seeded_db_adds_nothing_and_records_the_backfill)
+    check("a deleted seed is not resurrected on the next boot",
+          test_a_deleted_seed_is_not_resurrected_on_the_next_boot)
+    check("the backfill matches a seed row an admin edited",
+          test_backfill_matches_a_seed_row_an_admin_edited)
+    check("the backfill recognizes a v1 row without the upgrade running first",
+          test_backfill_recognizes_a_v1_row_without_the_upgrade_running_first)
+    check("seed slugs are unique and non-empty", test_seed_slugs_are_unique_and_stable)
     check("upgrade_seed_lessons: v1->v2, admin-edit-safe, idempotent",
           test_upgrade_seed_lessons_upgrades_v1_leaves_admin_edit_alone_idempotent)
     check("reembed_skills_if_needed: stale marker re-embeds all rows + advances",

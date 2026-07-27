@@ -82,13 +82,14 @@ async def lifespan(app: FastAPI):
             con.close()
     except Exception as e:  # noqa: BLE001 -- a housekeeping sweep must never block boot
         log.warning("auth row purge skipped: %s", e)
-    try:
-        from app.skills import seed_from_schema_examples
-        n = seed_from_schema_examples()
-        if n:
-            log.info("seeded %d skill exemplars", n)
-    except Exception as e:  # noqa: BLE001
-        log.warning("skill seeding skipped: %s", e)
+    # Upgrade BEFORE seeding, so the seed backfill
+    # (skills._backfill_applied_seed_keys) sees rows already normalized to the
+    # current headline text. NOT load-bearing — that backfill also matches on
+    # `question`, which no upgrade path rewrites, so a v1 row with a NULL
+    # headline is recognized either way (pinned by
+    # test_backfill_recognizes_a_v1_row_without_the_upgrade_running_first).
+    # It is simply the right order: the upgrade has nothing to say about rows
+    # seeding is about to write, and it is a no-op on a fresh database.
     try:
         from app.skills import upgrade_seed_lessons
         n = upgrade_seed_lessons()
@@ -96,6 +97,13 @@ async def lifespan(app: FastAPI):
             log.info("upgraded %d seed lesson(s) to the generalized headline/description shape", n)
     except Exception as e:  # noqa: BLE001
         log.warning("seed lesson upgrade skipped: %s", e)
+    try:
+        from app.skills import seed_from_schema_examples
+        n = seed_from_schema_examples()
+        if n:
+            log.info("seeded %d skill exemplars", n)
+    except Exception as e:  # noqa: BLE001
+        log.warning("skill seeding skipped: %s", e)
     try:
         from app.skills import reembed_skills_if_needed
         n = reembed_skills_if_needed()

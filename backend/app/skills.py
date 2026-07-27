@@ -44,6 +44,11 @@ _embed_ok = True
 # every stored vector once, at startup.
 _EMBED_SOURCE_VERSION = "2"
 
+# `meta` key holding the JSON list of SeedLesson slugs this database has been
+# given, so `seed_from_schema_examples` ships each shipped lesson exactly once
+# — including ones added in a release the deployment upgraded INTO.
+_SEED_APPLIED_KEY = "seed_lessons_applied"
+
 
 def _embedder():
     global _model, _embed_ok
@@ -413,24 +418,86 @@ def invalidate_cache() -> None:
         con.close()
 
 
-def seed_from_schema_examples() -> int:
-    """Seed the skill library with the SCHEMA.md §8 / README worked examples.
+def _applied_seed_keys(con) -> set[str] | None:
+    """The seed slugs this database has already been given, or None if it has
+    never recorded any (i.e. it predates key tracking and needs the backfill)."""
+    raw = get_meta(con, _SEED_APPLIED_KEY)
+    if raw is None:
+        return None
+    try:
+        return set(json.loads(raw))
+    except (ValueError, TypeError):  # hand-edited/corrupt marker — re-derive it
+        log.warning("unreadable %s marker; re-deriving from existing seed rows",
+                    _SEED_APPLIED_KEY)
+        return None
 
-    The seed data (question, headline, description, commented SQL) lives in
+
+def _backfill_applied_seed_keys(con) -> set[str]:
+    """One-time bridge for a database seeded before keys existed: a seed whose
+    headline OR question already appears on a `seed` row is treated as applied.
+
+    Matching on either half is deliberate — an admin may have edited one of them
+    (the Skills tab allows it), and the cost of a miss is a duplicate row someone
+    deletes, whereas the cost of a false match is a lesson silently never
+    shipped. `question` in particular is what makes this independent of
+    `upgrade_seed_lessons`: a database still carrying pre-migration-6 rows has
+    NULL headlines, but no upgrade path has ever rewritten a question, so those
+    rows are still recognized whichever order the two run in."""
+    rows = con.execute(
+        "SELECT headline, question FROM skills WHERE created_by='seed'").fetchall()
+    headlines = {r["headline"] for r in rows if r["headline"]}
+    questions = {r["question"] for r in rows if r["question"]}
+    return {s.slug for s in SEED_EXAMPLES
+            if s.headline in headlines or s.question in questions}
+
+
+def seed_from_schema_examples() -> int:
+    """Ship any seed lesson this database has not been given yet.
+
+    The seed data (key, question, headline, description, commented SQL) lives in
     app.seeds, a dependency-free leaf module shared with db migration 6 so a
-    fresh install and an upgraded one carry identical lesson text."""
+    fresh install and an upgraded one carry identical lesson text.
+
+    Per-LESSON, not all-or-nothing. This used to bail whenever the `skills`
+    table held any row at all, which meant a seed added in a later release
+    reached fresh installs only: every existing deployment had rows (its
+    original seeds, plus critic/feedback lessons), so the gate was closed
+    forever and new exemplars silently never arrived. Found in the wild on
+    0.2.0.
+
+    A seed ships at most ONCE per database. The keys applied so far are
+    recorded in `meta`, so an admin who deletes a seed from the Skills tab has
+    made a decision the next boot respects — re-deriving "missing" from the
+    table contents would resurrect it on every restart. `save_skill` does no
+    dedup of its own (that is `_upvote_or_save`, and only for unverified
+    same-source rows), so the marker is the only thing standing between an
+    upgrade and a pile of duplicate seeds."""
     n = 0
     con = connect()
     try:
-        have = con.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+        applied = _applied_seed_keys(con)
+        if applied is None:
+            applied = _backfill_applied_seed_keys(con)
+        missing = [s for s in SEED_EXAMPLES if s.slug not in applied]
     finally:
         con.close()
-    if have:
-        return 0
-    for s in SEED_EXAMPLES:
+
+    for s in missing:
         save_skill(s.question, s.commented_sql, headline=s.headline,
                   lesson=s.description, notes="", created_by="seed", verified=True)
         n += 1
+
+    # Written even when nothing was inserted: recording the backfill is what
+    # makes the NEXT call cheap and, more importantly, what makes a later
+    # deletion stick. Unknown keys in `applied` are preserved so a rollback to
+    # an image with fewer seeds doesn't forget what a newer one shipped.
+    con = connect()
+    try:
+        set_meta(con, _SEED_APPLIED_KEY,
+                 json.dumps(sorted(applied | {s.slug for s in SEED_EXAMPLES})))
+        con.commit()
+    finally:
+        con.close()
     return n
 
 

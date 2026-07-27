@@ -939,6 +939,27 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   a feedback candidate never collapses into a critic/seed row on the same
   scenario); the embedding key is **headline+description, never the question**.
   `SKILLS_ENABLED=0/1` gates the on/off eval A/B.
+  **Shipped SEED lessons arrive per-lesson, and exactly once.** `app/seeds.py`'s
+  `SEED_EXAMPLES` are inserted at boot by `skills.seed_from_schema_examples`,
+  which used to bail whenever the `skills` table held **any** row — so a seed
+  added in a later release reached **fresh installs only**: every existing
+  deployment had rows (its original seeds, plus critic/feedback lessons), the
+  gate was shut forever, and new exemplars silently never arrived. Found in the
+  wild on 0.2.0 by Todd, whose upgraded deployment kept its original 3 while the
+  image shipped 8. Each `SeedLesson` now carries a stable **`slug`** — its only
+  durable identity, since headline/description/SQL all get rewritten
+  (`SEED_LESSON_UPGRADES` exists because they have been) — and the slugs applied
+  so far live in `meta.seed_lessons_applied`. Two consequences, both deliberate:
+  an admin who **deletes** a seed from the Skills tab has made a decision the
+  next boot respects (deriving "missing" from the table alone would resurrect it
+  every restart), and a database that predates the marker is recognized by a
+  **one-time backfill** matching each seed's headline **OR question** against
+  existing `created_by='seed'` rows — `question` because no upgrade path has ever
+  rewritten one, so a pre-migration-6 row with a NULL headline still matches and
+  the backfill does not depend on `upgrade_seed_lessons` having run first.
+  `save_skill` does **no** dedup of its own (that's `_upvote_or_save`, unverified
+  same-source rows only), so the marker is the only thing between an upgrade and
+  a pile of duplicate seeds. Pinned in `test_skills.py`.
 - A **semantic answer cache** short-circuits repeat questions — **scoped to the
   user who asked** (migration 29's `query_cache.user_id`) and **bounded**.
   `cache_lookup` had no user predicate, so a colleague asking within
