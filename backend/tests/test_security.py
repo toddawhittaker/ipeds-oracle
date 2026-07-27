@@ -451,6 +451,51 @@ def test_verify_info_takes_the_token_in_a_body_not_a_query_string() -> None:
             f"the POST form must still name the account, got {p.status_code}: {p.text}")
 
 
+def test_legacy_verify_bounce_only_forwards_a_token_shaped_like_ours() -> None:
+    """`GET /api/auth/verify?token=` reflects its input into a 303 `Location`.
+
+    CodeQL flagged it as py/url-redirection (alert #44). PROBED first, both
+    ways, and it was never exploitable: the `/verify#` prefix is constant, so
+    `//evil.com` and `https://evil.com` land in the FRAGMENT and stay
+    same-origin, and Starlette percent-encodes CR/LF so the header cannot be
+    split. This pins the hardening that followed rather than a live hole — a
+    token that is not shaped like one we mint is DROPPED, not forwarded, so no
+    attacker-chosen text is bounced through our origin into the page a victim
+    just landed on.
+
+    The regression it catches is someone "simplifying" the shape check away:
+    every hostile probe below would then be reflected verbatim into `Location`.
+    A real token must still round-trip, or the check is a lockout — which is why
+    both halves are asserted together.
+    """
+    hostile = [
+        "//evil.com/x",                 # protocol-relative
+        "https://evil.com/",            # absolute
+        "a\r\nSet-Cookie: pwned=1",     # response splitting
+        "\\\\evil.com",                 # backslash host confusion
+        "../../etc/passwd",             # traversal-shaped
+        "",                             # empty
+    ]
+    with TestClient(app) as c:
+        for probe in hostile:
+            g = c.get("/api/auth/verify", params={"token": probe},
+                      follow_redirects=False)
+            loc = g.headers.get("location", "")
+            assert loc == "/verify", (
+                f"a malformed token must be dropped, not reflected; "
+                f"probe={probe!r} produced Location={loc!r}")
+
+        # …and a genuine token still rides through, or this is a lockout.
+        r = c.post("/api/auth/request", json={"email": "admin@example.edu"})
+        assert r.status_code == 200, r.text
+        real = captured["link"].split("token=")[1]
+        g = c.get("/api/auth/verify", params={"token": real},
+                  follow_redirects=False)
+        assert g.headers["location"] == f"/verify#token={real}", (
+            f"a real minted token must still be forwarded, got "
+            f"{g.headers.get('location')!r}")
+
+
 def test_signing_in_purges_dead_auth_rows_only() -> None:
     """A sign-in sweeps consumed/expired magic-link tokens and expired sessions —
     and touches nothing that's still live. Regression it catches, both ways: (a)
@@ -619,6 +664,8 @@ def run() -> None:
           test_magic_link_token_never_appears_in_a_server_visible_url)
     check("verify-info takes the token in a body, not the URL",
           test_verify_info_takes_the_token_in_a_body_not_a_query_string)
+    check("the legacy bounce forwards only a token shaped like ours (CodeQL #44)",
+          test_legacy_verify_bounce_only_forwards_a_token_shaped_like_ours)
 
     print("\n8. log injection: user-controlled tz param is scrubbed before logging")
     check("resolve_tz sanitizes control chars before the warning log",

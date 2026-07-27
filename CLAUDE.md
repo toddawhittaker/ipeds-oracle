@@ -1484,6 +1484,25 @@ working — the harness re-invokes you when it settles. Merge only when lint · 
 backend · e2e · image are all green. End commit messages with the `Co-Authored-By:`
 trailer.
 
+**A green PR is NOT an all-clear — check CodeQL separately, every time.**
+Code-scanning alerts do **not** block a merge (merge protection is off), and the
+`CodeQL` check going green means *the analysis ran*, not that it found nothing.
+So a finding lands silently in the Security tab and stays there. After a merge:
+
+```bash
+gh api "repos/toddawhittaker/ipeds-oracle/code-scanning/alerts?state=open" \
+  --jq '.[] | "\(.number)\t\(.rule.security_severity_level)\t\(.rule.id)\t\(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+```
+
+Todd had to point out alert #44 himself, several PRs after it appeared — the
+whole point of the tool is that it catches what review doesn't, which is
+worthless if nobody reads the queue. **Triage, don't just dismiss:** #44
+(`py/url-redirection`) was genuinely not exploitable, and it was still worth
+fixing rather than annotating away, because a queue with a permanent red item in
+it trains you to stop looking. Probe an alert both ways before deciding — the
+probe is what tells you whether you're patching a hole or hardening a
+non-hole, and the answer belongs in the code comment.
+
 **Two sessions → use a worktree.** If a second dev/agent session runs in this
 repo, they share one working tree — a `git checkout` in one moves the other's
 branch mid-edit and their servers collide on port 8000. Isolate each with a git
