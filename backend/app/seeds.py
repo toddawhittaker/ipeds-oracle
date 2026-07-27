@@ -16,6 +16,16 @@ from typing import NamedTuple
 
 
 class SeedLesson(NamedTuple):
+    """One shipped lesson.
+
+    `slug` is a short stable identifier and the ONLY durable identity a seed has:
+    `skills.seed_from_schema_examples` records the keys it has applied, so a
+    seed ships exactly once per database even though its headline, description
+    and SQL may all be rewritten later (SEED_LESSON_UPGRADES exists because
+    they have been). Never reuse or rename a slug — a rename reads as a brand
+    new lesson and re-inserts it beside the one already there.
+    """
+    slug: str
     question: str
     headline: str
     description: str
@@ -24,6 +34,7 @@ class SeedLesson(NamedTuple):
 
 SEED_EXAMPLES: list[SeedLesson] = [
     SeedLesson(
+        slug="cip-exact-6-digit",
         question=(
             "Top 20 institutions granting Associate's degrees in Registered Nursing "
             "(CIP 51.3801) per year over the last 3 years"
@@ -59,6 +70,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         ),
     ),
     SeedLesson(
+        slug="hd-join-unitid-and-year",
         question=(
             "How many bachelor's degrees in Computer Science (11.0701) did California "
             "public universities award in the most recent year?"
@@ -89,6 +101,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         ),
     ),
     SeedLesson(
+        slug="cip-99-grand-total",
         question="National total of associate's degrees per year, all programs",
         headline=(
             "For a national or all-programs total, use the grand-total row "
@@ -115,6 +128,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
     # they never had a terse v1, so they carry NO SEED_LESSON_UPGRADES entry
     # (migration 6 only rewrites the originals). ---
     SeedLesson(
+        slug="cip-family-leaf-codes",
         question="Which states awarded the most Master's degrees in Education?",
         headline=(
             "Total a CIP family with its 6-digit leaf codes, never a LIKE-prefix "
@@ -148,6 +162,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         ),
     ),
     SeedLesson(
+        slug="latest-year-from-years",
         question=(
             "How many Computer Science bachelor's degrees did California public "
             "universities award last year?"
@@ -178,6 +193,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         ),
     ),
     SeedLesson(
+        slug="no-future-years",
         question="Is community college undergraduate enrollment rising or falling?",
         headline=(
             "IPEDS data does not include future years; verify the latest available "
@@ -198,6 +214,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         ),
     ),
     SeedLesson(
+        slug="clarify-temporal-scope",
         question="Which five states award the most nursing bachelor's degrees?",
         headline=(
             "Clarify temporal scope when a user switches topics without specifying a "
@@ -213,6 +230,7 @@ SEED_EXAMPLES: list[SeedLesson] = [
         commented_sql="",  # a conversational lesson — no worked query
     ),
     SeedLesson(
+        slug="efcp-vs-completions-proxy",
         question=(
             "How is enrollment for AS-level allied healthcare fields trending across "
             "the nation for the last 5 years? Group by public, private, and "
