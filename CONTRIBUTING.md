@@ -8,7 +8,8 @@ see [SCHEMA.md](docs/SCHEMA.md).
 
 - **Backend** — Python 3.12, [FastAPI](https://fastapi.tiangolo.com/), an
   embedded tool‑calling agent over any OpenAI-compatible LLM provider
-  (`LLM_BASE_URL`; [OpenRouter](https://openrouter.ai/) + DeepSeek by default).
+  (`LLM_BASE_URL`, [OpenRouter](https://openrouter.ai/) by default; you choose
+  the model).
   Local, CPU‑only embeddings via [fastembed](https://github.com/qdrant/fastembed)
   power skill retrieval and the semantic cache.
 - **Data** — three SQLite databases, all separate: `ipeds.db` (the ~1.9 GB survey
@@ -110,9 +111,18 @@ real email), `make down` to stop. Details in `.claude/skills/interactive-testing
 Config is env‑driven via `pydantic-settings`; every setting lives in
 [`.env.example`](.env.example) — enforced by `backend/tests/test_env_example.py`,
 which diffs the file against `config.Settings` in both directions, so a new
-setting can't ship undocumented and a removed one can't linger. The default model is `deepseek/deepseek-v4-flash`
-escalating to `deepseek/deepseek-v4-pro`; `LLM_MAX_TOOL_ITERS` caps the agent's
-tool rounds.
+setting can't ship undocumented and a removed one can't linger.
+
+`MODEL_DEFAULT` ships with **no default and must be set** — the app is
+provider-agnostic, and a shipped default would both brand it with one vendor and
+silently route a self-hoster's traffic to a model they never picked. Use whatever
+ID your `LLM_BASE_URL` serves; it needs tool-calling support (a model that can't
+call tools falls back to the fence path — see `STRUCTURED_EMISSION_ENABLED`).
+`MODEL_ESCALATION` is optional (blank = never escalate) and names a stronger model
+the agent reaches for after repeated tool failures. Setting `LLM_API_KEY` without
+`MODEL_DEFAULT` logs a CRITICAL at boot (`main._missing_model_warning`) rather than
+failing opaquely on the first question. `LLM_MAX_TOOL_ITERS` caps the agent's tool
+rounds.
 
 ### Running two sessions at once (git worktrees)
 

@@ -109,7 +109,7 @@ weren't separately invoked.
 
 This is the **ipeds / ipeds-oracle** project: a unified cross-year IPEDS SQLite
 database plus a private FastAPI + React natural-language query web app
-(magic-link auth, self-learning DeepSeek agent). Read `CLAUDE.md` and `docs/SCHEMA.md`
+(magic-link auth, self-learning LLM agent). Read `CLAUDE.md` and `docs/SCHEMA.md`
 before planning anything that touches queries; the SQL safety and CIP/award-level
 aggregation gotchas there are load-bearing. Point every specialist you dispatch
 at the relevant one.

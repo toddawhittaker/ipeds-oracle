@@ -10,7 +10,7 @@ test("empty chat: privacy warning, example chips fill the composer, sidebar resi
   await page.goto("/");
 
   // The warning must call out confidential/non-public info and the third-party
-  // model, without hardcoding the institution's name or "DeepSeek" or any
+  // model, without hardcoding the institution's name or any model/vendor name or any
   // cost-savings framing. (Redesign: it's now a quiet margin note, not a box —
   // same substance, calmer treatment.)
   await expect(

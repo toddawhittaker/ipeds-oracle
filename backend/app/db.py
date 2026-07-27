@@ -287,7 +287,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     # Prompt tokens the LLM provider served from ITS OWN prefix cache (the big
     # static SCHEMA.md prefix), per request — lets the Usage dashboard show a
     # prompt-cache-hit rate. Provider-reported (OpenRouter's
-    # prompt_tokens_details.cached_tokens / DeepSeek's prompt_cache_hit_tokens);
+    # prompt_tokens_details.cached_tokens, or a native prompt_cache_hit_tokens);
     # stays 0 on a provider that reports neither. Distinct from `cached`, which
     # flags our own semantic answer-cache short-circuits.
     (18, "ALTER TABLE usage_log ADD COLUMN cached_prompt_tokens INTEGER NOT NULL DEFAULT 0;"),

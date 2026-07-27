@@ -139,7 +139,7 @@ def _get_or_create_user(email):
         con.close()
 
 
-def _seed_usage_log(email, question, created_at=None, model_used="deepseek-v4-flash",
+def _seed_usage_log(email, question, created_at=None, model_used="test-model",
                      ok=1, cached=0, cost=0.01, prompt_tokens=10, completion_tokens=20,
                      cached_prompt_tokens=0, first_call_prompt_tokens=0,
                      first_call_cached_prompt_tokens=0, escalated=0,
