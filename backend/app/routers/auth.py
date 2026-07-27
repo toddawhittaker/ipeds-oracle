@@ -1,6 +1,7 @@
 """Auth routes: request a magic link, verify it, whoami, logout."""
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
@@ -46,6 +47,11 @@ def request_link(body: LoginRequest, request: Request, tasks: BackgroundTasks):
     return auth.request_login(email, tasks)
 
 
+# The shape of what `security.new_token()` mints: `secrets.token_urlsafe(32)`,
+# i.e. base64url. Bounds are generous so a future token size still passes.
+_TOKEN_SHAPE = re.compile(r"^[A-Za-z0-9_-]{16,256}$")
+
+
 @router.get("/verify")
 def verify_get(token: str):
     # A GET never consumes the token — email link-scanners / prefetchers that
@@ -57,6 +63,24 @@ def verify_get(token: str):
     # target would be pointless here: the browser would follow it and the token
     # would land in the access log on the redirected page load anyway, making
     # the whole fix cosmetic.
+    #
+    # A token that isn't SHAPED like one we mint is dropped rather than
+    # reflected. It cannot be a link we sent, so the only thing forwarding it
+    # achieves is bouncing attacker-chosen text through our origin into a page
+    # the victim just landed on. This is also what closes CodeQL's
+    # py/url-redirection (alert #44): the redirect target is now constant except
+    # for a value matched against a strict allowlist.
+    #
+    # Not a vulnerability being patched — PROBED both ways first, and neither
+    # works: the `/verify#` prefix is constant, so `//evil.com` and
+    # `https://evil.com` stay same-origin (they land in the fragment), and
+    # Starlette percent-encodes CR/LF, so `\r\nSet-Cookie:` cannot split the
+    # header. This is defence in depth plus a clean alert queue, not a fix for a
+    # live hole. Dropping to a bare `/verify` lands on the SPA's own "this link
+    # is missing its token" state, which is the honest outcome for a token we
+    # would refuse anyway.
+    if not _TOKEN_SHAPE.fullmatch(token):
+        return RedirectResponse(url="/verify", status_code=303)
     return RedirectResponse(url=f"/verify#token={token}", status_code=303)
 
 
