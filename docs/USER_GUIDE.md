@@ -270,6 +270,12 @@ menu:
 ![The account menu with the theme toggle, About, and Sign out](images/user-menu.png)
 
 - **Light / dark mode** — toggle it here; your choice is remembered.
+
+  ![The same answer in light and dark mode](images/answer-themes.png)
+
+  *The whole app follows, charts included — and a chart you copy as an image
+  pastes cleanly on a white background either way.*
+
 - **About** — what the app is, plus links to these guides.
 - **Sign out**.
 

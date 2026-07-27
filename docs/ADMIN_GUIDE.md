@@ -129,6 +129,10 @@ choose (hour / day / 7 days / 30 days / custom):
 
 ![The Usage tab: totals, a trend chart, and top users](images/admin-usage.png)
 
+*The admin console follows your light/dark preference too:*
+
+![The Usage tab in light and dark mode](images/admin-usage-themes.png)
+
 - **Totals** — queries, tokens, spend, the three cache stats below, escalations, and
   failures.
 - **A trend chart** — queries, tokens, or spend over time (switch with the toggle;

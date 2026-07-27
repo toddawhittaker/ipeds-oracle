@@ -210,7 +210,12 @@ class Settings(BaseSettings):
 
     # --- Auth / sessions ---------------------------------------------------
     session_ttl_days: int = Field(default=30)
-    magic_link_ttl_minutes: int = Field(default=15)
+    # 30, not 15: onboarding is when this window matters most, and 15 minutes is
+    # shorter than the gap between "request a link" and "come back from the
+    # meeting you were pulled into". An expired link on someone's first contact
+    # with the app reads as broken, not as secure. The token is still one-time,
+    # single-use, consumed only by a deliberate POST, and swept once dead.
+    magic_link_ttl_minutes: int = Field(default=30)
     cookie_secure: bool = Field(default=False)     # True in production (HTTPS)
     cookie_name: str = Field(default="ipeds_session")
     admin_emails: str = Field(default="")          # comma-separated bootstrap admins
