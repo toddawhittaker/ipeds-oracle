@@ -25,6 +25,14 @@ os.environ["LLM_MAX_TOOL_ITERS"] = "3"
 # shifting call/iteration counts). The structured-specific tests flip it True
 # per-test via get_settings().structured_emission_enabled = True.
 os.environ["STRUCTURED_EMISSION_ENABLED"] = "false"
+# Model IDs ship BLANK (the app is vendor-neutral — config.py), and llm.py reads
+# "no MODEL_ESCALATION" as "never escalate". So the escalation test needs a
+# concrete, DISTINCT pair pinned here or it can't express its contract at all:
+# with both blank, `s.model_escalation in seen_models` is trivially true (every
+# recorded model is "") while the "Escalating" status never fires. Pinned at
+# import for the same reason as the flag above — ci_env.sh doesn't run in CI.
+os.environ["MODEL_DEFAULT"] = "test-vendor/test-model"
+os.environ["MODEL_ESCALATION"] = "test-vendor/test-model-strong"
 
 import httpx  # noqa: E402
 
@@ -114,8 +122,8 @@ def test_cached_prompt_tokens_accumulate_across_calls_openrouter_shape():
     assert res.first_call_prompt_tokens == 100, res.first_call_prompt_tokens
 
 
-def test_cached_prompt_tokens_accept_deepseek_native_shape():
-    # DeepSeek-direct reports the same fact as `prompt_cache_hit_tokens` (not the
+def test_cached_prompt_tokens_accept_the_provider_native_shape():
+    # Some providers report the same fact as `prompt_cache_hit_tokens` (not the
     # nested OpenRouter details) — the reader must accept both spellings.
     async def fake_chat(client, model, messages, tools=None):
         return {"choices": [{"message": {"content": "Answer."}}],
@@ -536,7 +544,7 @@ def test_reconstruct_answer_skips_a_degenerate_empty_clarify():
 
 # --- S5 grounding gate + leaked tool-markup scrub ------------------------------
 # chat/32: an exhausted turn fabricated a whole answer table (0/15 cells grounded)
-# and leaked raw DeepSeek tool-call markup into the prose. The gate degrades a
+# and leaked raw pseudo-XML tool-call markup into the prose. The gate degrades a
 # WHOLLY-ungrounded exhaustion answer to an honest "couldn't finish"; the scrub
 # strips the markup. Both are deterministic — no LLM.
 
@@ -1122,7 +1130,7 @@ def test_extract_figure_recovers_a_leading_bare_object():
 
 
 # --- mis-fenced ![figure]/![chart] normalization (a live regression) -----------
-# DeepSeek was observed emitting figures/charts as MARKDOWN IMAGE syntax
+# A model was observed emitting figures/charts as MARKDOWN IMAGE syntax
 # (`![figure]\n{json}`, `![chart]\n{json}`) instead of ```figure/```chart fences.
 # Nothing recognized that, so the raw JSON leaked into chat (and, where the retry
 # separately recovered the figure, DUPLICATED it). Normalization rewrites the

@@ -65,9 +65,30 @@ def _insecure_cookie_warning(s) -> str | None:
     return None
 
 
+def _missing_model_warning(s) -> str | None:
+    """The boot-time model-configuration check. Returns a CRITICAL message when a
+    provider key is configured but MODEL_DEFAULT is blank, else None.
+
+    Model IDs ship with no default (config.py) because the app is
+    provider-agnostic — but that means a deployment that sets only LLM_API_KEY
+    would send `model=""` upstream and fail on the FIRST question, as an opaque
+    provider 400 in the chat stream. This turns that into one legible line at
+    boot, on the same terms as the cookie-posture check above: logged, not
+    raised, and gated on the key being present so a key-free environment (CI,
+    the test suites, a dev box with no provider) stays silent."""
+    if s.llm_api_key.strip() and not s.model_default.strip():
+        return ("NO MODEL CONFIGURED: LLM_API_KEY is set but MODEL_DEFAULT is blank — "
+                "every question will fail upstream. Set MODEL_DEFAULT to a model your "
+                "LLM_BASE_URL serves.")
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _warning = _insecure_cookie_warning(get_settings())
+    if _warning:
+        log.critical(_warning)
+    _warning = _missing_model_warning(get_settings())
     if _warning:
         log.critical(_warning)
     init_db()

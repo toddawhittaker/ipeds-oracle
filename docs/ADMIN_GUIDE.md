@@ -157,8 +157,8 @@ summed over the window. That means it's always current: switch models, or the
 provider changes its rates, and Spend follows automatically with nothing to update.
 
 The catch: reporting cost this way is an **OpenRouter** feature. If you point
-`LLM_BASE_URL` at a provider that doesn't return a per-request cost (DeepSeek-direct,
-a self-hosted gateway, most raw OpenAI-compatible endpoints), **Spend reads $0** —
+`LLM_BASE_URL` at a provider that doesn't return a per-request cost (a vendor's own
+API, a self-hosted gateway, most raw OpenAI-compatible endpoints), **Spend reads $0** —
 not because nothing was spent, but because nobody told the app the price. Token
 counts still populate; only the dollar figure is blank. When the app detects this
 (real activity, but no cost recorded and no fallback prices set), it shows a **yellow

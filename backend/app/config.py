@@ -98,8 +98,18 @@ class Settings(BaseSettings):
     # --- LLM (any OpenAI-compatible provider; OpenRouter by default) -------
     llm_api_key: str = Field(default="")
     llm_base_url: str = Field(default="https://openrouter.ai/api/v1")
-    model_default: str = Field(default="deepseek/deepseek-v4-flash")
-    model_escalation: str = Field(default="deepseek/deepseek-v4-pro")
+    # Model IDs are REQUIRED IN PRACTICE and ship with NO default on purpose:
+    # the app is provider-agnostic, and a shipped default would both brand it
+    # with one vendor and silently route a self-hoster's traffic somewhere they
+    # never chose. Set MODEL_DEFAULT to whatever your LLM_BASE_URL serves.
+    # Blank rather than a pydantic-required field so a key-free environment
+    # (CI, the test suites, a dev box with no provider) can still construct
+    # Settings; a deployment that HAS a key but no model gets a screaming
+    # CRITICAL at boot instead — see main._missing_model_warning.
+    model_default: str = Field(default="")
+    # Optional. The agent escalates to this model after repeated tool failures;
+    # blank means "never escalate" (llm.py already guards on it being set).
+    model_escalation: str = Field(default="")
     llm_temperature: float = Field(default=0.0)
     llm_max_tool_iters: int = Field(default=20)
     # Fallback token prices (USD per 1,000,000 tokens) for the Usage spend total.
@@ -133,8 +143,8 @@ class Settings(BaseSettings):
     # the whole downstream (extract/critic/ground/retry/persist/frontend) is
     # unchanged. **DEFAULT ON** (0.2): dark-shipped in PR-1, adoption tuned in 0.1
     # (reject-and-reprompt), then validated 100%-structured / 0-leaks across FOUR
-    # vendors (DeepSeek/MiniMax/Anthropic/Moonshot). A model that can't (or won't)
-    # call the tool FALLS BACK to the fence path + the leak sentinel — kept as the
+    # separate vendors' models. A model that can't (or won't) call the tool FALLS
+    # BACK to the fence path + the leak sentinel — kept as the
     # safety net for tool-incapable self-hosted models. Set false to force the
     # fence path. Watch Admin → Usage "Answer leaks · N% structured".
     structured_emission_enabled: bool = Field(default=True)

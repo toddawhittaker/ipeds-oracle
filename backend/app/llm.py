@@ -637,8 +637,8 @@ def _reconstruct_answer(emit_call: dict) -> str:
 
 
 # The forced re-emit's tool_choice: FORCE emit_answer specifically (not "required",
-# which could re-call run_sql). Paired with reasoning OFF because forcing a
-# specific function is rejected while thinking is enabled on DeepSeek/Kimi.
+# which could re-call run_sql). Paired with reasoning OFF because several
+# reasoning models reject a forced specific function while thinking is enabled.
 _FORCE_EMIT_CHOICE = {"type": "function", "function": {"name": "emit_answer"}}
 
 
@@ -653,8 +653,8 @@ async def _forced_emit(client: httpx.AsyncClient, model: str,
     then falls back to the plain-text nudge + fence path. Accrues its own usage
     into `res` (the call is real spend even when it fails open).
 
-    Reasoning OFF is REQUIRED (not just cosmetic): forcing a specific function is
-    rejected by DeepSeek/Kimi while thinking is enabled (tested 2026-07-23). The
+    Reasoning OFF is REQUIRED (not just cosmetic): several reasoning models 400 on
+    a forced specific function while thinking is enabled (tested 2026-07-23). The
     answer's reasoning already happened on the turn that produced the free-typed
     draft, so this re-emit is pure reformat-into-the-tool and needs none."""
     s = get_settings()
@@ -740,12 +740,18 @@ def _scrub_leaked_blocks(prose: str) -> tuple[str, bool]:
     return "".join(parts).strip(), True
 
 
-# DeepSeek serializes a tool call in its own pseudo-XML markup (fullwidth vertical
-# bars U+FF5C bracket the DSML sentinel). When the model tries to call a tool on a
-# tools-DISABLED turn (the S5 synthesis pass), or otherwise misbehaves, that markup
-# can leak into the answer text as a `<｜｜DSML｜｜tool_calls>…` block. It is never
-# legitimate prose, so it is always safe to excise. The block may be truncated by a
-# stream cut, so also strip an unclosed trailing block, then sweep any stray tag.
+# Some model families serialize a tool call in a pseudo-XML markup of their own
+# rather than in the API's tool_calls field (fullwidth vertical bars U+FF5C bracket
+# the sentinel below). When the model tries to call a tool on a tools-DISABLED turn
+# (the S5 synthesis pass), or otherwise misbehaves, that markup can leak into the
+# answer text as a `<｜｜DSML｜｜tool_calls>…` block. It is never legitimate prose, so
+# it is always safe to excise. The block may be truncated by a stream cut, so also
+# strip an unclosed trailing block, then sweep any stray tag.
+#
+# Vendor-specific by nature: this sentinel is emitted by the DeepSeek-family
+# models, named here ONLY so a maintainer knows which provider to reproduce
+# against. The scrubber is keyed on the literal sentinel and is inert for every
+# model that doesn't emit it, so it costs nothing to keep for all providers.
 _DSML = "｜｜DSML｜｜"  # ｜｜DSML｜｜
 _TOOL_MARKUP_BLOCK_RE = re.compile(
     re.escape(f"<{_DSML}tool_calls>") + r".*?" + re.escape(f"</{_DSML}tool_calls>"),
@@ -756,7 +762,7 @@ _TOOL_MARKUP_TAG_RE = re.compile(r"</?" + re.escape(_DSML) + r"[^>]*>")
 
 
 def _strip_tool_markup(prose: str) -> tuple[str, bool]:
-    """Excise leaked DeepSeek tool-call markup (`<｜｜DSML｜｜tool_calls>…`) from an
+    """Excise leaked pseudo-XML tool-call markup (`<｜｜DSML｜｜tool_calls>…`) from an
     answer, WHATEVER its state — a well-formed block, an unclosed one truncated by a
     stream cut, or a stray residual tag. That sentinel never appears in legitimate
     answer prose, so removal is unconditional. Returns (clean_prose, removed)."""
@@ -961,7 +967,7 @@ async def _finalize_answer(res: AgentResult, answer: str, question: str, *,
         await _maybe_retry_figure(res, question, res.answer)
     # Last-resort scrubbers (the fence-fallback net): strip residual
     # figure/chart-shaped JSON a mangled fence left in the prose, and any leaked
-    # DeepSeek tool-call markup. `leaked` records debris caught AND removed.
+    # pseudo-XML tool-call markup. `leaked` records debris caught AND removed.
     res.answer, res.leaked = _scrub_leaked_blocks(res.answer)
     res.answer, markup_removed = _strip_tool_markup(res.answer)
     res.leaked = res.leaked or markup_removed

@@ -614,6 +614,43 @@ def test_insecure_cookie_posture_is_flagged_at_boot() -> None:
         app_public_url="https://oracle.example.edu", cookie_secure=True)) is None
 
 
+def test_a_configured_provider_with_no_model_is_flagged_at_boot() -> None:
+    # Model IDs ship with NO default (the app is provider-agnostic), so a deployment
+    # that sets only LLM_API_KEY would send model="" upstream and fail on the FIRST
+    # question as an opaque provider 400 mid-stream. THE REGRESSION THIS CATCHES:
+    # re-adding a vendor default to config.Settings would make this check
+    # unreachable, and dropping the check would put that failure back in the chat
+    # stream. Gated on the key so the key-free posture (CI, the suites, a dev box
+    # with no provider) stays silent — same terms as the cookie-posture check above.
+    import types
+
+    from app.config import Settings
+
+    # The DECLARED default, not the resolved value: reading get_settings() here
+    # would fail on any dev box whose .env sets MODEL_DEFAULT while staying green
+    # in CI (no .env) — the ci_env.sh bleed trap.
+    for field in ("model_default", "model_escalation"):
+        shipped = Settings.model_fields[field].default
+        assert shipped == "", (
+            f"{field} ships a default of {shipped!r}. Model IDs are deliberately "
+            f"vendor-neutral and un-defaulted: a shipped default both brands the "
+            f"app with one vendor and silently routes a self-hoster's traffic to a "
+            f"model they never chose.")
+
+    from app.main import _missing_model_warning
+    danger = _missing_model_warning(types.SimpleNamespace(
+        llm_api_key="sk-real-key", model_default=""))
+    assert danger and "MODEL_DEFAULT" in danger, danger
+    # whitespace-only is still "no model configured"
+    assert _missing_model_warning(types.SimpleNamespace(
+        llm_api_key="sk-real-key", model_default="   ")) is not None
+    # a configured pair is silent, and so is every key-free environment
+    assert _missing_model_warning(types.SimpleNamespace(
+        llm_api_key="sk-real-key", model_default="vendor/some-model")) is None
+    assert _missing_model_warning(types.SimpleNamespace(
+        llm_api_key="", model_default="")) is None
+
+
 def test_email_button_escapes_the_href_attribute() -> None:
     # SEC-4: a quote in an href must be escaped so it can't break out of the
     # attribute and inject markup into the outgoing email.
@@ -676,6 +713,8 @@ def run() -> None:
           test_magic_link_uses_configured_origin_not_request_host)
     check("insecure cookie posture is flagged CRITICAL at boot (SEC-2)",
           test_insecure_cookie_posture_is_flagged_at_boot)
+    check("a configured provider with no MODEL_DEFAULT is flagged at boot",
+          test_a_configured_provider_with_no_model_is_flagged_at_boot)
     check("email button escapes the href attribute (SEC-4)",
           test_email_button_escapes_the_href_attribute)
 

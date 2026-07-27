@@ -254,7 +254,7 @@ def test_reasoning_sent_when_passed_and_omitted_otherwise():
     _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
                                  reasoning={"enabled": False}, settings=s))
     assert client.last["json"]["reasoning"] == {"enabled": False}, client.last["json"]
-    # Not passed → no reasoning key (provider default = thinking on for DeepSeek).
+    # Not passed → no reasoning key (thinking is on by default on most reasoning models).
     client = _RecordingClient(_json_response(_OK_BODY))
     _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
                                  settings=s))
@@ -358,10 +358,10 @@ def test_model_and_messages_passthrough_and_returns_parsed_json():
     client = _RecordingClient(_json_response(_OK_BODY))
     s = _settings()
     msgs = [{"role": "user", "content": "hello"}]
-    result = _run(llmhttp.chat_completion(client, model="deepseek/deepseek-v4-flash",
+    result = _run(llmhttp.chat_completion(client, model="test-vendor/test-model",
                                           messages=msgs, temperature=0.0, settings=s))
     payload = client.last["json"]
-    assert payload["model"] == "deepseek/deepseek-v4-flash", payload
+    assert payload["model"] == "test-vendor/test-model", payload
     assert payload["messages"] == msgs, payload
     assert result == _OK_BODY, result
 
@@ -369,7 +369,7 @@ def test_model_and_messages_passthrough_and_returns_parsed_json():
 # ---------------------------------------------------------------------------
 # 10. cached_tokens(usage) — reads the provider's prompt-cache-hit count for
 #     the Usage dashboard's prompt-cache rate. Must accept BOTH the OpenRouter
-#     shape (nested prompt_tokens_details.cached_tokens) and the DeepSeek-native
+#     shape (nested prompt_tokens_details.cached_tokens) and a provider-native
 #     spelling (prompt_cache_hit_tokens), and degrade to 0 — never raise — on a
 #     provider that reports neither. Dropping it silently is the regression: the
 #     dashboard could then never show cache reuse.
@@ -380,7 +380,7 @@ def test_cached_tokens_reads_openrouter_nested_shape():
     assert llmhttp.cached_tokens(usage) == 80, usage
 
 
-def test_cached_tokens_reads_deepseek_native_shape():
+def test_cached_tokens_reads_the_provider_native_shape():
     usage = {"prompt_tokens": 100, "prompt_cache_hit_tokens": 45}
     assert llmhttp.cached_tokens(usage) == 45, usage
 
@@ -433,8 +433,8 @@ def run():
           test_model_and_messages_passthrough_and_returns_parsed_json)
     check("cached_tokens reads the OpenRouter nested cached_tokens shape",
           test_cached_tokens_reads_openrouter_nested_shape)
-    check("cached_tokens reads the DeepSeek-native prompt_cache_hit_tokens shape",
-          test_cached_tokens_reads_deepseek_native_shape)
+    check("cached_tokens reads a provider-native prompt_cache_hit_tokens shape",
+          test_cached_tokens_reads_the_provider_native_shape)
     check("cached_tokens degrades to 0 when the provider reports no cache stats",
           test_cached_tokens_zero_when_provider_reports_none)
     print()

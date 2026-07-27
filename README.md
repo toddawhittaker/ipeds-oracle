@@ -158,7 +158,9 @@ your own LLM + email keys and the built `ipeds.db`.
 
 - **Docker** with Compose (or Python 3.12 for a from‑source run — see
   [CONTRIBUTING.md](CONTRIBUTING.md)).
-- An **OpenRouter** API key (or any OpenAI‑compatible provider).
+- An **OpenRouter** API key (or any OpenAI‑compatible provider), **plus a model to
+  point it at** — the app ships no default model, so you pick one (`MODEL_DEFAULT`).
+  It needs tool‑calling support; beyond that any reasonably capable model works.
 - **Email delivery** for the magic‑link and access‑request emails — either a
   **Resend** API key (easiest for a pilot) **or your own SMTP** (Google Workspace,
   Microsoft 365, or any relay). See [Email](#email) below.
@@ -170,7 +172,7 @@ your own LLM + email keys and the built `ipeds.db`.
 
 ```bash
 git clone https://github.com/toddawhittaker/ipeds-oracle && cd ipeds-oracle
-cp .env.example .env && $EDITOR .env    # LLM_API_KEY, RESEND_API_KEY, ADMIN_EMAILS, APP_PUBLIC_URL, …
+cp .env.example .env && $EDITOR .env    # LLM_API_KEY, MODEL_DEFAULT, RESEND_API_KEY, ADMIN_EMAILS, APP_PUBLIC_URL, …
 mkdir -p srv-data/accdb                  # the /data volume (holds the DBs + import sources)
 cp /path/to/ipeds.db srv-data/ipeds.db   # the built database (see "Data" below)
 docker compose up -d --build             # --build until you pull a published image
@@ -258,6 +260,7 @@ commented list. The essentials:
 | Variable | What |
 | --- | --- |
 | `LLM_API_KEY` / `LLM_BASE_URL` | LLM provider (OpenRouter by default) |
+| `MODEL_DEFAULT` / `MODEL_ESCALATION` | **which model to use — required, no default.** The app is provider‑agnostic, so it ships no vendor's model ID; use whatever your `LLM_BASE_URL` serves. `MODEL_ESCALATION` is an optional stronger model for hard questions (blank = never escalate) |
 | `MAIL_BACKEND` / `RESEND_API_KEY` / `SMTP_*` / `MAIL_FROM` | email delivery (see [Email](#email)) |
 | `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted on first boot |
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |

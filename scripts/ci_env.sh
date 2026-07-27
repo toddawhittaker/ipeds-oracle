@@ -53,6 +53,12 @@ export MAIL_BACKEND=""
 export SMTP_HOST=""
 export LLM_INPUT_COST_PER_MTOK=0
 export LLM_OUTPUT_COST_PER_MTOK=0
+#   * MODEL_DEFAULT + MODEL_ESCALATION blank — these ship with NO default (the app
+#     is provider-agnostic), so CI resolves them to "". A dev .env necessarily sets
+#     real model IDs, which would otherwise be the one LLM setting present locally
+#     and absent in CI. Blanking them pins the key-free posture both places.
+export MODEL_DEFAULT=""
+export MODEL_ESCALATION=""
 #   * FIGURE_RETRY_ENABLED=false — the missing-figure retry makes a real LLM call
 #     when a data answer emits no figure. test_agent_loop.py sets its own test key,
 #     so with the retry ON its figureless numeric-answer cases would each attempt a

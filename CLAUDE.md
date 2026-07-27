@@ -2,8 +2,8 @@
 
 A **private FastAPI + React web app** that answers natural-language questions
 about U.S. colleges/universities (IPEDS = the U.S. Dept. of Education's census of
-postsecondary institutions) for an institution's approved colleagues. A
-DeepSeek-backed agent turns each question into SQL against the read-only IPEDS
+postsecondary institutions) for an institution's approved colleagues. An
+LLM-backed agent turns each question into SQL against the read-only IPEDS
 dataset (`ipeds.db`) and streams back an answer. The app is the work;
 `CONTRIBUTING.md` (dev handbook) and the README's **Self-hosting** section are the deeper guides.
 
@@ -437,9 +437,14 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   is one-shot today).
 
 ### The agent loop
-LLM = **DeepSeek** via any OpenAI-compatible provider (`LLM_BASE_URL`, **OpenRouter**
-by default, through the shared `backend/app/llmhttp.py` transport; `v4-flash` default →
-escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
+LLM = **any OpenAI-compatible provider** (`LLM_BASE_URL`, **OpenRouter** by default,
+through the shared `backend/app/llmhttp.py` transport). **`MODEL_DEFAULT` ships with
+NO default and must be set** — the app is vendor-neutral on purpose, so a shipped
+default would both brand it and silently route a self-hoster's traffic to a model
+they never chose; `MODEL_ESCALATION` is optional (blank = never escalate) and is
+reached for after repeated tool failures. A key with no model logs a CRITICAL at
+boot (`main._missing_model_warning`). Run as a tool-calling agent loop wrapped in
+three guards:
 - a topical **guardrail** in front (off-topic questions never reach the DB) —
   `guard.py`'s `_SYSTEM` explicitly whitelists **corrective feedback and a
   meta-critique of a prior answer's method/scope** (e.g. "you should have kept
@@ -681,7 +686,8 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   alone. **S5-only** on purpose — the normal path keeps shipping first-pass
   ungrounded figures observe-only (#163); acting on the verdict is scoped to the
   highest-risk path (a sibling to `retry:suppressed`). **(3)** `_strip_tool_markup`
-  scrubs leaked DeepSeek tool-call markup (`<｜｜DSML｜｜tool_calls>…`) from BOTH
+  scrubs leaked pseudo-XML tool-call markup (`<｜｜DSML｜｜tool_calls>…`, emitted by
+  some model families instead of the API's tool_calls field) from BOTH
   terminators. Exhaustion is recorded on `usage_log.exhaustion` (**migration 27**:
   `answered`/`degraded`/NULL) → the **Exhausted** stat on Admin → Usage
   (`exhaustionLabel`, `· N degraded` breakdown). Pinned by the `S5:`/`S5 gate:` cases
@@ -754,7 +760,7 @@ escalate to `v4-pro`), run as a tool-calling agent loop wrapped in three guards:
   left in the prose — **whatever the wrapping**, keyed off the object SHAPE (figure =
   `value`+`label`, chart = `type`+`data`), so a novel mangle is caught too; a proper
   ```chart fence is preserved (fenced segments skipped whole). The fence-path
-  fallback fires ~30% of the time live on DeepSeek flash, so this net matters in
+  fallback fires ~30% of the time live on a cheap/fast model, so this net matters in
   practice. `usage_log.answer_leaked` records debris **caught and removed** (never
   shipped); with `emit_mode` (structured|fence, migration 24) it drives the
   **Answer-leaks** scrub-rate stat on Admin → Usage (`leakRate`/`leakLabel`). Clarify

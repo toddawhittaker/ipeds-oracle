@@ -54,4 +54,4 @@ without re-deriving your reasoning.
   patterns and conventions in the codebase rather than importing new ones.
 - Honor the locked project decisions: keep SQLite (WAL + read-only + atomic
   swap), embedded tool-calling (not a standalone MCP server), no secrets in code,
-  DeepSeek-via-OpenRouter with escalation.
+  any OpenAI-compatible provider (operator-chosen model, with escalation).

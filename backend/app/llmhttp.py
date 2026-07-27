@@ -23,7 +23,8 @@ PROBE_TIMEOUT = 30.0     # cheap guard / critic classification calls
 def cached_tokens(usage: dict) -> int:
     """Prompt tokens the provider served from ITS OWN prompt cache, for this
     response. OpenRouter normalizes to `prompt_tokens_details.cached_tokens`;
-    DeepSeek-native reports `prompt_cache_hit_tokens`. Returns 0 on a provider
+    some providers report `prompt_cache_hit_tokens` natively instead. Both
+    shapes are read. Returns 0 on a provider
     that reports neither — so the metric degrades to "no reuse observed" rather
     than raising. (This is the LLM provider's prefix cache — distinct from our
     own semantic answer cache in query_cache.)"""
@@ -55,13 +56,13 @@ async def chat_completion(client: httpx.AsyncClient, *, model: str, messages: li
 
     `tool_choice` defaults to `"auto"` when tools are present (the model
     decides); pass an explicit value to FORCE a tool — e.g. `{"type":"function",
-    "function":{"name":"emit_answer"}}`. NOTE (tested 2026-07-23): forcing a
-    specific function (or `"required"`) is REJECTED by DeepSeek/Kimi while
-    reasoning is on — pair it with `reasoning={"enabled": False}`.
+    "function":{"name":"emit_answer"}}`. NOTE (tested 2026-07-23): several
+    reasoning models REJECT a forced specific function (or `"required"`) while
+    thinking is on, with a 400 — pair it with `reasoning={"enabled": False}`.
 
-    `reasoning` (OpenRouter's unified param) is omitted by default → the
-    provider's own default (thinking ON for DeepSeek v4). Pass
-    `{"enabled": False}` to turn thinking off for this call."""
+    `reasoning` (OpenRouter's unified param) is omitted by default → whatever
+    the provider does on its own (thinking is ON by default on most reasoning
+    models). Pass `{"enabled": False}` to turn thinking off for this call."""
     payload: dict = {"model": model, "messages": messages, "temperature": temperature}
     # Omitting tools entirely (rather than tool_choice="none") forces a plain
     # text answer more portably across OpenAI-compatible providers — used for

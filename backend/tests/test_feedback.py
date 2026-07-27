@@ -101,7 +101,7 @@ def test_distill_returns_none_with_empty_history():
 
 def _configured(**overrides):
     base = dict(skills_enabled=True, llm_api_key="test-key",
-                model_default="deepseek/deepseek-v4-flash",
+                model_default="test-vendor/test-model",
                 llm_base_url="https://openrouter.ai/api/v1",
                 app_public_url="http://localhost:8000", llm_app_title="IPEDS Query")
     base.update(overrides)
