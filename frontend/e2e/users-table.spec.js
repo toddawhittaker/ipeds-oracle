@@ -157,6 +157,33 @@ test("pagination pages through and disables Prev/Next at the ends", async ({ pag
   expect((await table.boundingBox()).height).toBe(fullHeight);
 });
 
+// The pagination test above caught this, but only on CI: it compares a full page
+// against a padded one, so it goes red only once a REAL row outgrows a filler
+// row — and whether the timestamp wraps depends on the font, so the same fixture
+// fit on a dev box and wrapped in the Playwright container. That is the worst
+// shape of failure: invisible locally, red only after the push.
+//
+// This pins the mechanism directly and deterministically, with the widest
+// ordinary en-US timestamp (measured: 174px of text + 20px padding = 194px, which
+// is why the first attempt at 190px overflowed). It fails on ANY machine if the
+// cell is allowed to wrap.
+test("a wide timestamp never wraps the Last active cell taller than one row", async ({ page }) => {
+  // 12/31, 11:59:59 PM — two-digit everything, the widest en-US rendering.
+  const widest = Math.floor(new Date("2023-12-31T23:59:59").getTime() / 1000);
+  await openUsers(page, [
+    { email: "a@example.edu", note: "n", is_admin: false,
+      last_login: widest, last_active: widest },
+  ]);
+
+  const cell = page.locator("#userpanel-current tbody tr td").nth(4);
+  await expect(cell).toHaveText(/2023/);
+  // One row, at the table's uniform 49px. A wrapped two-line cell exceeds it.
+  expect((await cell.boundingBox()).height).toBe(49);
+  // And the cause, asserted directly rather than inferred from the height: the
+  // cell must be nowrap, so no font or locale can make it wrap.
+  expect(await cell.evaluate((el) => globalThis.getComputedStyle(el).whiteSpace)).toBe("nowrap");
+});
+
 test("changing page size returns to page 1 and resizes the window", async ({ page }) => {
   await openUsers(page, bulkRows(30));
   await page.getByRole("button", { name: "Next page" }).click();

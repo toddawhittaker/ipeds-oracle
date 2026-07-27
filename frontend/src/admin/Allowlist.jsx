@@ -945,7 +945,12 @@ jamie@example.com,External reviewer,`}</pre>
           // ago and has been asking questions since reads as current. Rendered
           // through the shared fmtDateTime (date + time, viewer locale, "—" on
           // null) — the date alone couldn't answer "are they using it today?".
+          // cell-trunc (nowrap + ellipsis) is not cosmetic here: a timestamp is
+          // one atomic value, and letting it wrap grows the row past its 49px
+          // floor, which breaks the pixel-exact pagination height invariant on
+          // whichever font happens to be wider. See .col-active in styles.css.
           { key: "last_active", label: "Last active", sortable: true, colClass: "col-active",
+            cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.last_active),
             render: (r) => fmtDateTime(r.last_active) },
         ]}
         renderActions={(r) => {

@@ -1472,10 +1472,20 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    short columns get explicit widths; Email + Note split the rest and truncate. */
 .grid.data { table-layout: fixed; }
 .grid.data .col-admin { width: 132px; }
-/* Last active carries a date AND a time ("7/27/2026, 2:47:03 PM"), which the
-   116px the date alone needed cannot hold. Email/Note split whatever is left
-   and truncate, so the extra width comes out of them, not out of the layout. */
-.grid.data .col-active { width: 190px; }
+/* Last active carries a date AND a time ("12/31/2023, 11:59:59 PM"), which the
+   116px the date alone needed cannot hold. Measured: the widest en-US rendering
+   is 174px of text + 20px cell padding = 194px, so 190px overflowed and the cell
+   (white-space:normal) WRAPPED to two lines, growing the row past its 49px floor.
+   That broke the pagination test's pixel-exact height invariant on CI only — the
+   container's fallback font is wider than a dev box's system-ui, so the same
+   fixture fit locally and wrapped there.
+   The cell also carries `cell-trunc` (nowrap + ellipsis), which is the load-bearing
+   half: a timestamp is one atomic value and must never break across lines, and
+   nowrap makes the row height independent of font metrics and locale format
+   entirely, rather than leaving it a width race this width alone would keep
+   losing in a wider locale (de-DE, en-GB) or on another platform's fonts. The
+   width is what keeps the ellipsis from ever showing in the ordinary case. */
+.grid.data .col-active { width: 210px; }
 .grid.data .col-actions { width: 96px; }
 .grid.data td.cell-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Keep "✓ Admin (you)" on one line so it can't wrap the row taller than one line. */
