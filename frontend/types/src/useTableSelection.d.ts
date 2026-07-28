@@ -1,4 +1,4 @@
-export function useTableSelection(): {
+export declare function useTableSelection(): {
     mode: string;
     selectedIds: Set<any>;
     selection: {

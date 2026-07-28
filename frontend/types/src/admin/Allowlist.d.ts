@@ -1,6 +1,6 @@
+import React from "react";
 export default function Allowlist({ me, sub, onAttentionChanged }: {
     me: any;
-    sub: any;
     onAttentionChanged: any;
+    sub: any;
 }): React.JSX.Element;
-import React from "react";

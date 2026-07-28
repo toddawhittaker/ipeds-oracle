@@ -1,4 +1,4 @@
-export function briefLayout(src: any): {
+export declare function briefLayout(src: any): {
     pair: boolean;
     chart: any;
 };

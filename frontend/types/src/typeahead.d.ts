@@ -1,14 +1,14 @@
-export function shouldRedirectTyping({ key, ctrlKey, metaKey, altKey }: {
-    key: any;
-    ctrlKey: any;
-    metaKey: any;
+export declare function shouldRedirectTyping({ key, ctrlKey, metaKey, altKey }: {
     altKey: any;
+    ctrlKey: any;
+    key: any;
+    metaKey: any;
 }, { tag, editable, inDialog }: {
-    tag: any;
     editable: any;
     inDialog: any;
+    tag: any;
 }): boolean;
-export function targetInfo(el: any): {
+export declare function targetInfo(el: any): {
     tag: any;
     editable: boolean;
     inDialog: boolean;

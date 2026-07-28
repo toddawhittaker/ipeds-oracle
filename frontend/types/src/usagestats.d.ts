@@ -1,9 +1,9 @@
-export function promptCacheRate(totals: any): string;
-export function schemaCacheRate(totals: any): string;
-export function groundedFigureRate(totals: any): string;
-export function groundedFigureLabel(totals: any): string;
-export function groundedTableRate(totals: any): string;
-export function groundedTableLabel(totals: any): string;
-export function leakRate(totals: any): string;
-export function leakLabel(totals: any): string;
-export function exhaustionLabel(totals: any): string;
+export declare function promptCacheRate(totals: any): string;
+export declare function schemaCacheRate(totals: any): string;
+export declare function groundedFigureRate(totals: any): string;
+export declare function groundedFigureLabel(totals: any): string;
+export declare function groundedTableRate(totals: any): string;
+export declare function groundedTableLabel(totals: any): string;
+export declare function leakRate(totals: any): string;
+export declare function leakLabel(totals: any): string;
+export declare function exhaustionLabel(totals: any): string;

@@ -1,11 +1,4 @@
-/**
- * @typedef {object} ToastProviderProps
- * @property {React.ReactNode} children App subtree. Descendants call `useToast()`
- *   to push a transient message.
- */
-/** @param {ToastProviderProps} props */
-export function ToastProvider({ children }: ToastProviderProps): React.JSX.Element;
-export function useToast(): any;
+import React from "react";
 export type ToastProviderProps = {
     /**
      * App subtree. Descendants call `useToast()`
@@ -13,4 +6,11 @@ export type ToastProviderProps = {
      */
     children: React.ReactNode;
 };
-import React from "react";
+/**
+ * @typedef {object} ToastProviderProps
+ * @property {React.ReactNode} children App subtree. Descendants call `useToast()`
+ *   to push a transient message.
+ */
+/** @param {ToastProviderProps} props */
+export declare function ToastProvider({ children }: ToastProviderProps): React.JSX.Element;
+export declare function useToast(): any;

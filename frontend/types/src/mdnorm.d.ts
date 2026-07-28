@@ -1,1 +1,1 @@
-export function normalizeMarkdown(md: any): any;
+export declare function normalizeMarkdown(md: any): any;

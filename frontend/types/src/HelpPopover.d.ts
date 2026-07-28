@@ -1,13 +1,4 @@
-/**
- * @typedef {object} HelpPopoverProps
- * @property {string} label Accessible name for the trigger button.
- * @property {React.ReactNode} children Popover body.
- * @property {React.ComponentType<{ size?: number }>} [icon] Trigger glyph. Defaults
- *   to IconHelp; pass any icon from this system.
- * @property {string} [className]
- */
-/** @param {HelpPopoverProps} props */
-export default function HelpPopover({ label, children, icon: Icon, className }: HelpPopoverProps): React.JSX.Element;
+import React from "react";
 export type HelpPopoverProps = {
     /**
      * Accessible name for the trigger button.
@@ -26,4 +17,13 @@ export type HelpPopoverProps = {
     }>;
     className?: string;
 };
-import React from "react";
+/**
+ * @typedef {object} HelpPopoverProps
+ * @property {string} label Accessible name for the trigger button.
+ * @property {React.ReactNode} children Popover body.
+ * @property {React.ComponentType<{ size?: number }>} [icon] Trigger glyph. Defaults
+ *   to IconHelp; pass any icon from this system.
+ * @property {string} [className]
+ */
+/** @param {HelpPopoverProps} props */
+export default function HelpPopover({ label, children, icon: Icon, className }: HelpPopoverProps): React.JSX.Element;

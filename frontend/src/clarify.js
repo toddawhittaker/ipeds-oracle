@@ -11,6 +11,10 @@ export function normalizeClarify(raw) {
   if (!question) return null;
   const source = Array.isArray(raw.options) ? raw.options : [];
   const seen = new Set();
+  // Annotated, not inferred: TS 5 read the element type off the pushes below
+  // (evolving-array inference), TS 7 does not and emits `any[]` into the
+  // published contract. Stating it keeps the contract stable across compilers.
+  /** @type {string[]} */
   const options = [];
   for (const o of source) {
     const s = String(o ?? "").trim();

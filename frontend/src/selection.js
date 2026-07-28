@@ -86,6 +86,10 @@ export function partitionEligibility(selectedRows, action) {
   const rule = ELIGIBILITY_RULES[action];
   if (!rule) return { eligible: [...selectedRows], skipped: [] };
   const eligible = [];
+  // Annotated, not inferred — see the note in clarify.js. Sub-shape written
+  // INLINE, never a named @typedef (the design-sync converter prints an alias
+  // by name that the published .d.ts never defines).
+  /** @type {{ row: any, reason: any }[]} */
   const skipped = [];
   for (const row of selectedRows) {
     if (rule.skipIf(row)) skipped.push({ row, reason: rule.reason });

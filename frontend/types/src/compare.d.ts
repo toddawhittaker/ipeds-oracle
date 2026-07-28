@@ -1,4 +1,4 @@
-export function comparableTable(headers: any, rows: any): {
+export declare function comparableTable(headers: any, rows: any): {
     entityCol: any;
     labels: any;
     spec: {
@@ -8,4 +8,4 @@ export function comparableTable(headers: any, rows: any): {
         data: any;
     };
 };
-export function compareSpec(spec: any, selectedLabels: any): any;
+export declare function compareSpec(spec: any, selectedLabels: any): any;

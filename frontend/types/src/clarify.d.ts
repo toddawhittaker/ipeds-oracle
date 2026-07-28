@@ -1,4 +1,4 @@
-export function normalizeClarify(raw: any): {
+export declare function normalizeClarify(raw: any): {
     question: string;
     options: string[];
 };

@@ -1,1 +1,1 @@
-export function initials(email: any): string;
+export declare function initials(email: any): string;

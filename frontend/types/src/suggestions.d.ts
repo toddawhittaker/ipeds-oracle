@@ -1,1 +1,1 @@
-export function normalizeSuggestions(raw: any): string[];
+export declare function normalizeSuggestions(raw: any): string[];

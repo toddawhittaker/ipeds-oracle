@@ -1,4 +1,3 @@
-export default MarkdownTextarea;
 export type MarkdownTextareaBaseProps = {
     /**
      * Controlled value — always the RAW Markdown string. The
@@ -18,9 +17,6 @@ export type MarkdownTextareaBaseProps = {
      */
     maxLength?: number;
 };
-/**
- * `@property` cannot express a hyphenated key, so aria-label is intersected in.
- */
 export type MarkdownTextareaProps = MarkdownTextareaBaseProps & {
     "aria-label"?: string;
 };
@@ -44,3 +40,4 @@ export type MarkdownTextareaProps = MarkdownTextareaBaseProps & {
  */
 /** @type {React.ForwardRefExoticComponent<MarkdownTextareaProps & React.RefAttributes<HTMLTextAreaElement>>} */
 declare const MarkdownTextarea: React.ForwardRefExoticComponent<MarkdownTextareaProps & React.RefAttributes<HTMLTextAreaElement>>;
+export default MarkdownTextarea;
