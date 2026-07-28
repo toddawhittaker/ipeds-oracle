@@ -11,6 +11,72 @@ detail.
 
 ---
 
+## v0.3.0
+
+A small release with one consequential change: **the app no longer ships a
+default model.** It has always run against any OpenAI-compatible provider, but
+it read as a DeepSeek app and quietly sent your questions there unless you said
+otherwise. That default is gone. Alongside it: shipped lessons that were never
+reaching existing deployments now do, Admin → Users answers a more useful
+question, and the dependencies are swept.
+
+### Read this before upgrading
+
+- **`MODEL_DEFAULT` is now required — set it before you pull.** Earlier releases
+  fell back to `deepseek/deepseek-v4-flash` when the setting was blank, so a
+  deployment that never set it was using DeepSeek without choosing to. Nothing
+  is chosen for you now: if a provider key is configured with no model, the app
+  logs a **CRITICAL at startup** naming the problem, and every question fails
+  upstream. Set `MODEL_DEFAULT` in your `.env` to a model your `LLM_BASE_URL`
+  actually serves. `MODEL_ESCALATION` stays optional — blank means never
+  escalate.
+- **Nothing else to do.** There are no migrations in this release — `app.db`
+  stays at schema 33, exactly where v0.2.0 left it — so rolling back to v0.2.0
+  is safe and needs no snapshot. (Rolling back to v0.1.0 still refuses to start,
+  as described under v0.2.0 below.)
+
+### Fixed
+
+- **Seed lessons now reach existing deployments.** New shipped exemplars only
+  ever arrived on *fresh* installs: the seeder skipped its work whenever the
+  `skills` table held any row at all, which is true of every deployment that has
+  ever run. Found in the wild on v0.2.0, where an upgraded install sat on its
+  original 3 lessons while the image shipped 8. Seeding is now tracked
+  per-lesson, so each one arrives exactly once — including on databases that
+  predate the change. Deleting a seed from Admin → Skills is still respected as
+  a decision; it will not come back on the next restart.
+
+### Added
+
+- **Admin → Users shows "Last active" instead of "Last login".** The old column
+  reported the last magic-link sign-in, so a colleague who signed in months ago
+  and has asked questions every day since read as stale. It now shows the latest
+  of the sign-in, their most recent conversation, and their most recent
+  question, with the time as well as the date. It reads retroactively over
+  history you already have. It is deliberately not a "last page hit" — a
+  sign-in-and-browse session shows only the sign-in.
+
+### Changed
+
+- **The app presents as provider-neutral.** DeepSeek is no longer named in the
+  docs, `.env.example`, or the configuration as though it were the product's
+  choice of model. The one protection that is genuinely vendor-specific — a
+  scrubber for tool-call markup that one model family leaks into its prose — is
+  kept, because it is inert for every other provider and costs nothing.
+
+### For developers
+
+- `requirements.lock` is now checked against `requirements.txt` in CI. Nothing
+  installs `requirements.txt` — CI and the Dockerfile both install the lock — so
+  a raised floor with a stale lock was invisible drift that left every check
+  green while the suites exercised the version that had not changed.
+- Dependency sweep: FastAPI 0.140.7, Resend 2.35.0, React 19.2.8, Recharts
+  3.10.1, Playwright 1.62.0, TypeScript 7, jsdom 30, ruff 0.16. The Playwright
+  container image and `@playwright/test` must be bumped together or every e2e
+  spec fails at browser launch.
+
+---
+
 ## v0.2.0
 
 The first release with real users in mind. The headline is **answer integrity**:
