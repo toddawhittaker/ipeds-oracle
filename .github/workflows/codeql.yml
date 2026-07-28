@@ -18,6 +18,12 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # Same reasoning as ci.yml's per-job timeouts: GitHub's default is six hours,
+    # so a wedged runner would hold a required check open indefinitely and block
+    # every merge. Both matrix legs finish in ~1 minute; 20 is generous room for a
+    # cold CodeQL database build. (GitHub's own starter sets 360 — far too loose
+    # to catch a stall on a repo this size.)
+    timeout-minutes: 20
     permissions:
       security-events: write
       actions: read
