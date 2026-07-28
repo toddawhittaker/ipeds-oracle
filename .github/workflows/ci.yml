@@ -30,10 +30,27 @@ concurrency:
 permissions:
   contents: read
 
+# EVERY job below sets `timeout-minutes`. GitHub's default is SIX HOURS, which
+# is not a timeout so much as an absence of one: a wedged runner holds the job
+# open, `needs: [lint, backend, e2e]` keeps the image job from ever starting,
+# and nothing self-clears — a human has to notice and cancel by hand. That is
+# not hypothetical. On the v0.3.0 tag run the backend job sat on its suites step
+# for 13+ minutes and was still climbing; the SAME commit had finished that job
+# in 2m20s on its main push eight minutes earlier, and the one suite that can
+# reach the network monkeypatches httpx.get. It blocked the release publish
+# until it was cancelled and re-run.
+#
+# The values are ~5-8x each job's observed maximum over its last five green
+# runs (gitleaks 10s, lint 37s, semgrep 38s, vitest 48s, image 86s, backend
+# 149s, e2e 195s) — loose enough that a legitimately slow runner or a cold cache
+# still passes, tight enough that a hang fails in minutes instead of hours.
+# Re-measure before tightening: a timeout that trips on a slow-but-working run
+# is worse than the stall, because it trains you to re-run red checks reflexively.
 jobs:
   lint:
     name: Lint (ruff · eslint)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -77,6 +94,7 @@ jobs:
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,6 +120,7 @@ jobs:
   sast:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -131,6 +150,7 @@ jobs:
   backend:
     name: Backend suites (guards · hardening · backend · security)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # Point the app at a throwaway fixture DB, never the real (absent) one.
       # (runner.temp isn't available in job-level env; github.workspace is. The
@@ -177,6 +197,7 @@ jobs:
   unit:
     name: Web unit tests (vitest)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend
@@ -202,6 +223,7 @@ jobs:
   e2e:
     name: Playwright e2e (network-mocked UI)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Run inside the official Playwright image: Chromium + every browser system
     # library is PREINSTALLED, so we drop the slow `playwright install
     # --with-deps chromium` step (an apt-get of browser libs on every run,
@@ -240,6 +262,7 @@ jobs:
   image:
     name: Docker image (build · smoke-test · publish)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Only build/publish the deployable image once the tests are green, so a
     # broken build or a boot failure can't reach the registry.
     needs: [lint, backend, e2e]
