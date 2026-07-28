@@ -1,13 +1,4 @@
-/**
- * @typedef {object} SuggestionsProps
- * @property {string[]} items Follow-up questions. Non-string and empty entries are
- *   dropped; an empty list renders nothing.
- * @property {(question: string) => void} onAsk Called with the clicked question —
- *   the caller submits it as an ordinary follow-up turn.
- * @property {boolean} [disabled]
- */
-/** @param {SuggestionsProps} props */
-export default function Suggestions({ items, onAsk, disabled }: SuggestionsProps): React.JSX.Element;
+import React from "react";
 export type SuggestionsProps = {
     /**
      * Follow-up questions. Non-string and empty entries are
@@ -21,4 +12,13 @@ export type SuggestionsProps = {
     onAsk: (question: string) => void;
     disabled?: boolean;
 };
-import React from "react";
+/**
+ * @typedef {object} SuggestionsProps
+ * @property {string[]} items Follow-up questions. Non-string and empty entries are
+ *   dropped; an empty list renders nothing.
+ * @property {(question: string) => void} onAsk Called with the clicked question —
+ *   the caller submits it as an ordinary follow-up turn.
+ * @property {boolean} [disabled]
+ */
+/** @param {SuggestionsProps} props */
+export default function Suggestions({ items, onAsk, disabled }: SuggestionsProps): React.JSX.Element;

@@ -1,18 +1,19 @@
-export function canCaptionTruncation({ truncated, tableCount, messageId }: {
-    truncated: any;
-    tableCount: any;
+export declare const ROW_CAP = 200;
+export declare function canCaptionTruncation({ truncated, tableCount, messageId }: {
     messageId: any;
-}): boolean;
-export function truncationCaption(truncated: any): "" | "First 200 rows · the full result is larger";
-export function sortScopeNote({ truncated, sorted, rowsShown }: {
+    tableCount: any;
     truncated: any;
+}): boolean;
+export declare function truncationCaption(truncated: any): "" | "First 200 rows · the full result is larger";
+export declare function sortScopeNote({ truncated, sorted, rowsShown }: {
+    rowsShown: any;
     sorted: any;
-    rowsShown: any;
+    truncated: any;
 }): string;
-export function sortNoteTone(truncated: any): "warn" | "muted";
-export function csvLabel({ serverSide, rowsShown }: {
-    serverSide: any;
+export declare function sortNoteTone(truncated: any): "muted" | "warn";
+export declare function csvLabel({ serverSide, rowsShown }: {
     rowsShown: any;
+    serverSide: any;
 }): string;
 /**
  * @param {object} [verdict] The message's persisted table-grounding verdict.
@@ -28,7 +29,7 @@ export function csvLabel({ serverSide, rowsShown }: {
  * @returns {{tone: string, text: string, title: string} | null} The line to render, or
  *   null for "say nothing" — the default for every unrecognised or malformed verdict.
  */
-export function tableTrustNote({ status, cellsChecked, cellsMatched, hasSql }?: {
+export declare function tableTrustNote({ status, cellsChecked, cellsMatched, hasSql }?: {
     status?: string;
     cellsChecked?: number;
     cellsMatched?: number;
@@ -38,5 +39,4 @@ export function tableTrustNote({ status, cellsChecked, cellsMatched, hasSql }?: 
     text: string;
     title: string;
 } | null;
-export function csvErrorMessage(status: any, detail: any): any;
-export const ROW_CAP: 200;
+export declare function csvErrorMessage(status: any, detail: any): any;

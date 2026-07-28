@@ -5,6 +5,9 @@
 export function normalizeSuggestions(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
+  // Annotated, not inferred — see the note in clarify.js: TS 7 emits `any[]`
+  // where TS 5 read `string[]` off the pushes below.
+  /** @type {string[]} */
   const out = [];
   for (const q of raw) {
     const s = String(q ?? "").trim();

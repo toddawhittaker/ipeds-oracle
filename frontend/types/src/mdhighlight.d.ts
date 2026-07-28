@@ -1,1 +1,1 @@
-export function highlight(src: any): any[];
+export declare function highlight(src: any): any[];

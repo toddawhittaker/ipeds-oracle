@@ -1,12 +1,4 @@
-/**
- * @typedef {object} CopyMenuProps
- * @property {() => void} onCopyMarkdown
- * @property {() => void} onCopyHtml
- * @property {boolean} [copied] Flips the trigger to a "Copied!" check. The caller
- *   owns the reset timer.
- */
-/** @param {CopyMenuProps} props */
-export default function CopyMenu({ onCopyMarkdown, onCopyHtml, copied }: CopyMenuProps): React.JSX.Element;
+import React from "react";
 export type CopyMenuProps = {
     onCopyMarkdown: () => void;
     onCopyHtml: () => void;
@@ -16,4 +8,12 @@ export type CopyMenuProps = {
      */
     copied?: boolean;
 };
-import React from "react";
+/**
+ * @typedef {object} CopyMenuProps
+ * @property {() => void} onCopyMarkdown
+ * @property {() => void} onCopyHtml
+ * @property {boolean} [copied] Flips the trigger to a "Copied!" check. The caller
+ *   owns the reset timer.
+ */
+/** @param {CopyMenuProps} props */
+export default function CopyMenu({ onCopyMarkdown, onCopyHtml, copied }: CopyMenuProps): React.JSX.Element;

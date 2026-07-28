@@ -1,2 +1,2 @@
-export function isFigureVerified(grounding: any): boolean;
-export function normalizeFigure(raw: any): {};
+export declare function isFigureVerified(grounding: any): boolean;
+export declare function normalizeFigure(raw: any): {};

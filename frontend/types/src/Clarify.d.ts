@@ -1,15 +1,4 @@
-/**
- * @typedef {object} ClarifyProps
- * @property {{ question: string, options: string[] }} spec The blocking
- *   clarification. `options` are SHORT answer phrases ("bachelor's only"), never
- *   restated questions.
- * @property {(answer: string) => void} onAsk
- * @property {boolean} [disabled]
- * @property {boolean} [showQuestion] Show the model's actual question as the label
- *   instead of the default "Did you mean".
- */
-/** @param {ClarifyProps} props */
-export default function Clarify({ spec, onAsk, disabled, showQuestion }: ClarifyProps): React.JSX.Element;
+import React from "react";
 export type ClarifyProps = {
     /**
      * The blocking
@@ -28,4 +17,15 @@ export type ClarifyProps = {
      */
     showQuestion?: boolean;
 };
-import React from "react";
+/**
+ * @typedef {object} ClarifyProps
+ * @property {{ question: string, options: string[] }} spec The blocking
+ *   clarification. `options` are SHORT answer phrases ("bachelor's only"), never
+ *   restated questions.
+ * @property {(answer: string) => void} onAsk
+ * @property {boolean} [disabled]
+ * @property {boolean} [showQuestion] Show the model's actual question as the label
+ *   instead of the default "Did you mean".
+ */
+/** @param {ClarifyProps} props */
+export default function Clarify({ spec, onAsk, disabled, showQuestion }: ClarifyProps): React.JSX.Element;

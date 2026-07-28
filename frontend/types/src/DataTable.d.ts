@@ -1,7 +1,4 @@
-export default DataTable;
-/**
- * NOTE ON SHAPE: prop sub-types are written INLINE, not as named
- */
+import React from "react";
 export type DataTableProps = {
     /**
      * All rows, unpaginated — this component owns search, sort and paging client-side.
@@ -139,4 +136,4 @@ export type DataTableHandle = {
  */
 /** @type {React.ForwardRefExoticComponent<DataTableProps & React.RefAttributes<DataTableHandle>>} */
 declare const DataTable: React.ForwardRefExoticComponent<DataTableProps & React.RefAttributes<DataTableHandle>>;
-import React from "react";
+export default DataTable;
