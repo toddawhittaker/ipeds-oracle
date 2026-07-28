@@ -1493,7 +1493,16 @@ inside `coverage_check.sh`'s glob with output sent to `/dev/null`, so a groundin
 failure read as "coverage gate failed". Adding a suite is now just adding the file;
 `coverage_check.sh` replays a failing suite's output instead of discarding it.
 Similarly `.env.example` is pinned against `config.Settings` in both directions by
-`backend/tests/test_env_example.py`.
+`backend/tests/test_env_example.py`, and **`requirements.lock` is pinned against
+`requirements.txt`** by `backend/tests/test_requirements_lock.py`: every direct
+dependency must be locked, and the locked version must satisfy the declared floor.
+Nothing installs `requirements.txt` — CI and the Dockerfile both install the
+**lock** — so a raised floor with a stale lock is invisible drift that leaves every
+check green while the suites exercise the version that did *not* change. Dependabot
+does exactly this (it cannot run `pip-compile`): #253/#254 each raised a floor above
+the pinned version and went fully green. Regenerate with
+`pip-compile --generate-hashes --output-file=requirements.lock requirements.txt`
+in the same PR that moves a floor.
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
 CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on
