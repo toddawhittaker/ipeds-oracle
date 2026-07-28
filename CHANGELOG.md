@@ -16,8 +16,9 @@ detail.
 A small release with one consequential change: **the app no longer ships a
 default model.** It has always run against any OpenAI-compatible provider, but
 it read as a DeepSeek app and quietly sent your questions there unless you said
-otherwise. That default is gone. Alongside it, two fixes for things that were
-silently not working, and a dependency sweep.
+otherwise. That default is gone. Alongside it: shipped lessons that were never
+reaching existing deployments now do, Admin → Users answers a more useful
+question, and the dependencies are swept.
 
 ### Read this before upgrading
 
