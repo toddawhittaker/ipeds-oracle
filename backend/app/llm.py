@@ -21,7 +21,7 @@ import httpx
 
 from app import critic, grounding
 from app.config import get_settings
-from app.llmhttp import DEFAULT_TIMEOUT, PROBE_TIMEOUT, cached_tokens, chat_completion
+from app.llmhttp import DEFAULT_TIMEOUT, PROBE_TIMEOUT, Usage, cached_tokens, chat_completion
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
@@ -118,15 +118,15 @@ async def retry_missing_figure(question: str, answer: str) -> _FigureRetry:
                                          temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
     except (httpx.HTTPError, ValueError):
         return _FigureRetry()  # fail open — never block a finished answer
-    usage = data.get("usage") or {}
+    u = Usage.from_response(data)
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     _, figure = _extract_figure(content)
     return _FigureRetry(
         figure=figure,
-        prompt_tokens=usage.get("prompt_tokens", 0),
-        completion_tokens=usage.get("completion_tokens", 0),
-        cached_prompt_tokens=cached_tokens(usage),
-        cost=usage.get("cost") or 0,
+        prompt_tokens=u.prompt_tokens,
+        completion_tokens=u.completion_tokens,
+        cached_prompt_tokens=u.cached_prompt_tokens,
+        cost=u.cost,
     )
 
 
@@ -1472,12 +1472,18 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
         yield {"type": "done", "result": res}
 
 
-async def generate_title(question: str, answer: str) -> str:
-    """Ask the cheap model for a short conversation title. Returns "" on any
-    failure so titling never blocks or breaks a chat turn."""
+async def generate_title(question: str, answer: str) -> tuple[str, Usage]:
+    """Ask the cheap model for a short conversation title. Returns ("", zero usage)
+    on any failure so titling never blocks or breaks a chat turn.
+
+    Returns its Usage because this call is real spend the turn caused. It runs
+    AFTER _persist has committed (routers/chat.py), so the caller folds it in with
+    _add_usage rather than at insert time -- deliberately, since moving the call
+    ahead of the write would put a network probe in front of the only statement
+    that saves the answer."""
     s = get_settings()
     if not s.llm_api_key:
-        return ""
+        return "", Usage()
     prompt = [
         {"role": "system", "content":
             "You write a concise 3–6 word title for a chat about U.S. college "
@@ -1489,9 +1495,9 @@ async def generate_title(question: str, answer: str) -> str:
         async with httpx.AsyncClient() as client:
             data = await _chat(client, s.model_default, prompt, tools=None)
     except httpx.HTTPError:
-        return ""
+        return "", Usage()
     title = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    return title.strip().strip('"').strip().rstrip(".")[:80]
+    return title.strip().strip('"').strip().rstrip(".")[:80], Usage.from_response(data)
 
 
 async def run_agent(question: str, *, history: list[dict] | None = None,

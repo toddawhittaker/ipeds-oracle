@@ -205,8 +205,10 @@ estimate never reads like an invoice.
 The dashboard shows **three** cache figures — don't confuse them:
 
 - **Answer cache** — a *count* of questions answered straight from the app's own
-  semantic cache of past answers, with **no LLM call at all**. A repeat or
-  near-repeat question is served instantly and for free. The cache is **scoped to
+  semantic cache of past answers, **without running the agent**. A repeat or
+  near-repeat question is served instantly and for a small fraction of the usual
+  cost — not for nothing: the topical guard screens *every* question before the
+  cache is consulted, so a hit still pays for that one call. The cache is **scoped to
   the person who asked**: one colleague's stored answer is never replayed to
   another, since the prose is theirs and could reveal what they asked. That
   deliberately lowers the hit rate — a popular question is answered once per

@@ -59,7 +59,7 @@ def test_distill_returns_none_without_key():
     feedback.get_settings = lambda: types.SimpleNamespace(
         skills_enabled=True, llm_api_key="")
     try:
-        r = asyncio.run(feedback.distill_feedback(
+        r, usage = asyncio.run(feedback.distill_feedback(
             _HISTORY, "you should have asked me a clarifying question"))
     finally:
         feedback.get_settings = orig
@@ -71,7 +71,7 @@ def test_distill_returns_none_when_skills_disabled():
     feedback.get_settings = lambda: types.SimpleNamespace(
         skills_enabled=False, llm_api_key="test-key")
     try:
-        r = asyncio.run(feedback.distill_feedback(
+        r, usage = asyncio.run(feedback.distill_feedback(
             _HISTORY, "you should have asked me a clarifying question"))
     finally:
         feedback.get_settings = orig
@@ -90,7 +90,7 @@ def test_distill_returns_none_with_empty_history():
     orig_client = feedback.httpx.AsyncClient
     feedback.httpx.AsyncClient = _explode
     try:
-        r = asyncio.run(feedback.distill_feedback([], "some corrective feedback"))
+        r, usage = asyncio.run(feedback.distill_feedback([], "some corrective feedback"))
     finally:
         feedback.get_settings = orig_settings
         feedback.httpx.AsyncClient = orig_client
@@ -150,7 +150,7 @@ def test_distill_returns_none_on_ok_verdict():
         "choices": [{"message": {"content": "OK"}}],
         "usage": {"prompt_tokens": 20, "completion_tokens": 1},
     })
-    r = _with_fake_transport(
+    r, usage = _with_fake_transport(
         resp, lambda: asyncio.run(feedback.distill_feedback(
             _HISTORY, "thanks, that's exactly what I needed")))
     assert r is None, "an OK verdict (no generalizable feedback) must return None"
@@ -166,7 +166,7 @@ def test_distill_parses_revise_shaped_reply_into_headline_and_description():
             "instead of silently assuming bachelor's-only."}}],
         "usage": {"prompt_tokens": 40, "completion_tokens": 10},
     })
-    r = _with_fake_transport(
+    r, usage = _with_fake_transport(
         resp, lambda: asyncio.run(feedback.distill_feedback(
             _HISTORY,
             "you could have asked me a clarifying question instead of guessing "
@@ -181,7 +181,7 @@ def test_distill_parses_revise_shaped_reply_into_headline_and_description():
 
 
 def test_distill_transport_error_returns_none():
-    r = _with_fake_transport(
+    r, usage = _with_fake_transport(
         httpx.ConnectError("refused"),
         lambda: asyncio.run(feedback.distill_feedback(_HISTORY, "you got that wrong")))
     assert r is None, "a transport error must fail open (None), never raise"
@@ -195,10 +195,45 @@ def test_distill_non_json_200_response_returns_none():
     non_json_response = httpx.Response(
         200, text="<html><body>502 Bad Gateway</body></html>",
         request=httpx.Request("POST", "http://x/chat/completions"))
-    r = _with_fake_transport(
+    r, usage = _with_fake_transport(
         non_json_response,
         lambda: asyncio.run(feedback.distill_feedback(_HISTORY, "you got that wrong")))
     assert r is None, "a 200 response with a non-JSON body must fail open, not raise"
+
+
+def test_distill_reports_its_usage_even_when_it_finds_no_lesson():
+    """THE REGRESSION: this call's spend was deliberately unrecorded, on the
+    reasoning that a background probe isn't "part of the billed turn". It is a
+    real LLM call that a turn caused, so it is now billed to usage_log.
+
+    Reporting usage on the None path is the load-bearing half: "no generalizable
+    feedback here" is the COMMON outcome and costs exactly as much as a hit, so
+    returning usage only alongside a lesson would under-count the majority of the
+    calls -- which is the same shape of silent under-count as the original bug."""
+    resp = _json_response({
+        "choices": [{"message": {"content": "OK"}}],
+        "usage": {"prompt_tokens": 40, "completion_tokens": 2,
+                  "prompt_cache_hit_tokens": 32, "cost": 0.0001},
+    })
+    r, usage = _with_fake_transport(
+        resp, lambda: asyncio.run(feedback.distill_feedback(_HISTORY, "thanks!")))
+    assert r is None, "an OK verdict finds no lesson"
+    assert usage.prompt_tokens == 40 and usage.completion_tokens == 2, usage
+    assert usage.cached_prompt_tokens == 32, usage
+    assert usage.cost == 0.0001, usage
+
+
+def test_distill_fail_open_paths_report_zero_usage():
+    """A distiller that never reached the provider must bill nothing — otherwise
+    a disabled/keyless deployment would accrue phantom spend."""
+    orig = feedback.get_settings
+    feedback.get_settings = lambda: types.SimpleNamespace(
+        skills_enabled=True, llm_api_key="")
+    try:
+        _r, usage = asyncio.run(feedback.distill_feedback(_HISTORY, "feedback"))
+    finally:
+        feedback.get_settings = orig
+    assert usage.prompt_tokens == 0 and usage.cost == 0.0, usage
 
 
 def test_distill_posts_url_headers_and_probe_timeout():
@@ -248,6 +283,10 @@ def run():
     check("a transport error fails open (None)", test_distill_transport_error_returns_none)
     check("a non-JSON 200 body fails open, does not raise",
           test_distill_non_json_200_response_returns_none)
+    check("distill reports its usage even when it finds no lesson",
+          test_distill_reports_its_usage_even_when_it_finds_no_lesson)
+    check("distill fail-open paths report zero usage",
+          test_distill_fail_open_paths_report_zero_usage)
     check("distill posts url/headers/PROBE_TIMEOUT via llmhttp",
           test_distill_posts_url_headers_and_probe_timeout)
     check("the prompt carries the prior turn + the latest corrective message",

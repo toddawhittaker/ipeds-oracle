@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, cached_tokens, chat_completion
+from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
 
 _SYSTEM = (
     "You are a strict reviewer checking an IPEDS (U.S. postsecondary education) "
@@ -246,14 +246,14 @@ async def review(question: str, sql_log: list[str], answer: str,
     except (httpx.HTTPError, ValueError):
         return Critique(ok=True)  # fail open — never drop an answer over the critic
 
-    usage = data.get("usage") or {}
+    u = Usage.from_response(data)
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     ok, headline, description = parse_verdict(content)
     return Critique(
         ok=ok, headline=headline, description=description,
-        prompt_tokens=usage.get("prompt_tokens", 0),
-        completion_tokens=usage.get("completion_tokens", 0),
-        cached_prompt_tokens=cached_tokens(usage),
-        cost=usage.get("cost") or 0,
+        prompt_tokens=u.prompt_tokens,
+        completion_tokens=u.completion_tokens,
+        cached_prompt_tokens=u.cached_prompt_tokens,
+        cost=u.cost,
         raw=content.strip(),
     )

@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,7 +48,7 @@ mailer.send_magic_link = lambda to, link: captured.__setitem__("link", link) or 
 mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
-from app import guard, skills  # noqa: E402
+from app import guard, llmhttp, skills  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
@@ -72,7 +73,11 @@ def check(name, fn):
 
 
 async def _always_allow(question, history=None):
-    return guard.Verdict(allowed=True, tokens=1)
+    # Carries real usage on purpose: the guard's spend is folded into every
+    # turn's usage_log row, so a zeroed stub here would make the fold untestable.
+    return guard.Verdict(allowed=True,
+                         usage=llmhttp.Usage(prompt_tokens=11, completion_tokens=2,
+                                             cached_prompt_tokens=8))
 
 
 guard.classify = _always_allow
@@ -102,6 +107,24 @@ def _make_agent(answer_text, *, sql_log=None, error=None, model="test-model"):
             answer=answer_text or "", model_used=model, error=error,
             sql_log=sql_log or [], prompt_tokens=3, completion_tokens=2)}
     return _agent
+
+
+def _explode_agent(question, *, history=None, skills_block="", prior_results=None):
+    """A stream_agent that must never be reached — proves a cache hit really did
+    short-circuit the agent, so its usage row can only be the guard's."""
+    raise AssertionError("stream_agent must NOT run on an answer-cache hit")
+    yield  # pragma: no cover — makes this an async generator
+
+
+def _clear_usage_log():
+    """Own the usage_log window: other tests in this module post turns too, and
+    these assertions are positional (first row / second row)."""
+    con = connect()
+    try:
+        con.execute("DELETE FROM usage_log")
+        con.commit()
+    finally:
+        con.close()
 
 
 def _make_agent_no_result():
@@ -329,7 +352,8 @@ def test_cache_hit_serves_cached_answer_and_titles_new_conversation():
             raise AssertionError("stream_agent must not run on a cache hit")
 
         async def _fake_title(question, answer):
-            return "A Cached Title"
+            return "A Cached Title", llmhttp.Usage(prompt_tokens=5,
+                                                   completion_tokens=3)
 
         chat_router.stream_agent = _explode
         skills.cache_lookup = lambda q, _uid=None: {
@@ -372,6 +396,155 @@ def test_turn_duration_is_measured_persisted_and_in_the_done_event():
         # get_conversation also surfaces the user turn's created_at (the stamp).
         user = [m for m in msgs if m["role"] == "user"][-1]
         assert user["created_at"] and user["created_at"] > 0, user
+
+
+def _usage_rows(cols="prompt_tokens, completion_tokens, cached_prompt_tokens, cost"):
+    con = connect()
+    try:
+        return con.execute(f"SELECT {cols} FROM usage_log ORDER BY id").fetchall()
+    finally:
+        con.close()
+
+
+def test_guard_spend_is_billed_on_every_turn_shape():
+    """THE REGRESSION: the topical guard makes a real LLM call on EVERY question,
+    before the answer cache and before the agent -- and none of it reached
+    usage_log. On the refusal path Verdict.tokens landed only on messages.tokens;
+    on the allowed path the verdict was never referenced again. So the app's only
+    record of spend under-counted by one guard call per question, forever.
+
+    All three shapes are checked here because each writes usage_log from a
+    DIFFERENT branch, and two of them have no AgentResult to fold into:
+      1. a normal agent turn  -> guard usage ADDED to the agent's own
+      2. an off-topic refusal -> the guard is the only call, so the row IS it
+      3. an answer-cache hit  -> not free; the guard ran before the lookup
+
+    The stub guard reports 11/2 prompt/completion (see _always_allow), the stub
+    agent 3/2, so a correct fold is 14/4 -- asserting the SUM is what catches a
+    fold that silently overwrites instead of accumulating."""
+    async def _deny(question, history=None):
+        return guard.Verdict(allowed=False,
+                             usage=llmhttp.Usage(prompt_tokens=9, completion_tokens=3,
+                                                 cached_prompt_tokens=7))
+
+    cached_answer = {"answer_md": "a stored answer", "final_sql": "SELECT 1"}
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent, orig_guard = chat_router.stream_agent, guard.classify
+        orig_block, orig_lookup = skills.retrieve_skills_block, skills.cache_lookup
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q, _uid=None: None
+        try:
+            _clear_usage_log()
+            # 1) agent turn — guard usage adds to the agent's
+            chat_router.stream_agent = _make_agent("an answer", sql_log=["SELECT 1"])
+            c.post("/api/chat/stream", json={"question": "a normal question"})
+            # 2) refusal — the guard is the whole turn
+            guard.classify = _deny
+            c.post("/api/chat/stream", json={"question": "give me a recipe"})
+            guard.classify = _always_allow
+            # 3) cache hit — skips the agent, not the guard
+            skills.cache_lookup = lambda q, _uid=None: cached_answer
+            chat_router.stream_agent = _explode_agent
+            c.post("/api/chat/stream", json={"question": "a repeat question"})
+        finally:
+            chat_router.stream_agent, guard.classify = orig_agent, orig_guard
+            skills.retrieve_skills_block, skills.cache_lookup = orig_block, orig_lookup
+
+    rows = _usage_rows()
+    assert len(rows) == 3, rows
+    agent_row, refusal_row, cache_row = rows
+    # 1) 3+11 prompt, 2+2 completion — added, not replaced.
+    assert agent_row["prompt_tokens"] == 14, dict(agent_row)
+    assert agent_row["completion_tokens"] == 4, dict(agent_row)
+    assert agent_row["cached_prompt_tokens"] == 8, dict(agent_row)
+    # 2) the refusal row is exactly the guard's own call, no longer 0/0.
+    assert refusal_row["prompt_tokens"] == 9, dict(refusal_row)
+    assert refusal_row["completion_tokens"] == 3, dict(refusal_row)
+    assert refusal_row["cached_prompt_tokens"] == 7, dict(refusal_row)
+    # 3) a cache hit is NOT free — it still paid for the guard.
+    assert cache_row["prompt_tokens"] == 11, dict(cache_row)
+    assert cache_row["completion_tokens"] == 2, dict(cache_row)
+
+
+def test_guard_tokens_never_pollute_the_schema_cache_columns():
+    """first_call_* isolates the AGENT's schema-prefix reuse -- its first call
+    carries the big static SCHEMA.md block. The guard's prompt is a completely
+    different prefix, so folding its tokens in there would silently corrupt the
+    Schema-cache stat on Admin -> Usage, which exists to answer 'is keeping the
+    whole schema in the prompt paying off?'. The blended cached_prompt_tokens DOES
+    take them (asserted above); these two columns must not."""
+    with TestClient(app) as c:
+        _login(c)
+        orig_agent = chat_router.stream_agent
+        orig_block, orig_lookup = skills.retrieve_skills_block, skills.cache_lookup
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q, _uid=None: None
+        try:
+            _clear_usage_log()
+            chat_router.stream_agent = _make_agent("an answer", sql_log=["SELECT 1"])
+            c.post("/api/chat/stream", json={"question": "a normal question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block, skills.cache_lookup = orig_block, orig_lookup
+
+    rows = _usage_rows("first_call_prompt_tokens, first_call_cached_prompt_tokens, "
+                       "cached_prompt_tokens")
+    assert len(rows) == 1, rows
+    # The stub agent sets no first_call_*; the guard's 11/8 must not appear here.
+    assert rows[0]["first_call_prompt_tokens"] == 0, dict(rows[0])
+    assert rows[0]["first_call_cached_prompt_tokens"] == 0, dict(rows[0])
+    # ...while the blended column DID take the guard's cached tokens.
+    assert rows[0]["cached_prompt_tokens"] == 8, dict(rows[0])
+
+
+def test_add_usage_accumulates_onto_a_committed_row():
+    """The title call and the feedback distiller finish AFTER _persist commits, so
+    their spend is added to the existing row rather than folded in at insert time
+    -- deliberately, because moving either call ahead of the write would put a
+    network probe in front of the only statement that saves the user's answer.
+
+    Pins the two things that make the UPDATE correct: it ACCUMULATES (a second
+    probe must not overwrite the first), and cost_estimated is a MAX, so a later
+    estimated call taints an otherwise provider-billed row and a later billed call
+    cannot clear the flag."""
+    con = connect()
+    try:
+        con.execute("DELETE FROM usage_log")
+        con.execute(
+            "INSERT INTO usage_log(user_id, question, model_used, prompt_tokens, "
+            "completion_tokens, cached_prompt_tokens, ok, cached, cost, "
+            "cost_estimated, created_at) VALUES (1,'q','m',10,5,4,1,0,0.001,0,?)",
+            (time.time(),))
+        con.commit()
+        row_id = con.execute("SELECT id FROM usage_log").fetchone()[0]
+    finally:
+        con.close()
+
+    chat_router._add_usage(row_id, llmhttp.Usage(prompt_tokens=7, completion_tokens=3,
+                                                 cached_prompt_tokens=2, cost=0.002))
+    r = _usage_rows("prompt_tokens, completion_tokens, cached_prompt_tokens, cost, "
+                    "cost_estimated")[0]
+    assert (r["prompt_tokens"], r["completion_tokens"]) == (17, 8), dict(r)
+    assert r["cached_prompt_tokens"] == 6, dict(r)
+    assert abs(r["cost"] - 0.003) < 1e-9, dict(r)
+    # A provider-reported cost leaves the row's provenance alone.
+    assert r["cost_estimated"] == 0, dict(r)
+
+    # An UNPRICED call (no reported cost) is an estimate, and taints the row.
+    chat_router._add_usage(row_id, llmhttp.Usage(prompt_tokens=1, completion_tokens=1))
+    r = _usage_rows("prompt_tokens, cost_estimated")[0]
+    assert r["prompt_tokens"] == 18, dict(r)
+    assert r["cost_estimated"] == 1, dict(r)
+
+    # ...and a later billed call must NOT clear it (MAX, not assignment).
+    chat_router._add_usage(row_id, llmhttp.Usage(prompt_tokens=1, cost=0.005))
+    assert _usage_rows("cost_estimated")[0]["cost_estimated"] == 1
+
+    # A no-op probe (nothing spent) writes nothing at all.
+    before = _usage_rows("prompt_tokens")[0]["prompt_tokens"]
+    chat_router._add_usage(row_id, llmhttp.Usage())
+    assert _usage_rows("prompt_tokens")[0]["prompt_tokens"] == before
 
 
 def test_exhaustion_status_is_persisted_to_usage_log():
@@ -423,7 +596,8 @@ def test_normal_flow_titles_a_new_conversation():
         orig_cache_store = skills.cache_store
 
         async def _fake_title(question, answer):
-            return "A Real-Flow Title"
+            return "A Real-Flow Title", llmhttp.Usage(prompt_tokens=5,
+                                                      completion_tokens=3)
 
         chat_router.stream_agent = _make_agent("a real answer", sql_log=["SELECT 1"])
         chat_router.generate_title = _fake_title
@@ -881,7 +1055,9 @@ def test_record_feedback_lesson_records_when_distiller_finds_a_rule():
     captured = {}
 
     async def _distill(history, question):
-        return ("Keep the established scope.", "inherit the award-level scope on follow-ups")
+        return (("Keep the established scope.",
+                 "inherit the award-level scope on follow-ups"),
+                llmhttp.Usage(prompt_tokens=6, completion_tokens=2))
 
     orig_distill = chat_router.feedback.distill_feedback
     orig_record = skills.record_lesson_from_feedback
@@ -905,7 +1081,9 @@ def test_record_feedback_lesson_noops_when_distiller_finds_nothing():
     calls = {"n": 0}
 
     async def _distill(history, question):
-        return None
+        # No lesson found — but the call still happened and still cost money,
+        # which is the common case and must still be billed.
+        return None, llmhttp.Usage(prompt_tokens=6, completion_tokens=2)
 
     orig_distill = chat_router.feedback.distill_feedback
     orig_record = skills.record_lesson_from_feedback
@@ -1424,7 +1602,7 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
         finally:
             con.close()
 
-        _user_msg_id, msg_id = chat_router._persist(
+        _user_msg_id, msg_id, _usage_id = chat_router._persist(
             uid, conv, "q", "a",
             sql_log=["SELECT 1"], model="m", tokens=7, cached=False, ok=True,
             thinking=[{"kind": "sql", "text": "SELECT 1"}],
@@ -1548,6 +1726,12 @@ def run():
           test_cache_hit_serves_cached_answer_and_titles_new_conversation)
     check("turn duration is measured, persisted, and in the done event",
           test_turn_duration_is_measured_persisted_and_in_the_done_event)
+    check("guard spend is billed on every turn shape (agent/refusal/cache hit)",
+          test_guard_spend_is_billed_on_every_turn_shape)
+    check("guard tokens never pollute the schema-cache columns",
+          test_guard_tokens_never_pollute_the_schema_cache_columns)
+    check("_add_usage accumulates onto a committed row, MAXing cost_estimated",
+          test_add_usage_accumulates_onto_a_committed_row)
     check("exhaustion status is persisted to usage_log",
           test_exhaustion_status_is_persisted_to_usage_log)
     check("a normal (non-cached) successful turn titles a new conversation",

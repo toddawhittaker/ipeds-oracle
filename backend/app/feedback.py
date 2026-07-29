@@ -25,7 +25,7 @@ import httpx
 
 from app import critic
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, chat_completion
+from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
 
 _SYSTEM = (
     "You are reviewing a USER's follow-up message in a conversation with an "
@@ -67,14 +67,18 @@ def _build_messages(history: list[dict], latest_user_msg: str) -> list[dict]:
 
 
 async def distill_feedback(history: list[dict], latest_user_msg: str
-                           ) -> tuple[str, str] | None:
+                           ) -> tuple[tuple[str, str] | None, Usage]:
     """Judge whether `latest_user_msg` carries generalizable corrective feedback
-    about a prior turn; if so return (headline, description), else None. Fails
-    open (None) on no key, skills disabled, empty history, or any transport
-    error — never raises, never blocks the chat turn."""
+    about a prior turn; if so return ((headline, description), usage), else
+    (None, usage). Fails open on no key, skills disabled, empty history, or any
+    transport error — never raises, never blocks the chat turn.
+
+    The Usage comes back even when the verdict is None: the call was still made
+    and still cost money, and "found no lesson" is the common case. Returning it
+    only on a hit would under-count exactly the majority of turns."""
     s = get_settings()
     if not s.skills_enabled or not s.llm_api_key or not history:
-        return None
+        return None, Usage()
 
     messages = _build_messages(history, latest_user_msg)
     try:
@@ -83,17 +87,17 @@ async def distill_feedback(history: list[dict], latest_user_msg: str
                                          temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
     except (httpx.HTTPError, ValueError):
-        return None  # fail open — never drop or crash a chat turn over this
+        return None, Usage()  # fail open — never drop or crash a chat turn over this
 
+    usage = Usage.from_response(data)
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     ok, headline, description = critic.parse_verdict(content)
     if ok:
-        return None
-    return headline, description
+        return None, usage
+    return (headline, description), usage
 
 
-# This call's own prompt/completion tokens and cost are intentionally NOT
-# rolled into usage_log — like generate_title's title call, it's a cheap
-# background probe outside the billed turn, not part of the answer the user
-# is charged for. An accepted gap, not a silent omission (see chat.py's
-# _record_feedback_lesson, the caller).
+# This call's usage IS billed to usage_log, like every other LLM call a turn
+# causes. Because it runs detached (see chat.py's _record_feedback_lesson) the
+# turn's row is already committed by the time it finishes, so the caller folds it
+# in with _add_usage rather than at insert time.

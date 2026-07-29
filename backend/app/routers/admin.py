@@ -1106,18 +1106,27 @@ def usage(since: float | None = None, until: float | None = None,
             "COALESCE(SUM(first_call_prompt_tokens),0) AS first_call_prompt_tokens, "
             "COALESCE(SUM(first_call_cached_prompt_tokens),0) AS first_call_cached_prompt_tokens, "
             "COALESCE(SUM(cost),0.0) AS spend, "
-            # Spend provenance (migration 34): of the real LLM turns in this
-            # window, how many carried a cost we ESTIMATED from list prices rather
-            # than one the provider billed. Scoped to cached=0 turns with actual
-            # token usage — the same scoping the cost_warning probe below uses —
-            # because an answer-cache hit and a guard refusal spend nothing and
-            # would otherwise dilute the ratio toward "reported". Drives the
+            # Spend provenance (migration 34): of the turns in this window that
+            # actually spent tokens, how many carried a cost we ESTIMATED from list
+            # prices rather than one the provider billed. Drives the
             # estimated-spend marker on the Usage tab: a switch of providers puts
-            # BOTH kinds of row in one window, so the reader needs the split, not
-            # a single boolean.
-            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            # BOTH kinds of row in one window, so the reader needs the split, not a
+            # single boolean.
+            #
+            # The predicate is TOKENS SPENT, not `cached=0`. It used to also require
+            # cached=0, justified by "a cache hit and a guard refusal spend
+            # nothing" — which was never true of the guard (it runs before the cache
+            # lookup, on every question) and is no longer true of a cache hit now
+            # that its guard call is billed. Spending tokens is the honest test; a
+            # genuinely free row still has none.
+            #
+            # NB this is a COUNT of rows, not a spend-weighted share: a cache hit
+            # contributing a fraction of a cent counts the same as a full agent
+            # turn. The denominator also steps on the deploy that shipped this,
+            # since historical cache-hit rows kept 0 tokens and stay excluded.
+            "COALESCE(SUM(CASE WHEN (prompt_tokens+completion_tokens)>0 "
             "THEN 1 ELSE 0 END),0) AS priceable_turns, "
-            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            "COALESCE(SUM(CASE WHEN (prompt_tokens+completion_tokens)>0 "
             "AND cost_estimated=1 THEN 1 ELSE 0 END),0) AS estimated_turns, "
             "COALESCE(SUM(cached),0) AS cache_hits, "
             "COALESCE(SUM(escalated),0) AS escalations, "
@@ -1190,11 +1199,17 @@ def usage(since: float | None = None, until: float | None = None,
         # This is deliberately DECOUPLED from the selected window (a fixed 30-day
         # look-back) so the warning is a stable config-health signal, not a
         # per-range artifact that vanishes when you pick a quiet hour. It fires
-        # only when there's real LLM activity (a non-answer-cache turn that spent
-        # tokens) whose cost never landed AND no fallback prices are set — the two
-        # conditions in one: with prices set, cost>0 for those turns, so
-        # priced_turns>0 and the warning clears; likewise once the provider starts
-        # reporting. See app/llm.py effective_cost + docs/ADMIN_GUIDE.md.
+        # only when there's real LLM activity (any turn that spent tokens) whose
+        # cost never landed AND no fallback prices are set — the two conditions in
+        # one: with prices set, cost>0 for those turns, so priced_turns>0 and the
+        # warning clears; likewise once the provider starts reporting. See
+        # app/llm.py effective_cost + docs/ADMIN_GUIDE.md.
+        #
+        # BOTH halves are scoped identically ("spent tokens"), which they must be:
+        # scoping only llm_turns would let a single guard-billed refusal clear the
+        # warning for a window whose agent turns all recorded cost=0. The old
+        # cached=0 clause is gone for the reason given at priceable_turns above —
+        # a cache hit still pays for its guard call, so it is not a free row.
         #
         # llm_cache_read_cost_per_mtok is DELIBERATELY not part of this test, and
         # adding it can only create false negatives. It never enables an estimate
@@ -1205,9 +1220,10 @@ def usage(since: float | None = None, until: float | None = None,
                              or s.llm_output_cost_per_mtok > 0)
         health = con.execute(
             "SELECT "
-            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            "COALESCE(SUM(CASE WHEN (prompt_tokens+completion_tokens)>0 "
             "THEN 1 ELSE 0 END),0) AS llm_turns, "
-            "COALESCE(SUM(CASE WHEN cost>0 THEN 1 ELSE 0 END),0) AS priced_turns "
+            "COALESCE(SUM(CASE WHEN (prompt_tokens+completion_tokens)>0 AND cost>0 "
+            "THEN 1 ELSE 0 END),0) AS priced_turns "
             "FROM usage_log WHERE created_at >= ?", (now - 30 * 86400,)).fetchone()
         cost_warning = (health["llm_turns"] > 0 and health["priced_turns"] == 0
                         and not prices_configured)
