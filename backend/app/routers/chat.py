@@ -524,18 +524,23 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 yield _sse(ev)
 
             if result is None:
-                # The turn produced nothing to persist (transport error, or the
-                # client disconnected mid-stream). Leave the DB untouched — the
-                # edit DELETE never fired (it lives in _persist), and a new
+                # The turn produced nothing to persist. Leave the DB untouched —
+                # the edit DELETE never fired (it lives in _persist), and a new
                 # conversation is reversed by _delete_if_empty in `finally`.
                 #
-                # KNOWN GAP, stated rather than left to be rediscovered: this
-                # branch writes no usage_log row at all, so it records neither the
-                # guard's spend nor whatever the agent burned before dying. Every
-                # other path bills every call (see _guard_usage_kwargs below).
-                # Closing it needs spend recorded at CALL time instead of at turn
-                # end; a usage-only row here would inflate `queries` (a COUNT(*))
-                # with turns that produced no answer.
+                # NARROWER THAN IT LOOKS, and the old comment here named the wrong
+                # causes ("transport error, or the client disconnected"). Neither
+                # reaches this line. Every exit from stream_agent yields a terminal
+                # `done` carrying the result — including both transport-error
+                # branches, and the two that look like bare returns, which go
+                # through _final_events. The ONE exception is its no-API-key early
+                # return, and guard.classify short-circuits on the same setting, so
+                # that path spent nothing and has nothing to bill. A client
+                # disconnect doesn't arrive here at all: the generator unwinds at
+                # the `yield`, skipping everything below, and only `finally` runs.
+                #
+                # So the real spend-loss path is CANCELLATION, not this branch —
+                # see the note in `finally`.
                 yield _sse({"type": "done"})
                 return
 
@@ -684,6 +689,25 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     done["title"] = title
             yield _sse(done)
         finally:
+            # KNOWN GAP — a CANCELLED turn is billed nothing. When the client
+            # disconnects (closed tab, dropped network, refresh) this generator
+            # unwinds at whichever `yield` it was on, so _persist never runs and
+            # the guard's spend plus however many tool rounds the agent had burned
+            # are lost. Bounded by one turn, but a turn is big: an ordinary
+            # question measured 55,605 prompt tokens. Every NORMAL path bills
+            # every call (see _guard_usage_kwargs / _add_usage); this is the one
+            # exception. NB "Stop generating" is NOT affected — it is
+            # abandon-and-drain, so the request completes and bills normally.
+            #
+            # The fix, when it's worth doing: stream_agent builds one AgentResult
+            # up front and mutates it in place all turn, so letting the caller
+            # supply that object would give this block a live reference to the
+            # accumulated usage even with no terminal `done` — and this `finally`
+            # already survives cancellation (see the shield below). Needs a
+            # did-we-already-persist guard, or a normal turn bills twice. A row
+            # here would NOT distort `queries`: a cancelled turn is a real
+            # question the user asked and paid for, unlike a title/feedback probe.
+            #
             # Compensating cleanup (bug (a)): a brand-new conversation that never
             # received a message — interrupted turn, or the result-None return
             # above — must not linger as a phantom. _delete_if_empty is a no-op
