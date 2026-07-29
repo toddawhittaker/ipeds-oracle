@@ -39,9 +39,13 @@
 #   * MAIL_BACKEND + SMTP_HOST blank — with RESEND_API_KEY also blank, the mailer
 #     resolves to the console (log-only) backend; a dev .env pointing SMTP_HOST at
 #     a real relay would otherwise make the suite attempt a live SMTP send.
-#   * LLM_INPUT/OUTPUT_COST_PER_MTOK=0 — a dev .env with real fallback prices would
-#     make effective_cost() estimate a nonzero spend where CI (no .env → 0) records
-#     0, drifting any cost assertion. Explicit 0 pins the provider-reported-only path.
+#   * LLM_INPUT/OUTPUT/CACHE_READ_COST_PER_MTOK=0 — a dev .env with real fallback
+#     prices would make effective_cost() estimate a nonzero spend where CI (no .env
+#     → 0) records 0, drifting any cost assertion. Explicit 0 pins the
+#     provider-reported-only path. Note 0 is also the CACHE_READ setting's
+#     "not configured" value (prompt tokens priced at the full input rate), so this
+#     pin reproduces CI's default exactly — which is why that setting is a float
+#     defaulting to 0 rather than an Optional: `export …=""` would fail validation.
 
 export COOKIE_SECURE=false
 export LLM_API_KEY=""
@@ -53,6 +57,7 @@ export MAIL_BACKEND=""
 export SMTP_HOST=""
 export LLM_INPUT_COST_PER_MTOK=0
 export LLM_OUTPUT_COST_PER_MTOK=0
+export LLM_CACHE_READ_COST_PER_MTOK=0
 #   * MODEL_DEFAULT + MODEL_ESCALATION blank — these ship with NO default (the app
 #     is provider-agnostic), so CI resolves them to "". A dev .env necessarily sets
 #     real model IDs, which would otherwise be the one LLM setting present locally

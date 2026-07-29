@@ -145,7 +145,7 @@ def _seed_usage_log(email, question, created_at=None, model_used="test-model",
                      first_call_cached_prompt_tokens=0, escalated=0,
                      figure_grounding=None, emit_mode=None, answer_leaked=0,
                      table_grounding=None, table_cells_checked=0,
-                     table_cells_matched=0, exhaustion=None):
+                     table_cells_matched=0, exhaustion=None, cost_estimated=0):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -158,14 +158,15 @@ def _seed_usage_log(email, question, created_at=None, model_used="test-model",
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, figure_grounding, emit_mode, answer_leaked, "
-            "table_grounding, table_cells_checked, table_cells_matched, "
-            "exhaustion, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ok, cached, cost, cost_estimated, figure_grounding, emit_mode, "
+            "answer_leaked, table_grounding, table_cells_checked, "
+            "table_cells_matched, exhaustion, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
-             first_call_cached_prompt_tokens, ok, cached, cost, figure_grounding,
-             emit_mode, answer_leaked, table_grounding, table_cells_checked,
-             table_cells_matched, exhaustion,
+             first_call_cached_prompt_tokens, ok, cached, cost, cost_estimated,
+             figure_grounding, emit_mode, answer_leaked, table_grounding,
+             table_cells_checked, table_cells_matched, exhaustion,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1444,6 +1445,40 @@ def test_usage_totals_expose_prompt_cache_tokens():
         assert totals["cached_prompt_tokens"] == 800, totals
         assert totals["first_call_prompt_tokens"] == 700, totals
         assert totals["first_call_cached_prompt_tokens"] == 150, totals
+
+
+def test_usage_totals_split_estimated_spend_from_billed_spend():
+    """usage_log.cost holds two very different numbers -- the provider's actual
+    per-request charge, and our own list-price ESTIMATE for a provider that
+    reports none (DeepSeek direct). An estimate can be off by multiples, so the
+    Usage tile marks it; that needs the split in the totals.
+
+    THE REGRESSION this guards: a deployment that SWITCHES providers has both
+    kinds of row inside one window, so a config-derived boolean ("are prices
+    set?") would describe one half and lie about the other. Here two turns are
+    billed and one is estimated -- a single flag cannot express that, a count can.
+
+    Also pins the SCOPING: answer-cache hits and guard refusals spend nothing and
+    must stay out of BOTH counts, or the ratio drifts toward "billed" every time
+    someone repeats a question."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("spend@x.edu", "billed1", created_at=now - 100, cost=0.02)
+        _seed_usage_log("spend@x.edu", "billed2", created_at=now - 90, cost=0.03)
+        _seed_usage_log("spend@x.edu", "estimated", created_at=now - 80,
+                        cost=0.01, cost_estimated=1)
+        # An answer-cache hit: no tokens, no spend -- not a priceable turn.
+        _seed_usage_log("spend@x.edu", "cachehit", created_at=now - 70, cached=1,
+                        cost=0.0, prompt_tokens=0, completion_tokens=0)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        assert r.status_code == 200, r.text
+        totals = r.json()["totals"]
+        assert totals["priceable_turns"] == 3, totals
+        assert totals["estimated_turns"] == 1, totals
+        # The spend total itself still sums every row, estimated or not.
+        assert abs(totals["spend"] - 0.06) < 1e-9, totals
 
 
 def test_usage_totals_count_figure_grounding_excluding_non_evidence():
@@ -3528,6 +3563,8 @@ def run():
           test_usage_since_after_until_is_swapped)
     check("usage totals expose the four prompt-cache columns, summed independently",
           test_usage_totals_expose_prompt_cache_tokens)
+    check("usage totals split estimated spend from provider-billed spend",
+          test_usage_totals_split_estimated_spend_from_billed_spend)
     check("usage totals count figure grounding, excluding non-evidence turns",
           test_usage_totals_count_figure_grounding_excluding_non_evidence)
     check("usage totals sum table-grounding cells, excluding non-evidence turns",

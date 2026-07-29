@@ -116,11 +116,25 @@ class Settings(BaseSettings):
     # Spend normally uses the provider-reported per-request cost (OpenRouter's
     # usage.cost). A provider that doesn't report it leaves cost at 0 → set these to
     # your model's list prices and spend is estimated as
-    # prompt_tokens*input + completion_tokens*output (per Mtok). 0 = no estimate
-    # (spend stays 0 when the provider is silent). The estimate does NOT discount
-    # cached input tokens, so it slightly over-states spend on cache-heavy traffic.
+    # uncached_prompt*input + cached_prompt*cache_read + completion*output (per Mtok).
+    # 0 = no estimate (spend stays 0 when the provider is silent).
     llm_input_cost_per_mtok: float = Field(default=0.0)
     llm_output_cost_per_mtok: float = Field(default=0.0)
+    # Price of a prompt token the provider served from its prefix cache. These are
+    # steeply discounted — DeepSeek reads at $0.0028/Mtok against $0.140 for a miss,
+    # a 50x gap — and this app is cache-heavy by construction (a large static
+    # SCHEMA.md prefix rides every turn, measured ~78% hit rate), so pricing them at
+    # the full input rate over-states spend several-fold.
+    #
+    # 0 means NOT CONFIGURED — every prompt token is then priced at the full input
+    # rate, exactly as before this setting existed. It does NOT mean "cache reads are
+    # free": no provider bills them at zero, and reading it that way would UNDER-state
+    # spend, the one direction a cost estimate must never err in silently. Set it to a
+    # real (tiny) price to enable the discount.
+    #
+    # Cache WRITES are priced at the plain input rate. DeepSeek charges no write
+    # premium; Anthropic (1.25x) and OpenAI do, so their estimates run slightly low.
+    llm_cache_read_cost_per_mtok: float = Field(default=0.0)
     # Topical input guardrail: a cheap pre-flight classifier refuses off-topic /
     # prompt-injection messages before the agent runs. Set false to disable.
     guard_enabled: bool = Field(default=True)

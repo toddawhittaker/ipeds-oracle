@@ -13,6 +13,7 @@ import {
   groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate,
   leakLabel, leakRate,
   promptCacheRate, schemaCacheRate,
+  spendEstimated, spendLabel,
 } from "../usagestats.js";
 import { money } from "./format.js";
 
@@ -116,7 +117,12 @@ export default function Usage() {
             <div className="stats">
               <Stat label="Queries" value={(t.queries || 0).toLocaleString()} info={STAT_INFO.queries} />
               <Stat label="Tokens" value={(t.tokens || 0).toLocaleString()} info={STAT_INFO.tokens} />
-              <Stat label="Spend" value={money(t.spend)} info={STAT_INFO.spend} />
+              {/* "~" marks a figure we ESTIMATED from list prices rather than one
+                  the provider billed — see spendEstimated(). The label carries the
+                  split when a window holds both kinds. */}
+              <Stat label={spendLabel(t)}
+                    value={spendEstimated(t) ? `~${money(t.spend)}` : money(t.spend)}
+                    info={STAT_INFO.spend} />
             </div>
           </div>
           <div className="stat-band">

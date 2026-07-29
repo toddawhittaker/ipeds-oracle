@@ -256,21 +256,49 @@ async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> N
         res.figure_derivation = "retry:suppressed"
 
 
+def cost_is_estimated(reported_cost: float) -> bool:
+    """Whether a turn's spend came from our list-price estimate rather than the
+    provider's own bill. ONE definition, two readers: `effective_cost` branches on
+    it, and `routers/chat.py` persists it to `usage_log.cost_estimated` so the
+    Usage tab can mark an estimate as an estimate. Duplicating the test at the call
+    site is how the two would drift apart."""
+    return not (reported_cost and reported_cost > 0)
+
+
 def effective_cost(reported_cost: float, prompt_tokens: int,
-                   completion_tokens: int, s=None) -> float:
+                   completion_tokens: int, *, cached_prompt_tokens: int = 0,
+                   s=None) -> float:
     """The USD cost to record for a turn. Prefer the provider-reported cost
     (OpenRouter's usage.cost); when that's absent/zero, fall back to an estimate
     from the admin-configured per-Mtok list prices — so a provider that doesn't
-    report cost still yields a spend figure instead of 0. Both prices default to
+    report cost still yields a spend figure instead of 0. The prices default to
     0, in which case there's no estimate and the reported (0) cost stands.
 
-    The estimate prices EVERY prompt token at the input rate — it does not
-    discount cached-prefix tokens (we can't know the provider's cached rate), so
-    it slightly over-states spend on cache-heavy traffic. It's a stand-in for a
-    real per-request bill, not a substitute for one."""
-    if reported_cost and reported_cost > 0:
+    Cached-prefix tokens are priced separately when
+    `llm_cache_read_cost_per_mtok` is set: they are a SUBSET of `prompt_tokens`
+    (verified — DeepSeek reports hit + miss == prompt_tokens), so the uncached
+    count is a subtraction. Providers discount a cache read steeply (DeepSeek 50x),
+    and this app runs ~78% cached, so pricing them at the input rate over-stated
+    spend ~5x. With the price left at 0 the old behaviour is reproduced exactly:
+    every prompt token at the input rate. Either way it's a stand-in for a real
+    per-request bill, not a substitute for one — it estimates from LIST prices,
+    which drift from what a provider actually charges.
+
+    `cached_prompt_tokens` is keyword-only on purpose. The one production caller
+    passes three positionals; a 4th positional would bind an int into `s` and
+    raise on the next attribute read — inside the SSE generator, AFTER the answer
+    streamed, losing the turn's usage_log row. The `*` makes that unrepresentable."""
+    if not cost_is_estimated(reported_cost):
         return reported_cost
     s = s or get_settings()
+    if s.llm_cache_read_cost_per_mtok > 0:
+        # max(0,…): cached_tokens() reads two provider shapes through an `or`
+        # chain, so a provider reporting hits while omitting prompt_tokens would
+        # otherwise drive this negative and CREDIT the turn.
+        uncached = max(0, prompt_tokens - cached_prompt_tokens)
+        return (uncached * s.llm_input_cost_per_mtok
+                + cached_prompt_tokens * s.llm_cache_read_cost_per_mtok
+                + completion_tokens * s.llm_output_cost_per_mtok) / 1_000_000
     return (prompt_tokens * s.llm_input_cost_per_mtok
             + completion_tokens * s.llm_output_cost_per_mtok) / 1_000_000
 
