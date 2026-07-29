@@ -1352,6 +1352,44 @@ turns that burned the whole tool budget (`usage_log.exhaustion` NOT NULL), with 
 exhaustion bullet above). A rising Exhausted count is the signal to lift
 `LLM_MAX_TOOL_ITERS`.
 
+**EVERY LLM call a turn causes is billed, not just the agent's.** `usage_log` used
+to record only `stream_agent`'s usage, so three probes were invisible: the topical
+**guard** (`guard.classify` — runs on EVERY question, *before* the answer cache and
+before the agent), the **title** call, and the **feedback distiller**. The guard was
+the serious one and an oversight rather than a decision — `Verdict` carried a bare
+token count that reached `messages.tokens` on the refusal path and nowhere else, and
+on the allowed path the verdict was never referenced again. Consequences worth
+knowing: **an answer-cache hit is NOT free** (the guard ran before the lookup, so its
+row carries that one call — `cache_hits` is unaffected, it counts rows), and a
+**refusal row is real spend** (`model_used='guard'`). Three shapes, three
+mechanisms, because two of them have no `AgentResult` to accumulate into: the agent
+path does a plain `+=` onto `result`; refusal and cache-hit share
+**`_guard_usage_kwargs`**; and the two probes that finish *after* `_persist` has
+committed (title, distiller) add to the existing row via **`_add_usage`**
+(`UPDATE … cost_estimated = MAX(…)`, so a later estimated call taints an otherwise
+billed row and a later billed one can't clear the flag). **`_persist` therefore
+returns a THIRD value, the `usage_log` row id.** Two things deliberately NOT done:
+the title call is **not** moved ahead of `_persist` — that would put a network probe
+in front of the only statement that saves the user's answer, trading data safety for
+tidier accounting; and `first_call_*` is **never** touched by a probe, since it
+isolates the AGENT's schema-prefix reuse and the guard's prompt is a different
+prefix (polluting it would corrupt the Schema-cache stat). One **known gap, stated
+in the code** at chat.py's `result is None` branch: it writes no `usage_log` row at
+all, so it records neither the guard's spend nor the agent's — closing it needs
+spend recorded at CALL time, and a usage-only row there would inflate `queries` (a
+`COUNT(*)`) with turns that produced no answer. The `priceable_turns` /
+`estimated_turns` / `cost_warning` predicates dropped their `cached=0` clause as a
+direct consequence — it was justified by "a cache hit and a guard refusal spend
+nothing", which was never true of the guard and is no longer true of a hit; **tokens
+spent** is the honest test, and both halves of the `cost_warning` probe are scoped
+identically or a single guard-billed refusal could clear a warning for a window
+whose agent turns all recorded `cost=0`. A shared **`llmhttp.Usage`** +
+`from_response()` is the one extractor for all five probes (`Critique` and
+`_FigureRetry` keep their flat fields and just populate from it — which is what made
+adopting it behaviour-neutral, proven by `test_critic.py` passing untouched). Pinned
+in `test_chat_router.py` (the three turn shapes + `_add_usage`), `test_guard.py`,
+`test_feedback.py`, `test_admin_router.py`.
+
 **Spend is two different numbers, and the tile says which.** `usage_log.cost` holds
 either the provider's own per-request charge (OpenRouter reports `usage.cost`) or
 **our list-price estimate** for a provider that reports none — DeepSeek direct, and

@@ -167,7 +167,7 @@ def test_classify_in_scope_reply_with_live_key():
         resp, lambda: asyncio.run(guard.classify(
             "How many nursing degrees were awarded?", history=history)))
     assert v.allowed is True, v
-    assert v.tokens == 13, v.tokens
+    assert v.total_tokens == 13, v.total_tokens
     assert v.raw == "IN_SCOPE", v.raw
 
 
@@ -179,7 +179,45 @@ def test_classify_out_of_scope_reply_with_live_key():
     v = _with_fake_transport(
         resp, lambda: asyncio.run(guard.classify("give me a recipe")))
     assert v.allowed is False, v
-    assert v.tokens == 14, v.tokens
+    assert v.total_tokens == 14, v.total_tokens
+
+
+def test_classify_captures_the_full_usage_split_not_just_a_count():
+    """THE REGRESSION: the guard runs on EVERY question, before the answer cache
+    and before the agent, and its spend reached usage_log nowhere -- Verdict
+    carried a bare token count, and on the allowed path even that was discarded.
+    Billing it needs the four numbers usage_log stores, so classify must keep the
+    prompt/completion split, the provider's cached-prefix count, and the cost.
+
+    Cached tokens use the provider-native shape here (`prompt_cache_hit_tokens`)
+    rather than OpenRouter's nested one, since a guard prompt is a large fixed
+    system block that a provider serves from cache almost every time -- if this
+    were dropped, adding guard tokens to the blended Prompt-cache denominator
+    with no matching numerator would drag that rate down."""
+    resp = _json_response({
+        "choices": [{"message": {"content": "IN_SCOPE"}}],
+        "usage": {"prompt_tokens": 500, "completion_tokens": 2,
+                  "prompt_cache_hit_tokens": 448, "cost": 0.00012},
+    })
+    v = _with_fake_transport(
+        resp, lambda: asyncio.run(guard.classify("how many nursing degrees?")))
+    assert v.usage.prompt_tokens == 500, v.usage
+    assert v.usage.completion_tokens == 2, v.usage
+    assert v.usage.cached_prompt_tokens == 448, v.usage
+    assert v.usage.cost == 0.00012, v.usage
+    # ...and the derived total still agrees with the split it is derived from.
+    assert v.total_tokens == 502, v.total_tokens
+
+
+def test_classify_fail_open_paths_report_zero_usage():
+    """A guard that never called the provider must bill nothing. Both fail-open
+    exits return a bare Verdict, so this pins that the default Usage is zeroed --
+    a shared mutable default here would leak one turn's spend onto the next."""
+    v = Verdict(allowed=True)
+    assert v.usage.prompt_tokens == 0 and v.usage.cost == 0.0, v
+    assert v.total_tokens == 0, v
+    # Distinct instances, not one shared default (field(default_factory=Usage)).
+    assert Verdict(allowed=True).usage is not v.usage
 
 
 def test_classify_transport_error_fails_open_with_live_key():
@@ -239,7 +277,8 @@ def _login(c):
 
 def test_out_of_scope_refused_without_calling_agent():
     async def deny(question, history=None):
-        return Verdict(allowed=False, tokens=7)
+        return Verdict(allowed=False, usage=llmhttp.Usage(prompt_tokens=6,
+                                                          completion_tokens=1))
 
     def explode(*a, **k):
         raise AssertionError("stream_agent must NOT run for an out-of-scope message")
@@ -264,7 +303,8 @@ def test_out_of_scope_refused_without_calling_agent():
 
 def test_in_scope_reaches_agent():
     async def allow(question, history=None):
-        return Verdict(allowed=True, tokens=3)
+        return Verdict(allowed=True, usage=llmhttp.Usage(prompt_tokens=2,
+                                                         completion_tokens=1))
 
     called = {"hit": False}
 
@@ -303,6 +343,10 @@ def run():
           test_classify_in_scope_reply_with_live_key)
     check("classify (live key): OUT_OF_SCOPE reply refuses",
           test_classify_out_of_scope_reply_with_live_key)
+    check("classify (live key): captures the full usage split, not just a count",
+          test_classify_captures_the_full_usage_split_not_just_a_count)
+    check("classify: fail-open verdicts carry zeroed, unshared usage",
+          test_classify_fail_open_paths_report_zero_usage)
     check("classify (live key): transport error fails open",
           test_classify_transport_error_fails_open_with_live_key)
     check("classify (live key): non-JSON 200 body fails open, does not raise",

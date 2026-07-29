@@ -12,6 +12,7 @@ zero risk of a real, billed network call.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,6 +31,38 @@ def cached_tokens(usage: dict) -> int:
     own semantic answer cache in query_cache.)"""
     details = usage.get("prompt_tokens_details") or {}
     return details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0
+
+
+@dataclass
+class Usage:
+    """What one LLM call cost, in the four numbers usage_log records.
+
+    Every probe in the app (guard, critic, figure-retry, title, feedback) needs
+    the same extraction off a chat-completions response, and it was written out
+    per-probe -- so a provider adding a key, or a probe forgetting `cost`, drifted
+    silently. `from_response` is the single definition; the carrier is optional
+    (critic.Critique and llm._FigureRetry keep their own flat fields and just
+    populate them from here, which is what makes adopting this behaviour-neutral).
+
+    Lives beside `cached_tokens` because this module owns the wire format -- it is
+    the only place that knows a provider might say `prompt_cache_hit_tokens`
+    instead of `prompt_tokens_details.cached_tokens`."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cost: float = 0.0
+
+    @classmethod
+    def from_response(cls, data: dict) -> Usage:
+        """Read the usage block off a chat-completions response. A response that
+        carries none (an error shape, or a provider that omits it) yields all
+        zeros rather than raising -- every caller is on a fail-open path."""
+        usage = (data or {}).get("usage") or {}
+        return cls(prompt_tokens=usage.get("prompt_tokens", 0),
+                   completion_tokens=usage.get("completion_tokens", 0),
+                   cached_prompt_tokens=cached_tokens(usage),
+                   cost=usage.get("cost") or 0.0)
 
 
 def provider_headers(s: Any) -> dict[str, str]:

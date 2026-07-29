@@ -18,7 +18,8 @@ function rate(cached, total) {
 // COST metric — it reflects the actual billing discount, whatever got cached
 // (the static schema prefix AND the growing in-turn tool-call conversation).
 // Distinct from the "Answer cache" stat, which counts our own semantic
-// query_cache short-circuits (no LLM call at all).
+// query_cache short-circuits (those skip the AGENT — not every LLM call: the
+// topical guard still runs on every question, before the cache is consulted).
 export function promptCacheRate(totals) {
   const t = totals || {};
   return rate(t.cached_prompt_tokens, t.prompt_tokens);
@@ -44,10 +45,11 @@ export function schemaCacheRate(totals) {
 // drift from what a vendor actually charges. Rendering both as a plain "$0.63"
 // makes an estimate read like an invoice, so the tile marks it.
 //
-// False when nothing in the window was priceable (an empty range, or only
-// answer-cache hits) and when the counts are absent altogether — an older backend
-// or a fixture that predates the columns must not have an "estimated" claim
-// invented for it. Not-knowing renders as the unmarked number, never a false mark.
+// False when nothing in the window spent any tokens (an empty range) and when the
+// counts are absent altogether — an older backend or a fixture that predates the
+// columns must not have an "estimated" claim invented for it. Not-knowing renders
+// as the unmarked number, never a false mark. (Answer-cache hits DO count: they
+// still pay for the guard call that screens every question.)
 export function spendEstimated(totals) {
   const t = totals || {};
   return num(t.estimated_turns) > 0;

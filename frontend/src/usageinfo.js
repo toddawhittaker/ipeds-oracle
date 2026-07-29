@@ -35,9 +35,10 @@ export const STAT_INFO = {
     name: "Answer cache",
     what: "How many answers were served straight from the semantic cache: a " +
       "repeat or near-identical question reused a stored answer instead of " +
-      "calling the model at all.",
+      "running the agent.",
     direction: "up",
-    note: "Every hit is a question answered instantly and for free.",
+    note: "A hit answers instantly and skips the agent entirely — it still " +
+      "pays for the one guard call that screens every question.",
   },
   schemaCache: {
     name: "Schema cache",

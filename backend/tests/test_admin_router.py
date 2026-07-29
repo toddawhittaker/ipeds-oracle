@@ -1458,9 +1458,9 @@ def test_usage_totals_split_estimated_spend_from_billed_spend():
     set?") would describe one half and lie about the other. Here two turns are
     billed and one is estimated -- a single flag cannot express that, a count can.
 
-    Also pins the SCOPING: answer-cache hits and guard refusals spend nothing and
-    must stay out of BOTH counts, or the ratio drifts toward "billed" every time
-    someone repeats a question."""
+    Also pins the SCOPING: a row that spent no tokens stays out of BOTH counts.
+    Note this is deliberately NOT "cached=0" -- a cache hit still pays for the
+    guard call that screens every question, so it is a priceable turn."""
     now = time.time()
     _clear_usage_log()
     with TestClient(app) as c:
@@ -1469,16 +1469,51 @@ def test_usage_totals_split_estimated_spend_from_billed_spend():
         _seed_usage_log("spend@x.edu", "billed2", created_at=now - 90, cost=0.03)
         _seed_usage_log("spend@x.edu", "estimated", created_at=now - 80,
                         cost=0.01, cost_estimated=1)
-        # An answer-cache hit: no tokens, no spend -- not a priceable turn.
+        # An answer-cache hit. It is NOT free and NOT excluded: the guard runs on
+        # every question before the cache is consulted, so the row carries that
+        # one call's tokens. Seeding it with prompt_tokens=0 (as this test used
+        # to) is not a real post-fix row -- and would let the assertion below
+        # keep passing while the scoping it names had changed underneath it.
         _seed_usage_log("spend@x.edu", "cachehit", created_at=now - 70, cached=1,
+                        cost=0.00002, prompt_tokens=11, completion_tokens=2,
+                        cost_estimated=1)
+        # A turn that genuinely spent nothing still self-excludes on tokens.
+        _seed_usage_log("spend@x.edu", "nospend", created_at=now - 60,
                         cost=0.0, prompt_tokens=0, completion_tokens=0)
         r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
         assert r.status_code == 200, r.text
         totals = r.json()["totals"]
-        assert totals["priceable_turns"] == 3, totals
-        assert totals["estimated_turns"] == 1, totals
+        # 3 billed/estimated agent turns + the cache hit that paid for its guard.
+        assert totals["priceable_turns"] == 4, totals
+        assert totals["estimated_turns"] == 2, totals
         # The spend total itself still sums every row, estimated or not.
-        assert abs(totals["spend"] - 0.06) < 1e-9, totals
+        assert abs(totals["spend"] - 0.06002) < 1e-9, totals
+
+
+def test_usage_totals_count_a_guard_refusal_as_real_spend():
+    """A refusal row (model_used='guard') records a real LLM call: the topical
+    guard classified the message, which costs tokens whether or not the question
+    was answered. No test anywhere seeded such a row before this, which is how the
+    guard's spend went unrecorded for so long -- the fixtures only ever exercised
+    agent turns and zero-token cache hits, so the gap was invisible to the suite.
+
+    Refusals need no special-casing to be counted; they are cached=0 with real
+    tokens, so the ordinary predicates pick them up. That is the assertion."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("refused@x.edu", "give me a recipe", created_at=now - 50,
+                        model_used="guard", prompt_tokens=9, completion_tokens=3,
+                        cost=0.0000168, cost_estimated=1)
+        r = c.get("/api/admin/usage", params={"since": now - 200, "until": now})
+        totals = r.json()["totals"]
+        assert totals["priceable_turns"] == 1, totals
+        assert totals["estimated_turns"] == 1, totals
+        assert totals["tokens"] == 12, totals
+        assert abs(totals["spend"] - 0.0000168) < 1e-12, totals
+        # A refusal is not an answer-cache hit, and must not read as one.
+        assert totals["cache_hits"] == 0, totals
 
 
 def test_usage_totals_count_figure_grounding_excluding_non_evidence():
@@ -1620,16 +1655,35 @@ def test_usage_cost_warning_flags_missing_spend():
         assert c.get("/api/admin/usage").json()["cost_warning"] is False
 
 
-def test_usage_cost_warning_ignores_answer_cache_only_activity():
-    """Answer-cache hits make no LLM call (cached=1, tokens=0), so a period with
-    only those has no spend to report and must NOT warn -- otherwise every quiet,
-    fully-cached stretch would false-alarm."""
+def test_usage_cost_warning_ignores_activity_that_spent_nothing():
+    """A row that made no LLM call (0 tokens) has no spend to report and must NOT
+    warn -- otherwise every quiet stretch would false-alarm.
+
+    The predicate is TOKENS SPENT, not cached=0. This test used to assert that an
+    answer-cache hit is such a row, which was wrong twice over: the guard runs on
+    every question BEFORE the cache is consulted, so a hit always cost one call,
+    and now that the call is billed the row has tokens. See the companion test
+    below for what a real cache-hit row does."""
     _clear_usage_log()
     with TestClient(app) as c:
         _login(c)
         _seed_usage_log("cacheonly@x.edu", "q", prompt_tokens=0, completion_tokens=0,
                         cost=0.0, cached=1)
         assert c.get("/api/admin/usage").json()["cost_warning"] is False
+
+
+def test_usage_cost_warning_fires_for_a_cache_hit_whose_guard_cost_never_landed():
+    """The counterpart, and the behaviour change worth stating: a cache hit now
+    carries its guard call's tokens, so a window of nothing BUT cache hits whose
+    cost never landed does warn. That is correct -- real spend went unrecorded,
+    which is exactly what this probe exists to surface. Previously such a window
+    was silent, because the predicate excluded cached rows outright."""
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("cachehit@x.edu", "q", prompt_tokens=11, completion_tokens=2,
+                        cost=0.0, cached=1)
+        assert c.get("/api/admin/usage").json()["cost_warning"] is True
 
 
 def test_usage_cost_warning_suppressed_when_fallback_prices_set():
@@ -3565,6 +3619,8 @@ def run():
           test_usage_totals_expose_prompt_cache_tokens)
     check("usage totals split estimated spend from provider-billed spend",
           test_usage_totals_split_estimated_spend_from_billed_spend)
+    check("usage totals count a guard refusal as real spend",
+          test_usage_totals_count_a_guard_refusal_as_real_spend)
     check("usage totals count figure grounding, excluding non-evidence turns",
           test_usage_totals_count_figure_grounding_excluding_non_evidence)
     check("usage totals sum table-grounding cells, excluding non-evidence turns",
@@ -3575,8 +3631,10 @@ def run():
           test_usage_totals_count_exhaustion_turns)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
           test_usage_cost_warning_flags_missing_spend)
-    check("usage cost_warning ignores answer-cache-only activity",
-          test_usage_cost_warning_ignores_answer_cache_only_activity)
+    check("usage cost_warning ignores activity that spent nothing",
+          test_usage_cost_warning_ignores_activity_that_spent_nothing)
+    check("usage cost_warning fires for a cache hit whose guard cost never landed",
+          test_usage_cost_warning_fires_for_a_cache_hit_whose_guard_cost_never_landed)
     check("usage cost_warning suppressed when fallback prices are set",
           test_usage_cost_warning_suppressed_when_fallback_prices_set)
     check("usage dashboard response has no 'recent' key",

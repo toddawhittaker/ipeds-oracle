@@ -1804,10 +1804,11 @@ def test_generate_title_no_key_returns_empty():
     orig_get_settings = llm.get_settings
     llm.get_settings = lambda: types.SimpleNamespace(llm_api_key="")
     try:
-        title = asyncio.run(llm.generate_title("q", "a"))
+        title, usage = asyncio.run(llm.generate_title("q", "a"))
     finally:
         llm.get_settings = orig_get_settings
     assert title == "", title
+    assert usage.prompt_tokens == 0 and usage.cost == 0.0, usage
 
 
 def test_generate_title_success_strips_quotes_and_period():
@@ -1816,18 +1817,22 @@ def test_generate_title_success_strips_quotes_and_period():
         "choices": [{"message": {"content": '  "Nursing Degree Trends."  '}}],
         "usage": {"prompt_tokens": 4, "completion_tokens": 4},
     })
-    title = _with_fake_transport(
+    title, usage = _with_fake_transport(
         resp, lambda: asyncio.run(llm.generate_title(
             "How many nursing degrees were awarded?", "About 100,000.")))
     assert title == "Nursing Degree Trends", repr(title)
+    # The title call is real spend the turn caused; routers/chat.py bills it with
+    # _add_usage because it runs after _persist has already committed the row.
+    assert usage.prompt_tokens == 4 and usage.completion_tokens == 4, usage
 
 
 def test_generate_title_transport_error_returns_empty():
     llm._chat = _REAL_CHAT
-    title = _with_fake_transport(
+    title, usage = _with_fake_transport(
         httpx.ConnectError("boom"),
         lambda: asyncio.run(llm.generate_title("q", "a")))
     assert title == "", title
+    assert usage.prompt_tokens == 0 and usage.cost == 0.0, usage
 
 
 def run():

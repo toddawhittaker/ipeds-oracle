@@ -105,13 +105,71 @@ DONE_EVENT_FIELDS: tuple[str, ...] = (
 _background_tasks: set[asyncio.Task] = set()
 
 
+def _guard_usage_kwargs(usage) -> dict:
+    """The `_persist` accounting kwargs for a turn whose ONLY LLM call was the
+    guard — a refusal, or an answer-cache hit.
+
+    Neither branch has an AgentResult to accumulate into (both call `_persist`
+    with literals), which is why this returns kwargs rather than mutating a
+    result the way the agent path does. Resisting the urge to manufacture an
+    empty AgentResult here is deliberate: it would be one short step from handing
+    that object to `_persist` wholesale and writing emit_mode/figure_grounding
+    defaults onto a replay row, undoing the NULLs the cache branch documents.
+
+    first_call_* stays 0 — see the note at the agent-path fold."""
+    return {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cached_prompt_tokens": usage.cached_prompt_tokens,
+        "cost": effective_cost(usage.cost, usage.prompt_tokens,
+                               usage.completion_tokens,
+                               cached_prompt_tokens=usage.cached_prompt_tokens),
+        "cost_estimated": cost_is_estimated(usage.cost),
+    }
+
+
+def _add_usage(usage_log_id: int, usage) -> None:
+    """Add a probe's spend to an ALREADY-COMMITTED usage_log row.
+
+    Two calls a turn causes finish after `_persist` has run: the title call and
+    the detached feedback distiller. Neither can be folded in at insert time, and
+    neither should be moved ahead of the write — `_persist` is the statement that
+    saves the user's answer, and putting a network probe in front of it would turn
+    a slow title call into lost data. So they add to the row afterwards.
+
+    cost_estimated uses MAX, not assignment: the flag means "any part of this row
+    is an estimate", so a later estimated call must taint an otherwise
+    provider-billed row, and a later billed call must not clear the flag.
+
+    Best-effort by design — a lost update costs one probe's accounting, never a
+    turn. Both callers already swallow their own failures."""
+    if usage_log_id is None or not (usage.prompt_tokens or usage.completion_tokens
+                                    or usage.cost):
+        return
+    con = connect()
+    try:
+        con.execute(
+            "UPDATE usage_log SET prompt_tokens = prompt_tokens + ?, "
+            "completion_tokens = completion_tokens + ?, "
+            "cached_prompt_tokens = cached_prompt_tokens + ?, "
+            "cost = cost + ?, cost_estimated = MAX(cost_estimated, ?) WHERE id = ?",
+            (usage.prompt_tokens, usage.completion_tokens, usage.cached_prompt_tokens,
+             effective_cost(usage.cost, usage.prompt_tokens, usage.completion_tokens,
+                            cached_prompt_tokens=usage.cached_prompt_tokens),
+             int(cost_is_estimated(usage.cost)), usage_log_id))
+        con.commit()
+    finally:
+        con.close()
+
+
 def _fire_and_forget(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
 
-async def _record_feedback_lesson(history: list[dict], question: str) -> None:
+async def _record_feedback_lesson(history: list[dict], question: str,
+                                  usage_log_id: int | None = None) -> None:
     """Mine corrective feedback on a follow-up turn into a candidate lesson —
     run as a background task (see _fire_and_forget), NOT awaited from gen(), so
     the SSE stream's body closes and the composer re-enables the instant the
@@ -120,11 +178,16 @@ async def _record_feedback_lesson(history: list[dict], question: str) -> None:
     answer. The answer is already persisted by the time this runs, so a
     failure here only costs a missed lesson, never a broken turn — caught and
     logged rather than left to surface as an "exception never retrieved"
-    warning. Like generate_title's title call, this call's own token/cost
-    usage is intentionally NOT recorded in usage_log (a cheap probe call, not
-    part of the billed turn)."""
+    warning.
+
+    Its spend IS billed, via _add_usage onto the row `_persist` already wrote —
+    running detached is why it can't be folded in at insert time, and is not a
+    reason to leave a real LLM call unaccounted. Billed BEFORE the lesson is
+    saved, so the call is recorded whether or not it found anything: "no lesson
+    here" is the common outcome and costs exactly the same."""
     try:
-        fb = await feedback.distill_feedback(history, question)
+        fb, usage = await feedback.distill_feedback(history, question)
+        await run_in_threadpool(_add_usage, usage_log_id, usage)
         if fb:
             await run_in_threadpool(skills.record_lesson_from_feedback, question, fb[0], fb[1])
     except Exception:
@@ -360,10 +423,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             if not verdict.allowed:
                 answer = guard.REFUSAL
                 yield _sse({"type": "answer", "text": answer})
-                user_msg_id, msg_id = await run_in_threadpool(
+                user_msg_id, msg_id, _ = await run_in_threadpool(
                     _persist, user["id"], conv_id, question, answer,
-                    sql_log=[], model="guard", tokens=verdict.tokens,
-                    cached=False, ok=True, delete_from_id=edit_from)
+                    sql_log=[], model="guard", tokens=verdict.total_tokens,
+                    cached=False, ok=True, delete_from_id=edit_from,
+                    # A refusal costs exactly one LLM call — the guard's own.
+                    **_guard_usage_kwargs(verdict.usage))
                 yield _sse({"type": "done", "refused": True, "message_id": msg_id,
                             "user_message_id": user_msg_id})
                 return
@@ -385,12 +450,16 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 if suggestions:
                     yield _sse({"type": "suggestions", "suggestions": suggestions})
                 yield _sse({"type": "answer", "text": answer})
-                user_msg_id, msg_id = await run_in_threadpool(
+                user_msg_id, msg_id, usage_id = await run_in_threadpool(
                     _persist, user["id"], conv_id, question, answer,
                     sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
-                    model="cache", tokens=0, cached=True, ok=True,
+                    model="cache", tokens=verdict.total_tokens, cached=True, ok=True,
                     thinking=[{"kind": "status", "text": status}], figure=figure,
                     suggestions=suggestions, delete_from_id=edit_from,
+                    # A cache hit is NOT free: the guard ran before the lookup, so
+                    # the row carries that one call's spend. `cached=True` still
+                    # marks it a hit — the Answer-cache count is unaffected.
+                    **_guard_usage_kwargs(verdict.usage),
                     # Replay the cached turn's own result rows onto this message
                     # (migration 31). Without them a cache hit wrote results=NULL
                     # and every LATER turn in the conversation lost the evidence
@@ -407,7 +476,8 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                         "user_message_id": user_msg_id,
                         "results_truncated": bool(cached.get("results_truncated"))}
                 if is_new and answer:
-                    title = await generate_title(question, answer)
+                    title, title_usage = await generate_title(question, answer)
+                    await run_in_threadpool(_add_usage, usage_id, title_usage)
                     if title:
                         await run_in_threadpool(_update_title, conv_id, title)
                         done["title"] = title
@@ -458,11 +528,29 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # client disconnected mid-stream). Leave the DB untouched — the
                 # edit DELETE never fired (it lives in _persist), and a new
                 # conversation is reversed by _delete_if_empty in `finally`.
+                #
+                # KNOWN GAP, stated rather than left to be rediscovered: this
+                # branch writes no usage_log row at all, so it records neither the
+                # guard's spend nor whatever the agent burned before dying. Every
+                # other path bills every call (see _guard_usage_kwargs below).
+                # Closing it needs spend recorded at CALL time instead of at turn
+                # end; a usage-only row here would inflate `queries` (a COUNT(*))
+                # with turns that produced no answer.
                 yield _sse({"type": "done"})
                 return
 
+            # Fold the guard's spend into the turn it gated. Must be AFTER the
+            # `result is None` check above (there is no result to fold into before
+            # it) and BEFORE effective_cost below, or the estimate misses it.
+            result.prompt_tokens += verdict.usage.prompt_tokens
+            result.completion_tokens += verdict.usage.completion_tokens
+            result.cached_prompt_tokens += verdict.usage.cached_prompt_tokens
+            result.cost += verdict.usage.cost
+            # NB first_call_* is deliberately NOT touched: it measures the AGENT's
+            # schema-prefix reuse, and the guard's prompt is a different prefix.
+
             duration_ms = round((time.monotonic() - t0) * 1000)
-            user_msg_id, msg_id = await run_in_threadpool(
+            user_msg_id, msg_id, usage_id = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer or (result.error or ""),
                 sql_log=result.sql_log, model=result.model_used,
                 tokens=result.total_tokens, cached=False,
@@ -566,7 +654,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             cfg = get_settings()
             if (history and clarify is None and result.error is None
                     and cfg.skills_enabled and cfg.llm_api_key):
-                _fire_and_forget(_record_feedback_lesson(history, question))
+                _fire_and_forget(_record_feedback_lesson(history, question, usage_id))
 
             done = {"type": "done", "escalated": result.escalated,
                     "model": result.model_used, "tokens": result.total_tokens,
@@ -585,7 +673,12 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     "table_cells_matched": result.table_cells_matched}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
-                title = await generate_title(question, answer)
+                title, title_usage = await generate_title(question, answer)
+                # Runs after _persist committed, so its spend is added to that row
+                # rather than folded in (see _add_usage). Moving the call ahead of
+                # the write would put a network probe in front of the statement
+                # that saves the answer.
+                await run_in_threadpool(_add_usage, usage_id, title_usage)
                 if title:
                     await run_in_threadpool(_update_title, conv_id, title)
                     done["title"] = title
@@ -700,7 +793,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              *(turn_values[c] for c in MESSAGE_TURN_COLUMNS), now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
-        con.execute(
+        usage_cur = con.execute(
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
@@ -717,7 +810,10 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              int(table_cells_checked), int(table_cells_matched),
              exhaustion or None, now))
         con.commit()
-        return user_msg_id, assistant_id
+        # The usage_log id comes back so a probe that finishes AFTER this commit
+        # (the title call, the detached feedback distiller) can add its spend with
+        # _add_usage instead of being silently unbilled.
+        return user_msg_id, assistant_id, usage_cur.lastrowid
     finally:
         con.close()
 

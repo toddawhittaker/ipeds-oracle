@@ -18,12 +18,12 @@ Design choices:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, chat_completion
+from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
 
 # Shown to the user (Markdown) when a message is refused.
 REFUSAL = (
@@ -67,8 +67,19 @@ _HISTORY_TURNS = 4
 @dataclass
 class Verdict:
     allowed: bool
-    tokens: int = 0
+    usage: Usage = field(default_factory=Usage)
     raw: str = ""
+
+    # Derived, never stored -- a second copy of a number is a number that drifts.
+    # Named for AgentResult.total_tokens, the existing precedent for a derived sum
+    # on a usage-carrying result; the components live on `usage`, like Critique's.
+    #
+    # Do NOT annotate this (`total_tokens: int`) if you tidy this file: @dataclass
+    # would then read the property object as the field's default and every Verdict
+    # would carry a `property` instance instead of an int.
+    @property
+    def total_tokens(self) -> int:
+        return self.usage.prompt_tokens + self.usage.completion_tokens
 
 
 def _allowed_from_reply(content: str) -> bool:
@@ -108,8 +119,9 @@ async def classify(question: str, history: list[dict] | None = None) -> Verdict:
     except (httpx.HTTPError, ValueError):
         return Verdict(allowed=True)  # fail open — system prompt is the backstop
 
-    usage = data.get("usage") or {}
-    tokens = usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    return Verdict(allowed=_allowed_from_reply(content), tokens=tokens,
-                   raw=content.strip())
+    # This call is REAL SPEND on every question the app answers -- it runs before
+    # the answer cache and before the agent. Carrying the full split (not just a
+    # token count) is what lets routers/chat.py bill it to usage_log.
+    return Verdict(allowed=_allowed_from_reply(content),
+                   usage=Usage.from_response(data), raw=content.strip())
