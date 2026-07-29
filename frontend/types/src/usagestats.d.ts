@@ -1,5 +1,7 @@
 export declare function promptCacheRate(totals: any): string;
 export declare function schemaCacheRate(totals: any): string;
+export declare function spendEstimated(totals: any): boolean;
+export declare function spendLabel(totals: any): string;
 export declare function groundedFigureRate(totals: any): string;
 export declare function groundedFigureLabel(totals: any): string;
 export declare function groundedTableRate(totals: any): string;

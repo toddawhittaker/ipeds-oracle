@@ -1432,6 +1432,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0
       ],
       [
+        "cost_estimated",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
         "created_at",
         "REAL",
         1,

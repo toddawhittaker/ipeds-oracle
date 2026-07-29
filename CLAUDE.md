@@ -1352,6 +1352,41 @@ turns that burned the whole tool budget (`usage_log.exhaustion` NOT NULL), with 
 exhaustion bullet above). A rising Exhausted count is the signal to lift
 `LLM_MAX_TOOL_ITERS`.
 
+**Spend is two different numbers, and the tile says which.** `usage_log.cost` holds
+either the provider's own per-request charge (OpenRouter reports `usage.cost`) or
+**our list-price estimate** for a provider that reports none — DeepSeek direct, and
+most self-hosted gateways. `llm.effective_cost` picks; the bill always wins.
+**Cached-prefix tokens are priced separately** via `LLM_CACHE_READ_COST_PER_MTOK`:
+they are a SUBSET of `prompt_tokens` (DeepSeek's `prompt_cache_hit_tokens +
+prompt_cache_miss_tokens == prompt_tokens`), so the uncached count is a
+subtraction — no new provider key to read, `llmhttp.cached_tokens()` already
+normalizes both shapes. This matters because the app is cache-heavy **by
+construction** (the whole schema rides every prompt; measured **77.7%** hit rate),
+and a provider discounts a hit steeply (DeepSeek **50×**: $0.0028/M vs $0.140/M) —
+so pricing every prompt token at the input rate over-stated spend **5.0×**, measured
+against OpenRouter's own billed figure ($3.16 estimated vs $0.63 actual over 307
+turns). Tiering takes that to ~1.5×. **It remains an ESTIMATE and an upper bound** —
+list prices drift from what a vendor bills, and one price pair covers both
+`MODEL_DEFAULT` and `MODEL_ESCALATION`. Two traps: `0` means **not configured**
+(prompt tokens priced at the full input rate, reproducing the old number exactly),
+**never "cache reads are free"** — reading it that way would silently UNDER-state
+spend, the one direction a cost estimate must not err in; and the uncached count is
+`max(0, …)`-clamped, since `cached_tokens()`'s `or` chain could otherwise drive it
+negative and **credit** the turn. The setting is deliberately **NOT** part of
+`admin.py`'s `prices_configured` — it never enables an estimate alone, so including
+it could only suppress a true `cost_warning`. Provenance is per-row
+(`usage_log.cost_estimated`, **migration 34**, stamped from the shared
+`llm.cost_is_estimated`) because it **cannot be derived after the fact**: a
+deployment that switches providers has both kinds of row in one window, which no
+config-derived boolean can describe. The Usage tile marks an estimate with a leading
+**`~`** and carries the split in its label (`Spend · 12 of 40 estimated` —
+`usagestats.js`'s `spendEstimated`/`spendLabel`, vitest-pinned); absent counts render
+**unmarked**, so an older backend or a fixture never has an "estimated" claim
+invented for it. Historical rows keep the cost recorded at the time, so the spend
+series **steps** on the day prices change — documented in `ADMIN_GUIDE.md`, not a
+bug. Pinned in `test_agent_loop.py` (the `effective_cost`/`cost_is_estimated` block)
++ `test_admin_router.py` + `test_migrations.py`.
+
 **Timezone + per-turn timing (viewer's browser tz EVERYWHERE — see
 [[date-formatting-preference]]).** The `/usage` **series buckets in the VIEWER's
 timezone**: the browser sends `?tz=<IANA>` (its resolved zone), and the endpoint

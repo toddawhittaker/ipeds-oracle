@@ -1106,6 +1106,19 @@ def usage(since: float | None = None, until: float | None = None,
             "COALESCE(SUM(first_call_prompt_tokens),0) AS first_call_prompt_tokens, "
             "COALESCE(SUM(first_call_cached_prompt_tokens),0) AS first_call_cached_prompt_tokens, "
             "COALESCE(SUM(cost),0.0) AS spend, "
+            # Spend provenance (migration 34): of the real LLM turns in this
+            # window, how many carried a cost we ESTIMATED from list prices rather
+            # than one the provider billed. Scoped to cached=0 turns with actual
+            # token usage — the same scoping the cost_warning probe below uses —
+            # because an answer-cache hit and a guard refusal spend nothing and
+            # would otherwise dilute the ratio toward "reported". Drives the
+            # estimated-spend marker on the Usage tab: a switch of providers puts
+            # BOTH kinds of row in one window, so the reader needs the split, not
+            # a single boolean.
+            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            "THEN 1 ELSE 0 END),0) AS priceable_turns, "
+            "COALESCE(SUM(CASE WHEN cached=0 AND (prompt_tokens+completion_tokens)>0 "
+            "AND cost_estimated=1 THEN 1 ELSE 0 END),0) AS estimated_turns, "
             "COALESCE(SUM(cached),0) AS cache_hits, "
             "COALESCE(SUM(escalated),0) AS escalations, "
             "COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END),0) AS failures, "
@@ -1182,6 +1195,11 @@ def usage(since: float | None = None, until: float | None = None,
         # conditions in one: with prices set, cost>0 for those turns, so
         # priced_turns>0 and the warning clears; likewise once the provider starts
         # reporting. See app/llm.py effective_cost + docs/ADMIN_GUIDE.md.
+        #
+        # llm_cache_read_cost_per_mtok is DELIBERATELY not part of this test, and
+        # adding it can only create false negatives. It never enables an estimate
+        # by itself — with a cache price set but the input/output prices at 0, and
+        # with zero cache hits, spend genuinely IS 0 and this warning SHOULD fire.
         s = get_settings()
         prices_configured = (s.llm_input_cost_per_mtok > 0
                              or s.llm_output_cost_per_mtok > 0)

@@ -35,6 +35,37 @@ export function schemaCacheRate(totals) {
   return rate(t.first_call_cached_prompt_tokens, t.first_call_prompt_tokens);
 }
 
+// Is any of the window's spend our own ESTIMATE rather than the provider's bill?
+//
+// usage_log.cost holds both kinds of number. A provider that reports a
+// per-request cost (OpenRouter) gives a real billed figure; one that reports none
+// (DeepSeek direct, most self-hosted gateways) leaves the server to estimate from
+// admin-configured list prices — which can be off by MULTIPLES, since list prices
+// drift from what a vendor actually charges. Rendering both as a plain "$0.63"
+// makes an estimate read like an invoice, so the tile marks it.
+//
+// False when nothing in the window was priceable (an empty range, or only
+// answer-cache hits) and when the counts are absent altogether — an older backend
+// or a fixture that predates the columns must not have an "estimated" claim
+// invented for it. Not-knowing renders as the unmarked number, never a false mark.
+export function spendEstimated(totals) {
+  const t = totals || {};
+  return num(t.estimated_turns) > 0;
+}
+
+// The Spend tile's label, carrying the split when the window holds BOTH kinds of
+// row — which is exactly what a provider switch produces, and the case a single
+// "estimated" boolean would misdescribe. Mirrors groundedFigureLabel: detail in
+// the label, so the value stays a number you can read at a glance.
+export function spendLabel(totals) {
+  const t = totals || {};
+  const estimated = num(t.estimated_turns);
+  if (estimated <= 0) return "Spend";
+  const priceable = num(t.priceable_turns);
+  if (priceable > estimated) return `Spend · ${estimated} of ${priceable} estimated`;
+  return "Spend · estimated";
+}
+
 // GROUNDED-FIGURE rate: of the answers that led with a hero figure and had query
 // results to check it against, what share carried a number the server could
 // reproduce from those results — verbatim, at the figure's own rounding, or via

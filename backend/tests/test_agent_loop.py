@@ -135,25 +135,89 @@ def test_cached_prompt_tokens_accept_the_provider_native_shape():
     assert res.cached_prompt_tokens == 45, res.cached_prompt_tokens
 
 
+def _prices(inp, out, cache_read=0.0):
+    # The settings effective_cost reads. A stub, not a real Settings, so a NEW
+    # price setting must be added here too -- deliberately: a getattr() default
+    # would let a typo'd or missing setting pass silently in production, which is
+    # the drift test_env_example.py exists to prevent.
+    return types.SimpleNamespace(llm_input_cost_per_mtok=inp,
+                                 llm_output_cost_per_mtok=out,
+                                 llm_cache_read_cost_per_mtok=cache_read)
+
+
 def test_effective_cost_prefers_provider_reported():
     # When the provider reports a real cost, that wins — the fallback prices are
     # never consulted (they could be stale/wrong; the bill is authoritative).
-    s = types.SimpleNamespace(llm_input_cost_per_mtok=999.0, llm_output_cost_per_mtok=999.0)
-    assert llm.effective_cost(0.0123, 1000, 500, s) == 0.0123
+    assert llm.effective_cost(0.0123, 1000, 500, s=_prices(999.0, 999.0)) == 0.0123
 
 
 def test_effective_cost_estimates_from_prices_when_report_is_zero():
     # Provider silent (cost=0) but admin set list prices -> estimate from tokens.
     # 2,000,000 input @ $0.30/Mtok + 1,000,000 output @ $1.20/Mtok = 0.60 + 1.20.
-    s = types.SimpleNamespace(llm_input_cost_per_mtok=0.30, llm_output_cost_per_mtok=1.20)
-    assert abs(llm.effective_cost(0.0, 2_000_000, 1_000_000, s) - 1.80) < 1e-9
+    assert abs(llm.effective_cost(0.0, 2_000_000, 1_000_000,
+                                  s=_prices(0.30, 1.20)) - 1.80) < 1e-9
 
 
 def test_effective_cost_zero_when_no_report_and_no_prices():
     # The default posture: provider reports cost (so prices stay 0). If a provider
     # is ALSO silent and no prices are set, spend legitimately stays 0 — never NaN.
-    s = types.SimpleNamespace(llm_input_cost_per_mtok=0.0, llm_output_cost_per_mtok=0.0)
-    assert llm.effective_cost(0.0, 5000, 2000, s) == 0.0
+    assert llm.effective_cost(0.0, 5000, 2000, s=_prices(0.0, 0.0)) == 0.0
+
+
+def test_effective_cost_prices_cached_prompt_tokens_at_the_cache_rate():
+    # THE REGRESSION: cached-prefix tokens are a SUBSET of prompt_tokens, and a
+    # provider discounts them steeply (DeepSeek reads at $0.0028/Mtok against
+    # $0.140 for a miss). Pricing all 1,000,000 at the input rate billed $0.14 for
+    # a turn that really cost ~$0.014 -- measured 5x high on real traffic, because
+    # this app runs ~78% cached (the whole schema rides every prompt).
+    # 200,000 uncached @ $0.14 = 0.028; 800,000 cached @ $0.0028 = 0.00224;
+    # 10,000 completion @ $0.28 = 0.0028.
+    got = llm.effective_cost(0.0, 1_000_000, 10_000, cached_prompt_tokens=800_000,
+                             s=_prices(0.14, 0.28, 0.0028))
+    assert abs(got - 0.03304) < 1e-9, got
+    # ...and that it is genuinely CHEAPER than pricing every prompt token at input.
+    flat = llm.effective_cost(0.0, 1_000_000, 10_000, s=_prices(0.14, 0.28))
+    assert got < flat, (got, flat)
+
+
+def test_effective_cost_unset_cache_price_reproduces_the_old_number_exactly():
+    # 0 means NOT CONFIGURED, never "cache reads are free". A deployment that sets
+    # only the two original prices must get byte-identical spend to before this
+    # setting existed -- so the cached tokens stay at the full input rate. Reading
+    # 0 as free would silently UNDER-state spend, the one direction that matters.
+    with_cached = llm.effective_cost(0.0, 1_000_000, 10_000,
+                                     cached_prompt_tokens=800_000,
+                                     s=_prices(0.14, 0.28))
+    assert abs(with_cached - (0.14 + 0.0028)) < 1e-9, with_cached
+
+
+def test_effective_cost_never_credits_a_turn_when_cached_exceeds_prompt():
+    # cached_tokens() reads two provider shapes through an `or` chain, so a
+    # provider reporting cache hits while omitting prompt_tokens would drive the
+    # uncached count NEGATIVE and hand the turn a credit against real completion
+    # spend. Clamped: the estimate can never go below the completion cost.
+    got = llm.effective_cost(0.0, 0, 10_000, cached_prompt_tokens=800_000,
+                             s=_prices(0.14, 0.28, 0.0028))
+    assert got >= 10_000 * 0.28 / 1_000_000, got
+
+
+def test_effective_cost_reported_still_wins_over_a_cached_estimate():
+    # The cache tier must not become a back door around "the bill is
+    # authoritative" -- a reported cost short-circuits before any pricing runs.
+    got = llm.effective_cost(0.0123, 1_000_000, 10_000,
+                             cached_prompt_tokens=800_000,
+                             s=_prices(999.0, 999.0, 999.0))
+    assert got == 0.0123, got
+
+
+def test_cost_is_estimated_marks_only_the_unreported_turns():
+    # Drives usage_log.cost_estimated (migration 34) so Admin -> Usage can mark an
+    # estimate as an estimate. ONE definition shared with effective_cost's own
+    # branch: duplicating the `> 0` test at the call site is how the stored flag
+    # and the stored number would come to disagree.
+    assert llm.cost_is_estimated(0.0) is True
+    assert llm.cost_is_estimated(None) is True   # provider omitted the field
+    assert llm.cost_is_estimated(0.0123) is False
 
 
 def test_synthesis_on_budget_exhaustion():
@@ -1934,6 +1998,16 @@ def run():
           test_effective_cost_estimates_from_prices_when_report_is_zero)
     check("effective_cost stays 0 with no report and no configured prices",
           test_effective_cost_zero_when_no_report_and_no_prices)
+    check("effective_cost prices cached prompt tokens at the cache-read rate",
+          test_effective_cost_prices_cached_prompt_tokens_at_the_cache_rate)
+    check("effective_cost with no cache price reproduces the old number exactly",
+          test_effective_cost_unset_cache_price_reproduces_the_old_number_exactly)
+    check("effective_cost never credits a turn when cached exceeds prompt",
+          test_effective_cost_never_credits_a_turn_when_cached_exceeds_prompt)
+    check("effective_cost still prefers the reported cost over a cached estimate",
+          test_effective_cost_reported_still_wins_over_a_cached_estimate)
+    check("cost_is_estimated marks only the turns the provider didn't price",
+          test_cost_is_estimated_marks_only_the_unreported_turns)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

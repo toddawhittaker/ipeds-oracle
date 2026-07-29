@@ -20,7 +20,7 @@ from app import feedback, guard, ratelimit, skills
 from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
-from app.llm import effective_cost, generate_title, stream_agent
+from app.llm import cost_is_estimated, effective_cost, generate_title, stream_agent
 from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, ipeds_years, run_sql
 
 log = logging.getLogger("ipeds.chat")
@@ -472,8 +472,17 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 cached_prompt_tokens=result.cached_prompt_tokens,
                 first_call_prompt_tokens=result.first_call_prompt_tokens,
                 first_call_cached_prompt_tokens=result.first_call_cached_prompt_tokens,
+                # Cached-prefix tokens are a SUBSET of prompt_tokens and are priced
+                # separately (a provider discounts a cache read steeply — DeepSeek
+                # 50x — and this app runs ~78% cached), so passing them is what
+                # keeps an estimated spend from reading several-fold high.
                 cost=effective_cost(result.cost, result.prompt_tokens,
-                                    result.completion_tokens),
+                                    result.completion_tokens,
+                                    cached_prompt_tokens=result.cached_prompt_tokens),
+                # ...and whether that number is the provider's bill or our estimate,
+                # so Admin → Usage can say which. Same predicate effective_cost
+                # branches on, never a second copy of the test.
+                cost_estimated=cost_is_estimated(result.cost),
                 thinking=thinking, figure=figure,
                 suggestions=suggestions, clarify=clarify,
                 # Observe-only figure-grounding status (app/grounding.py). Only a
@@ -631,7 +640,8 @@ def _delete_if_empty(conv_id: int) -> None:
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              cached, ok, escalated=False, prompt_tokens=0, completion_tokens=0,
              cached_prompt_tokens=0, first_call_prompt_tokens=0,
-             first_call_cached_prompt_tokens=0, cost=0.0, thinking=None, figure=None,
+             first_call_cached_prompt_tokens=0, cost=0.0, cost_estimated=False,
+             thinking=None, figure=None,
              suggestions=None, clarify=None, figure_grounding=None,
              figure_derivation=None, results=None, emit_mode=None, leaked=False,
              table_grounding=None, table_cells_checked=0, table_cells_matched=0,
@@ -694,14 +704,15 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
             "INSERT INTO usage_log(user_id, question, model_used, escalated, "
             "prompt_tokens, completion_tokens, cached_prompt_tokens, "
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, figure_grounding, figure_derivation, "
+            "ok, cached, cost, cost_estimated, figure_grounding, figure_derivation, "
             "emit_mode, answer_leaked, table_grounding, table_cells_checked, "
             "table_cells_matched, exhaustion, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model, int(escalated), prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, int(ok), int(cached),
-             float(cost), figure_grounding or None, figure_derivation or None,
+             float(cost), int(bool(cost_estimated)),
+             figure_grounding or None, figure_derivation or None,
              emit_mode or None, int(bool(leaked)), table_grounding or None,
              int(table_cells_checked), int(table_cells_matched),
              exhaustion or None, now))

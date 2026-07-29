@@ -25,9 +25,10 @@ export const STAT_INFO = {
   },
   spend: {
     name: "Spend",
-    what: "Estimated language-model cost for the window — taken from the " +
-      "provider's own reported per-request price, or from your fallback prices " +
-      "if the provider doesn't report one.",
+    what: "Language-model cost for the window — taken from the provider's own " +
+      "reported per-request price, or from your fallback prices if the provider " +
+      "doesn't report one. A leading ~ means some or all of it is that estimate, " +
+      "which is only as accurate as the list prices you entered.",
     direction: "down",
   },
   answerCache: {

@@ -441,6 +441,23 @@ MIGRATIONS: list[tuple[int, str]] = [
     (33, "ALTER TABLE messages ADD COLUMN table_grounding TEXT;\n"
          "ALTER TABLE messages ADD COLUMN table_cells_checked INTEGER;\n"
          "ALTER TABLE messages ADD COLUMN table_cells_matched INTEGER;"),
+    # 34 — was this turn's spend BILLED by the provider, or ESTIMATED by us?
+    #
+    # usage_log.cost is one number with two very different provenances: the
+    # provider's own per-request charge (OpenRouter reports usage.cost) or our
+    # list-price estimate for a provider that reports nothing (DeepSeek direct,
+    # most self-hosted gateways). Admin → Usage presented both as a plain dollar
+    # figure, so an estimate — which can be off by multiples, since list prices
+    # drift from what a vendor actually bills — read exactly like a real invoice.
+    #
+    # It cannot be derived after the fact: cost>0 with prices configured is
+    # ambiguous, and a deployment that SWITCHES providers (as this one just did)
+    # has both kinds of row inside a single window, so no config-derived flag can
+    # describe them. Hence a per-row stamp, written from llm.cost_is_estimated.
+    #
+    # DEFAULT 0 = "reported", which is correct for every existing row: they
+    # predate the switch and carry OpenRouter's billed figure.
+    (34, "ALTER TABLE usage_log ADD COLUMN cost_estimated INTEGER NOT NULL DEFAULT 0;"),
 ]
 
 

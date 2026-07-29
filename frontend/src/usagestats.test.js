@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { exhaustionLabel, groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate } from "./usagestats.js";
+import { exhaustionLabel, groundedFigureLabel, groundedFigureRate, groundedTableLabel, groundedTableRate, leakLabel, leakRate, promptCacheRate, schemaCacheRate, spendEstimated, spendLabel } from "./usagestats.js";
 
 // Both rates share one guarded ratio helper; the regression each guards is the
 // same: a naive cached/total renders "NaN%"/"Infinity%" on an empty window (0
@@ -184,5 +184,47 @@ describe("exhaustionLabel (S5 health stat)", () => {
     expect(exhaustionLabel({ exhausted_turns: 5, degraded_turns: 2 }))
       .toBe("Exhausted · 2 degraded");
     expect(exhaustionLabel({ degraded_turns: "1" })).toBe("Exhausted · 1 degraded");
+  });
+});
+
+describe("spend provenance (estimated vs provider-billed)", () => {
+  // usage_log.cost holds two different kinds of number and rendered both as a
+  // plain "$0.63" — so a list-price estimate, which can be off by multiples,
+  // read exactly like an invoice. These decide the "~" and the label detail.
+
+  it("is unmarked when every priceable turn was billed by the provider", () => {
+    const t = { priceable_turns: 40, estimated_turns: 0, spend: 0.63 };
+    expect(spendEstimated(t)).toBe(false);
+    expect(spendLabel(t)).toBe("Spend");
+  });
+
+  it("says plainly 'estimated' when the whole window is estimated", () => {
+    const t = { priceable_turns: 12, estimated_turns: 12 };
+    expect(spendEstimated(t)).toBe(true);
+    expect(spendLabel(t)).toBe("Spend · estimated");
+  });
+
+  it("carries the SPLIT for a window spanning a provider switch", () => {
+    // The case a single boolean cannot describe: half the rows carry
+    // OpenRouter's billed figure, half are DeepSeek-direct estimates.
+    const t = { priceable_turns: 40, estimated_turns: 12 };
+    expect(spendEstimated(t)).toBe(true);
+    expect(spendLabel(t)).toBe("Spend · 12 of 40 estimated");
+  });
+
+  it("never invents an estimated claim from missing counts", () => {
+    // An older backend, an empty window, or an e2e fixture predating the
+    // columns. Not-knowing must render the unmarked number, never a false mark.
+    expect(spendEstimated({})).toBe(false);
+    expect(spendEstimated(undefined)).toBe(false);
+    expect(spendEstimated({ spend: 1.23 })).toBe(false);
+    expect(spendLabel({})).toBe("Spend");
+    expect(spendLabel(undefined)).toBe("Spend");
+  });
+
+  it("coerces string counts (JSON numbers can arrive as strings)", () => {
+    expect(spendEstimated({ estimated_turns: "3" })).toBe(true);
+    expect(spendLabel({ estimated_turns: "3", priceable_turns: "9" }))
+      .toBe("Spend · 3 of 9 estimated");
   });
 });

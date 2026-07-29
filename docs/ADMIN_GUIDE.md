@@ -169,17 +169,36 @@ To get spend back in that case, set your model's list prices in `.env` and the a
 will **estimate** the cost from token counts:
 
 ```
-LLM_INPUT_COST_PER_MTOK=0.27    # USD per 1,000,000 prompt (input) tokens
-LLM_OUTPUT_COST_PER_MTOK=1.10   # USD per 1,000,000 completion (output) tokens
+LLM_INPUT_COST_PER_MTOK=0.14      # USD per 1,000,000 prompt (input) tokens
+LLM_OUTPUT_COST_PER_MTOK=0.28     # USD per 1,000,000 completion (output) tokens
+LLM_CACHE_READ_COST_PER_MTOK=0.0028   # per 1,000,000 tokens served from the cache
 ```
 
-Leave both unset (the default) whenever the provider reports real cost — the
-provider's figure always wins; the estimate only fills in when the reported cost is
-0. Two caveats on the estimate: it uses the prices **you** enter, so keep them in
-sync with your provider if they change (unlike the reported cost, this one *can* go
-stale), and it prices every prompt token at the input rate **without** the
-cached-prefix discount, so it slightly over-states spend when the **Prompt cache**
-rate is high.
+Leave them unset (the default) whenever the provider reports real cost — the
+provider's figure always wins; the estimate only fills in when the reported cost
+is 0.
+
+**Set the cache-read price if you set the other two.** Providers discount a prompt
+token they served from their own prefix cache very steeply (DeepSeek charges
+$0.0028 against $0.140 for a miss — 50x), and this app is cache-heavy by design:
+the whole schema rides every prompt, and a typical deployment runs near 80% on the
+**Prompt cache** stat. Leaving the cache price at 0 prices those tokens at the full
+input rate and over-states spend **several-fold** — measured at 5x on real traffic
+here. A `0` means *not configured*, not "cache reads are free".
+
+Two things the estimate still can't do: it uses the prices **you** enter, so keep
+them in sync with your provider (unlike the reported cost, this one *can* go
+stale); and one price pair covers both `MODEL_DEFAULT` and `MODEL_ESCALATION`, so
+escalated turns are priced at the default model's rate.
+
+Spend that came from the estimate is marked with a leading **~** on the Usage tab,
+and the tile's label says how many of the window's turns were estimated — so an
+estimate never reads like an invoice.
+
+> **Note after switching providers or setting the cache price:** historical rows
+> keep whatever cost was recorded at the time, so the spend trend can step sharply
+> up or down on the day you changed it. That's the old rows being priced the old
+> way, not a change in what you're actually paying.
 
 ### The three caches (they mean different things)
 
