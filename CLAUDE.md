@@ -1373,11 +1373,19 @@ the title call is **not** moved ahead of `_persist` — that would put a network
 in front of the only statement that saves the user's answer, trading data safety for
 tidier accounting; and `first_call_*` is **never** touched by a probe, since it
 isolates the AGENT's schema-prefix reuse and the guard's prompt is a different
-prefix (polluting it would corrupt the Schema-cache stat). One **known gap, stated
-in the code** at chat.py's `result is None` branch: it writes no `usage_log` row at
-all, so it records neither the guard's spend nor the agent's — closing it needs
-spend recorded at CALL time, and a usage-only row there would inflate `queries` (a
-`COUNT(*)`) with turns that produced no answer. The `priceable_turns` /
+prefix (polluting it would corrupt the Schema-cache stat). One **known gap, and it
+is CANCELLATION — not the `result is None` branch** (an earlier comment there named
+the wrong cause and has been corrected): when a client disconnects, `gen()` unwinds
+at its current `yield`, so `_persist` never runs and the whole turn's spend is lost.
+`result is None` is reached only via `stream_agent`'s no-API-key return, where
+`guard.classify` short-circuits on the same setting and nothing was spent — every
+other exit, transport errors included, yields a terminal `done` carrying the result.
+**"Stop generating" is unaffected** (abandon-and-drain: the request completes and
+bills). The fix, when worth doing: let the caller supply the `AgentResult` that
+`stream_agent` mutates in place, so the (already cancellation-shielded) `finally`
+has a live reference to bill from — with a did-we-already-persist guard, or a normal
+turn bills twice. A row there would NOT distort `queries`: a cancelled turn is a real
+question, unlike a title/feedback probe. The `priceable_turns` /
 `estimated_turns` / `cost_warning` predicates dropped their `cached=0` clause as a
 direct consequence — it was justified by "a cache hit and a guard refusal spend
 nothing", which was never true of the guard and is no longer true of a hit; **tokens
