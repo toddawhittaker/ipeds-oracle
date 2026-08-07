@@ -274,8 +274,17 @@ function DataTable({ node, sideChart, pairChart, serverCsvId, truncated }) {
         <div className="compare-panel">
           <div className="compare-panel-head">
             <span className="field-label">Comparing {cmpSpec.data.length}</span>
+            {/* Close unmounts ITSELF, so focus has to go somewhere first or it
+                lands on <body>. Every other self-disabling control here is
+                already handled (ConfirmModal's opener restore, BulkBar's
+                onFocusFallback, DataTable.goPage); this was the one missed. */}
             <button type="button" className="link"
-                    onClick={() => setShowCompare(false)}>Close</button>
+                    onClick={(e) => {
+                      const bar = e.currentTarget.closest(".table-block")
+                        ?.querySelector(".compare-bar button");
+                      setShowCompare(false);
+                      bar?.focus();
+                    }}>Close</button>
           </div>
           <Chart spec={cmpSpec} />
         </div>

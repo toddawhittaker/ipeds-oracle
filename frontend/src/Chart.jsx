@@ -314,7 +314,17 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
         {delta && (
           <span className={"chart-delta " + delta.dir}
                 title={`${Math.abs(delta.pct).toFixed(1)}% change over the range shown`}>
-            {deltaArrow} {Math.abs(delta.pct).toFixed(1)}%
+            {/* The span has no role, and `title` on non-interactive content is
+                not reliably announced — so direction rode entirely on the ▲/▼
+                glyph and the --ok/--danger colour, on the one element whose
+                whole job is to state it. Same treatment Skills.jsx already
+                gives its ▲/▼ vote counts. NOT role="img", which would prune
+                the number. */}
+            <span aria-hidden="true">{deltaArrow} {Math.abs(delta.pct).toFixed(1)}%</span>
+            <span className="sr-only">
+              {delta.dir === "up" ? "up" : "down"} {Math.abs(delta.pct).toFixed(1)}%
+              {" "}over the range shown
+            </span>
           </span>
         )}
         <div className="chart-head-tools">
