@@ -238,6 +238,14 @@ def reconcile_interrupted_jobs() -> int:
     Safe precisely BECAUSE the worker is a daemon thread: it cannot outlive the
     process, so anything non-terminal at boot is definitionally dead. Returns the
     number reconciled so the caller can log it.
+
+    Honest limit: that is a property of the SINGLE-PROCESS deployment, not of
+    this code. `docker-entrypoint.sh` runs uvicorn with no `--workers`, and this
+    runs inside `lifespan` before the app serves, so no request in this process
+    can have created a job yet. With two processes on one app.db, B's boot would
+    mark A's LIVE import failed and append a "nothing was swapped" note that is
+    false. That topology already breaks `_import_lock` (a process-local
+    threading.Lock) and is unsupported — but the constraint belongs in writing.
     """
     con = connect()
     try:

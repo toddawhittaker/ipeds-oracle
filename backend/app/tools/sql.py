@@ -104,11 +104,44 @@ SQL_MAX_VALUE_BYTES = 1 << 20
 #     plus one row -- and that row is separately bounded there.
 SQL_MAX_RESULT_BYTES = 64 << 20
 
-# Floor for the per-row value cap derived in run_sql. A result with hundreds of
-# columns would otherwise squeeze each value to almost nothing; 4 KiB is still
-# far above every real IPEDS value except vartable.longdescription (7,469 bytes
-# max).
+# Floor for the per-row value cap derived in run_sql, and the fail-closed value
+# when the column-count probe cannot run.
+#
+# Honest about reach: with SQLITE_LIMIT_COLUMN at its 2000 default the smallest
+# DERIVABLE limit is 64 MiB // 2000 = ~33 KB, so the floor never binds on that
+# path -- an earlier comment claimed it stopped hundreds of columns being
+# "squeezed to almost nothing", which is false (300 columns yields 223 KB). It
+# earns its place as the FAIL-CLOSED value instead.
 _MIN_VALUE_BYTES = 4096
+
+
+def _row_value_limit(ncols: int) -> int:
+    """The per-value ceiling that keeps ONE row inside the whole-result budget.
+
+    `ncols == 0` means the column-count probe could not run, and this FAILS
+    CLOSED to the floor rather than leaving the generous 1 MiB default. That is
+    not defensive tidiness: the probe adds one level of subquery nesting, and
+    SQLite's parser overflows at depth 15, so a statement written at depth 14
+    parses on its own while making the probe fail. Leaving 1 MiB there skipped
+    the row bound entirely and reopened a ~3 GB single-query allocation.
+
+    Split out because the end-to-end path CANNOT distinguish the two: with the
+    row bound skipped, the whole-result budget still raises the same
+    SQLResultTooLargeError -- just after the memory has been spent. The
+    difference is this number, so this is what gets asserted."""
+    if ncols <= 0:
+        return _MIN_VALUE_BYTES
+    # min() with the per-value cap is load-bearing: SQLITE_LIMIT_LENGTH is NOT a
+    # one-way ratchet -- sqlite3_limit will RAISE it back toward the compile-time
+    # maximum. Without the clamp this expression only tightened at ncols >= 64,
+    # and at ncols == 1 it LOOSENED the documented 1 MiB cap 64x. Measured:
+    # `SELECT hex(zeroblob(33000000))` went from refused-at-1-MiB to returning a
+    # 66,000,000-byte value in 0.14 s, which then rides into to_markdown() (the
+    # next provider request body) and into messages.results, whose own ceiling
+    # loop cannot drop a lone oversized blob. This bound may only ever make the
+    # cap SMALLER.
+    return max(_MIN_VALUE_BYTES,
+               min(SQL_MAX_VALUE_BYTES, SQL_MAX_RESULT_BYTES // ncols))
 
 
 def _value_bytes(v: object) -> int:
@@ -333,10 +366,37 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
             ncols = len(probe.description or ())
             probe.close()
         except sqlite3.Error:
+            # ...but never swallow the WATCHDOG. threading.Timer fires once, so
+            # an interrupt absorbed here would leave timer.cancel() a no-op and
+            # the real execute() running with no watchdog at all.
+            if timed_out.is_set():
+                raise
             ncols = 0
-        if ncols:
-            con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH,
-                         max(_MIN_VALUE_BYTES, SQL_MAX_RESULT_BYTES // ncols))
+        # FAIL CLOSED when the probe cannot run.
+        #
+        # This originally fell back to leaving the 1 MiB per-value cap in place,
+        # which skipped the row bound entirely -- and the probe adds exactly ONE
+        # level of subquery nesting, so that is a lever, not a hypothetical.
+        # SQLite's parser overflows at nesting depth 15, so a statement written
+        # at depth 14 parses on its own and makes the PROBE fail. Measured with
+        # 800 columns of `hex(zeroblob(500000))` (every value under the 1 MiB
+        # cap, so nothing else fires), under a 3 GB RLIMIT_AS:
+        #
+        #     depth  1   refused, 36 MB, 0.01 s
+        #     depth 14   MemoryError, 2,975 MB, 1.69 s
+        #
+        # i.e. the exact hole this probe was added to close, re-reached through
+        # nesting depth. Dropping to the floor instead bounds a worst-case row
+        # at SQLITE_LIMIT_COLUMN x 4 KiB (~8 MB) and refuses that same attack at
+        # 15 MB in 0.011 s.
+        #
+        # The cost is honest and small: a query the probe cannot wrap also loses
+        # the generous per-column budget, so a legitimate value between 4 KiB and
+        # 1 MiB would be refused -- but that needs a statement weird enough to
+        # break the wrapper AND a large value, and the only real IPEDS value over
+        # 4 KiB is vartable.longdescription (7,469 bytes), which nests fine.
+        eff_value_limit = _row_value_limit(ncols)
+        con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, eff_value_limit)
 
         cur = con.execute(cleaned, params)
         columns = [d[0] for d in cur.description] if cur.description else []
@@ -375,9 +435,16 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
         # NOT OperationalError — so it needs its own branch or it falls through
         # to registry's generic handler and the model gets no steer about what
         # to do differently.
+        # Name the limit ACTUALLY in force, not the module constant. On a wide
+        # result the effective cap is 64 MiB // ncols, so a hardcoded "1 MiB"
+        # told the model to trim to a size that would still be refused -- and it
+        # obeys, re-runs, gets the same message, and burns tool iterations
+        # toward the S5 exhaustion path. Same over-claiming class as the
+        # comments, except shipped to the model as guidance.
+        _limit_kb = max(1, eff_value_limit // 1024)
         raise SQLResultTooLargeError(
             f"A single value in the result exceeded "
-            f"{SQL_MAX_VALUE_BYTES // (1 << 20)} MiB. Aggregate it in SQL "
+            f"{_limit_kb} KB. Aggregate it in SQL "
             "(count/sum/avg) or trim it with substr(), rather than selecting "
             "the whole value."
         ) from e
