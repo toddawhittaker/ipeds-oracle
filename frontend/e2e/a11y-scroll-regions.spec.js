@@ -99,7 +99,17 @@ test.describe("scrollable regions are keyboard reachable", () => {
     // inside a collapsed <details> — expand that first or the trigger isn't in
     // the tree at all.
     await page.getByText("Import from CSV").click();
-    await page.getByRole("button", { name: "CSV format help" }).click();
+    // focus(), NOT click(). HelpPopover opens on hover AND focus while its
+    // onClick TOGGLES, so a bare click() races React: click() dispatches
+    // mouseenter -> focus -> click, and whether `openedByFocus` is armed depends
+    // on whether the mouseenter's setOpen(true) has COMMITTED by the time
+    // onFocus reads `open`. Batched into one task it passes; under load the
+    // commit lands first, the click toggles the popover shut, and this test
+    // fails. Focus alone calls openNow() unconditionally — no toggle, no race —
+    // and it is also the keyboard route, which is what this spec is about.
+    // Every other popover spec already does this (csv-import.spec.js,
+    // admin-usage-info.spec.js's focusPopover); this was the lone outlier.
+    await page.getByRole("button", { name: "CSV format help" }).focus();
     const example = page.getByRole("region", { name: "CSV format example" });
     await expect(example).toBeVisible();
     await expect(example).toHaveAttribute("tabindex", "0");
