@@ -595,7 +595,11 @@ Alternatively (no network access, or a file you already have): drop
 `IPEDS{YYYY}{YY}.accdb` into `data/` and rerun `scripts/build_ipeds_db.py`, or
 use the manual upload fallback (a collapsed `<details>` under the year catalog
 in the same Imports tab) — same staging-DB + integrity-checks + atomic-swap
-pipeline, just for one file instead of a union.
+pipeline, just for one file instead of a union. The streamed upload-dir copy
+is likewise deleted afterward, success or failure (mirroring the NCES work
+dir above). What survives is the `data/` copy the loader actually builds
+from — on success it stays as the permanent source for every future rebuild,
+and on failure it is reverted to whatever was there before.
 
 **`backend/app/nces.py`** is the fetch layer: every URL it requests is built ONLY from
 a fixed host (`nces.ed.gov`) + a fixed template + a validated integer year (the
