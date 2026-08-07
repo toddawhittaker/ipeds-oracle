@@ -71,7 +71,21 @@ async function adminA11yMocks(page) {
 // rather than CSS, so a regression that removes an aria attribute or a <label>
 // association fails the test, not just a visual/CSS check.
 
-const SQL = "SELECT stabbr, SUM(x) AS total FROM c_a WHERE cipcode='51.3801' AND awlevel=3 GROUP BY stabbr";
+// `LIMIT 200` is deliberate. Prism colours a number literal with .token.number,
+// and axe files a ONE-CHARACTER element as `incomplete` rather than a violation
+// — so while the only number here was `3` (from `awlevel=3`), a below-AA number
+// colour could not be rated at all. It shipped at 4.44:1 on exactly that basis.
+// (`'51.3801'` does not count: quoted, so it lexes as .token.string.)
+//
+// Measured, so it is not over-claimed: with the old colour restored, axe DOES
+// report `<span class="token number">200</span>` as a serious violation when
+// probed directly on this state — and yet the "rendered answer" scan below
+// still PASSES. That gap is unexplained and is on the backlog; do not treat the
+// widened fixture as the thing protecting this. The direct contrast assertion
+// at the bottom of this file is what actually fails when the colour regresses,
+// and it is mutation-verified.
+const SQL = "SELECT stabbr, SUM(x) AS total FROM c_a WHERE cipcode='51.3801' "
+  + "AND awlevel=3 GROUP BY stabbr LIMIT 200";
 const ANSWER_MD =
   "Here are Associate's degrees in Registered Nursing by state:\n\n" +
   "| State | Total |\n| --- | --- |\n| CA | 100 |\n| NY | 50 |\n";
@@ -495,6 +509,23 @@ test.describe("axe smoke scan", () => {
 
     const ratio = await contrastRatio(page, ".avatar-badge");
     expect(ratio, `.avatar-badge contrast was ${ratio?.toFixed(2)}:1`)
+      .toBeGreaterThanOrEqual(4.5);
+  });
+
+  // THE REGRESSION: .sqlblock .token.number shipped at #a15c00 = 4.44:1 on
+  // --bg, below AA, while every sibling token passed (.function 5.81,
+  // .string 4.57, .operator 4.85). The gate could not see it because the
+  // fixture's only number was a single character; see the SQL const above.
+  // Asserted directly as well as via the widened fixture, because a measured
+  // ratio names the number when it drifts, where axe just says "serious".
+  test("SQL number literals meet AA contrast in the light theme", async ({ page }) => {
+    await askAndUnlockAnswer(page);
+    await page.getByRole("button", { name: /SQL/i }).first().click();
+    const token = page.locator(".sqlblock .token.number").first();
+    await expect(token).toBeVisible();
+
+    const ratio = await contrastRatio(page, ".sqlblock .token.number");
+    expect(ratio, `.sqlblock .token.number contrast was ${ratio?.toFixed(2)}:1`)
       .toBeGreaterThanOrEqual(4.5);
   });
 });

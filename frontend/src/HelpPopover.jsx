@@ -83,6 +83,22 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
       className={"help" + (className ? " " + className : "")}
       onMouseEnter={() => { hover.current = true; openNow(); }}
       onMouseLeave={() => { hover.current = false; closeSoon(); }}
+      // Focus is tracked on the WRAPPER, not on the trigger alone. The popover's
+      // own CONTENT is focusable — the CSV format example is a tabIndex=0
+      // role=region, added so a keyboard user can scroll it (WCAG 2.1.1) — and
+      // with the tracking on the trigger, Tabbing into that region blurred the
+      // trigger, fired closeSoon(), and unmounted the region out from under the
+      // focused element 140ms later, dropping focus to <body>. So the single
+      // control the region exists for could never actually reach it, and trying
+      // stranded you at the top of the document.
+      //
+      // Capture phase for the same reason Login.jsx's gallery uses it: it fires
+      // for focus moving anywhere inside the wrapper, so trigger -> content
+      // (blur then focus, in that order) lands as closeSoon() then openNow(),
+      // and openNow clears the pending timer. Focus leaving the wrapper
+      // entirely gets no following focus event, so the close stands.
+      onFocusCapture={() => { focus.current = true; openNow(); }}
+      onBlurCapture={() => { focus.current = false; closeSoon(); }}
       onKeyDown={(e) => { if (e.key === "Escape" && open) { setOpen(false); e.stopPropagation(); } }}
     >
       <button
@@ -96,8 +112,15 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
           if (openedByFocus.current) { openedByFocus.current = false; return; }
           setOpen((o) => !o);
         }}
-        onFocus={() => { focus.current = true; if (!open) { openedByFocus.current = true; } openNow(); }}
-        onBlur={() => { focus.current = false; openedByFocus.current = false; closeSoon(); }}
+        // The wrapper above owns focus.current / openNow / closeSoon. What stays
+        // here is only the touch-tap bookkeeping, which is specific to THIS
+        // element: it must not arm when focus lands on the popover's content,
+        // or a subsequent click on the trigger would be wrongly swallowed.
+        // `open` still reads false here — the wrapper's capture-phase openNow()
+        // has queued setOpen(true) but React has not committed it yet — which is
+        // exactly the ordering the tap swallow already relied on.
+        onFocus={() => { if (!open) { openedByFocus.current = true; } }}
+        onBlur={() => { openedByFocus.current = false; }}
       >
         <Icon />
       </button>
