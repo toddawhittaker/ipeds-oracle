@@ -176,6 +176,8 @@ test.describe("controls that disable themselves keep focus somewhere useful", ()
       // `Integrate {year_label} ({release})`.
       await page.getByRole("checkbox", { name: "Integrate 2024-25 (Final)" }).click();
       await page.getByRole("button", { name: /Integrate selected/ }).click();
+      // Adding years is confirmed now (same as removing one) — clear the modal.
+      await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
       const lock = page.getByText(/controls are locked until it finishes/);
       await expect(lock).toBeVisible();

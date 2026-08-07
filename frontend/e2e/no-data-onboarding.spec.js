@@ -195,6 +195,8 @@ test("an integrate reaching 'swapped' re-fetches /me and clears the Chat no-data
 
   await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+  // Adding years is confirmed now (same as removing one) — clear the modal.
+  await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
   await expect.poll(() => integrate.posts.length).toBe(1);
   await expect(page.getByText("swapped")).toBeVisible();

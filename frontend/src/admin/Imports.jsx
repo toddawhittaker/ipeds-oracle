@@ -130,6 +130,7 @@ export default function Imports({ onDataChanged }) {
   const [catalogError, setCatalogError] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [integrating, setIntegrating] = useState(false);
+  const [adopted, setAdopted] = useState(false);
 
   useEffect(() => { activeYearsRef.current = activeYears; }, [activeYears]);
   // Move focus to the notice whenever it (re)appears — covers both the
@@ -138,13 +139,37 @@ export default function Imports({ onDataChanged }) {
   useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
   const wasLocked = useRef(false);
 
-  const loadJobs = () => api.importJobs().then(setJobs);
+  // Returns the jobs as well as storing them, so the mount effect can adopt a
+  // job that is already running (see below).
+  const loadJobs = () => api.importJobs().then((j) => { setJobs(j); return j; });
   const loadCatalog = useCallback((refresh = false) => api.importCatalog(refresh)
     .then((data) => { setCatalog(data); setCatalogError(false); })
     .catch(() => setCatalogError(true)), []);
 
+  // ADOPT a job that is already running when this tab mounts.
+  //
+  // `locked` derives from `active`, and `active` was only ever set by watch(),
+  // which only ran for a job THIS browser session started or clicked "view" on.
+  // So an admin who reloaded the tab -- or a second admin, or the same admin on
+  // another machine -- got the ordinary catalog: year cards selectable,
+  // "Integrate selected" enabled, manual upload enabled, trashcans live, with a
+  // full rebuild and atomic swap of the live database in progress. The only
+  // trace was a row reading `running` at the bottom of a long page.
+  //
+  // The 409 hand-off means nothing corrupts, but recovering from a
+  // wrong-looking-but-blocked click is not the same as never showing the wrong
+  // state. Adopting reuses the whole existing apparatus -- the locked notice,
+  // per-year progress, and the terminal toast all light up for a job this
+  // session did not start (watch() already handles that; see its isRemoval
+  // note).
   useEffect(() => {
-    loadJobs();
+    loadJobs()
+      .then((list) => {
+        const running = (list || []).find(
+          (j) => !TERMINAL_JOB_STATUSES.includes(j.status));
+        if (running) watch(running.id, { adopted: true });
+      })
+      .catch(() => { /* the jobs table shows its own empty state */ });
     loadCatalog();
     return () => clearInterval(poll.current);
   }, [loadCatalog]);
@@ -165,7 +190,12 @@ export default function Imports({ onDataChanged }) {
     wasLocked.current = busy;
   }, [locked, uploading]);
 
-  function watch(id) {
+  // `adopted` marks a job this session did not start, so the locked notice can
+  // say so — "controls are locked until it finishes" is confusing when you did
+  // not do anything. Set here rather than at each call site so the flag cannot
+  // drift out of sync with what is actually being watched.
+  function watch(id, { adopted: isAdopted = false } = {}) {
+    setAdopted(isAdopted);
     clearInterval(poll.current);
     const tick = async () => {
       const job = await api.importJob(id);
@@ -344,10 +374,41 @@ export default function Imports({ onDataChanged }) {
   }, [catalog, selected]);
   const diskOver = diskEstimate != null && !diskEstimate.sufficient;
 
-  async function submitIntegrate() {
+  // Adding years is the SAME operation as removing one, with different inputs --
+  // a full rebuild from the union, ending in an atomic swap of the live
+  // database. Removing had a danger modal and adding fired on a single click,
+  // which teaches an admin that the guarded one is the dangerous one. It is
+  // "warning", not "danger": this is additive, and the live database keeps
+  // answering questions until every check passes.
+  //
+  // Every number in the body is already on screen (diskEstimate / catalog), so
+  // this is copy assembly, not new computation. `diskOver` still disables the
+  // trigger, so the modal is never the thing standing between an admin and a
+  // rebuild that cannot fit.
+  function submitIntegrate() {
+    const years = Array.from(selected);
+    const already = (catalog?.years || []).filter((y) => y.integrated).length;
+    const n = years.length;
+    let cost = "";
+    if (diskEstimate) {
+      const secs = (diskEstimate.estDownloadSeconds || 0) + (diskEstimate.estBuildSeconds || 0);
+      cost = ` It downloads about ${humanBytes(diskEstimate.totalDownloadBytes)}`
+        + ` and takes roughly ${humanSeconds(secs)}.`;
+    }
+    confirm({
+      variant: "warning",
+      title: `Rebuild the database with ${n} more year${n === 1 ? "" : "s"}?`,
+      body: `This rebuilds from all ${already + n} years (${already} already loaded`
+        + ` + ${n} new).${cost} The live database is only replaced if every check`
+        + " passes — until then it keeps answering questions.",
+      confirmLabel: "Start rebuild",
+      onConfirm: () => runIntegrate(years),
+    });
+  }
+
+  async function runIntegrate(years) {
     notify("");
     setIntegrating(true);
-    const years = Array.from(selected);
     try {
       const body = await api.integrateYears(years);
       setActiveYears(years.slice().sort((a, b) => a - b));
@@ -438,7 +499,9 @@ export default function Imports({ onDataChanged }) {
           it is where focus goes (see the effect above). */}
       {(locked || uploading) && (
         <div ref={lockedRef} tabIndex={-1} className="notice" role="status">
-          An import is running… controls are locked until it finishes.
+          {adopted
+            ? "An import started by another session is running… controls are locked until it finishes."
+            : "An import is running… controls are locked until it finishes."}
         </div>
       )}
 
