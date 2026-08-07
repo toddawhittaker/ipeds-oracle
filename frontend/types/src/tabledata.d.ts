@@ -3,7 +3,6 @@ export declare function extractTable(node: any): {
     rows: any[];
     cellNodes: any[];
 };
-export declare function rowCells(trNode: any): any;
 export declare function parseNum(s: any): number;
 export declare function columnIsNumeric(rows: any, col: any): boolean;
 export declare function sortedIndices(rows: any, col: any, dir: any, numeric: any): any;
