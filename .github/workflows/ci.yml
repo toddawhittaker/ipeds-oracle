@@ -231,7 +231,7 @@ jobs:
     # version in frontend/package-lock.json — the two MUST match (Playwright
     # refuses a browser build it didn't ship), so bump them together.
     container:
-      image: mcr.microsoft.com/playwright:v1.62.0-noble
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
     defaults:
       run:
         working-directory: frontend
