@@ -21,7 +21,14 @@ import httpx
 
 from app import critic, grounding
 from app.config import get_settings
-from app.llmhttp import DEFAULT_TIMEOUT, PROBE_TIMEOUT, Usage, cached_tokens, chat_completion
+from app.llmhttp import (
+    CHAT_ERRORS,
+    DEFAULT_TIMEOUT,
+    PROBE_TIMEOUT,
+    Usage,
+    cached_tokens,
+    chat_completion,
+)
 from app.prompt import build_system_prompt
 from app.tools import registry
 from app.tools.sql import QueryResult
@@ -116,7 +123,7 @@ async def retry_missing_figure(question: str, answer: str) -> _FigureRetry:
         async with httpx.AsyncClient() as client:
             data = await chat_completion(client, model=s.model_default, messages=messages,
                                          temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
-    except (httpx.HTTPError, ValueError):
+    except CHAT_ERRORS:
         return _FigureRetry()  # fail open — never block a finished answer
     u = Usage.from_response(data)
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
@@ -691,7 +698,7 @@ async def _forced_emit(client: httpx.AsyncClient, model: str,
             client, model=model, messages=messages, temperature=s.llm_temperature,
             tools=tools, tool_choice=_FORCE_EMIT_CHOICE,
             reasoning={"enabled": False}, settings=s, timeout=DEFAULT_TIMEOUT)
-    except (httpx.HTTPError, ValueError):
+    except CHAT_ERRORS:
         return None
     usage = data.get("usage") or {}
     res.prompt_tokens += usage.get("prompt_tokens", 0)
@@ -1105,7 +1112,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 yield {"type": "error", "text": res.error}
                 yield {"type": "done", "result": res}
                 return
-            except httpx.HTTPError as e:
+            except CHAT_ERRORS as e:
                 # Same policy as the status branch above: a transport error's
                 # string can carry connection/host detail (the provider URL, a
                 # proxy). Log it server-side, but return only a generic message —
@@ -1340,7 +1347,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 res.cached_prompt_tokens += cached_tokens(usage)
                 res.cost += usage.get("cost") or 0
                 final = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            except httpx.HTTPError:
+            except CHAT_ERRORS:
                 final = ""
 
         res.model_used = model
@@ -1387,7 +1394,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                     for _ in range(_CRITIC_CORRECTION_ITERS):
                         try:
                             data = await _chat(client, model, messages, tools)
-                        except httpx.HTTPError:
+                        except CHAT_ERRORS:
                             break
                         usage = data.get("usage") or {}
                         res.prompt_tokens += usage.get("prompt_tokens", 0)
@@ -1450,7 +1457,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                             res.cost += usage.get("cost") or 0
                             corrected = ((data.get("choices") or [{}])[0]
                                          .get("message") or {}).get("content") or ""
-                        except httpx.HTTPError:
+                        except CHAT_ERRORS:
                             corrected = ""
                     # Same gate as the normal path — shared via _settle_revision.
                     final = _settle_revision(res, corrected, draft, sql_count)
@@ -1494,7 +1501,7 @@ async def generate_title(question: str, answer: str) -> tuple[str, Usage]:
     try:
         async with httpx.AsyncClient() as client:
             data = await _chat(client, s.model_default, prompt, tools=None)
-    except httpx.HTTPError:
+    except CHAT_ERRORS:
         return "", Usage()
     title = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     return title.strip().strip('"').strip().rstrip(".")[:80], Usage.from_response(data)
