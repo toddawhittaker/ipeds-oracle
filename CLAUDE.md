@@ -546,6 +546,25 @@ The three guards:
   A kernel that cannot reproduce a CORRECT number manufactures evidence of model
   error, the most damaging way this measurement can be wrong. Retention is the foundation: `AgentResult.results`
   keeps every call's result (in call order), where `last_result` used to overwrite.
+  **The persisted-results cap really is a cap now** (`_results_for_storage`,
+  `routers/chat.py`). It drops the largest results first, but that loop was
+  guarded by `len(blobs) > 1` — so it was a no-op for a single result and stopped
+  the moment dropping left one, and **the survivor was never measured**.
+  `RESULT_STORE_MAX_BYTES` (64 KB) therefore meant "at most one result may exceed
+  it, unbounded": `to_storage` caps rows (200) but not WIDTH, and one value may
+  reach `SQL_MAX_VALUE_BYTES` (1 MiB), so 200 rows of a wide `SELECT *` is
+  comfortably megabytes — written **twice**, into `messages.results` AND
+  `query_cache.results` (whose comment reasoned from "already capped by the
+  caller", which is what stopped anyone looking). Measured 2,002,125 bytes stored
+  against the 64,000 ceiling. The lone survivor is now **shrunk** — halve its
+  rows until it fits — rather than dropped, since it is the turn's only evidence.
+  **If not even one row fits, it stores NOTHING, and that direction is the
+  point**: a blob with columns and zero rows reads to grounding as "checked, and
+  nothing reproduced" — an `unmatched` verdict raising the ⚠ caution on a CORRECT
+  answer — while NULL reads as `unchecked` and renders silently. My first fix
+  returned the zero-row blob; the test caught it. Losing rows can only cost a
+  match that would have been made (a false `ungrounded`), never manufacture a
+  false ✓ — the same trade the 200-row cap already makes.
   **Grounding is CONVERSATION-scoped**: each turn's results are persisted
   (`messages.results`, migration 23, capped + backend-only) and the recent window is
   re-hydrated (`_load_prior_results`, same `before_id` semantics as `_load_history`
@@ -1254,6 +1273,17 @@ The three guards:
   (400/404/**429**/504) used to replace the chat view with a raw JSON page, and a
   slow export timing out is the likeliest failure. Pinned in
   `frontend/e2e/truncated-table.spec.js` + `tabletruth.test.js`.
+  **The server re-run PROBES every candidate, and each probe is time-bounded**
+  (`CSV_PROBE_TIMEOUT_SECONDS`, 3s). `_select_table_sql` runs each query in the
+  answer's `sql_log` at `LIMIT 1` to find which one produced the table you saw —
+  and `LIMIT 1` bounds the ROWS returned, never the WORK done, so an unbounded
+  probe could burn the full 25s `sql_timeout_seconds`. `sql_log` records **every
+  attempt the agent made, failures included**, so 5–8 candidates is routine and
+  one export could hold a threadpool worker for two to three minutes. The
+  **winning re-run keeps the full default budget** — it is the query the user
+  actually asked for. Don't tune the probe timeout down: a probe timeout is
+  swallowed by the candidate-skipping `except`, so an over-tight value turns a
+  slow-but-valid table query into "No runnable query for this answer." → 400.
   **Numeric columns right-align.** `Markdown.jsx` already computed `numericByCol`
   (via `columnIsNumeric`) to pick a sort comparator; it now also puts `.num` on the
   matching `<th>`/`<td>`, so digits line up on the ones place and magnitudes are

@@ -49,6 +49,20 @@ HISTORY_TURNS = 6
 RESULT_STORE_MAX_ROWS = 200
 RESULT_STORE_MAX_BYTES = 64_000
 
+# How long ONE candidate probe in _select_table_sql may run. `LIMIT 1` bounds
+# the ROWS a probe returns, never the WORK it does, so without this each probe
+# could burn the full sql_timeout_seconds (25s) — and sql_log records every
+# attempt the agent made, failures included, so 5-8 candidates is routine and
+# one CSV request could hold a threadpool worker for two to three minutes.
+#
+# Deliberately generous: a probe re-runs a query that ALREADY executed during
+# the turn, so seconds is plenty. Do not tune this down — a probe timeout is
+# swallowed by the candidate-skipping `except` below, so an over-tight value
+# turns a slow-but-valid table query into "No runnable query for this answer."
+# The winning re-run keeps the full default budget; it is what the user asked
+# for.
+CSV_PROBE_TIMEOUT_SECONDS = 3.0
+
 # ---------------------------------------------------------------------------
 # The persisted-answer field list, in ONE place.
 #
@@ -271,6 +285,30 @@ def _results_for_storage(results) -> list | None:
     while blobs and len(json.dumps(blobs)) > RESULT_STORE_MAX_BYTES and len(blobs) > 1:
         widest = max(range(len(blobs)), key=lambda i: len(json.dumps(blobs[i])))
         blobs.pop(widest)
+    # The loop above stops at ONE blob and never measures it, so the ceiling used
+    # to mean "at most one result may exceed it, unbounded" — `to_storage` caps
+    # rows (200) but not WIDTH, and a single value may run to SQL_MAX_VALUE_BYTES
+    # (1 MiB), so 200 rows of a wide SELECT * is comfortably megabytes. It is
+    # written TWICE (messages.results and query_cache.results), and skills.py's
+    # cache_store comment reasons from "already capped by the caller", which is
+    # exactly the assumption that broke.
+    #
+    # The last blob can't be dropped the way the others were — it's the only
+    # evidence the turn has — so SHRINK it instead: halve its rows until it fits.
+    # Truncating rows can only cost grounding a match it would otherwise have
+    # made, i.e. a false `ungrounded`/`partial`, never a false ✓ — the safe
+    # direction, and the same trade `to_storage`'s 200-row cap already makes.
+    while blobs and len(json.dumps(blobs)) > RESULT_STORE_MAX_BYTES:
+        rows = blobs[0]["rows"]
+        blobs[0]["rows"] = rows[: len(rows) // 2]
+        if not blobs[0]["rows"]:
+            # Not even one row fits. Store NOTHING rather than a zero-row blob,
+            # and the direction matters: a blob with columns and no rows reads
+            # to grounding as "checked, and nothing reproduced" — an `unmatched`
+            # verdict that raises the ⚠ caution on an answer that is CORRECT.
+            # NULL reads as `unchecked`, which renders silently. When the choice
+            # is between a false accusation and saying nothing, say nothing.
+            return None
     return blobs or None
 
 
@@ -956,7 +994,7 @@ def _select_table_sql(sql_list: list[str], cols: int | None, cap: int):
     best_i, best_key = None, None
     for i, sql in enumerate(sql_list):
         try:
-            probe = run_sql(sql, limit=1)
+            probe = run_sql(sql, limit=1, timeout=CSV_PROBE_TIMEOUT_SECONDS)
         except Exception:  # noqa: BLE001 — see below; a bad candidate is normal
             # ANY failure skips the candidate, not just validation/timeout.
             #
