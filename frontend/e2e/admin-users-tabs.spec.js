@@ -179,3 +179,62 @@ test.describe("Users sub-tabs — keyboard + ARIA", () => {
       await expect(tab(page, /Blocked users/)).toHaveAttribute("aria-selected", "true");
     });
 });
+
+// The Pending and Blocked tables render timestamps through the SAME fmtDateTime
+// as Current users' "Last active", but their columns were left without
+// `cell-trunc` and at 168px — so an ordinary stamp both wrapped and overflowed.
+// This is the #250 bug, in the same file, on the two tables that never got the
+// fix. It went unseen because nothing asserts pixel geometry on either table:
+// the Current-users pagination spec only caught it there because THAT table
+// compares real rows against padded fillers.
+//
+// Height is not the invariant to assert here — Blocked's Email cell wraps on
+// purpose (`.blocked-email`, so "requested as …" is never clipped), so its rows
+// are legitimately multi-line. Instead this pins both halves of the fix at the
+// mechanism: nowrap (font- and locale-independent) and enough width that the
+// ellipsis never shows for an ordinary stamp.
+test.describe("Users sub-tabs — timestamp columns", () => {
+  // 12/31, 11:59:59 PM — two-digit everything, the widest en-US rendering, and
+  // the same value the Current-users test measured 194px against.
+  const WIDEST = Math.floor(new Date("2023-12-31T23:59:59").getTime() / 1000);
+  // No digits in the addresses, so `hasText: /2023/` can only match a stamp cell.
+  const PENDING_WIDE = [{ id: 1, email: "pending@example.edu", reason: null,
+    status: "pending", created_at: WIDEST }];
+  const DENIED_WIDE = [{ id: 9, canon_email: "blocked@example.edu",
+    emails: ["blocked@example.edu"], created_at: WIDEST, denied_at: WIDEST }];
+
+  async function stampCells(page, panel) {
+    const cells = page.locator(`${panel} tbody tr`).first().locator("td", { hasText: /2023/ });
+    await expect(cells.first()).toBeVisible();
+    return cells;
+  }
+
+  // Fails if `cellClass: "cell-trunc"` is dropped from either column.
+  test("stamps never wrap, on both Pending and Blocked", async ({ page }) => {
+    await openUsers(page, { pending: PENDING_WIDE, denied: DENIED_WIDE, path: "/admin/users/pending" });
+
+    const pending = await stampCells(page, "#userpanel-pending");
+    await expect(pending).toHaveCount(1);            // Requested
+    await expect(pending.first()).toHaveCSS("white-space", "nowrap");
+
+    await tab(page, /Blocked users/).click();
+    const blocked = await stampCells(page, "#userpanel-blocked");
+    await expect(blocked).toHaveCount(2);            // Requested + Denied
+    for (const cell of await blocked.all()) {
+      await expect(cell).toHaveCSS("white-space", "nowrap");
+    }
+  });
+
+  // Fails if `.col-when` goes back to 168px: nowrap alone would then clip an
+  // ordinary timestamp to an ellipsis, trading a wrapped cell for a truncated
+  // one. scrollWidth > clientWidth is exactly "this text is being cut off".
+  test("an ordinary stamp fits its column without being ellipsised", async ({ page }) => {
+    await openUsers(page, { pending: PENDING_WIDE, denied: DENIED_WIDE, path: "/admin/users/pending" });
+
+    const cell = (await stampCells(page, "#userpanel-pending")).first();
+    const { scrollWidth, clientWidth } = await cell.evaluate((el) => ({
+      scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+    }));
+    expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  });
+});
