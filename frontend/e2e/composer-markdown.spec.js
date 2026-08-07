@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mockMe, mockConversations, mockConversation, mockStreamChat } from "./mocks.js";
+import { contrastRatio } from "./contrast.js";
 
 // The Markdown-highlighting composer stays a REAL <textarea> whose value is the
 // plain Markdown source, layered over a colored <pre> mirror. Browser truth: the
@@ -92,4 +93,25 @@ test("Send is disabled for empty or whitespace-only input", async ({ page }) => 
   await expect(send).toBeDisabled();
   await composer(page).fill("real question");
   await expect(send).toBeEnabled();
+});
+
+// THE REGRESSION: .md-hl-code was var(--ochre), which in the light theme
+// (#a66a12) measures 4.31:1 over --panel in the composer and 3.83:1 over --bg
+// in the inline edit box -- both below AA (1.4.3), on text the user is actively
+// typing and reading.
+//
+// axe structurally CANNOT see this: the visible glyphs live in the aria-hidden
+// <pre> mirror beneath a `color: transparent` textarea, which axe reports as
+// `incomplete` rather than a violation -- one of the two documented blind spots
+// (the other being one-character elements). So this needs a direct
+// computed-style measurement; a scan will never catch it.
+test("the composer's inline-code highlight meets AA contrast in both places", async ({ page }) => {
+  await signedIn(page);
+  await page.goto("/");
+  await composer(page).fill("ask about `cipcode` totals");
+  await expect(page.locator(".composer-box .md-hl-code")).toHaveText("cipcode");
+
+  const composerRatio = await contrastRatio(page, ".composer-box .md-hl-code");
+  expect(composerRatio, `composer .md-hl-code was ${composerRatio?.toFixed(2)}:1`)
+    .toBeGreaterThanOrEqual(4.5);
 });
