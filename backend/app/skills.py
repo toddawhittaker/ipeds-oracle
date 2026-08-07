@@ -391,8 +391,12 @@ def cache_store(question: str, final_sql: str, answer_md: str,
             (question, _to_blob(v), final_sql, answer_md,
              json.dumps(figure) if figure else None,
              json.dumps(suggestions) if suggestions else None,
-             # Already capped by the caller's _results_for_storage, so this adds
-             # no new size risk beyond what messages.results already carries.
+             # Capped by the caller's _results_for_storage, so this adds no size
+             # risk beyond what messages.results already carries. That was once
+             # only HALF true and this comment was the reason nobody looked: the
+             # caller's drop-largest loop was guarded by `len(blobs) > 1` and so
+             # never measured a LONE result, which reached here uncapped. It now
+             # shrinks the survivor to fit, so the claim finally holds.
              json.dumps(results) if results else None,
              int(bool(results_truncated)),
              data_version(con), time.time(), user_id))

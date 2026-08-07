@@ -1396,6 +1396,75 @@ def test_results_for_storage_caps_and_drops_largest_over_budget():
     assert out[0]["columns"] == ["n"], out
 
 
+def test_results_for_storage_caps_a_lone_oversized_result():
+    """THE REGRESSION: the drop-largest loop was guarded by `len(blobs) > 1`, so
+    it was a no-op for a single result and stopped as soon as dropping left one —
+    the survivor was NEVER measured. RESULT_STORE_MAX_BYTES therefore meant "at
+    most one result may exceed it, unbounded". `to_storage` caps rows (200) but
+    not WIDTH, and one value may reach SQL_MAX_VALUE_BYTES (1 MiB), so 200 rows
+    of a wide SELECT * is comfortably megabytes — written twice, into
+    messages.results AND query_cache.results.
+
+    The lone survivor is now shrunk to fit instead of trusted.
+    """
+    # ~2 MB before any capping: well past the 64 KB ceiling on its own.
+    huge = QueryResult(columns=["a", "b"],
+                       rows=[(i, "x" * 10_000) for i in range(200)], row_count=200)
+    out = chat_router._results_for_storage([huge])
+    assert out is not None, "a lone oversized result should shrink, not vanish"
+    assert len(json.dumps(out)) <= chat_router.RESULT_STORE_MAX_BYTES, (
+        f"stored {len(json.dumps(out))} bytes, ceiling is "
+        f"{chat_router.RESULT_STORE_MAX_BYTES}")
+    # Shrinking drops ROWS, never the shape — grounding indexes columns.
+    assert out[0]["columns"] == ["a", "b"], out[0]["columns"]
+
+    # A single row too wide to ever fit stores nothing rather than an unbounded
+    # blob — the terminating case of the halving loop.
+    monster = QueryResult(columns=["a"], rows=[("x" * 200_000,)], row_count=1)
+    assert chat_router._results_for_storage([monster]) is None
+
+    # Anti-vacuous: an ordinary result is untouched, so "shrink everything to
+    # None" would not pass this test.
+    ordinary = QueryResult(columns=["n"], rows=[(1,), (2,)], row_count=2)
+    assert chat_router._results_for_storage([ordinary]) == [
+        {"columns": ["n"], "rows": [[1], [2]]}]
+
+
+def test_csv_probes_are_time_bounded_but_the_winning_rerun_is_not():
+    """THE REGRESSION: _select_table_sql probes EVERY query in the answer's
+    sql_log at `LIMIT 1`, and LIMIT 1 bounds the ROWS returned, never the WORK
+    done — so each probe could burn the full sql_timeout_seconds (25s). sql_log
+    records every attempt the agent made, failures included, so 5-8 candidates
+    is routine and one CSV request could hold a threadpool worker for two to
+    three minutes.
+
+    The probes are now bounded. The WINNING re-run deliberately is NOT — that is
+    the query the user actually asked for, and it keeps the full budget.
+    """
+    calls = []
+    real = chat_router.run_sql
+
+    def recording_run_sql(sql, **kw):
+        calls.append({"sql": sql, "limit": kw.get("limit"), "timeout": kw.get("timeout")})
+        return QueryResult(columns=["year", "a"], rows=[(2025, 1)], row_count=1)
+
+    chat_router.run_sql = recording_run_sql
+    try:
+        chat_router._select_table_sql(
+            ["SELECT 1 a, 2 b", "SELECT 3 c, 4 d"], cols=2, cap=100)
+    finally:
+        chat_router.run_sql = real
+
+    probes = [c for c in calls if c["limit"] == 1]
+    assert len(probes) == 2, f"expected one probe per candidate: {calls}"
+    assert all(p["timeout"] == chat_router.CSV_PROBE_TIMEOUT_SECONDS for p in probes), (
+        f"an unbounded probe can burn the full 25s SQL budget: {probes}")
+    winner = calls[-1]
+    assert winner["limit"] == 100, winner
+    assert winner["timeout"] is None, (
+        f"the winning re-run must keep the full default budget: {winner}")
+
+
 def test_cache_hit_keeps_the_conversation_grounding_chain_intact():
     """THE REGRESSION: a cache hit persisted messages.results=NULL, so the NEXT
     turn in that conversation had nothing to ground a recited number against and
@@ -1787,6 +1856,10 @@ def run():
           test_version_endpoint_authed_and_shape)
     check("_results_for_storage caps and drops largest over budget",
           test_results_for_storage_caps_and_drops_largest_over_budget)
+    check("_results_for_storage caps a LONE oversized result too",
+          test_results_for_storage_caps_a_lone_oversized_result)
+    check("CSV probes are time-bounded; the winning re-run is not",
+          test_csv_probes_are_time_bounded_but_the_winning_rerun_is_not)
     check("a cache hit keeps the conversation grounding chain intact",
           test_cache_hit_keeps_the_conversation_grounding_chain_intact)
     check("_load_prior_results respects the before_id window",
