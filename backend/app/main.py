@@ -103,6 +103,17 @@ async def lifespan(app: FastAPI):
             con.close()
     except Exception as e:  # noqa: BLE001 -- a housekeeping sweep must never block boot
         log.warning("auth row purge skipped: %s", e)
+    try:
+        # An import job can only be mid-flight in a process that no longer
+        # exists, so anything non-terminal here is a ghost. Admin -> Imports
+        # adopts a non-terminal job on mount, so leaving one behind locks that
+        # tab permanently. See importer.reconcile_interrupted_jobs.
+        from app.importer import reconcile_interrupted_jobs
+        n = reconcile_interrupted_jobs()
+        if n:
+            log.warning("marked %d interrupted import job(s) as failed", n)
+    except Exception as e:  # noqa: BLE001 -- housekeeping must never block boot
+        log.warning("import job reconciliation skipped: %s", e)
     # Upgrade BEFORE seeding, so the seed backfill
     # (skills._backfill_applied_seed_keys) sees rows already normalized to the
     # current headline text. NOT load-bearing — that backfill also matches on

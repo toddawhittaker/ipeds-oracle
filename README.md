@@ -274,10 +274,12 @@ commented list. The essentials:
 restart.** Once granted, an address is recorded as applied, so removing or
 demoting that account in Admin → Users is a decision later restarts respect —
 offboarding someone actually sticks. Adding a *new* address to `ADMIN_EMAILS`
-still grants it on the next start. If you ever need to re-bootstrap an address
-you removed (for example, you demoted your last admin and locked yourself out),
-delete the `bootstrap_admins_applied` row from the `meta` table in `app.db` and
-restart; the app logs a warning at boot naming any listed address that is not
+still grants it on the next start — including on the upgrade where you add it to
+an existing deployment. If you ever need to re-bootstrap an address you removed
+(for example, you demoted your last admin and locked yourself out), remove **just
+that address** from the JSON list in the `bootstrap_admins_applied` row of the
+`meta` table in `app.db` and restart — deleting the whole row would also restore
+any other listed address you had deliberately removed; the app logs a warning at boot naming any listed address that is not
 currently an admin, so this state is never silent.
 
 The published image reports its own version (the release tag it was built from) on

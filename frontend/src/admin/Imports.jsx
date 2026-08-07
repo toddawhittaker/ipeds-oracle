@@ -346,23 +346,35 @@ export default function Imports({ onDataChanged }) {
   // once in the union, not twice, so it can't inflate the staging-db term.
   // This is still a UX preview, not the server's authoritative preflight
   // check — see app/estimate.py / frontend/src/estimate.js for the shared formula.
+  // The union counts, derived ONCE and shared by the disk estimate and the
+  // confirmation. A year with status "update" is BOTH `integrated` and
+  // `selectable` (re-integrating picks up a Final release over a Provisional
+  // one), so ticking one is a REPLACEMENT, not an addition. Counting it as
+  // `already + selected.size` double-counts: six years loaded, tick the one
+  // that went final, and the modal claimed "all 7 years (6 already loaded + 1
+  // new)" for a deployment that has six and will still have six. The disk
+  // estimate got this right via a set union; the confirmation re-derived the
+  // same fact and disagreed with it, which is why they are now one computation.
+  const yearCounts = useMemo(() => {
+    const integratedStarts = (catalog?.years || [])
+      .filter((y) => y.integrated).map((y) => y.start_year);
+    const unionStarts = Array.from(new Set([...integratedStarts, ...selected]))
+      .sort((a, b) => a - b);
+    const already = integratedStarts.length;
+    return { already, adding: unionStarts.length - already,
+             total: unionStarts.length, unionStarts };
+  }, [catalog, selected]);
+
   const diskEstimate = useMemo(() => {
     if (!catalog?.disk || !catalog?.calibration) return null;
     const calib = catalog.calibration;
     const byYear = new Map(catalog.years.map((y) => [y.start_year, y]));
-    const alreadyIntegratedStarts = catalog.years
-      .filter((y) => y.integrated)
-      .map((y) => y.start_year);
-    const unionStarts = Array.from(new Set([...alreadyIntegratedStarts, ...selected]))
-      .sort((a, b) => a - b);
-    const alreadyIntegratedCount = alreadyIntegratedStarts.length;
-    const selectedCount = unionStarts.length - alreadyIntegratedCount;
     return estimateIntegrate({
-      zipBytes: unionStarts.map((sy) => byYear.get(sy)?.zip_bytes ?? null),
-      alreadyIntegratedCount,
-      selectedCount,
+      zipBytes: yearCounts.unionStarts.map((sy) => byYear.get(sy)?.zip_bytes ?? null),
+      alreadyIntegratedCount: yearCounts.already,
+      selectedCount: yearCounts.adding,
       liveDbBytes: calib.live_db_bytes,
-      currentIntegratedYearCount: alreadyIntegratedCount,
+      currentIntegratedYearCount: yearCounts.already,
       diskFreeBytes: catalog.disk.free_bytes,
       diskTotalBytes: catalog.disk.total_bytes,
       expandFactor: calib.expand_factor,
@@ -371,7 +383,7 @@ export default function Imports({ onDataChanged }) {
       buildSecondsPerYear: calib.build_seconds_per_year,
       safetyFactor: calib.safety_factor,
     });
-  }, [catalog, selected]);
+  }, [catalog, yearCounts]);
   const diskOver = diskEstimate != null && !diskEstimate.sufficient;
 
   // Adding years is the SAME operation as removing one, with different inputs --
@@ -387,8 +399,7 @@ export default function Imports({ onDataChanged }) {
   // rebuild that cannot fit.
   function submitIntegrate() {
     const years = Array.from(selected);
-    const already = (catalog?.years || []).filter((y) => y.integrated).length;
-    const n = years.length;
+    const { already, adding, total } = yearCounts;
     let cost = "";
     if (diskEstimate) {
       const secs = (diskEstimate.estDownloadSeconds || 0) + (diskEstimate.estBuildSeconds || 0);
@@ -397,12 +408,20 @@ export default function Imports({ onDataChanged }) {
     }
     confirm({
       variant: "warning",
-      title: `Rebuild the database with ${n} more year${n === 1 ? "" : "s"}?`,
-      body: `This rebuilds from all ${already + n} years (${already} already loaded`
-        + ` + ${n} new).${cost} The live database is only replaced if every check`
+      title: adding === 0
+        ? "Rebuild the database?"
+        : `Rebuild the database with ${adding} more year${adding === 1 ? "" : "s"}?`,
+      body: `This rebuilds from all ${total} years (${already} already loaded`
+        + `${adding ? `, ${adding} new` : ", re-fetching a year you already have"}`
+        + `).${cost} The live database is only replaced if every check`
         + " passes — until then it keeps answering questions.",
       confirmLabel: "Start rebuild",
+      // Mirrors removeYear: a genuine failure RETHROWS so the modal stays open
+      // showing the error, instead of dismissing exactly like a success and
+      // leaving a notice further down the page as the only trace. The 409
+      // hand-off is not a failure — it resolves an outcome and closes.
       onConfirm: () => runIntegrate(years),
+      errorToast: "Could not start the import.",
     });
   }
 
@@ -416,13 +435,24 @@ export default function Imports({ onDataChanged }) {
     } catch (err) {
       let msg = "Could not start the import.";
       msg = err?.detail || msg;   // ApiError carries the server's own wording
-      notify(msg, "error");
       if (/already running/i.test(msg)) {
-        // Someone else's import is mid-flight — find it and watch its progress.
+        // Someone else's import is mid-flight — hand off to it. This is NOT a
+        // failure of the admin's action, so the modal closes and that job's
+        // progress surfaces (same shape as removeYear's hand-off).
+        notify(msg, "error");
         const list = await api.importJobs().catch(() => []);
         const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
-        if (runningJob) watch(runningJob.id);
+        // { adopted: true } — by definition a job this session did NOT start,
+        // which is exactly what the flag describes. Omitting it was the drift
+        // the flag's own comment claimed immunity from.
+        if (runningJob) watch(runningJob.id, { adopted: true });
+        return;
       }
+      // A genuine failure: rethrow so useConfirm keeps the modal open showing
+      // the error. Swallowing it dismissed the dialog exactly like a success,
+      // leaving a notice further down the page as the only trace.
+      notify(msg, "error");
+      throw err;
     } finally {
       setIntegrating(false);
     }
@@ -452,7 +482,11 @@ export default function Imports({ onDataChanged }) {
             const runningJob = list.find((j) => !TERMINAL_JOB_STATUSES.includes(j.status));
             // Hand off to the running job: close the modal and show ITS progress
             // (matches the old inline path, which surfaced it immediately).
-            if (runningJob) { outcome = { jobId: runningJob.id, message: msg, kind: "error" }; return; }
+            if (runningJob) {
+              outcome = { jobId: runningJob.id, message: msg, kind: "error",
+                          adopted: true };
+              return;
+            }
           }
           throw err; // genuine failure -> modal stays open with the error
         }
@@ -464,7 +498,7 @@ export default function Imports({ onDataChanged }) {
         // the modal has since unmounted).
         notify(outcome.message, outcome.kind);
         setActiveYears(null);
-        watch(outcome.jobId);
+        watch(outcome.jobId, { adopted: !!outcome.adopted });
       },
     });
   }

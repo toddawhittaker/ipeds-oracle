@@ -1752,8 +1752,55 @@ def test_activate_staging_removes_the_previous_copy():
     assert not staging.exists(), "the staging file should have been moved, not copied"
 
 
+def test_reconcile_interrupted_jobs_clears_a_ghost_and_spares_terminal_rows():
+    """THE REGRESSION: the rebuild runs on a DAEMON thread and only marks itself
+    `failed` from its own except block, so a SIGKILL / OOM kill / host reboot /
+    `docker compose pull && up -d` leaves the row at `running` forever. Nothing
+    ever reconciled it.
+
+    That was cosmetic until Admin -> Imports started ADOPTING a non-terminal job
+    on mount: after that, every later visit adopts the ghost, `locked` is true,
+    and every control on the tab -- year cards, integrate, upload, the remove
+    trashcans -- is disabled behind an "an import is running" notice, forever,
+    with no dismiss. Recovery was hand-editing app.db.
+
+    Asserts BOTH directions: the ghost is cleared, and rows that legitimately
+    finished are untouched (a sweep that rewrote `swapped` would erase the
+    record of a successful import)."""
+    con = importer.connect()
+    try:
+        con.execute("DELETE FROM import_jobs")
+        for status in ("running", "checks", "swapped", "failed"):
+            con.execute("INSERT INTO import_jobs(filename, status, created_at, updated_at) "
+                        "VALUES (?,?,?,?)", (f"j-{status}", status, 0, 0))
+        con.commit()
+    finally:
+        con.close()
+
+    n = importer.reconcile_interrupted_jobs()
+    assert n == 2, f"expected 2 non-terminal rows reconciled, got {n}"
+
+    con = importer.connect()
+    try:
+        got = dict(con.execute(
+            "SELECT filename, status FROM import_jobs").fetchall())
+    finally:
+        con.close()
+    assert got["j-running"] == "failed", got
+    assert got["j-checks"] == "failed", got
+    # Terminal rows must be left exactly as they were.
+    assert got["j-swapped"] == "swapped", "a completed import was rewritten"
+    assert got["j-failed"] == "failed", got
+
+    # Idempotent: a second boot must not re-touch anything.
+    assert importer.reconcile_interrupted_jobs() == 0, \
+        "reconciliation is not idempotent across restarts"
+
+
 def run():
     print("importer contract:")
+    check("interrupted jobs are reconciled at boot; terminal rows are spared",
+          test_reconcile_interrupted_jobs_clears_a_ghost_and_spares_terminal_rows)
     check("loader script path resolves to repo-root scripts/ (ROOT anchor)",
           test_loader_script_path_resolves_to_repo_root_scripts)
     check("create_job writes a pending row", test_create_job_row)

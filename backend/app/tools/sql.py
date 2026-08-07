@@ -91,19 +91,24 @@ SQL_MAX_VALUE_BYTES = 1 << 20
 # dispatch, so it persists whether or not it ran) and then request the CSV.
 #
 # 64 MiB is ~3x the widest plausible legitimate export (100k rows of ordinary
-# IPEDS columns is ~20 MB) and small enough that the overshoot below cannot
-# matter. Surfaces as the same SQLResultTooLargeError the value cap uses, so the
-# model gets a steer instead of the generic handler.
+# IPEDS columns is ~20 MB). Surfaces as the same SQLResultTooLargeError the
+# value cap uses, so the model gets a steer instead of the generic handler.
+#
+# What this budget does and does NOT bound, stated plainly because an earlier
+# version of this comment over-claimed and the over-claim was the bug:
+#   * it counts _value_bytes, a ROUGH size -- str/bytes are exact, everything
+#     else is charged a flat 8. A numeric-heavy result under-accounts by ~5.6x
+#     against real resident memory, so an all-integer export trips nearer
+#     ~360 MB than 64 MB. Bounded, but not bounded AT 64 MiB.
+#   * it is checked per ROW (see run_sql), so worst-case resident is the budget
+#     plus one row -- and that row is separately bounded there.
 SQL_MAX_RESULT_BYTES = 64 << 20
 
-# Rows are fetched in batches so the budget is checked BEFORE the whole result
-# is resident. The batch adapts: the first one is deliberately tiny (a wide row
-# of capped values can be tens of MB on its own), then it is sized from the
-# measured average so no single batch can overshoot by more than an eighth of
-# the budget. Ordinary narrow rows reach the 1000 ceiling immediately, so a
-# normal 100k-row export costs ~100 round trips, not 100k.
-_FETCH_BATCH_FIRST = 8
-_FETCH_BATCH_MAX = 1000
+# Floor for the per-row value cap derived in run_sql. A result with hundreds of
+# columns would otherwise squeeze each value to almost nothing; 4 KiB is still
+# far above every real IPEDS value except vartable.longdescription (7,469 bytes
+# max).
+_MIN_VALUE_BYTES = 4096
 
 
 def _value_bytes(v: object) -> int:
@@ -300,30 +305,69 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
     timer = threading.Timer(timeout, _watchdog)
     timer.start()
     try:
+        # Bound ONE ROW before any row exists.
+        #
+        # SQL_MAX_VALUE_BYTES caps a value at 1 MiB and SQL_MAX_RESULT_BYTES
+        # caps the accumulated total -- but nothing capped a ROW, whose size is
+        # n_columns x 1 MiB. Measured on the real dataset (500 columns of
+        # `hex(zeroblob(500000))`, peak RSS): 2,185 MB at limit=1 and 5,046 MB
+        # at limit=200. The budget DID refuse them; the memory was already gone.
+        # Same hole as the original, re-reached through row WIDTH instead of row
+        # count, and the 25 s watchdog cannot fire inside 1.6 s either.
+        #
+        # The bound has to be applied BEFORE the statement is prepared, and this
+        # is the part that is easy to get wrong: `con.execute()` STEPS ONCE, so
+        # by the time `cur.description` gives the column count the first row is
+        # already built. Measured directly -- tightening the limit after
+        # execute() leaves the already-materialized row untouched, so that
+        # placement does nothing.
+        #
+        # `SELECT * FROM (<sql>) LIMIT 0` gives the column count with ZERO rows
+        # materialized (12 MB peak against the query above), for a plain SELECT,
+        # a WITH, and `SELECT *` alike. Fails OPEN: a statement that will not
+        # nest just skips the row bound and keeps the per-row budget below.
+        # Deliberately NOT capping SQLITE_LIMIT_COLUMN -- real IPEDS tables are
+        # legitimately wide and `SELECT *` must keep working.
+        try:
+            probe = con.execute(f"SELECT * FROM ({cleaned}) LIMIT 0", params)
+            ncols = len(probe.description or ())
+            probe.close()
+        except sqlite3.Error:
+            ncols = 0
+        if ncols:
+            con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH,
+                         max(_MIN_VALUE_BYTES, SQL_MAX_RESULT_BYTES // ncols))
+
         cur = con.execute(cleaned, params)
         columns = [d[0] for d in cur.description] if cur.description else []
         # One row past the cap is how truncation is detected; keep that.
         want = limit + 1
         rows: list = []
         seen = 0
-        batch_n = _FETCH_BATCH_FIRST
-        while len(rows) < want:
-            batch = cur.fetchmany(min(batch_n, want - len(rows)))
-            if not batch:
-                break
-            seen += sum(_value_bytes(v) for row in batch for v in row)
+        # PER ROW, not per batch. The previous version sized a fetchmany() from
+        # the running AVERAGE row size, which is only safe on a uniform result:
+        # with small rows first and large rows later the average stayed tiny,
+        # the batch pinned at its 1000 ceiling, and one fetch pulled ~1 GB
+        # resident BEFORE the check ran -- defeating the budget it enforces and
+        # falsifying the "no more than an eighth of the budget" claim by ~120x.
+        # A `CASE WHEN rowid < 10 THEN 'x' ELSE hex(zeroblob(500000)) END` is
+        # enough to shape it, and validate_sql accepts that.
+        #
+        # Iterating the cursor costs ~1 us/row, so a 100k-row export pays tens
+        # of milliseconds for a bound that holds against an adversarial result
+        # instead of an average one. Worst case resident is now the budget plus
+        # ONE row, and that row is itself bounded above.
+        for row in cur:
+            seen += sum(_value_bytes(v) for v in row)
             if seen > SQL_MAX_RESULT_BYTES:
                 raise SQLResultTooLargeError(
                     f"The result exceeded {SQL_MAX_RESULT_BYTES // (1 << 20)} MiB "
                     "in total. Aggregate it in SQL (count/sum/avg), select fewer "
                     "columns, or narrow the query with a WHERE clause."
                 )
-            rows.extend(batch)
-            # Size the next batch from the measured average so a wide result
-            # cannot overshoot the budget by more than an eighth of it.
-            avg = max(seen // len(rows), 1)
-            batch_n = max(1, min(_FETCH_BATCH_MAX,
-                                 (SQL_MAX_RESULT_BYTES // 8) // avg))
+            rows.append(row)
+            if len(rows) >= want:
+                break
         truncated = len(rows) > limit
         rows = rows[:limit]
     except sqlite3.DataError as e:
