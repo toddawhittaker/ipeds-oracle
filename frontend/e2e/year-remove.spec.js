@@ -120,6 +120,14 @@ test.describe("trashcan: remove an integrated year", () => {
     await mockImportCatalog(page, CATALOG);
     await mockDeintegrate(page, { httpStatus: 409 });
     await openImportsTab(page);
+    // Settle the mount BEFORE swapping the jobs mock. The tab now adopts a job
+    // that is already running when it mounts, so if the override landed while
+    // the mount's own /import/jobs request was still in flight, the tab would
+    // adopt job 77, lock the controls, and this trashcan would not exist. The
+    // scenario under test is the other one: nothing running at mount, and the
+    // 409 arrives only when the admin acts.
+    await expect(page.getByRole("button", { name: "Remove 2022-23 from the database" }))
+      .toBeVisible();
     // Override: a job IS mid-flight, and it polls to completion.
     await mockImportJobs(page, [
       { id: 77, filename: "integrate:2023", status: "running", log: "", report: null, updated_at: 1 },
@@ -158,6 +166,9 @@ test.describe("rebuild progress bar", () => {
 
     await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
     await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+    // Adding years is confirmed now, the same as removing one — see the
+    // "adding years is confirmed" describe below.
+    await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
     const bar = page.getByTestId("rebuild-progress");
     await expect(bar).toBeVisible();
@@ -188,8 +199,86 @@ test.describe("rebuild progress bar", () => {
 
     await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
     await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+    // Adding years is confirmed now, the same as removing one — see the
+    // "adding years is confirmed" describe below.
+    await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
     await expect(page.getByTestId("import-progress")).toBeVisible();
     await expect(page.getByTestId("rebuild-progress")).toHaveCount(0);
+  });
+});
+
+test.describe("a job already running when the tab mounts", () => {
+  // THE REGRESSION: `locked` derives from `active`, and `active` was only ever
+  // set by watch() — which only ran for a job THIS session started or clicked
+  // "view" on. So an admin who reloaded the tab, or a SECOND admin, saw the
+  // ordinary catalog with "Integrate selected" enabled, manual upload enabled
+  // and the trashcans live, while a full rebuild and atomic swap of the live
+  // database was in progress. The only trace was a row reading `running` at the
+  // bottom of a long page. The 409 hand-off means nothing corrupts, but
+  // recovering from a wrong-looking-but-blocked click is not the same as never
+  // presenting the wrong state.
+  test("is adopted on mount: controls lock and the notice says it wasn't yours", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    await mockMe(page, { email: "admin@example.edu", is_admin: true });
+    await mockConversations(page, []);
+    // A job already in flight, started by somebody else.
+    await mockImportJobs(page, [
+      { id: 77, filename: "integrate:2023", status: "running", updated_at: 1_700_000_000 },
+    ]);
+    await mockImportJobPoll(page, 77, [
+      { id: 77, filename: "integrate:2023", status: "running", log: "building…", report: null },
+    ]);
+    await page.goto("/");
+    await gotoAdmin(page);
+    await page.getByRole("link", { name: "Imports" }).click();
+
+    // The notice names the situation rather than implying the admin did it.
+    const notice = page.locator(".notice", { hasText: /import started by another session/i });
+    await expect(notice).toBeVisible();
+
+    // ...and the destructive controls are genuinely locked, not merely 409-safe.
+    await expect(page.getByRole("button", { name: /Integrate selected/ })).toBeDisabled();
+    await expect(page.locator(".year-remove")).toHaveCount(0);
+  });
+});
+
+test.describe("adding years is confirmed, like removing one", () => {
+  // Adding is the SAME operation as removing, with different inputs: a full
+  // rebuild from the union ending in an atomic swap. Removing had a danger
+  // modal; adding fired on a single click. That asymmetry teaches an admin that
+  // the guarded one is the dangerous one.
+  test("Integrate opens a confirmation and only starts the rebuild on confirm", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    const integrate = await mockIntegrate(page, { jobId: 91 });
+    await mockImportJobPoll(page, 91, [
+      { id: 91, filename: "integrate:2023", status: "running", log: "…", report: null },
+    ]);
+    await openImportsTab(page);
+
+    await page.locator(".year-card", { hasText: "2023-24" }).click();
+    await page.getByRole("button", { name: /Integrate selected/ }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(/rebuild/i);
+    // No request may have gone out yet — the modal is a gate, not a notice.
+    expect(integrate.posts.length).toBe(0);
+
+    await dialog.getByRole("button", { name: "Start rebuild" }).click();
+    await expect.poll(() => integrate.posts.length).toBe(1);
+  });
+
+  test("cancelling the confirmation starts nothing", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    const integrate = await mockIntegrate(page, { jobId: 92 });
+    await openImportsTab(page);
+
+    await page.locator(".year-card", { hasText: "2023-24" }).click();
+    await page.getByRole("button", { name: /Integrate selected/ }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(integrate.posts.length).toBe(0);
   });
 });

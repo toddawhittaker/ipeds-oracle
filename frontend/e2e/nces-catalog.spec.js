@@ -117,6 +117,8 @@ test("submitting selected years POSTs the right start_year list and job progress
   await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+  // Adding years is confirmed now (same as removing one) — clear the modal.
+  await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
   await expect.poll(() => integrate.posts.length).toBe(1);
   expect(integrate.posts[0].years.slice().sort()).toEqual([2023, 2024]);
@@ -132,6 +134,8 @@ test("a 409 response shows the already-running notice", async ({ page }) => {
 
   await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+  // Adding years is confirmed now (same as removing one) — clear the modal.
+  await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
   await expect(page.getByText(/already running/i)).toBeVisible();
 });
@@ -247,6 +251,8 @@ test("per-file progress renders one row per year (label + step); percent is not 
   await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
   await page.getByRole("checkbox", { name: "Integrate 2024-25 (Provisional)" }).click();
   await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+  // Adding years is confirmed now (same as removing one) — clear the modal.
+  await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
 
   const progressPanel = page.getByTestId("import-progress");
   const row2023 = progressPanel.locator('[data-year="2023"]');
