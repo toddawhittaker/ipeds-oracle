@@ -11,6 +11,7 @@ is model-agnostic via the OpenAI-compatible /chat/completions API.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -18,6 +19,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 import httpx
+from starlette.concurrency import run_in_threadpool
 
 from app import critic, grounding
 from app.config import get_settings
@@ -36,6 +38,39 @@ from app.tools.sql import QueryResult
 log = logging.getLogger("ipeds.llm")
 
 _FAIL_MARKERS = ("SQL REJECTED", "SQL ERROR", "SQL TIMEOUT", "ERROR")
+
+
+async def _dispatch(name: str, args: dict, result_sink: dict) -> str:
+    """Run one tool call OFF the event loop.
+
+    `registry.dispatch` → `tools.sql.run_sql` is blocking `sqlite3`, and it is
+    called from inside `stream_agent`, an ASYNC generator. Run inline, a query
+    holding the full `sql_timeout_seconds` (25s) budget stalls the entire event
+    loop: with one uvicorn worker that is every other user's stream, the admin
+    console, and /api/health — and even THIS turn's already-queued
+    `{"type": "sql"}` event can't flush, so the UI shows nothing while the query
+    it is waiting on runs. `routers/chat.py` already threadpools its own blocking
+    DB work; these two call sites were the oversight.
+
+    Safe to move off-thread, and each reason was checked rather than assumed:
+    `run_sql` opens a FRESH connection per call (`tools/sql.py` `_connect_ro`)
+    and closes it in `finally`, with `check_same_thread=False` already set; the
+    timeout watchdog is already its own thread (`threading.Timer` →
+    `con.interrupt()`); and `registry._TOOLS` is a read-only module dict.
+
+    The one thing that must NOT change: callers await these ONE AT A TIME. The
+    per-request `result_sink` dict and `res.sql_log` are shared mutable state,
+    and sequential awaits are the whole reason there is no race. Do not
+    `asyncio.gather` the tool calls.
+
+    Trade-off, stated: this moves SQL onto Starlette's default 40-worker
+    threadpool, shared with every sync route handler, so a burst of heavy
+    queries can saturate it. That is strictly better than serialising them all
+    behind a single event loop, but it is a ceiling, not an absence of one.
+    """
+    return await run_in_threadpool(
+        functools.partial(registry.dispatch, name, args, result_sink=result_sink))
+
 
 # When the critic flags the TOOL-BUDGET-EXHAUSTED answer, it gets ONE bounded
 # correction round with tools RE-ENABLED (so a flagged aggregation error can be
@@ -1282,7 +1317,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         pass
                 else:
                     yield {"type": "status", "text": f"Looking up {name.replace('_', ' ')}…"}
-                result = registry.dispatch(name, args, result_sink=last_sql_result)
+                result = await _dispatch(name, args, last_sql_result)
                 ok = not any(result.startswith(m) for m in _FAIL_MARKERS)
                 turn_had_fail = turn_had_fail or not ok
                 yield {"type": "tool", "name": name, "ok": ok}
@@ -1439,8 +1474,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                                         yield {"type": "sql", "sql": sql}
                                 except json.JSONDecodeError:
                                     pass
-                            r_out = registry.dispatch(name, args,
-                                                      result_sink=last_sql_result)
+                            r_out = await _dispatch(name, args, last_sql_result)
                             ok = not any(r_out.startswith(m) for m in _FAIL_MARKERS)
                             yield {"type": "tool", "name": name, "ok": ok}
                             messages.append({"role": "tool",

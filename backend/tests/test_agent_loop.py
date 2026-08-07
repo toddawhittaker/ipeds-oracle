@@ -78,6 +78,61 @@ def _run(question):
     return asyncio.run(llm.run_agent(question))
 
 
+def test_a_blocking_tool_call_does_not_stall_the_event_loop():
+    """The regression: `registry.dispatch` → `run_sql` is blocking `sqlite3`,
+    called from inside `stream_agent`, an ASYNC generator. Run inline, a query
+    holding the full 25s `sql_timeout_seconds` budget stalls the entire event
+    loop — with one uvicorn worker that is every other user's stream, the admin
+    console and /api/health — and even this turn's own already-queued
+    `{"type": "sql"}` event can't flush.
+
+    This FORCES the bad branch rather than sampling for it (a timing test that
+    merely measures a fast query would pass either way). `dispatch` blocks on a
+    threading.Event that ONLY a concurrent asyncio task can set: off the loop it
+    is released in ~50ms; on the loop that task can never be scheduled, so the
+    wait burns its whole 2.0s timeout instead. The 1.0s bound sits an order of
+    magnitude away from both outcomes, so this is not a flaky margin.
+    """
+    import threading
+    import time
+
+    calls = {"n": 0}
+    released = threading.Event()
+
+    def blocking_dispatch(*a, **k):
+        calls["n"] += 1
+        released.wait(timeout=2.0)
+        return "OK — 1 row(s)"
+
+    async def fake_chat(client, model, messages, tools=None):
+        # Ask for one tool call, then answer once its result comes back.
+        if any(m.get("role") == "tool" for m in messages):
+            return _text_response("The answer is 42.")
+        return _tool_call_response()
+
+    llm._chat = fake_chat
+    registry.dispatch = blocking_dispatch
+
+    async def drive():
+        async def releaser():
+            await asyncio.sleep(0.05)
+            released.set()
+        task = asyncio.ensure_future(releaser())
+        res = await llm.run_agent("does the loop keep running?")
+        await task
+        return res
+
+    t0 = time.monotonic()
+    res = asyncio.run(drive())
+    elapsed = time.monotonic() - t0
+
+    assert calls["n"] == 1, f"expected exactly one tool call, got {calls['n']}"
+    assert res.error is None, f"unexpected error: {res.error}"
+    assert elapsed < 1.0, (
+        f"the tool call blocked the event loop for {elapsed:.2f}s — the "
+        "concurrent task could not run, so dispatch is back on the loop")
+
+
 def test_plain_answer_path(monkeypatch=None):
     async def fake_chat(client, model, messages, tools=None):
         return _text_response("The answer is 42.")
@@ -1875,6 +1930,8 @@ def test_generate_title_transport_error_returns_empty():
 
 def run():
     print("agent tool-loop contract:")
+    check("a blocking tool call runs off the event loop",
+          test_a_blocking_tool_call_does_not_stall_the_event_loop)
     check("plain answer (no tool calls) is returned", test_plain_answer_path)
     check("budget exhaustion synthesizes from gathered data", test_synthesis_on_budget_exhaustion)
     check("empty synthesis falls back to a clear error", test_hard_error_when_synthesis_is_empty)

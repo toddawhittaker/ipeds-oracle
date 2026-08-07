@@ -483,7 +483,29 @@ default would both brand it and silently route a self-hoster's traffic to a mode
 they never chose; `MODEL_ESCALATION` is optional (blank = never escalate) and is
 reached for after repeated tool failures. A key with no model logs a CRITICAL at
 boot (`main._missing_model_warning`). Run as a tool-calling agent loop wrapped in
-three guards:
+three guards.
+
+**Every tool call runs OFF the event loop** (`llm._dispatch`). `registry.dispatch`
+→ `tools/sql.run_sql` is blocking `sqlite3` called from inside `stream_agent`, an
+**async generator** — so run inline, one query holding the full 25 s
+`sql_timeout_seconds` budget stalled the ENTIRE event loop: with one uvicorn
+worker that is every other user's stream, the admin console and `/api/health`,
+and even that turn's own already-queued `{"type":"sql"}` event couldn't flush.
+`routers/chat.py` already threadpooled its blocking DB work; these two sites (the
+main tool loop and the critic-correction round) were the oversight. Safe because
+`run_sql` opens a FRESH connection per call and closes it in `finally`, with
+`check_same_thread=False` already set, and the timeout watchdog is already its
+own thread. **The one invariant: callers await these ONE AT A TIME** — the
+per-request `result_sink` dict and `res.sql_log` are shared mutable state, and
+sequential awaits are the whole reason there's no race, so never
+`asyncio.gather` the tool calls. Trade-off, stated: SQL now shares Starlette's
+default 40-worker threadpool with every sync route handler, so a burst can
+saturate it — a higher ceiling, not the absence of one. Pinned by
+`test_a_blocking_tool_call_does_not_stall_the_event_loop`, which FORCES the bad
+branch (dispatch blocks on an Event only a concurrent asyncio task can set)
+rather than timing a fast query: measured 2.39 s inline vs <1 s threadpooled.
+
+The three guards:
 - a topical **guardrail** in front (off-topic questions never reach the DB) —
   `guard.py`'s `_SYSTEM` explicitly whitelists **corrective feedback and a
   meta-critique of a prior answer's method/scope** (e.g. "you should have kept
