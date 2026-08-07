@@ -205,6 +205,19 @@ the elements whose contrast could be wrong), and the answer fixture must carry a
 rather than a violation, so a count badge's contrast needs a direct
 computed-style assertion — the gate alone won't catch it.
 
+**Opening a `HelpPopover` in an e2e spec: use `focus()`, never a bare `click()`.**
+It opens on hover *and* focus while its `onClick` toggles, so a `click()`
+(mouseenter → focus → click) races React's commit and can toggle the popover
+straight back shut — a flake that appeared roughly one loaded run in four while
+passing 100/100 under `--repeat-each=25`. `focus()` opens it unconditionally and
+is the keyboard route anyway. (`csv-import.spec.js`'s awaited
+`focus()`-then-`click()` deliberately tests the touch-tap swallow and is correct.)
+
+More generally, **when a flake has a candidate mechanism, force the bad branch
+instead of counting runs.** Repetition could not settle that one; a throwaway
+spec that hovered, awaited the popover visible, then clicked failed 5/5 while the
+fix passed 5/5 — seconds, and conclusive.
+
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
 
@@ -437,6 +450,45 @@ webfonts (it keeps the CSP's `script-src 'self'` untouched).
 cd frontend && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
 cd frontend && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
 ```
+
+## Dependencies
+
+Two lockfiles, and **nothing installs the loose files**: CI and the Dockerfile
+install `backend/requirements.lock`, and `npm ci` installs
+`frontend/package-lock.json`. So a version you *declared* is not necessarily the
+version anything *ran*.
+
+```bash
+# Backend — regenerate the lock in the SAME PR that moves a floor in requirements.txt
+pip-compile --generate-hashes --output-file=backend/requirements.lock backend/requirements.txt
+
+# Frontend — check advisories before AND after any lockfile change
+cd frontend && npm audit
+```
+
+Four things that have each caused a real defect:
+
+- **A raised floor with a stale lock is invisible.** Dependabot cannot run
+  `pip-compile`, so it bumps `requirements.txt` alone and every check goes green
+  having exercised the version that did *not* change.
+  `backend/tests/test_requirements_lock.py` now fails on that, in both
+  directions.
+- **`npm audit` is run by no CI job.** A vulnerable transitive is invisible to a
+  green suite, and dependabot titles do not say "security". Of three
+  routine-looking npm PRs folded into #276, two cleared advisories (one HIGH, one
+  MODERATE) and a third HIGH was present that none of them referenced. The
+  frontend audits at **zero** today — a useful baseline only if it is checked.
+- **`npm install` will not move a transitive that already satisfies its parent's
+  range.** One package stayed on its vulnerable version through a full
+  `npm install --package-lock-only`; it needed `npm update <pkg>`. The resulting
+  lockfile looks the same either way.
+- **`ci.yml`'s Playwright container tag must move with `@playwright/test`.**
+  A mismatched pair fails at browser launch — except across a patch bump, which
+  shares a browser build and passes, hiding the drift until a bump that does not.
+
+Because `main` is `strict: true`, each merge puts every other PR behind and
+forces a fresh run. When several dependabot PRs rewrite the **same** lockfile,
+combine them into one PR rather than merging serially.
 
 ## CI & the contribution workflow
 

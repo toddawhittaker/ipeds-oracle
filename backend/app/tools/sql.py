@@ -69,6 +69,51 @@ class SQLResultTooLargeError(RuntimeError):
 # raise it, and raising it re-opens the hole.
 SQL_MAX_VALUE_BYTES = 1 << 20
 
+# ...and a cumulative ceiling on the WHOLE result, because the per-value cap
+# above does not bound the total.
+#
+# The comment above argues the value cap "restores" the watchdog: with each
+# value bounded, serious memory needs thousands of values and therefore long
+# enough for con.interrupt() to land. That is true at the 200-row model cap
+# (200 MB, survivable) and FALSE at the 100k-row CSV download cap, which is the
+# one place it was never re-checked. Measured against the real dataset with
+# values UNDER the per-value cap (`SELECT hex(zeroblob(500000)) FROM c_a`):
+#
+#     limit=  100   0.05s   ~95 MB    1,811 MB/s
+#     limit=  400   0.18s  ~382 MB    2,082 MB/s
+#     limit= 1000   0.40s  ~954 MB    2,359 MB/s
+#
+# At ~2.3 GB/s the 25 s watchdog is irrelevant -- any realistic container limit
+# is gone in well under a second, and the reachable ceiling on the download path
+# is 100,000 x 1 MiB ~= 100 GB, all resident before a single CSV byte is
+# written. An allowlisted user only has to steer one turn into emitting a
+# large-value query (llm.py appends every emitted statement to sql_log BEFORE
+# dispatch, so it persists whether or not it ran) and then request the CSV.
+#
+# 64 MiB is ~3x the widest plausible legitimate export (100k rows of ordinary
+# IPEDS columns is ~20 MB) and small enough that the overshoot below cannot
+# matter. Surfaces as the same SQLResultTooLargeError the value cap uses, so the
+# model gets a steer instead of the generic handler.
+SQL_MAX_RESULT_BYTES = 64 << 20
+
+# Rows are fetched in batches so the budget is checked BEFORE the whole result
+# is resident. The batch adapts: the first one is deliberately tiny (a wide row
+# of capped values can be tens of MB on its own), then it is sized from the
+# measured average so no single batch can overshoot by more than an eighth of
+# the budget. Ordinary narrow rows reach the 1000 ceiling immediately, so a
+# normal 100k-row export costs ~100 round trips, not 100k.
+_FETCH_BATCH_FIRST = 8
+_FETCH_BATCH_MAX = 1000
+
+
+def _value_bytes(v: object) -> int:
+    """Rough resident size of one cell. Only str/bytes can be large (the value
+    cap bounds them at 1 MiB); everything else is a small fixed-width scalar and
+    is counted as 8 so a wide all-numeric row still accrues against the budget."""
+    if isinstance(v, (str, bytes, bytearray, memoryview)):
+        return len(v)
+    return 8
+
 
 @dataclass
 class QueryResult:
@@ -257,7 +302,28 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
     try:
         cur = con.execute(cleaned, params)
         columns = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchmany(limit + 1)
+        # One row past the cap is how truncation is detected; keep that.
+        want = limit + 1
+        rows: list = []
+        seen = 0
+        batch_n = _FETCH_BATCH_FIRST
+        while len(rows) < want:
+            batch = cur.fetchmany(min(batch_n, want - len(rows)))
+            if not batch:
+                break
+            seen += sum(_value_bytes(v) for row in batch for v in row)
+            if seen > SQL_MAX_RESULT_BYTES:
+                raise SQLResultTooLargeError(
+                    f"The result exceeded {SQL_MAX_RESULT_BYTES // (1 << 20)} MiB "
+                    "in total. Aggregate it in SQL (count/sum/avg), select fewer "
+                    "columns, or narrow the query with a WHERE clause."
+                )
+            rows.extend(batch)
+            # Size the next batch from the measured average so a wide result
+            # cannot overshoot the budget by more than an eighth of it.
+            avg = max(seen // len(rows), 1)
+            batch_n = max(1, min(_FETCH_BATCH_MAX,
+                                 (SQL_MAX_RESULT_BYTES // 8) // avg))
         truncated = len(rows) > limit
         rows = rows[:limit]
     except sqlite3.DataError as e:

@@ -157,6 +157,20 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   state *and* its lifted selection **survive a tab switch**, resetting only when
   the admin leaves the Users section — the spec's persistence contract, with no
   new state plumbing. Pinned in `frontend/e2e/admin-users-tabs.spec.js`.
+  **Every timestamp cell in these tables is `cell-trunc` (nowrap + ellipsis) in a
+  fixed-width column** — `.col-active` and `.col-when` are both **210px**,
+  because all four render the same `fmtDateTime`. The nowrap is the load-bearing
+  half: a stamp is one atomic value, and letting it wrap makes row height depend
+  on font metrics and locale, which is why this first showed up only inside the
+  Playwright container. Width alone is a race a wider locale eventually wins; it
+  exists so the ellipsis never shows in the ordinary case. Both halves are
+  needed and were mutation-verified — at the old 168px, nowrap alone traded a
+  wrapped cell for an **ellipsised** one (measured: 182px of content). The tests
+  pin the MECHANISM (computed `white-space`; `scrollWidth` vs `clientWidth`),
+  **not row height** the way the Current-users test does: Blocked's Email cell
+  wraps deliberately (`.blocked-email`), so its rows are legitimately multi-line.
+  Costs the Blocked table 84px of minimum width, slightly worsening the deferred
+  `DataTable` 320px reflow issue — fix that once in `DataTable.jsx`, not here.
   The Current-users table's **"Last active"** column is **DERIVED read-side** in
   `admin.list_allowlist`, not stored: the latest of `users.last_login`, the
   user's newest `conversations.updated_at`, and their newest
@@ -939,10 +953,12 @@ three guards:
   never a year-over-year trend table. Pure logic in `compare.js` (vitest):
   `comparableTable(headers, rows)` (reuses `chartSpecFromTable`'s entity-column
   inference — `spec.x`) and `compareSpec(spec, selectedLabels)` (filters the parent
-  spec's data to the selected entities, forces a bar snapshot). `Markdown.jsx` injects
-  a leading checkbox column into comparable tables via a react-markdown `tr` override +
-  a per-table `CompareContext` (selection keyed by entity-label text, so each row
-  self-identifies from its own hast node — no row-index plumbing); a "Compare N →" bar
+  spec's data to the selected entities, forces a bar snapshot). `Markdown.jsx`'s
+  `SortableTable` renders the leading checkbox **inline in its own row map**, with
+  selection keyed by the entity LABEL rather than a row index — so a tick survives a
+  re-sort, which is the whole reason for the label key. (The earlier react-markdown
+  `tr` override + per-table `CompareContext` are **gone**; don't go looking for them,
+  and see `Markdown.jsx`'s comment at the `SortableTable` definition.) A "Compare N →" bar
   appears once ≥1 row is ticked (action enables at 2, capped at 4), rendering the
   snapshot `<Chart>` in a `.compare-panel`. `Chart.jsx` renders **every** categorical
   tick (`interval={0}`) and **wraps** long labels onto multi-line centered ticks
@@ -1527,6 +1543,22 @@ opt-in and a tested module can't stay silently ungated. Browser-tested component
 (`Chat.jsx`, `src/admin/*.jsx`, …) have no `*.test.js` and so stay out of the floor —
 Playwright covers them. The derivation walks `src/` **recursively**; it must, or a
 module in a subdirectory escapes the floor silently (see the `src/admin/` note above).
+**Open a `HelpPopover` in e2e with `focus()`, NEVER a bare `click()`.** The
+component opens on hover AND focus while its `onClick` **toggles**, so a
+`.click()` (which dispatches mouseenter → focus → click) is a race: if React has
+already committed the mouseenter's `setOpen(true)` when `onFocus` reads `open`,
+`openedByFocus` is never armed and the click toggles the popover **shut**. Those
+events batch into one task normally and spread apart under load, which is why
+`a11y-scroll-regions.spec.js` failed roughly one loaded run in four and passed
+100/100 under `--repeat-each=25`. `focus()` calls `openNow()` unconditionally —
+no toggle, no race — and is the keyboard route besides. The component is **not**
+wrong (for a mouse user, hover-opens-then-click-closes is that `onClick`'s stated
+intent), so the fix is in the spec; `csv-import.spec.js`'s awaited
+`focus()`-then-`click()` is deliberately testing the touch-tap swallow and is
+correct as written. Generalizing: **when a flake has a candidate mechanism,
+construct the input that FORCES the bad branch rather than sampling for it** —
+repetition proved nothing here, while a throwaway spec that hovered, awaited
+visibility, then clicked failed 5/5 against the fix's 5/5 pass.
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
 and now SCANS THE APP** — a rendered answer with its disclosures open, a
 MID-STREAM answer, and all seven admin paths in **both themes** (19 scans).
@@ -1585,6 +1617,27 @@ the pinned version and went fully green. Regenerate with
 `pip-compile --generate-hashes --output-file=requirements.lock requirements.txt`
 in the same PR that moves a floor.
 
+**The npm side has no equivalent gate — `npm audit` is the check nothing runs.**
+CI never invokes it, so a vulnerable transitive is invisible to a fully green
+suite, and a dependabot title gives no hint: of three routine-looking npm PRs in
+#276, **two were security fixes** (js-yaml 4.3.0→4.3.1 cleared a HIGH, postcss
+8.5.19→8.5.26 a MODERATE) and a third HIGH (`brace-expansion`) was sitting
+unreferenced by any of them. Run `npm audit` in `frontend/` on `main` **before
+and after** any lockfile change and state the delta in the PR; the frontend
+currently audits at **zero**, which is only a useful baseline if it is checked.
+Two traps behind that: **`npm install` will NOT move a transitive that already
+satisfies its parent's range** — js-yaml stayed on the vulnerable version
+through a full `npm install --package-lock-only` and needed `npm update
+js-yaml`, and a lockfile that still carries the advisory is byte-indistinguishable
+from a fixed one at a glance — and **`ci.yml`'s Playwright container tag must
+move with `@playwright/test`** (both at 1.62.1). #269 moved the package alone and
+went green, because a PATCH pair happens to share a browser build; that is
+exactly why the drift survives review until a bump where it does not.
+**Prefer ONE PR when several dependabot PRs rewrite the same lockfile.** `main`
+is `strict: true`, so each merge puts the rest behind and forces them to
+regenerate that file against a moved base — #269/#273/#274 were combined into
+#276 for the same reason #271 combined #267/#268.
+
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
 CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on
 `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
@@ -1608,6 +1661,10 @@ override is left enabled only as a safety valve for a flaky check.
 authority on **cross-file taint** (its py/log-injection caught a request `tz` param
 logged in another module — CodeQL alerts surface in the Security tab; NB they don't
 block a merge unless code-scanning *merge protection* is enabled in repo settings).
+The three `github/codeql-action/*` steps are pinned to an **exact patch**
+(`@v4.37.4`, was the floating `@v4`) — a reviewable diff for every CodeQL change
+instead of silently riding whatever the major tag moves to, at the cost of a
+dependabot PR per patch release.
 **Semgrep** (the CI **SAST (semgrep)** job + the local gate) is the fast pattern
 layer — `p/python` · `p/security-audit` · `p/javascript` plus repo-local rules in
 **`.semgrep/`** (a CWE-117 log-injection rule). It runs `--error` (any finding fails

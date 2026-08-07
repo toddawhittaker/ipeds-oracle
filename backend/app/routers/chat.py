@@ -21,7 +21,14 @@ from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
 from app.llm import cost_is_estimated, effective_cost, generate_title, stream_agent
-from app.tools.sql import QueryResult, SQLTimeoutError, SQLValidationError, ipeds_years, run_sql
+from app.tools.sql import (
+    QueryResult,
+    SQLResultTooLargeError,
+    SQLTimeoutError,
+    SQLValidationError,
+    ipeds_years,
+    run_sql,
+)
 
 log = logging.getLogger("ipeds.chat")
 
@@ -1006,6 +1013,13 @@ def download_csv(message_id: int, request: Request, cols: int | None = None,
         raise HTTPException(400, str(e)) from e
     except SQLTimeoutError as e:
         raise HTTPException(504, "The query took too long to export.") from e
+    except SQLResultTooLargeError as e:
+        # The whole-result byte budget (sql.py's SQL_MAX_RESULT_BYTES). This is
+        # the path that budget exists for: the download cap is 100k rows, and
+        # without a total ceiling one wide result could exhaust the container's
+        # memory before a single CSV byte was written. 413 rather than 400 —
+        # the request was well-formed, the RESULT is too big.
+        raise HTTPException(413, str(e)) from e
 
     # Serialize row-by-row so a 100k-row CSV isn't also buffered whole as one
     # string on top of the already-materialized rows.

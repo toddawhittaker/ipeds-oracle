@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings
 from app.tools.sql import (
+    SQL_MAX_RESULT_BYTES,
     SQL_MAX_VALUE_BYTES,
     SQLResultTooLargeError,
     SQLTimeoutError,
@@ -104,6 +105,44 @@ print(f"  ✓ a large but legitimate value still returns ({r.rows[0][0]:,} chars
 _lim = _connect_ro(get_settings().ipeds_db_path).getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
 assert _lim == SQL_MAX_VALUE_BYTES, f"read-only connection lost the cap: {_lim}"
 print(f"  ✓ read-only connections carry the cap ({_lim:,} bytes)")
+
+print("\n== whole-result byte budget: the per-value cap does not bound the TOTAL ==")
+# THE REGRESSION: SQL_MAX_VALUE_BYTES bounds ONE value at 1 MiB, and the row cap
+# bounds how MANY rows come back -- but nothing bounded the product. The CSV
+# download path runs at sql_row_cap_download (100,000), so the reachable ceiling
+# was 100k x 1 MiB ~= 100 GB, all resident before a single CSV byte is written.
+#
+# The value cap's own comment argues it "restores" the watchdog because serious
+# memory then needs thousands of values and therefore enough TIME for
+# con.interrupt() to land. Measured against the real dataset with values UNDER
+# the cap, that is true at the 200-row model cap and false at the download cap:
+# ~2.3 GB/s (1000 rows of 1 MB in 0.40s), so any realistic container limit is
+# gone in well under a second and the 25 s watchdog never fires.
+#
+# A recursive CTE rather than a real table, so this holds on CI's tiny fixture
+# DB as well as the full dataset -- the rows are generated, not stored.
+_rows_needed = (SQL_MAX_RESULT_BYTES // 1_000_000) + 8
+_fat = (f"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<{_rows_needed}) "
+        "SELECT hex(zeroblob(500000)) AS v FROM n")
+_t0 = time.time()
+try:
+    _r = run_sql(_fat, limit=100_000)
+    raise AssertionError(
+        f"a {_rows_needed}-row x 1 MB result was returned whole "
+        f"(~{_rows_needed} MB) -- the whole-result budget did not fire")
+except SQLResultTooLargeError as e:
+    _dt = time.time() - _t0
+    assert "MiB" in str(e), f"the error must name the ceiling, got: {e}"
+    print(f"  ✓ a result over {SQL_MAX_RESULT_BYTES // (1 << 20)} MiB is refused "
+          f"({_dt:.2f}s) -> {str(e)[:60]}...")
+
+# ...and the budget must not break an ordinary export. Well under the ceiling,
+# many rows: this is the shape a real 100k-row CSV has, and it must still work.
+_r = run_sql("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<5000) "
+             "SELECT i, hex(zeroblob(20)) AS v FROM n", limit=100_000)
+assert len(_r.rows) == 5000, f"an ordinary wide-ish export must survive, got {len(_r.rows)}"
+assert not _r.truncated, "5000 rows under a 100k cap must not report truncated"
+print(f"  ✓ an ordinary {len(_r.rows):,}-row export is unaffected")
 
 print("\n== ipeds_years / has_ipeds_data: fresh-deploy 'no data' probes ==")
 # Non-raising probes for the "no dataset loaded yet" state. Built entirely on
