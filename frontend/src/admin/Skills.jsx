@@ -55,7 +55,12 @@ export default function Skills({ onAttentionChanged }) {
       announce(verified ? "Lesson verified." : "Lesson moved back to unverified.", "ok");
       load();
       refreshAttention();  // verified count changed → update the Skills badge now
-    });
+    // Without this a 4xx/5xx or a dropped connection produced an unhandled
+    // rejection and NOTHING else: no toast, no message, no state change, so the
+    // admin pressed Verify and the button simply did nothing. Every sibling
+    // mutation in this file already toasts on failure; this is the most-used
+    // action in it.
+    }).catch(() => announce("Couldn't change that lesson's status.", "error"));
 
   function startEdit(s) {
     setEditingId(s.id);

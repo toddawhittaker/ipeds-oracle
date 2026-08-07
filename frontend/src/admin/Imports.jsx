@@ -39,7 +39,19 @@ function YearCard({ entry, locked, checked, onToggle, onRemove }) {
   // full checkbox semantics for keyboard + screen-reader users: role=checkbox,
   // aria-checked, tabbable, and Space/Enter toggle. Non-selectable cards
   // (already-integrated / unknown) are inert static tiles, not controls.
+  // `interactive` gates only the HANDLERS. It used to gate role, aria-checked,
+  // aria-label and tabIndex too, which left a locked or non-selectable card as a
+  // roleless <div> carrying aria-disabled — an attribute ARIA does not permit on
+  // a generic element, so it is simply ignored. The whole year grid degraded to
+  // unannounced static text with no disabled semantics, where a native disabled
+  // button would at least announce "button, dimmed".
+  //
+  // Newly reachable because Imports now ADOPTS a running job on mount: a second
+  // admin, or the same one after a reload, lands in exactly this state. An
+  // aria-disabled control staying focusable is the point — it is how the state
+  // becomes discoverable at all.
   const interactive = entry.selectable && !locked;
+  const disabled = !entry.selectable || locked;
   const label = `Integrate ${entry.year_label} (${entry.release})`;
   const cls = ["year-card", entry.status, checked ? "selected" : "", locked ? "locked" : ""]
     .filter(Boolean).join(" ");
@@ -66,11 +78,11 @@ function YearCard({ entry, locked, checked, onToggle, onRemove }) {
         className={cls}
         data-year={entry.start_year}
         data-status={entry.status}
-        role={interactive ? "checkbox" : undefined}
-        aria-checked={interactive ? checked : undefined}
-        aria-label={interactive ? label : undefined}
-        aria-disabled={!entry.selectable || locked ? "true" : undefined}
-        tabIndex={interactive ? 0 : undefined}
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={label}
+        aria-disabled={disabled ? "true" : undefined}
+        tabIndex={0}
         onClick={interactive ? toggle : undefined}
         onKeyDown={interactive ? onKeyDown : undefined}
       >

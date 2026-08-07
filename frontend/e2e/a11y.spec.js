@@ -77,13 +77,12 @@ async function adminA11yMocks(page) {
 // colour could not be rated at all. It shipped at 4.44:1 on exactly that basis.
 // (`'51.3801'` does not count: quoted, so it lexes as .token.string.)
 //
-// Measured, so it is not over-claimed: with the old colour restored, axe DOES
-// report `<span class="token number">200</span>` as a serious violation when
-// probed directly on this state — and yet the "rendered answer" scan below
-// still PASSES. That gap is unexplained and is on the backlog; do not treat the
-// widened fixture as the thing protecting this. The direct contrast assertion
-// at the bottom of this file is what actually fails when the colour regresses,
-// and it is mutation-verified.
+// This DOES now make the scan able to catch the regression, but only together
+// with the tall viewport set on the axe describe below — the token renders
+// below a 720px fold, and axe silently PASSES off-screen text rather than
+// rating it. Both halves are required; with either one missing the scan is
+// green against a real violation. The direct contrast assertion at the bottom
+// of this file is the belt to that pair of braces.
 const SQL = "SELECT stabbr, SUM(x) AS total FROM c_a WHERE cipcode='51.3801' "
   + "AND awlevel=3 GROUP BY stabbr LIMIT 200";
 const ANSWER_MD =
@@ -339,6 +338,33 @@ function gatedViolations(results) {
 }
 
 test.describe("axe smoke scan", () => {
+  // A TALL viewport, and this is load-bearing rather than cosmetic.
+  //
+  // axe only contrast-checks text that is inside the viewport: colorContrastEvaluate
+  // begins `if (!_isVisibleOnScreen(node)) { ...; return true }` — a PASS, not an
+  // incomplete. This app pins `html, body { overflow: hidden }` and gives each
+  // screen its own inner scroller (.messages, .admin), so at Playwright's default
+  // 1280x720 nothing below the fold is ever measured.
+  //
+  // Measured: on /admin/logs with 30 records, 95 text nodes are checked at 720px
+  // and 143 at 4000px — 34% never contrast-checked. And a real below-AA colour
+  // (#a15c00 on .token.number, 4.44:1) sat at y=767 in the rendered-answer scan,
+  // 47px below the fold, so that scan PASSED while a direct probe of the same
+  // state reported it as a serious violation. That gap is what this fixes; it is
+  // specific to colour-contrast, since the other gated rules are DOM/CSSOM-based
+  // and not viewport-gated.
+  // ...and reduced motion for EVERY scan, not just Login's.
+  //
+  // The Login scan already did this, and its comment gives the reason: axe
+  // sampling mid-fade measures the BLENDED colour, reporting a ratio against
+  // pixels that never rest there. That reasoning was never Login-specific —
+  // toasts, modals, the bulk toolbar and the spinner all animate — it was just
+  // the only scan that had been bitten. Widening the viewport surfaced it
+  // elsewhere: /admin/users/blocked (dark) failed roughly one full-suite run in
+  // two while passing 3/3 in isolation, the signature of a transient frame
+  // rather than a real violation. Scan resting pixels, everywhere.
+  test.use({ viewport: { width: 1280, height: 2600 }, reducedMotion: "reduce" });
+
   test("Login screen has no critical or serious violations", async ({ page }) => {
     await mockMe(page, null);
     await mockAuthConfig(page, "");

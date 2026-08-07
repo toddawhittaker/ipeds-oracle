@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import {
   mockMe, mockConversations, mockConversation, mockAttention, mockMarkLogsSeen,
   mockAllowlist, mockAccessRequests, mockDeniedRequests, mockSkills, mockLogs,
-  mockImportJobs, mockImportJobPoll,
+  mockImportJobs, mockImportJobPoll, mockImportCatalog,
 } from "./mocks.js";
 
 // WCAG 2.1.1 (Level A): a region that scrolls but contains nothing focusable is
@@ -160,5 +160,50 @@ test.describe("scrollable regions are keyboard reachable", () => {
     const jobLog = page.getByRole("region", { name: "Import job log" });
     await expect(jobLog).toBeVisible();
     await expect(jobLog).toHaveAttribute("tabindex", "0");
+  });
+});
+
+test.describe("a locked year card keeps its semantics", () => {
+  // THE REGRESSION: `interactive = selectable && !locked` gated role,
+  // aria-checked, aria-label AND tabIndex together, so a locked card was a
+  // roleless <div> carrying aria-disabled — an attribute ARIA does not permit
+  // on a generic element, so it is ignored outright. The whole year grid
+  // degraded to unannounced static text with NO disabled semantics.
+  //
+  // Newly reachable because Imports adopts a running job on mount: a second
+  // admin, or the same one after a reload, lands in exactly this state on the
+  // app's highest-stakes screen. axe cannot see it — the a11y fixture's only
+  // year is selectable, so the branch never renders under the gate.
+  test("stays a checkbox, focusable, and announces as disabled while locked", async ({ page }) => {
+    await mockMe(page, ADMIN);
+    await mockConversations(page, []);
+    await mockAttention(page, { users: 0, skills: 0, logs: 0 });
+    await mockMarkLogsSeen(page);
+    await mockImportCatalog(page, {
+      probed_at: 0, partial: false,
+      years: [{ start_year: 2024, year: 2025, year_label: "2024-25", status: "final",
+                integrated: false, available: true, release: "Final", selectable: true }],
+      disk: null, calibration: null,
+    });
+    // A job already running -> the tab adopts it and locks every control.
+    await mockImportJobs(page, [
+      { id: 88, filename: "integrate:2024", status: "running", updated_at: 1 },
+    ]);
+    await mockImportJobPoll(page, 88, [
+      { id: 88, filename: "integrate:2024", status: "running", log: "…", report: null },
+    ]);
+    await page.goto("/admin/imports");
+
+    const card = page.getByRole("checkbox", { name: "Integrate 2024-25 (Final)" });
+    await expect(card).toBeVisible();                       // still IN the a11y tree
+    await expect(card).toHaveAttribute("aria-disabled", "true");
+    await expect(card).toHaveAttribute("tabindex", "0");    // discoverable, not skipped
+    // aria-disabled is advisory to the DOM, so the HANDLER has to be what
+    // actually refuses. force:true because Playwright itself honours
+    // aria-disabled and would otherwise wait for the element to become
+    // "enabled" — which is a good sign in its own right, and also means an
+    // ordinary .click() cannot express this assertion.
+    await card.click({ force: true });
+    await expect(card).toHaveAttribute("aria-checked", "false");
   });
 });
