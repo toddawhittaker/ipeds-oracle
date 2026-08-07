@@ -1783,15 +1783,22 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
     `done` path enumerates them by hand — so a miss renders CORRECTLY after a
     refresh and wrongly only on the turn that produced it.
 
-    Two halves:
+    SCHEMA PARITY (the load-bearing half) — the real messages table, minus
+    structural and explicitly backend-only columns, must equal
+    MESSAGE_READ_COLUMNS. Adding a migration column now fails HERE until it is
+    wired up or deliberately excluded. This is the half that catches the NEXT
+    field, not just the last two. Then a ROUND TRIP: a turn populating every
+    field comes back intact from get_conversation.
 
-      1. SCHEMA PARITY (the load-bearing one) — the real messages table, minus
-         structural and explicitly backend-only columns, must equal
-         MESSAGE_READ_COLUMNS. Adding a migration column now fails HERE until
-         it is wired up or deliberately excluded. This is the half that catches
-         the NEXT field, not just the last two.
-      2. ROUND TRIP — a turn populating every field comes back intact from
-         get_conversation, and every DONE_EVENT_FIELDS entry is carried.
+    What this test does NOT check any more: whether DONE_EVENT_FIELDS actually
+    reaches a real `done` SSE frame. That used to be `set(DONE_EVENT_FIELDS) -
+    set(MESSAGE_READ_COLUMNS)` — two static tuples compared to each other,
+    never touching chat.py's `done = {...}` dict literal. Deleting a key from
+    that literal left it green, because there was nothing there for the
+    literal to disagree WITH. See
+    test_done_event_carries_every_field_on_all_three_message_bearing_paths (a
+    real stream, a real parsed `done` frame) and the ungrounded-turn
+    live-vs-reload agreement test below for the real check.
     """
     # Everything runs inside the TestClient context: the app's lifespan is what
     # creates/migrates app.db, so PRAGMA table_info(messages) is EMPTY before it
@@ -1814,14 +1821,6 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
             assert not stale, f"field list names column(s) not in the schema: {sorted(stale)}"
             assert set(chat_router.MESSAGE_READ_COLUMNS) == (
                 set(chat_router.MESSAGE_TURN_COLUMNS) - chat_router._BACKEND_ONLY)
-            # Everything the `done` event carries must also survive a reload, or
-            # the live turn and the reopened one disagree — the exact shape of
-            # both shipped bugs.
-            missing = (set(chat_router.DONE_EVENT_FIELDS)
-                       - set(chat_router.MESSAGE_READ_COLUMNS))
-            assert not missing, (
-                f"done event carries {sorted(missing)} which get_conversation never "
-                "returns: the field would render live and vanish on reload")
 
             # --- 2. round trip ----------------------------------------------
             # Own the conversation with the address _login already signs in as:
@@ -1838,7 +1837,14 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
         finally:
             con.close()
 
-        _user_msg_id, msg_id, _usage_id = chat_router._persist(
+        # Attribute access, not a positional unpack: _persist returns a
+        # _PersistResult NamedTuple whose fourth field (turn_values) is what
+        # lets the `done` event project its values out of the SAME mapping the
+        # INSERT used — unpacking by position here would keep that field
+        # pinned to a fixed arity for no reason this test needs, and is
+        # exactly the kind of positional fragility the shared-mapping fix is
+        # removing everywhere else.
+        persisted = chat_router._persist(
             uid, conv, "q", "a",
             sql_log=["SELECT 1"], model="m", tokens=7, cached=False, ok=True,
             thinking=[{"kind": "sql", "text": "SELECT 1"}],
@@ -1852,6 +1858,7 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
             results=[{"columns": ["v"], "rows": [[1]]}],
             duration_ms=1234, results_truncated=True, figure_grounding="exact",
             table_grounding="matched", table_cells_checked=4, table_cells_matched=4)
+        msg_id = persisted.message_id
 
         con = connect()
         try:
@@ -1879,6 +1886,205 @@ def test_every_persisted_turn_field_reaches_the_reader_and_the_done_event():
             con.commit()
         finally:
             con.close()
+
+
+def _assert_done_fields_scalar_and_match_reload(c, conv_id, done):
+    """Two properties the DERIVED form of DONE_EVENT_FIELDS depends on for
+    safety, checked against a REAL `done` frame and a REAL reload — never two
+    lists of names compared to each other.
+
+    1. SCALARS ONLY. `hydrate()` JSON-parses exactly five named columns
+       (sql_log, thinking, figure, suggestions, clarify — Chat.jsx:200-207)
+       into native lists/dicts on the RELOAD path; the live `done` event is
+       handed to the message object as-is, with no parse step anywhere. If
+       DONE_EVENT_FIELDS is ever derived as an opt-OUT of MESSAGE_READ_COLUMNS
+       (so a new migration column rides `done` automatically unless
+       excluded), a JSON-holding column left out of `_OWN_STREAMED_EVENT`
+       would put its RAW native list/dict straight onto the wire (`_sse`
+       serializes whatever `done` holds) instead of the JSON-encoded TEXT
+       every other consumer expects — a live message carrying a shape nothing
+       else on that field ever produces. This fails the moment such a column
+       is added and forwarded unserialized; it does not, and cannot, detect a
+       column added as an already-`json.dumps`'d STRING (a plain string is a
+       valid scalar on both sides) — that half of the asymmetry can only be
+       caught by eye, or by extending `_OWN_STREAMED_EVENT`/`hydrate()`
+       together, which is exactly the reviewable act the derivation is meant
+       to force.
+    2. LIVE == RELOAD, field by field, comparing two REAL payloads instead of
+       two static lists. This is the assertion that actually pins the bug
+       class: it would have caught both shipped defects (results_truncated,
+       table_cells_matched missed on the live path) and the table-cell-count
+       0-vs-NULL divergence, none of which the old constant-vs-constant guard
+       could ever see.
+
+    NB `True == 1` in Python, so live's booleans (results_truncated) comparing
+    equal to reload's stored ints (0/1) is CORRECT and deliberate — once both
+    sides are built from the same mapping, 1/0 is what reload has always sent
+    and no normalizer should paper over that.
+    """
+    for f in chat_router.DONE_EVENT_FIELDS:
+        v = done.get(f)
+        assert v is None or isinstance(v, (int, float, str, bool)), (
+            f"done[{f!r}] is a {type(v).__name__}, not a scalar -- a "
+            "list/dict-holding column must not auto-join DONE_EVENT_FIELDS "
+            f"unserialized (add it to _OWN_STREAMED_EVENT instead): {v!r}")
+
+    msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+    assistant = [m for m in msgs if m["role"] == "assistant"][-1]
+    for f in chat_router.DONE_EVENT_FIELDS:
+        assert done.get(f) == assistant.get(f), (
+            f"live and reload disagree on {f!r}: live={done.get(f)!r} "
+            f"reload={assistant.get(f)!r}")
+
+
+def test_done_event_carries_every_field_on_all_three_message_bearing_paths():
+    """THE regression this repo keeps paying for, this time against a REAL `done`
+    frame instead of two constants compared to each other. The old guard
+    (`set(DONE_EVENT_FIELDS) - set(MESSAGE_READ_COLUMNS)`) never opened a stream
+    and never built a `done` dict, so deleting a key from the literal at
+    chat.py:~725 left it green. This drives all THREE message-bearing branches
+    — the ones with no shared AgentResult to fold into (agent / off-topic
+    refusal / semantic-cache hit) — and checks PRESENCE, not truthiness: a
+    field is legitimately None when nothing was graded, and that must not be
+    confused with the key being absent altogether (what a `.get(...)` truthy
+    check would hide). Each branch is then also checked with
+    _assert_done_fields_scalar_and_match_reload — the live/reload payloads
+    are the real test; presence alone can't catch a wrong VALUE."""
+    with TestClient(app) as c:
+        _login(c)
+
+        # 1) a normal agent turn — has an AgentResult to fold into.
+        r = _post_turn(c, "how many institutions?", answer_text="42",
+                       sql_log=["SELECT 1"])
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        for field in chat_router.DONE_EVENT_FIELDS:
+            assert field in done, f"agent-turn done event is missing {field!r}: {done}"
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        _assert_done_fields_scalar_and_match_reload(c, conv_id, done)
+
+        # 2) an off-topic refusal — the guard's own call IS the whole turn.
+        async def _deny(question, history=None):
+            return guard.Verdict(allowed=False, usage=llmhttp.Usage(prompt_tokens=1))
+        orig_guard = guard.classify
+        guard.classify = _deny
+        try:
+            r = c.post("/api/chat/stream", json={"question": "give me a recipe"})
+        finally:
+            guard.classify = orig_guard
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("refused") is True, done
+        for field in chat_router.DONE_EVENT_FIELDS:
+            assert field in done, f"refusal done event is missing {field!r}: {done}"
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        _assert_done_fields_scalar_and_match_reload(c, conv_id, done)
+
+        # 3) a semantic-cache hit — skips the agent entirely, still no AgentResult.
+        # results_truncated=True on the cached row so the branch's ONE real
+        # field (see chat.py:514-519's "cached=True still marks the hit, no
+        # grounding") is exercised as truthy, not just as an absent default.
+        orig_agent = chat_router.stream_agent
+        orig_lookup = skills.cache_lookup
+        orig_block = skills.retrieve_skills_block
+        chat_router.stream_agent = _explode_agent
+        skills.cache_lookup = lambda q, _uid=None: {
+            "answer_md": "cached answer", "final_sql": "SELECT 1",
+            "results_truncated": True}
+        skills.retrieve_skills_block = lambda q: ("", [])
+        try:
+            r = c.post("/api/chat/stream", json={"question": "a fresh cacheable question"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.cache_lookup = orig_lookup
+            skills.retrieve_skills_block = orig_block
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("cached") is True, done
+        for field in chat_router.DONE_EVENT_FIELDS:
+            assert field in done, f"cache-hit done event is missing {field!r}: {done}"
+        # THE deliberate asymmetry from chat.py:514-519, made into a test: a
+        # cache hit carries NEITHER grounding mark (nothing was graded, the
+        # replayed answer just doesn't say so) while still captioning a
+        # truncated table -- the one field it CAN know without re-grading.
+        # An untested "deliberate" asymmetry is indistinguishable from a bug
+        # to the next person who "helpfully" re-grades this branch.
+        assert done.get("figure_grounding") is None, done
+        assert done.get("table_grounding") is None, done
+        assert done.get("table_cells_checked") is None, done
+        assert done.get("table_cells_matched") is None, done
+        assert done.get("results_truncated"), done
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        _assert_done_fields_scalar_and_match_reload(c, conv_id, done)
+
+
+def test_message_less_turns_carry_no_done_event_fields():
+    """The no-data guard and an interrupted turn (agent never yields a terminal
+    `done` result) never call _persist — there's no message row to attach a
+    duration/truncation/grounding mark to, so DONE_EVENT_FIELDS must be
+    excluded, not merely absent by accident. Pinned explicitly, rather than
+    left implied by the two message-bearing tests above, so a future change
+    that starts stamping one of these fields onto a message-less `done` event
+    (a dangling reference — there is no msg_id to attach it to) fails loudly
+    here instead of silently rendering nothing forever."""
+    with TestClient(app) as c:
+        _login(c)
+
+        # no-data guard: no ipeds.db dataset loaded.
+        orig_years = chat_router.ipeds_years
+        chat_router.ipeds_years = lambda: []
+        try:
+            r = c.post("/api/chat/stream", json={"question": "anything"})
+        finally:
+            chat_router.ipeds_years = orig_years
+        assert r.status_code == 200, r.text
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        assert done.get("no_data") is True, done
+        for field in chat_router.DONE_EVENT_FIELDS:
+            assert field not in done, (
+                f"no-data done event unexpectedly carries {field!r}: {done}")
+
+        # interrupted turn: the agent yields progress but never a terminal result.
+        r = _post_turn_no_result(c, "a question that never finishes")
+        assert r.status_code == 200, r.text
+        done = next(e for e in _parse_sse(r.text) if e["type"] == "done")
+        for field in chat_router.DONE_EVENT_FIELDS:
+            assert field not in done, (
+                f"interrupted-turn done event unexpectedly carries {field!r}: {done}")
+
+
+def test_live_and_reloaded_cell_counts_agree_for_an_ungrounded_turn():
+    """THE 0-vs-null divergence CLAUDE.md flags as the same bug class as the two
+    that already shipped: `_persist` NULLs table_cells_checked/matched whenever
+    table_grounding is falsy (nothing was graded), but the `done` dict used to
+    send AgentResult's raw int default (0) regardless of table_grounding. So an
+    ordinary ungrounded turn told the LIVE viewer "0 values reproduced" while a
+    reload of the exact same turn showed no mark at all — invisible unless the
+    two are compared side by side, which is what this test does. The stub agent
+    from _make_agent leaves table_grounding at its "" (never-checked) default
+    and table_cells_checked/matched at 0, which is exactly the shape that
+    trips the divergence."""
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "an ungrounded question", answer_text="42",
+                       sql_log=["SELECT 1"])
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        done = next(e for e in events if e["type"] == "done")
+        assert done.get("table_grounding") is None, done
+        conv_id = next(e["id"] for e in events if e["type"] == "conversation")
+        msgs = c.get(f"/api/chat/conversations/{conv_id}").json()
+        assistant = next(m for m in msgs if m["role"] == "assistant")
+        assert assistant.get("table_grounding") is None, assistant
+        assert done.get("table_cells_checked") == assistant.get("table_cells_checked"), \
+            ("live and reloaded table_cells_checked disagree for an ungrounded turn",
+             done, assistant)
+        assert done.get("table_cells_matched") == assistant.get("table_cells_matched"), \
+            ("live and reloaded table_cells_matched disagree for an ungrounded turn",
+             done, assistant)
 
 
 def test_the_two_recent_windows_are_measured_in_different_units():
@@ -2041,6 +2247,15 @@ def run():
           test_csv_export_survives_a_failed_query_in_the_answers_log)
     check("every persisted turn field reaches the reader and the done event",
           test_every_persisted_turn_field_reaches_the_reader_and_the_done_event)
+    check("the done event carries every DONE_EVENT_FIELDS key on all three "
+          "message-bearing paths (agent/refusal/cache-hit)",
+          test_done_event_carries_every_field_on_all_three_message_bearing_paths)
+    check("message-less turns (no-data guard, interrupted) carry no "
+          "DONE_EVENT_FIELDS at all",
+          test_message_less_turns_carry_no_done_event_fields)
+    check("live and reloaded cell counts agree for an ungrounded turn "
+          "(0 vs NULL divergence)",
+          test_live_and_reloaded_cell_counts_agree_for_an_ungrounded_turn)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

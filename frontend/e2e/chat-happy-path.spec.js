@@ -4,6 +4,7 @@ import {
   mockConversations,
   mockConversation,
   mockStreamChat,
+  mockVersion,
 } from "./mocks.js";
 
 // Flow 3: chat happy path. Signed in, empty conversation list, ask a
@@ -114,6 +115,14 @@ test("every field on the done event reaches the LIVE turn, not just a reload",
   async ({ page }) => {
     await mockMe(page, { email: "user@example.edu", is_admin: false });
     await mockConversations(page, []);
+    // Mocked so the console-error check below only reflects THIS turn — App.jsx
+    // fetches /api/version on every signed-in load, and an unmocked route here
+    // 502s through the dev proxy and would pollute the assertion with noise
+    // unrelated to the done-event field this test is actually about.
+    await mockVersion(page);
+    const consoleErrors = [];
+    page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
+    page.on("pageerror", (err) => consoleErrors.push(String(err)));
     await mockStreamChat(page, {
       conversationId: CONV_ID, messageId: MSG_ID, userMessageId: MSG_ID - 1,
       sql: [SQL], answer: ANSWER_MD,
@@ -124,8 +133,28 @@ test("every field on the done event reaches the LIVE turn, not just a reload",
       suggestions: ["Which state grew fastest?"],
       durationMs: 4200,
       figureGrounding: "exact",
-      tableGrounding: "partial", tableCellsChecked: 22, tableCellsMatched: 9,
+      // table_cells_matched is delivered ONLY through `doneExtra` below, not
+      // this named option — see the comment there.
+      tableGrounding: "partial", tableCellsChecked: 22,
       resultsTruncated: true,
+      // Two things at once, both about mocks.js's new `doneExtra` escape
+      // hatch rather than this dedicated per-field option list, which is
+      // itself the "FOURTH hand-enumerated site" CLAUDE.md flags:
+      //   1. table_cells_matched arrives with NO matching named mockStreamChat
+      //      option used above — proving a spec can drive a real field through
+      //      the generic hatch instead of needing yet another named parameter
+      //      added to the mock for it.
+      //   2. a_field_the_client_never_names is pure noise: no mock option, no
+      //      Chat.jsx field name, no renderer anywhere. A denylist-based
+      //      messageFieldsFromDone forwards it onto the message object
+      //      harmlessly; this cannot be asserted by reading the DOM (nothing
+      //      renders it — see donefields.test.js for the direct, tier-
+      //      appropriate proof that an unknown key survives the merge), but a
+      //      BROKEN implementation (one that throws walking unexpected data,
+      //      or that corrupts the merge order) would surface here as a
+      //      console/page error, or as the OTHER assertions in this test
+      //      failing outright.
+      doneExtra: { table_cells_matched: 9, a_field_the_client_never_names: "future-proofing" },
     });
     await mockConversation(page, CONV_ID, []);   // never reloaded; this is the live path
 
@@ -141,9 +170,9 @@ test("every field on the done event reaches the LIVE turn, not just a reload",
     // The mark lives in the figcaption, not the number itself.
     await expect(page.locator(".fig-verified")).toBeVisible();
     // table_grounding + BOTH counts -> the caution names the misses (13 of 22).
-    // table_cells_matched is the field that shipped broken: the done event
-    // carried it and Chat.jsx dropped it, so the count was right on reload and
-    // absent live.
+    // table_cells_matched is the field that shipped broken once already: the
+    // done event carried it and Chat.jsx dropped it, so the count was right on
+    // reload and absent live. Delivered here purely via doneExtra (see above).
     await expect(page.locator(".table-trust")).toContainText("13 of 22");
     // suggestions -> the drill-down chips
     await expect(page.getByRole("button", { name: "Which state grew fastest?" })).toBeVisible();
@@ -152,4 +181,7 @@ test("every field on the done event reaches the LIVE turn, not just a reload",
     await expect(page.getByText(/First 200 rows/)).toBeVisible();
     // message_id -> the id that unlocks the server-side CSV
     await expect(page.getByRole("button", { name: /Download full result/i })).toBeVisible();
+    // The unrecognized field rode along on the SAME done event as everything
+    // above and broke nothing.
+    expect(consoleErrors).toEqual([]);
   });
