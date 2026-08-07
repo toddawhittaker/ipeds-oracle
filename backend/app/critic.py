@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
+from app.llmhttp import CHAT_ERRORS, PROBE_TIMEOUT, Usage, chat_completion
 
 _SYSTEM = (
     "You are a strict reviewer checking an IPEDS (U.S. postsecondary education) "
@@ -243,7 +243,7 @@ async def review(question: str, sql_log: list[str], answer: str,
             data = await chat_completion(client, model=s.model_default, messages=messages,
                                          temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
-    except (httpx.HTTPError, ValueError):
+    except CHAT_ERRORS:
         return Critique(ok=True)  # fail open — never drop an answer over the critic
 
     u = Usage.from_response(data)

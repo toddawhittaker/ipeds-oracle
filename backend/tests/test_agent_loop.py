@@ -1800,6 +1800,44 @@ def test_chat_transport_generic_http_error_surfaces_as_agent_error():
     assert "connection refused" not in res.error, res.error
 
 
+def test_chat_transport_non_json_200_surfaces_as_agent_error():
+    """THE REGRESSION: a 200 whose body isn't JSON — an endpoint fronted by a
+    proxy, captive portal, or gateway answering with an HTML error page.
+    `Response.json()` raises `json.JSONDecodeError`, a **ValueError**, not an
+    `httpx.HTTPError`, so the agent loop's `except httpx.HTTPError` did not see
+    it.
+
+    Five sibling modules (guard, critic, feedback, and llm's own two probes)
+    already caught it and each said why in a comment. The agent loop's own four
+    call sites plus generate_title did not — the five that matter most, because
+    `stream_agent` is an async generator being consumed by the SSE endpoint,
+    whose `gen()` has a `try:`/`finally:` and NO `except`. So the ValueError
+    escaped mid-response: no terminal `done`, `_persist` never ran (the answer
+    AND the turn's spend both lost), `_delete_if_empty` reversed the new
+    conversation, an unhandled traceback landed in logs.db and ticked the admin
+    attention badge, and the user was left with a blank assistant bubble that
+    never resolved.
+
+    Asserts the generator TERMINATES normally carrying an error, rather than
+    raising — that distinction is the whole bug."""
+    llm._chat = _REAL_CHAT
+    html = httpx.Response(
+        200, text="<html><body>502 Bad Gateway</body></html>",
+        headers={"content-type": "text/html"},
+        request=httpx.Request("POST", "http://x/chat/completions"))
+    try:
+        res = _with_fake_transport(html, lambda: _run("q"))
+    except ValueError as e:                       # pragma: no cover - the bug
+        raise AssertionError(
+            "a non-JSON 200 escaped stream_agent instead of terminating it "
+            f"with an error: {e!r}") from e
+    assert res.error and "LLM request failed" in res.error, res.error
+    # Same disclosure rule as the sibling transport cases: the upstream body can
+    # carry proxy/host detail, so it must not reach the client-facing string.
+    assert "Bad Gateway" not in res.error, \
+        f"upstream response body leaked into the client error: {res.error!r}"
+
+
 def test_generate_title_no_key_returns_empty():
     orig_get_settings = llm.get_settings
     llm.get_settings = lambda: types.SimpleNamespace(llm_api_key="")
@@ -1939,6 +1977,8 @@ def run():
           test_chat_transport_http_status_error_surfaces_as_agent_error)
     check("real _chat: a generic transport error surfaces as an agent error",
           test_chat_transport_generic_http_error_surfaces_as_agent_error)
+    check("real _chat: a 200 with a NON-JSON body surfaces as an agent error",
+          test_chat_transport_non_json_200_surfaces_as_agent_error)
     check("generate_title returns '' with no API key configured",
           test_generate_title_no_key_returns_empty)
     check("generate_title strips quotes/period from a real response",
