@@ -1029,7 +1029,11 @@ jamie@example.com,External reviewer,`}</pre>
           columns={[
             { key: "email", label: "Email", sortable: true, colClass: "col-req-email",
               cellClass: "cell-trunc", cellTitle: (r) => r.email },
+            // cell-trunc (nowrap + ellipsis) for the same reason as Current
+            // users' "Last active": a timestamp is one atomic value, and letting
+            // it wrap makes the row height depend on font metrics and locale.
             { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
+              cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.created_at),
               render: (r) => fmtDateTime(r.created_at) },
           ]}
           renderActions={(r) => (
@@ -1133,8 +1137,13 @@ jamie@example.com,External reviewer,`}</pre>
                   // ("Denied"). The two are separate columns — neither overwrites
                   // the other. denied_at is null for pre-migration denials → "—".
                   { key: "requested", label: "Requested", sortable: true, colClass: "col-when",
+                    cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.created_at),
                     render: (r) => fmtDateTime(r.created_at) },
                   { key: "denied", label: "Denied", sortable: true, colClass: "col-when",
+                    cellClass: "cell-trunc",
+                    // Only a real stamp gets a tooltip: titling the "—" placeholder
+                    // would put a dash in a hover label that says nothing.
+                    cellTitle: (r) => (r.denied_at ? fmtDateTime(r.denied_at) : undefined),
                     // A pre-migration denial has no denied_at — a bare "—" reads
                     // as silence/"dash" to a screen reader, so name it.
                     render: (r) => (r.denied_at ? fmtDateTime(r.denied_at) : (
