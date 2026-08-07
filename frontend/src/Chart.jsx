@@ -321,9 +321,14 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
                 gives its ▲/▼ vote counts. NOT role="img", which would prune
                 the number. */}
             <span aria-hidden="true">{deltaArrow} {Math.abs(delta.pct).toFixed(1)}%</span>
+            {/* delta.dir is THREE-valued (trendstats.js: up | down | flat, with
+                flat for |pct| <= 0.5). Collapsing it to two announced a series
+                that renders "→ 0.3%" in neutral grey as "down 0.3%" — a
+                sighted user and a screen-reader user being told opposite
+                things, on the one element whose whole job is direction. */}
             <span className="sr-only">
-              {delta.dir === "up" ? "up" : "down"} {Math.abs(delta.pct).toFixed(1)}%
-              {" "}over the range shown
+              {delta.dir === "up" ? "up " : delta.dir === "down" ? "down " : "roughly unchanged, "}
+              {Math.abs(delta.pct).toFixed(1)}% over the range shown
             </span>
           </span>
         )}

@@ -206,4 +206,41 @@ test.describe("a locked year card keeps its semantics", () => {
     await card.click({ force: true });
     await expect(card).toHaveAttribute("aria-checked", "false");
   });
+
+  test("a NON-selectable card is named by its state, not by an action it cannot do",
+    async ({ page }) => {
+      // THE REGRESSION: making role="checkbox" unconditional was right, but the
+      // label was not. role=checkbox is in ARIA's presentational-children list,
+      // so the tile's own .year-label and StatusBadge are PRUNED and aria-label
+      // becomes the ENTIRE accessible name. An already-loaded year therefore
+      // announced "Integrate 2022-23 (Final)" — its "Integrated" badge gone, and
+      // an affordance stated that does not exist — and `release` is null for an
+      // unprobed/unknown year, which rendered the literal string "(null)".
+      // axe cannot rate a wrong-but-present name, and the fixture above only
+      // covers a SELECTABLE card, which is how this got through.
+      await mockMe(page, ADMIN);
+      await mockConversations(page, []);
+      await mockAttention(page, { users: 0, skills: 0, logs: 0 });
+      await mockMarkLogsSeen(page);
+      await mockImportJobs(page, []);
+      await mockImportCatalog(page, {
+        probed_at: 0, partial: false,
+        years: [
+          { start_year: 2022, year: 2023, year_label: "2022-23", status: "integrated",
+            integrated: true, available: true, release: "Final", selectable: false },
+          { start_year: 2019, year: 2020, year_label: "2019-20", status: "unknown",
+            integrated: false, available: false, release: null, selectable: false },
+        ],
+        disk: null, calibration: null,
+      });
+      await page.goto("/admin/imports");
+
+      // Named by STATE, so the badge's meaning survives being pruned.
+      await expect(page.getByRole("checkbox", { name: "2022-23 — Integrated" })).toBeVisible();
+      // A null release must never reach the name as the string "null".
+      const unknown = page.getByRole("checkbox", { name: /^2019-20 —/ });
+      await expect(unknown).toBeVisible();
+      await expect(page.getByRole("checkbox", { name: /null/ })).toHaveCount(0);
+      await expect(page.getByRole("checkbox", { name: /^Integrate 2022-23/ })).toHaveCount(0);
+    });
 });

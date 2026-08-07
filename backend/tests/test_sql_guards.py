@@ -9,12 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings
 from app.tools.sql import (
+    _MIN_VALUE_BYTES,
     SQL_MAX_RESULT_BYTES,
     SQL_MAX_VALUE_BYTES,
     SQLResultTooLargeError,
     SQLTimeoutError,
     SQLValidationError,
     _connect_ro,
+    _row_value_limit,
     has_ipeds_data,
     ipeds_years,
     run_sql,
@@ -173,6 +175,61 @@ try:
     raise AssertionError("a small-rows-then-large-rows result was returned whole")
 except SQLResultTooLargeError:
     print("  ✓ small rows followed by large ones cannot defeat the budget")
+
+# (c) NESTING DEPTH -- the third pass's finding, and the reason the probe fails
+#     CLOSED. The row bound derives the column count from a
+#     `SELECT * FROM (<sql>) LIMIT 0` probe, which adds exactly ONE level of
+#     subquery nesting. SQLite's parser overflows at depth 15, so a statement
+#     written at depth 14 parses on its own while making the PROBE fail --
+#     and the first version then skipped the row bound entirely.
+#     Measured with 800 columns of hex(zeroblob(500000)) under a 3 GB
+#     RLIMIT_AS: depth 1 refused at 36 MB / 0.01 s, depth 14 MemoryError at
+#     2,975 MB / 1.69 s. Exactly the hole the probe was added to close,
+#     re-reached through nesting. Dropping to the 4 KiB floor refuses it at
+#     15 MB instead.
+_inner = "SELECT " + ", ".join(f"hex(zeroblob(500000)) AS c{i}" for i in range(200))
+_deep = _inner
+for _ in range(14):
+    _deep = f"SELECT * FROM ({_deep})"
+try:
+    run_sql(_deep, limit=1)
+    raise AssertionError("a deeply nested wide-value query was returned whole")
+except SQLResultTooLargeError:
+    pass
+# ...and assert the thing that actually DIFFERS. End-to-end cannot discriminate:
+# with the row bound skipped the TOTAL budget still raises the same error, just
+# after the memory is spent. The limit itself is the difference.
+# THE REGRESSION (third pass): SQLITE_LIMIT_LENGTH is NOT a one-way ratchet --
+# sqlite3_limit RAISES it back up. Without a min() against the per-value cap the
+# derived limit only tightened at ncols >= 64, and at ncols == 1 it LOOSENED the
+# documented 1 MiB cap 64x: `SELECT hex(zeroblob(33000000))` went from refused
+# to returning a 66,000,000-byte value, which then rides into to_markdown() (the
+# next provider request body) and messages.results.
+assert _row_value_limit(1) == SQL_MAX_VALUE_BYTES, (
+    f"a 1-column query must keep the 1 MiB per-value cap, got "
+    f"{_row_value_limit(1)} -- the row bound RAISED it")
+assert _row_value_limit(2) == SQL_MAX_VALUE_BYTES, _row_value_limit(2)
+assert _row_value_limit(300) < SQL_MAX_VALUE_BYTES, "a wide row must tighten it"
+_r = run_sql("SELECT length(hex(zeroblob(400000))) AS n", limit=1)
+assert _r.rows[0][0] == 800000, "a large-but-legitimate value must still survive"
+try:
+    run_sql("SELECT hex(zeroblob(33000000)) AS v", limit=1)
+    raise AssertionError("a 66 MB single value was returned -- the 1 MiB cap was raised")
+except SQLResultTooLargeError:
+    pass
+print("  ✓ the row bound only ever TIGHTENS the per-value cap, never raises it")
+
+assert _row_value_limit(0) == _MIN_VALUE_BYTES, \
+    (f"a failed probe must fail CLOSED to the {_MIN_VALUE_BYTES}-byte floor, got "
+     f"{_row_value_limit(0)} — leaving the 1 MiB default skips the row bound")
+assert _row_value_limit(100_000) == _MIN_VALUE_BYTES, "the floor must hold"
+print("  ✓ a query the column-count probe cannot wrap fails CLOSED, not open")
+
+# ...and nesting a legitimate query must still work: the floor only bites when
+# the probe fails AND a value exceeds 4 KiB.
+_r = run_sql("SELECT * FROM (SELECT 1 AS a, 'x' AS b)", limit=10)
+assert _r.rows and _r.rows[0][0] == 1, f"an ordinary nested query broke: {_r.rows}"
+print("  ✓ an ordinary nested query is unaffected")
 
 print("\n== ipeds_years / has_ipeds_data: fresh-deploy 'no data' probes ==")
 # Non-raising probes for the "no dataset loaded yet" state. Built entirely on

@@ -363,6 +363,11 @@ test.describe("axe smoke scan", () => {
   // elsewhere: /admin/users/blocked (dark) failed roughly one full-suite run in
   // two while passing 3/3 in isolation, the signature of a transient frame
   // rather than a real violation. Scan resting pixels, everywhere.
+  // One thing the tall viewport NARROWS, stated so nobody "simplifies" it away:
+  // rules gated on a region actually BEING scrollable
+  // (scrollable-region-focusable) mostly stop firing here, because at 2600px
+  // the panels fit. That class is covered by a11y-scroll-regions.spec.js, which
+  // deliberately keeps the default 1280x720 — do not fold those cases in here.
   test.use({ viewport: { width: 1280, height: 2600 }, reducedMotion: "reduce" });
 
   test("Login screen has no critical or serious violations", async ({ page }) => {

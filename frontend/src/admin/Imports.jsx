@@ -52,7 +52,16 @@ function YearCard({ entry, locked, checked, onToggle, onRemove }) {
   // becomes discoverable at all.
   const interactive = entry.selectable && !locked;
   const disabled = !entry.selectable || locked;
-  const label = `Integrate ${entry.year_label} (${entry.release})`;
+  // role="checkbox" is in ARIA's presentational-children list, so the tile's
+  // own .year-label and StatusBadge are PRUNED and this label is the entire
+  // accessible name. Making the role unconditional therefore made the name
+  // wrong for cards that are not selectable: an already-loaded year announced
+  // "Integrate 2022-23 (Final)" with its "Integrated" badge gone — an
+  // affordance that does not exist — and `release` is null for an unprobed or
+  // unknown year, which rendered the literal string "(null)".
+  const label = entry.selectable
+    ? `Integrate ${entry.year_label}${entry.release ? ` (${entry.release})` : ""}`
+    : `${entry.year_label} — ${STATUS_TEXT[entry.status] || entry.status}`;
   const cls = ["year-card", entry.status, checked ? "selected" : "", locked ? "locked" : ""]
     .filter(Boolean).join(" ");
 
@@ -428,7 +437,7 @@ export default function Imports({ onDataChanged }) {
         ? "Rebuild the database?"
         : `Rebuild the database with ${adding} more year${adding === 1 ? "" : "s"}?`,
       body: `This rebuilds from all ${total} years (${already} already loaded`
-        + `${adding ? `, ${adding} new` : ", re-fetching a year you already have"}`
+        + `${adding ? `, ${adding} new` : `, re-fetching ${total === 1 ? "a year" : "years"} you already have`}`
         + `).${cost} The live database is only replaced if every check`
         + " passes — until then it keeps answering questions.",
       confirmLabel: "Start rebuild",
@@ -467,7 +476,12 @@ export default function Imports({ onDataChanged }) {
       // A genuine failure: rethrow so useConfirm keeps the modal open showing
       // the error. Swallowing it dismissed the dialog exactly like a success,
       // leaving a notice further down the page as the only trace.
-      notify(msg, "error");
+      //
+      // No notify() here — removeYear's genuine-failure branch throws WITHOUT
+      // one, and the comment above claims to mirror it. Calling both reported a
+      // single failure three times (in-modal error + errorToast + a page notice
+      // behind the inert background) and set the notice-focus effect fighting
+      // ConfirmModal for focus.
       throw err;
     } finally {
       setIntegrating(false);
