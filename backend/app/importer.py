@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -287,6 +288,35 @@ def _restore_data_dir(data_target: Path, backup_accdb: Path | None) -> None:
         data_target.unlink(missing_ok=True)
 
 
+def _unlink_quietly(job_id: int, what: str, path: Path) -> None:
+    """Best-effort delete of a leftover .accdb (an uploaded copy, or a file
+    backed up before staging) once it's no longer needed. Logs a warning
+    instead — this must NEVER raise, and the reason differs by caller:
+
+    - called from run_import's success branch (inside its own `try`), an
+      escaping error would fall into the outer `except Exception` at
+      run_import's tail and report an import that is ALREADY LIVE as failed,
+      naming a stray file as the cause. (It would not also roll data_dir
+      back: `swapped` is set by then, so _restore_all no-ops — that guard is
+      what downgraded this from data loss to a wrong status.)
+    - called from run_import's `finally`, an escaping error would mask
+      whatever exception is already propagating out of the daemon thread
+      run_import runs on, with no caller left to see it.
+
+    Mirrors _ProgressThrottle.persist's precedent above: display-or-disk
+    housekeeping never decides a job's outcome. Catches ANY exception, not
+    just OSError, for the same reason: one call site sits in a `finally`
+    wrapping `_record_provenance`, and a non-OSError escaping there would
+    REPLACE whatever exception `_record_provenance` was already raising —
+    making the job report name this cleanup as the failure instead of the
+    real one."""
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001 — best-effort cleanup, never fatal
+        log.warning("could not remove %s for job %s (%s): %s: %s",
+                    what, job_id, path, type(e).__name__, e)
+
+
 def preflight(upload_path: Path) -> tuple[bool, str]:
     """Cheap checks before the (slow) rebuild."""
     name = upload_path.name
@@ -488,18 +518,31 @@ def deintegrate_checks(staging: Path, live: Path, removed_year: int) -> tuple[bo
 
 
 def _activate_staging(job_id: int, staging: Path,
-                      done_message: str = "Import succeeded and is now live.") -> None:
+                      done_message: str = "Import succeeded and is now live.",
+                      *, on_swapped: Callable[[], None] | None = None) -> None:
     """Atomic swap: move live aside, move staging -> live, DELETE the moved-aside
     copy, bump data_version, invalidate the semantic cache. Shared swap tail used by
     BOTH build_check_swap (import/integrate) and run_deintegrate (year
     removal) — the only difference between callers is what happened before
-    this point (a full rebuild vs. an offline in-place delete + VACUUM)."""
+    this point (a full rebuild vs. an offline in-place delete + VACUUM).
+
+    `on_swapped` (keyword-only, added after `done_message` so run_deintegrate's
+    existing positional call is unaffected) fires the instant the staging ->
+    live move below completes — BEFORE `prev.unlink`, the app.db data_version
+    write, or cache invalidation, any of which can still raise. That's the
+    only truthful place to mark "the swap happened": everything after it is
+    real work but is no longer reversible-worthy, and a caller that instead
+    waits for this function to return without raising would miss a swap
+    followed by a failure in one of those later steps (run_import's `swapped`
+    flag exists exactly to avoid that)."""
     s = get_settings()
     _update_overall_phase(job_id, "swapping", "Swapping the staging database into place…")
     prev = s.ipeds_db_path.with_suffix(".db.prev")
     if s.ipeds_db_path.exists():
         shutil.move(str(s.ipeds_db_path), str(prev))
     shutil.move(str(staging), str(s.ipeds_db_path))
+    if on_swapped is not None:
+        on_swapped()
     # The .prev copy exists ONLY to make the two-step move recoverable: if the
     # process died between them, the old database is still on disk under that
     # name. Once staging is in place that window is closed, so drop it —
@@ -526,7 +569,8 @@ def _activate_staging(job_id: int, staging: Path,
     _update_overall_phase(job_id, "done", done_message)
 
 
-def build_check_swap(job_id: int, data_dir: Path) -> bool:
+def build_check_swap(job_id: int, data_dir: Path, *,
+                     on_swapped: Callable[[], None] | None = None) -> bool:
     """The core rebuild pipeline, shared by run_import (an uploaded .accdb
     staged into `data_dir`) and run_integrate (a temp work dir holding a whole
     union of fetched .accdb files): full rebuild of `data_dir` into a staging
@@ -538,7 +582,13 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
     is already marked 'failed' with a report; the caller decides what else,
     if anything, needs cleaning up). Unexpected exceptions are NOT caught here
     — they propagate to the caller, which mirrors run_import's/run_integrate's
-    own top-level except-and-fail-the-job handling.
+    own top-level except-and-fail-the-job handling — and that includes any
+    raised AFTER `_activate_staging` has already moved staging into place, so
+    a truthful "did the swap happen" signal cannot be this function's return
+    value. `on_swapped` (forwarded to `_activate_staging`, by KEYWORD — a
+    third positional argument would bind to `_activate_staging`'s
+    `done_message`) is that signal instead: it fires at the swap itself, not
+    at this function's return.
     """
     s = get_settings()
     staging = s.ipeds_db_path.with_name("ipeds_staging.db")
@@ -599,7 +649,7 @@ def build_check_swap(job_id: int, data_dir: Path) -> bool:
 
     # Atomic swap + data_version bump + semantic-cache invalidation (shared
     # with run_deintegrate — see _activate_staging).
-    _activate_staging(job_id, staging)
+    _activate_staging(job_id, staging, on_swapped=on_swapped)
     _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
     return True
 
@@ -652,13 +702,66 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
     background thread. Preflights every file, stages them all into DATA_DIR
     (backing up any existing same-named files), refuses the rebuild if it would
     DROP a currently-live year (the superset guard), then hands off to
-    build_check_swap — restoring DATA_DIR to its pre-import state on any failure."""
+    build_check_swap — restoring DATA_DIR to its pre-import state on any failure
+    before the swap happens (never after — see the `swapped` guard below).
+
+    run_import also owns the WHOLE LIFETIME of `upload_paths`: it deletes each
+    upload_dir copy on the way out, success or failure — mirroring
+    run_integrate's documented "work dir is always removed afterward" contract.
+    A function deleting its own argument is a surprising contract, so it's
+    stated here explicitly. On SUCCESS the data_dir/<name>.accdb copy it staged
+    survives as the loader's source; on failure that copy is reverted or
+    removed by _restore_data_dir, which is the point of staging it."""
     s = get_settings()
     staged: list[tuple[Path, Path | None]] = []  # (data_target, backup or None)
+    swapped = False  # True once build_check_swap has swapped in a new live db
 
     def _restore_all() -> None:
+        # Once the swap has happened, data_dir already fed the NEW live
+        # ipeds.db — restoring the old .accdb over it would leave data_dir
+        # inconsistent with what's actually live, and the next manual
+        # import's superset guard would then refuse a rebuild that includes
+        # the very year already live (it can't see the swapped-in year in
+        # data_dir, only the stale restored file). Restoring only ever made
+        # sense while the live db was still the old one.
+        if swapped:
+            return
         for target, backup in staged:
             _restore_data_dir(target, backup)
+
+    def _discard_uploads() -> None:
+        for up in upload_paths:
+            # upload_dir and data_dir are both free-form settings with no
+            # validator between them (config.py:90-91), so a self-hoster CAN
+            # point UPLOAD_DIR at data_dir. In that configuration the
+            # "uploaded copy" IS data_dir/<name>.accdb — the loader's live
+            # source for that file — and deleting it would silently destroy
+            # the dataset instead of just the leaked streaming copy. Compare
+            # with .resolve() (not Path.samefile(), which raises
+            # FileNotFoundError, and non-strict resolve() is safe even on the
+            # preflight-failure exit, which returns before data_dir exists);
+            # this also catches a symlinked upload_dir.
+            #
+            # .resolve() itself can raise (measured: a symlink loop raises
+            # RuntimeError, not OSError, on this box's Python — so
+            # _unlink_quietly's catch wouldn't help even wrapped around the
+            # unlink alone). This runs from run_import's `finally`, so an
+            # escape here would abort the loop mid-batch (every LATER upload
+            # leaks) and mask whatever exception was already propagating out
+            # of the daemon thread. Fail CLOSED: if we can't prove `up` is
+            # NOT the loader's own data_dir source file, leaving a stray
+            # upload on disk is strictly better than the alternative of
+            # deleting the dataset on a wrong guess.
+            try:
+                aliased = up.resolve() == (s.data_dir / up.name).resolve()
+            except Exception as e:  # noqa: BLE001 — see above: fail closed, keep going
+                log.warning("could not resolve upload path for job %s (%s): "
+                            "%s: %s — leaving it on disk", job_id, up,
+                            type(e).__name__, e)
+                continue
+            if aliased:
+                continue
+            _unlink_quietly(job_id, "the uploaded copy", up)
 
     try:
         _set_status(job_id, "running")
@@ -675,14 +778,25 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         s.data_dir.mkdir(parents=True, exist_ok=True)
         for up in upload_paths:
             data_target = s.data_dir / up.name
+            aliased = data_target.resolve() == up.resolve()
             backup = None
-            if data_target.exists() and data_target.resolve() != up.resolve():
+            if data_target.exists() and not aliased:
                 backup = data_target.with_suffix(".accdb.bak")
                 shutil.move(str(data_target), str(backup))
-            if up.resolve() != data_target.resolve():
+            if not aliased:
                 shutil.copy2(str(up), str(data_target))
-            staged.append((data_target, backup))
-        _log(job_id, f"Staged {len(upload_paths)} source file(s) into {s.data_dir}")
+            # In the UPLOAD_DIR == DATA_DIR configuration `up` IS
+            # data_target: neither guard above ran, so this job changed
+            # NOTHING about the file. `staged` records what this job
+            # changed (it's what _restore_all replays on a failure) —
+            # recording it anyway would make a failed import's rollback
+            # call _restore_data_dir(data_target, None), which UNLINKS the
+            # admin's own dataset file that this job never touched.
+            if not aliased:
+                staged.append((data_target, backup))
+        _log(job_id, f"Staged {len(upload_paths)} source file(s) into {s.data_dir} "
+                     "(the uploaded copies are temporary and are removed once "
+                     "this job finishes, whatever the outcome)")
 
         # Superset guard — refuse a rebuild that would drop a live year.
         ok, msg = _guard_no_dropped_years(s.data_dir, s.ipeds_db_path)
@@ -692,21 +806,46 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
             _restore_all()
             return
 
-        if build_check_swap(job_id, s.data_dir):
-            prov = []
-            for target, _ in staged:
-                m = FILENAME_RE.match(target.name)
-                if m:
-                    start_year = int(m.group(1))
-                    prov.append((start_year, start_year + 1, None, "manual"))
-            if prov:
-                _record_provenance(prov)
+        def _mark_swapped() -> None:
+            # Fires from inside _activate_staging the instant the rename
+            # completes, NOT from build_check_swap's return — see both of
+            # their docstrings. Setting `swapped` from the return value left
+            # it False whenever the swap tail raised after the rename, and
+            # _restore_all() then rolled data_dir back under a live db built
+            # from those very files.
+            nonlocal swapped
+            swapped = True
+
+        if build_check_swap(job_id, s.data_dir, on_swapped=_mark_swapped):
+            try:
+                prov = []
+                for target, _ in staged:
+                    m = FILENAME_RE.match(target.name)
+                    if m:
+                        start_year = int(m.group(1))
+                        prov.append((start_year, start_year + 1, None, "manual"))
+                if prov:
+                    _record_provenance(prov)
+            finally:
+                # Once the swap has happened this backup can never usefully be
+                # restored (see _restore_all above), so drop it here
+                # regardless of whether recording provenance itself succeeded
+                # — the same reasoning _activate_staging gives for dropping
+                # ipeds.db.prev once its own swap window has closed. Read the
+                # STORED backup Path rather than recomputing one: it is None
+                # exactly when nothing was moved aside, so there is no second
+                # rule about when a .bak exists to get wrong.
+                for _, backup in staged:
+                    if backup is not None:
+                        _unlink_quietly(job_id, "the backed-up .accdb", backup)
         else:
             _restore_all()
     except Exception as e:  # noqa: BLE001
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
         _restore_all()
+    finally:
+        _discard_uploads()
 
 
 def run_integrate(job_id: int, start_years: list[int]) -> None:

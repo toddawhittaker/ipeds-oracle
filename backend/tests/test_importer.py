@@ -489,6 +489,13 @@ def test_run_import_preflight_failure_no_swap():
     assert row["status"] == "failed", row
     assert "bad file, rejected" in (row["report"] or ""), row
     assert not live.exists(), "live db must not be created on preflight failure"
+    # Preflight returns before data_dir is ever created, so the resolve()
+    # comparison the upload-discard guard makes (up.resolve() vs
+    # data_dir/up.name) is non-strict here — data_dir doesn't exist to
+    # resolve a real path under. Pin that the upload is still discarded on
+    # this early-exit path regardless.
+    assert not upload.exists(), \
+        "the uploaded copy was left on disk after a preflight failure"
 
 
 def test_run_import_loader_failure_restores_data_dir():
@@ -642,13 +649,24 @@ def test_run_import_multi_file_success_records_all_provenance():
         staging.write_bytes(b"built")
         return _FakeProc(0, ["build ok"])
 
+    def _fake_activate_staging(job_id, st, on_swapped=None):
+        # Models the real swap closely enough for this test: removes the
+        # staging file (the real thing moves it into place) AND fires the
+        # on_swapped callback the way _activate_staging will once it calls
+        # it right after its own shutil.move — a fake that only did the
+        # unlink would silently stop exercising the swapped-flag plumbing
+        # the moment build_check_swap starts passing it a callback.
+        st.unlink(missing_ok=True)
+        if on_swapped is not None:
+            on_swapped()
+
     orig = (importer.get_settings, importer.preflight, importer.subprocess.Popen,
             importer.integrity_checks, importer._activate_staging)
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.preflight = lambda p: (True, "Preflight OK")
     importer.subprocess.Popen = _fake_popen
     importer.integrity_checks = lambda s_, l_: (True, ["✓ ok"])
-    importer._activate_staging = lambda job_id, st: st.unlink(missing_ok=True)
+    importer._activate_staging = _fake_activate_staging
     try:
         jid = create_job("2 files", "admin@example.edu")
         run_import(jid, [up1, up2])
@@ -752,6 +770,339 @@ def test_run_import_success_swaps_and_bumps_data_version():
         assert n_cache == 0, "semantic cache was not invalidated"
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------------------
+# run_import — leftover .accdb cleanup (upload_dir copy + data_dir .bak)
+#
+# A successful import currently leaks TWO full 1-3 GB Access files forever:
+# the streamed upload_dir copy (admin.py only unlinks it on an UPLOAD
+# failure, never after run_import's own pipeline finishes) and any
+# pre-existing same-named data_dir/<name>.accdb.bak backup (run_import moves
+# it aside before the rebuild but never removes it on success). The
+# data_dir/<name>.accdb file itself is NOT leaked storage — it's the loader's
+# live source, re-globbed by scripts/build_ipeds_db.py on every future
+# rebuild — so every test here that asserts a deletion also asserts that
+# THIS file survives, to pin the fix against over-deleting the dataset.
+# ---------------------------------------------------------------------------
+
+def test_run_import_success_removes_the_uploaded_copy_and_the_backup():
+    """Regression for the leaked-.accdb bug (admin.py:832/importer.py:683 +
+    :679-681): a successful import must not leave the streamed upload_dir
+    copy OR the pre-existing data_dir .bak backup on disk forever — each is a
+    1-3 GB Access file, and nothing today ever removes either of them on the
+    success path. The third assertion (the data_dir/<name>.accdb loader
+    source still holds the NEW upload's bytes) is what would catch a fix that
+    over-deletes and destroys the live dataset instead of just the leaked
+    upload/backup copies."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, content=b"new-upload-bytes")
+    # A same-named .accdb already sitting in data_dir from a previous import
+    # -> run_import backs it up to data_dir/<name>.accdb.bak before staging.
+    data_dir.mkdir(parents=True, exist_ok=True)
+    existing = data_dir / upload.name
+    existing.write_bytes(b"previous-accdb-bytes")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    row = _job_row(jid)
+    assert row["status"] == "swapped", row
+    assert not upload.exists(), \
+        f"the uploaded copy {upload} was left on disk after a successful import"
+    assert not (data_dir / (upload.name + ".bak")).exists(), \
+        "the pre-existing .bak backup was left on disk after a successful import"
+    assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
+        ("the loader's data_dir source .accdb must survive a successful import "
+         "unchanged (holding the new upload's bytes) — only the leaked "
+         "upload/backup copies should ever be removed")
+
+
+def test_run_import_a_failed_import_still_removes_the_uploaded_copy():
+    """Regression: the upload_dir copy must be discarded on EVERY exit path,
+    not just success. Before this fix, admin.py:847-849 only unlinked the
+    upload inside its OWN except block — i.e. only when the upload/stream
+    itself failed — so a later pipeline failure inside run_import (a loader
+    crash, here) still left the full uploaded .accdb on disk forever."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d)
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output line"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert not upload.exists(), \
+        f"the uploaded copy {upload} was left on disk after a FAILED import"
+
+
+def test_run_import_never_deletes_the_upload_when_upload_dir_equals_data_dir():
+    """Guard for the discard-uploads fix: config.py places no validator
+    between upload_dir and data_dir (config.py:90-91), so a self-hoster CAN
+    point UPLOAD_DIR at the same directory as data_dir. In that
+    configuration the streamed 'upload' IS the loader's live source file for
+    that name, and a naive unconditional discard would delete it — silently
+    destroying the dataset scripts/build_ipeds_db.py needs for every future
+    rebuild. The fix must skip any upload where up.resolve() equals the
+    would-be data_dir/<name>.accdb target."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload = data_dir / "IPEDS202526.accdb"
+    upload.write_bytes(b"fake accdb bytes")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    row = _job_row(jid)
+    assert row["status"] == "swapped", row
+    assert upload.exists() and upload.read_bytes() == b"fake accdb bytes", \
+        ("the dataset's own .accdb was deleted when upload_dir == data_dir — "
+         "the fix must special-case this instead of unconditionally discarding "
+         "every uploaded path")
+
+
+def test_run_import_a_failed_import_does_not_delete_the_dataset_when_upload_dir_equals_data_dir():
+    """Regression for the FAILURE-path twin of the aliasing bug above. When
+    UPLOAD_DIR == DATA_DIR, the staging loop's existing guards correctly skip
+    both the .bak-aside move and the copy2 (up.resolve() == data_target.
+    resolve()), so this job changes nothing about the file on disk — but
+    staged.append((data_target, None)) ran unconditionally regardless, so
+    the aliased file was recorded in `staged` as though the job HAD staged
+    it. On a FAILED import, _restore_all() then calls
+    _restore_data_dir(target, None), whose `elif data_target.exists()`
+    branch unlinks it outright — deleting the admin's own dataset file,
+    which this job never created and never modified, on nothing more than a
+    loader crash. The next import is then wrongly refused by the superset
+    guard, since data_dir now has one fewer year than it should. Existence
+    is asserted before the byte comparison so a deleted file fails with a
+    legible message instead of read_bytes() raising FileNotFoundError."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload = data_dir / "IPEDS202526.accdb"
+    upload.write_bytes(b"the admins own dataset file")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output line"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert upload.exists(), \
+        ("the admin's own .accdb (upload_dir == data_dir) was deleted by a "
+         "FAILED import's rollback, even though this job never staged or "
+         "modified it — staged.append must not record an aliased file as "
+         "something this job changed")
+    assert upload.read_bytes() == b"the admins own dataset file", \
+        "the dataset file's bytes changed after a failed import that should " \
+        "have touched nothing in this configuration"
+
+
+def test_unlink_quietly_never_raises_on_a_path_it_cannot_delete():
+    """Regression: _unlink_quietly is the best-effort cleanup helper the
+    upload/backup discard relies on for every path it removes. Path.unlink()
+    raises IsADirectoryError (an OSError) when pointed at a directory; if
+    _unlink_quietly let that propagate, one unexpected path would crash
+    run_import's cleanup and mask the job's real success/failure report
+    instead of just logging a warning and moving on."""
+    d = Path(tempfile.mkdtemp())
+    sub = d / "a_directory_not_a_file"
+    sub.mkdir()
+    importer._unlink_quietly(0, "test-path", sub)  # must not raise
+    assert sub.exists(), \
+        "a directory _unlink_quietly could not remove should still be there"
+
+
+def test_run_import_no_rollback_of_data_dir_after_a_successful_swap():
+    """Pins two distinct things about a post-swap exception (here:
+    _record_provenance choking). First: _restore_all() at the bottom of
+    run_import's outer except-Exception branch (importer.py:706-709) is
+    unconditional today, so ANY exception raised AFTER build_check_swap has
+    already swapped the live db restores the OLD .accdb over the NEW one in
+    data_dir — a silent split-brain where ipeds.db already holds the new
+    data but data_dir's source file is the stale one, which then makes the
+    NEXT import's superset guard misbehave. Once the swap has happened,
+    rollback of data_dir must become a no-op (caught by the bytes
+    assertion). Second: once the swap has happened, no rollback can ever
+    reach the backup again either, so it must be positively DELETED rather
+    than left orphaned on disk when the post-swap step raises (caught by the
+    .bak assertion — note a genuine *restore* would also leave no .bak
+    behind, since shutil.move consumes it, so this assertion alone cannot
+    detect a rollback; it detects an orphaned backup)."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, content=b"new-upload-bytes")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    existing = data_dir / upload.name
+    existing.write_bytes(b"previous-accdb-bytes")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    def _boom(rows):
+        raise RuntimeError("app.db is locked")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    orig_record = importer._record_provenance
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer._record_provenance = _boom
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer._record_provenance = orig_record
+
+    assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
+        "a post-swap exception rolled the data_dir .accdb back to the old bytes"
+    assert not (data_dir / (upload.name + ".bak")).exists(), \
+        "the backup was left on disk after a post-swap exception — once the " \
+        "swap has happened nothing can restore it, so it must be deleted"
+
+
+def test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_the_move():
+    """Regression at the actual swap boundary (distinct from the test above,
+    which only breaks _record_provenance — AFTER build_check_swap has
+    already returned True). The real swap is shutil.move(staging ->
+    ipeds.db) INSIDE _activate_staging, followed by several more fallible
+    steps (prev.unlink, a data_version bump + commit, invalidate_cache,
+    _update_overall_phase) — none of which is guarded. Any of those raising
+    AFTER the move propagates all the way out of build_check_swap uncaught,
+    so it never returns True, and run_import concludes the swap never
+    happened and calls _restore_all(). On a FRESH year — no pre-existing
+    same-named data_dir file, so `backup is None` — that means
+    _restore_data_dir UNLINKS the just-staged .accdb entirely, even though
+    ipeds.db was already rebuilt from it: data_dir desyncs from the live db,
+    and every future import is then wedged on the superset guard. Breaks
+    importer.invalidate_cache — called AFTER the move, inside
+    _activate_staging — to land squarely in that post-move window."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, content=b"new-upload-bytes")
+    # Deliberately NO pre-existing data_dir/<name>.accdb: a first import of
+    # this year, so backup is None and a rollback UNLINKS rather than
+    # restores — the destructive variant of this bug.
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    def _boom():
+        raise RuntimeError("cache invalidation blew up")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    orig_invalidate = importer.invalidate_cache
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer.invalidate_cache = _boom
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer.invalidate_cache = orig_invalidate
+
+    assert live.read_bytes() == b"new-staging-content", \
+        ("the live db was not actually swapped before invalidate_cache raised "
+         "— this test is only meaningful once the move has already happened")
+    assert (data_dir / upload.name).exists(), \
+        ("the just-staged data_dir .accdb was deleted after a failure INSIDE "
+         "_activate_staging that struck AFTER the real swap — data_dir is now "
+         "desynced from the live db that was already built from this file")
+    assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
+        "the data_dir .accdb's bytes changed after a post-move failure"
 
 
 # ---------------------------------------------------------------------------
@@ -1868,6 +2219,21 @@ def run():
           test_run_import_backs_up_existing_staged_accdb)
     check("run_import: success swaps db, bumps data_version, clears cache",
           test_run_import_success_swaps_and_bumps_data_version)
+    check("run_import: success removes the uploaded copy and the .bak backup",
+          test_run_import_success_removes_the_uploaded_copy_and_the_backup)
+    check("run_import: a failed import still removes the uploaded copy",
+          test_run_import_a_failed_import_still_removes_the_uploaded_copy)
+    check("run_import: never deletes the upload when upload_dir == data_dir",
+          test_run_import_never_deletes_the_upload_when_upload_dir_equals_data_dir)
+    check("run_import: a failed import does not delete the dataset when "
+          "upload_dir == data_dir",
+          test_run_import_a_failed_import_does_not_delete_the_dataset_when_upload_dir_equals_data_dir)
+    check("_unlink_quietly never raises on a path it cannot delete",
+          test_unlink_quietly_never_raises_on_a_path_it_cannot_delete)
+    check("run_import: no rollback of data_dir after a successful swap",
+          test_run_import_no_rollback_of_data_dir_after_a_successful_swap)
+    check("run_import: no rollback of data_dir when _activate_staging fails after the move",
+          test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_the_move)
     check("run_integrate: union is correct, idempotent, fetches once per year",
           test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year)
     check("run_integrate: cleans up the temp work dir on success",
