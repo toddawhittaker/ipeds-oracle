@@ -643,11 +643,26 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
     #       already removed -- reproducing the bug once on the way to fixing it.
     #   established, marker present          -> grant anything NOT yet applied,
     #       so an address the operator ADDS to ADMIN_EMAILS later still works.
-    grant = fresh or raw is not None
+    marked = raw is not None
     for email in emails:
         if email in applied:
             continue
-        if grant:
+        # On the upgrade hop (`not fresh and not marked`) the conservative
+        # choice is record-only, so a previously offboarded admin is not
+        # restored. But applied blindly that ALSO swallows an address this
+        # deployment has never seen -- and editing `.env` while pulling a new
+        # image is the ordinary upgrade, so "add a new admin" silently did
+        # nothing, twice over (the marker then recorded it as applied).
+        #
+        # The two cases are distinguishable: `_remove_user` DELETEs the
+        # allowlist row but KEEPS the users row with is_admin=0, so an
+        # offboarded admin is still KNOWN here while a genuinely new address is
+        # in neither table. Grant only the latter.
+        known = con.execute(
+            "SELECT 1 FROM users WHERE email=? "
+            "UNION ALL SELECT 1 FROM allowlist WHERE email=? LIMIT 1",
+            (email, email)).fetchone() is not None
+        if fresh or marked or not known:
             con.execute(
                 "INSERT INTO allowlist(email, note, added_by, added_at) "
                 "VALUES (?, 'bootstrap admin', 'system', ?) "
@@ -666,11 +681,19 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
         row = con.execute(
             "SELECT is_admin FROM users WHERE email=?", (email,)).fetchone()
         if row is None or not row["is_admin"]:
+            # The remedy must name ONE address. The marker is a single JSON list
+            # covering every ADMIN_EMAILS entry, so "delete the meta row" -- what
+            # this used to advise -- makes the next boot re-grant ALL of them,
+            # including a colleague who was deliberately offboarded. That is
+            # precisely the restart-restores-a-removed-admin behaviour this
+            # function exists to stop, prescribed by its own warning.
             log.warning(
                 "ADMIN_EMAILS lists %s but it is not an admin on this deployment. "
                 "That is expected if the account was deliberately removed; nothing "
-                "is re-granted on restart. To bootstrap it again, delete the '%s' "
-                "row from the meta table in app.db and restart.",
+                "is re-granted on restart. To bootstrap THIS address again, remove "
+                "just its entry from the JSON list in the '%s' row of the meta "
+                "table in app.db and restart -- do not delete the whole row, which "
+                "would also restore any other listed address that was removed.",
                 email, _BOOTSTRAP_APPLIED_KEY)
 
 

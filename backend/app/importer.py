@@ -215,6 +215,47 @@ def _set_status(job_id: int, status: str, report: str | None = None) -> None:
         con.close()
 
 
+TERMINAL_JOB_STATUSES = ("failed", "swapped")
+
+
+def reconcile_interrupted_jobs() -> int:
+    """Mark any import job left mid-flight by a process exit as `failed`.
+
+    The rebuild runs on a daemon `threading.Thread`, and `_set_status(...,
+    "failed")` only runs from that thread's own `except`. So a SIGKILL, an OOM
+    kill, a host reboot, or an ordinary `docker compose pull && up -d` leaves the
+    row at `running`/`checks` forever -- nothing has ever reconciled it.
+
+    That used to be cosmetic: one stale line at the bottom of the jobs table.
+    It stopped being cosmetic when Admin -> Imports began ADOPTING a non-terminal
+    job on mount, because then EVERY later visit to the tab adopts the ghost,
+    `locked` is true, and every control -- year cards, integrate, upload, the
+    remove trashcans -- is disabled with a notice saying an import is running,
+    permanently, with no dismiss. Meanwhile `_import_lock` is a process-level
+    lock the restart already released, so the server would happily accept the
+    very import the UI is refusing. Recovery was hand-editing app.db.
+
+    Safe precisely BECAUSE the worker is a daemon thread: it cannot outlive the
+    process, so anything non-terminal at boot is definitionally dead. Returns the
+    number reconciled so the caller can log it.
+    """
+    con = connect()
+    try:
+        placeholders = ",".join("?" for _ in TERMINAL_JOB_STATUSES)
+        cur = con.execute(
+            f"UPDATE import_jobs SET status='failed', updated_at=?, "
+            f"report=COALESCE(report,'') || ? "
+            f"WHERE status NOT IN ({placeholders})",
+            (time.time(),
+             "\n\nInterrupted: the server restarted while this job was running. "
+             "Nothing was swapped into the live database — start it again.",
+             *TERMINAL_JOB_STATUSES))
+        con.commit()
+        return cur.rowcount or 0
+    finally:
+        con.close()
+
+
 def create_job(filename: str, created_by: str) -> int:
     con = connect()
     try:
