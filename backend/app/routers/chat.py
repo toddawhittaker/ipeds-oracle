@@ -10,6 +10,7 @@ import json
 import logging
 import sqlite3
 import time
+import typing
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -76,15 +77,28 @@ CSV_PROBE_TIMEOUT_SECONDS = 3.0
 #
 # The failure is asymmetric, which is what makes it nasty: the reload path
 # inherits new fields for free (Chat.jsx spreads `...m`) while the live `done`
-# path enumerates them by hand. So a miss looks CORRECT after a refresh and
+# path enumerated them by hand. So a miss looked CORRECT after a refresh and
 # wrong only during the turn that produced it — the hardest shape to notice.
 #
-# These three tuples drive the INSERT, the `done` event, and the SELECT, and a
-# test asserts them against the ACTUAL messages schema (see
+# MESSAGE_TURN_COLUMNS / MESSAGE_READ_COLUMNS drive the INSERT and the SELECT,
+# and a test asserts them against the ACTUAL messages schema (see
 # test_every_persisted_turn_field_reaches_the_reader_and_the_done_event). A new
 # migration column therefore fails a test until it is either wired up or
 # explicitly excluded — a deliberate, reviewable act rather than a remembered
 # one.
+#
+# DONE_EVENT_FIELDS used to be a THIRD hand-typed literal, free to drift from
+# the other two exactly the way it did (that literal is how table_cells_matched
+# went missing on the live path in the first place). It is now DERIVED as an
+# OPT-OUT of MESSAGE_READ_COLUMNS: everything a reload gets, the live `done`
+# event gets too, unless it is named below with a reason. That flips the
+# default for the NEXT field — a new migration column now rides `done`
+# automatically, with no line to remember to add — and it flips what needs
+# review: a column that is genuinely reload-only (there is none today) now
+# needs an EXPLICIT exclusion, or it silently bloats every `done` frame with a
+# value nothing on the live path reads. That failure is at least a visible one
+# (a fatter frame) rather than the old invisible one (a field quietly missing
+# from the live render), which is why opt-out is the safer default here.
 
 # Columns every persisted assistant turn writes, in INSERT order.
 MESSAGE_TURN_COLUMNS: tuple[str, ...] = (
@@ -109,14 +123,39 @@ _STRUCTURAL: frozenset[str] = frozenset(
 MESSAGE_READ_COLUMNS: tuple[str, ...] = tuple(
     c for c in MESSAGE_TURN_COLUMNS if c not in _BACKEND_ONLY)
 
+# Excluded from DONE_EVENT_FIELDS for TWO reasons at once, both load-bearing:
+#   1. They already arrive as their own streamed events (the figure/
+#      suggestions/clarify events, and the sql/thinking trace items) — a
+#      second copy riding `done` would be redundant.
+#   2. They are exactly the columns Chat.jsx's `hydrate()` JSON.parses on
+#      reload. `_persist` stores each of them as JSON TEXT (see turn_values
+#      below), so letting one ride `done` unparsed would hand the LIVE path a
+#      raw JSON STRING where reload hands the SAME field a parsed object —
+#      a real, structural asymmetry, not a style nit.
+_OWN_STREAMED_EVENT: frozenset[str] = frozenset(
+    {"sql_log", "thinking", "figure", "suggestions", "clarify"})
+
+# Rides `done` under a different name (the agent-path dict has always used
+# "model") rather than under its column name.
+_RENAMED_ON_DONE: frozenset[str] = frozenset({"model_used"})
+
 # What the `done` SSE event carries so a LIVE turn renders every affordance
-# without waiting for a reload. Narrower than MESSAGE_READ_COLUMNS on purpose:
-# sql_log/thinking/figure/suggestions/clarify already arrived as their own
-# streamed events, and model_used rides `done` under the name "model".
-DONE_EVENT_FIELDS: tuple[str, ...] = (
-    "duration_ms", "results_truncated", "figure_grounding", "table_grounding",
-    "table_cells_checked", "table_cells_matched",
-)
+# without waiting for a reload — MESSAGE_READ_COLUMNS minus the two exclusions
+# above. Evaluates to exactly the same six names this used to be hand-typed
+# as; see the module comment for what deriving it instead buys and costs.
+DONE_EVENT_FIELDS: tuple[str, ...] = tuple(
+    c for c in MESSAGE_READ_COLUMNS
+    if c not in _OWN_STREAMED_EVENT | _RENAMED_ON_DONE)
+
+
+def _done_extras(turn_values: dict) -> dict:
+    """The ONLY consumer of DONE_EVENT_FIELDS: projects the same values
+    `_persist` just wrote onto the message row into `done`-event keys, so a
+    live turn and a reload of that same turn are reading the SAME dict rather
+    than two hand-typed copies that can drift apart. Kept next to the tuples
+    it reads, not near its call sites, since a reader auditing "what does
+    `done` carry" needs this and DONE_EVENT_FIELDS in the same glance."""
+    return {c: turn_values[c] for c in DONE_EVENT_FIELDS}
 
 # Fire-and-forget async tasks (the feedback distiller below) need a strong
 # reference kept somewhere until they finish, or asyncio can garbage-collect a
@@ -468,14 +507,16 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             if not verdict.allowed:
                 answer = guard.REFUSAL
                 yield _sse({"type": "answer", "text": answer})
-                user_msg_id, msg_id, _ = await run_in_threadpool(
+                persisted = await run_in_threadpool(
                     _persist, user["id"], conv_id, question, answer,
                     sql_log=[], model="guard", tokens=verdict.total_tokens,
                     cached=False, ok=True, delete_from_id=edit_from,
                     # A refusal costs exactly one LLM call — the guard's own.
                     **_guard_usage_kwargs(verdict.usage))
-                yield _sse({"type": "done", "refused": True, "message_id": msg_id,
-                            "user_message_id": user_msg_id})
+                yield _sse({"type": "done", "refused": True,
+                            "message_id": persisted.message_id,
+                            "user_message_id": persisted.user_message_id,
+                            **_done_extras(persisted.turn_values)})
                 return
 
             # 1) Semantic cache: reuse SQL for a near-identical past question.
@@ -495,7 +536,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 if suggestions:
                     yield _sse({"type": "suggestions", "suggestions": suggestions})
                 yield _sse({"type": "answer", "text": answer})
-                user_msg_id, msg_id, usage_id = await run_in_threadpool(
+                persisted = await run_in_threadpool(
                     _persist, user["id"], conv_id, question, answer,
                     sql_log=[cached["final_sql"]] if cached["final_sql"] else [],
                     model="cache", tokens=verdict.total_tokens, cached=True, ok=True,
@@ -511,18 +552,26 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                     # it would have grounded a recited number against.
                     results=cached.get("results"),
                     results_truncated=cached.get("results_truncated", False))
-                # NB no figure_grounding / table_grounding here, so a cache hit
-                # carries NEITHER mark. Deliberate, and the same call #215 made:
-                # the rows above make re-grading possible now, but doing it would
-                # move the Grounded-figures/cells denominators, and a measurement
-                # shouldn't shift inside a replay path. The replayed answer is
-                # byte-identical to a turn that WAS graded; it just doesn't say so.
-                done = {"type": "done", "cached": True, "message_id": msg_id,
-                        "user_message_id": user_msg_id,
-                        "results_truncated": bool(cached.get("results_truncated"))}
+                # NB no figure_grounding / table_grounding is passed above, so a
+                # cache hit carries NEITHER mark. Deliberate, and the same call
+                # #215 made: the rows above make re-grading possible now, but
+                # doing it would move the Grounded-figures/cells denominators,
+                # and a measurement shouldn't shift inside a replay path. The
+                # replayed answer is byte-identical to a turn that WAS graded;
+                # it just doesn't say so. That NULL is now explicit rather than
+                # a second hand-typed list: `_persist` stores figure_grounding/
+                # table_grounding as `None` because this call never passed
+                # them, and `_done_extras` reads that same `None` back off
+                # `turn_values` below — the omission is expressed by what got
+                # PERSISTED, not by a separate field the `done` dict used to
+                # hand-pick.
+                done = {"type": "done", "cached": True,
+                        "message_id": persisted.message_id,
+                        "user_message_id": persisted.user_message_id,
+                        **_done_extras(persisted.turn_values)}
                 if is_new and answer:
                     title, title_usage = await generate_title(question, answer)
-                    await run_in_threadpool(_add_usage, usage_id, title_usage)
+                    await run_in_threadpool(_add_usage, persisted.usage_id, title_usage)
                     if title:
                         await run_in_threadpool(_update_title, conv_id, title)
                         done["title"] = title
@@ -600,7 +649,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             # schema-prefix reuse, and the guard's prompt is a different prefix.
 
             duration_ms = round((time.monotonic() - t0) * 1000)
-            user_msg_id, msg_id, usage_id = await run_in_threadpool(
+            persisted = await run_in_threadpool(
                 _persist, user["id"], conv_id, question, answer or (result.error or ""),
                 sql_log=result.sql_log, model=result.model_used,
                 tokens=result.total_tokens, cached=False,
@@ -720,23 +769,20 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             cfg = get_settings()
             if (history and clarify is None and result.error is None
                     and cfg.skills_enabled and cfg.llm_api_key):
-                _fire_and_forget(_record_feedback_lesson(history, question, usage_id))
+                _fire_and_forget(_record_feedback_lesson(
+                    history, question, persisted.usage_id))
 
+            # duration_ms/results_truncated/figure_grounding/table_grounding/
+            # table_cells_checked/table_cells_matched all come from the SAME
+            # turn_values `_persist` just wrote (via _done_extras), rather than
+            # six hand-picked copies off `result` — that duplication is exactly
+            # how this event and the message row went out of step (a 0 here vs
+            # a NULL there for an ungrounded turn's cell counts).
             done = {"type": "done", "escalated": result.escalated,
                     "model": result.model_used, "tokens": result.total_tokens,
-                    "message_id": msg_id, "user_message_id": user_msg_id,
-                    # The live turn shows "Thought for N seconds" without a reload.
-                    "duration_ms": duration_ms,
-                    # …and captions a truncated table without one. Same value the
-                    # message row stores, so live and reloaded agree.
-                    "results_truncated": any(r.truncated for r in (result.results or [])),
-                    # …and marks a reproduced figure "verified" without one.
-                    "figure_grounding": result.figure_grounding or None,
-                    # …and likewise for the table's numbers. Same values the
-                    # message row stores, so live and reloaded agree.
-                    "table_grounding": result.table_grounding or None,
-                    "table_cells_checked": result.table_cells_checked,
-                    "table_cells_matched": result.table_cells_matched}
+                    "message_id": persisted.message_id,
+                    "user_message_id": persisted.user_message_id,
+                    **_done_extras(persisted.turn_values)}
             # 5) Let the model name a brand-new conversation (better than the raw query).
             if is_new and result.error is None and answer:
                 title, title_usage = await generate_title(question, answer)
@@ -744,7 +790,7 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
                 # rather than folded in (see _add_usage). Moving the call ahead of
                 # the write would put a network probe in front of the statement
                 # that saves the answer.
-                await run_in_threadpool(_add_usage, usage_id, title_usage)
+                await run_in_threadpool(_add_usage, persisted.usage_id, title_usage)
                 if title:
                     await run_in_threadpool(_update_title, conv_id, title)
                     done["title"] = title
@@ -813,6 +859,21 @@ def _delete_if_empty(conv_id: int) -> None:
         con.commit()
     finally:
         con.close()
+
+
+class _PersistResult(typing.NamedTuple):
+    """_persist's return value: a NamedTuple, not a plain tuple, so the NEXT
+    field a caller needs is reached by NAME (`persisted.turn_values`) instead
+    of by position — a plain tuple is exactly how DONE_EVENT_FIELDS's old
+    hand-typed literal could drift unnoticed.
+
+    Every caller reaches `turn_values` by attribute, never by unpacking a 4th
+    positional name — that friction is the point: the next field added here is
+    an explicit, reviewed access rather than a silent positional slot."""
+    user_message_id: int
+    message_id: int
+    usage_id: int
+    turn_values: dict
 
 
 def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
@@ -897,8 +958,12 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         con.commit()
         # The usage_log id comes back so a probe that finishes AFTER this commit
         # (the title call, the detached feedback distiller) can add its spend with
-        # _add_usage instead of being silently unbilled.
-        return user_msg_id, assistant_id, usage_cur.lastrowid
+        # _add_usage instead of being silently unbilled. turn_values comes back
+        # too, so a caller can project the `done` event's extras
+        # (_done_extras) from the SAME values just written, rather than a
+        # second hand-typed copy.
+        return _PersistResult(user_msg_id, assistant_id, usage_cur.lastrowid,
+                              turn_values)
     finally:
         con.close()
 

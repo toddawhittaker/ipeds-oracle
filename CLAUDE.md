@@ -1654,23 +1654,74 @@ pair against another, and it **shipped two defects** — `results_truncated`
 The failure is **asymmetric**, which is why review kept missing it: the reload
 path inherits new fields free (`Chat.jsx` spreads `...m`) while the live `done`
 path enumerates by hand, so a miss renders CORRECTLY after a refresh and wrongly
-only on the turn that produced it. Now three tuples in `routers/chat.py` —
-`MESSAGE_TURN_COLUMNS` (drives the INSERT, whose `?` count is derived, never
-counted), `MESSAGE_READ_COLUMNS` (= turn columns minus `_BACKEND_ONLY`
-`{results, tokens}`, drives the SELECT), `DONE_EVENT_FIELDS` — are asserted
-against the **actual `messages` schema** by
+only on the turn that produced it. **One hand-written tuple and two derivations**
+now live in `routers/chat.py`: `MESSAGE_TURN_COLUMNS` (drives the INSERT, whose
+`?` count is derived, never counted); `MESSAGE_READ_COLUMNS` (= turn columns
+minus `_BACKEND_ONLY` `{results, tokens}`, drives the SELECT); and
+**`DONE_EVENT_FIELDS`, itself derived by OPT-OUT** — read columns minus
+`_OWN_STREAMED_EVENT` `{sql_log, thinking, figure, suggestions, clarify}` and
+`_RENAMED_ON_DONE` `{model_used}` (it rides `done` as `"model"`). They are
+asserted against the **actual `messages` schema** by
 `test_every_persisted_turn_field_reaches_the_reader_and_the_done_event`. A new
 migration column fails that test until it is wired up **or** explicitly excluded
-with a reason: a reviewable act instead of a remembered one. Two things the test
-gets right on purpose: it runs inside the `TestClient` context (the app's
-lifespan is what creates the schema — checking before it would make the gate
-**vacuously pass**, the one failure mode a schema gate must not have), and it
-populates *every* field at once (a figure AND a clarify never co-occur in a real
-turn; this exercises the plumbing, and any field left None would silently
-satisfy the "was it persisted?" check). `_persist`'s keyword signature stays
-explicit — it's the readable, type-checkable seam — and the **cache-hit call
-stays enumerated**, because it is a deliberately different subset (a cache hit
-shows neither grounding mark, by contract).
+with a reason: a reviewable act instead of a remembered one.
+
+**`DONE_EVENT_FIELDS` used to be decorative** — hand-listed, with its only
+reference in `backend/app/` being its own definition, and its "test" one constant
+minus another (deleting a key from the hand-built dict left it green). Deriving
+it flips the **default for the next field**: a new column rides `done`
+automatically, and *not* riding it is the reviewed act. The trade, stated: a
+genuinely reload-only column now needs an explicit exclusion or it silently
+bloats every frame — moving the failure from "renders wrong live" (invisible;
+shipped twice) to "sends more bytes" (visible in a payload).
+`_OWN_STREAMED_EVENT` carries **two** reasons at once and both are load-bearing:
+those fields already arrive as their own streamed events, **and** they are
+exactly the columns `Chat.jsx`'s `hydrate()` JSON-parses — so one riding `done`
+would hand the LIVE path a raw JSON string where reload hands the same field a
+parsed object.
+
+**Values come from ONE mapping, not two.** `_persist` returns a `_PersistResult`
+NamedTuple whose `turn_values` is the dict that fed the INSERT, and
+`_done_extras(turn_values)` — the single consumer of `DONE_EVENT_FIELDS` —
+projects it onto the event. Reach `turn_values` **by attribute, never a 4th
+positional slot**; that friction is the point. This closed a live divergence
+already in the code: `_persist` NULLs the cell counts when `table_grounding` is
+falsy while the old `done` dict sent them raw, so an ungrounded turn reported
+`0` live and `null` on reload. Applied to the **three message-bearing paths**
+(agent, cache hit, refusal); the **no-data and interrupted paths are excluded
+STRUCTURALLY** — neither calls `_persist`, so neither has a `turn_values`, and a
+`done` with no `message_id` describes a turn the client cannot attach anything
+to. The cache hit still shows **neither grounding mark**, now expressed by what
+that `_persist` call *persists* (grounding kwargs absent → `None`) rather than by
+a second hand-written list.
+
+Two things the test gets right on purpose: it runs inside the `TestClient`
+context (the app's lifespan is what creates the schema — checking before it would
+make the gate **vacuously pass**, the one failure mode a schema gate must not
+have), and it populates *every* field at once (a figure AND a clarify never
+co-occur in a real turn; this exercises the plumbing, and any field left None
+would silently satisfy the "was it persisted?" check). The done-event half is now
+pinned on **real payloads**: a streamed turn's actual `done` frame is compared
+**field-by-field against the reload** of that same turn, plus a **scalars-only**
+check that fires the moment a JSON-text column joins the derivation.
+`_persist`'s keyword signature stays explicit — the readable, type-checkable
+seam.
+
+**The browser half is derived too.** `Chat.jsx` used to name each field three
+times (a local, a read off the event, a key in the finalize merge) — a fourth
+hand-enumerated site. `frontend/src/donefields.js` (pure, vitest)
+`messageFieldsFromDone(ev)` takes every key **except** a documented `DONE_META_KEYS`
+denylist (identity/plumbing/path markers/telemetry), skipping nulls. A
+**denylist, not an allowlist**: an allowlist would re-create the two-lists
+problem in the worst place, since nothing cross-checks JS against the Python
+tuple. **Skipping is `== null`, never truthiness** — `table_cells_matched: 0` is
+the caution for an answer where EVERY value failed to reproduce, the worst one to
+drop. **Merge order at the finalize is load-bearing**: `results_truncated: false`
+*before* the spread (a present value wins, an absent one keeps the default) and
+every turn-owned key — `content`, `sql_log`, `figure`, `suggestions`, `clarify`,
+`id`, `pending`, `error` — *after* it, so no future server field can clobber the
+answer. Keys stay **snake_case**, which is the only reason every render site
+works for both live and reloaded messages.
 
 **Full details live in `CONTRIBUTING.md` and the README's Self-hosting section — read them, don't guess.**
 

@@ -20,6 +20,7 @@ import { inflight } from "./inflight.js";
 import { tableTrustNote } from "./tabletruth.js";
 import { shouldRedirectTyping, targetInfo } from "./typeahead.js";
 import { collectionYearRange } from "./years.js";
+import { messageFieldsFromDone } from "./donefields.js";
 
 // Mirrors MAX_QUESTION_LEN in backend/app/routers/chat.py — the browser stops an
 // over-long question at the composer so the server's 400 stays a backstop.
@@ -856,12 +857,11 @@ export default function Chat({ me }) {
       patchLast((last) => ({ ...last, thinking: [...(last.thinking || []), item] }));
 
     let answer = "", sqlLog = [], newConvId = convId, msgId = null, userMsgId = null, newTitle = null;
-    let durationMs = null; // turn wall-clock from the done event → "Thought for N seconds"
-    let resultsTruncated = false; // did this turn's SQL return more rows than shown?
-    let figureGrounding = null;   // did the server reproduce the figure's number?
-    let tableGrounding = null;    // …and the table's numbers, with how many it checked
-    let tableCellsChecked = null;
-    let tableCellsMatched = null; // needed by the caution, which leads with the misses
+    // Everything else the `done` event carries onto the message (duration_ms,
+    // results_truncated, figure_grounding, table_grounding, ...) accumulates
+    // here rather than as one local per field — see messageFieldsFromDone,
+    // the one merge point that replaces what used to be six hand-named locals.
+    let doneFields = {};
     let figure = null; // the structured hero statistic, when the model emitted one
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
@@ -948,19 +948,11 @@ export default function Chat({ me }) {
         else if (ev.type === "done") {
           if (ev.message_id) msgId = ev.message_id;
           if (ev.user_message_id) userMsgId = ev.user_message_id;
-          if (ev.duration_ms != null) durationMs = ev.duration_ms;
-          // Same flag the message row stores, so a live turn captions a
-          // truncated table without waiting for a reload.
-          if (ev.results_truncated != null) resultsTruncated = ev.results_truncated;
-          // …and marks a reproduced figure "verified" without one, matching what
-          // the message row stores so live and reloaded agree.
-          if (ev.figure_grounding != null) figureGrounding = ev.figure_grounding;
-          // …and likewise for the table's numbers. The COUNT travels with the
-          // status because the note states it ("40 values reproduced"); a status
-          // without its count renders nothing.
-          if (ev.table_grounding != null) tableGrounding = ev.table_grounding;
-          if (ev.table_cells_checked != null) tableCellsChecked = ev.table_cells_checked;
-          if (ev.table_cells_matched != null) tableCellsMatched = ev.table_cells_matched;
+          // Every OTHER answer field the done event carries (duration_ms,
+          // results_truncated, figure_grounding, table_grounding, ...) —
+          // merged, not named, so a server field this file has never heard of
+          // still reaches the message (see donefields.js).
+          doneFields = { ...doneFields, ...messageFieldsFromDone(ev) };
           if (ev.title) newTitle = ev.title;
         }
       });
@@ -996,7 +988,15 @@ export default function Chat({ me }) {
       setMessages((m) => {
         const c = [...m];
         const ai = c.length - 1, ui = c.length - 2;
-        if (ai >= 0) c[ai] = { ...c[ai], role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, duration_ms: durationMs, results_truncated: resultsTruncated, figure_grounding: figureGrounding, table_grounding: tableGrounding, table_cells_checked: tableCellsChecked, table_cells_matched: tableCellsMatched, pending: false, error: failed };
+        // ORDER IS LOAD-BEARING: `results_truncated: false` is the only
+        // default a `done` field needs (every other field already reads as
+        // "nothing" when absent/null — see donefields.js), and it sits
+        // BEFORE the spread so a present value wins over it. Every key the
+        // turn itself owns (role/content/sql_log/figure/suggestions/clarify/
+        // id/pending/error) sits AFTER the spread, so no key the server adds
+        // to `done` in the future can ever clobber the streamed answer, the
+        // parsed sub-objects, or the message's identity.
+        if (ai >= 0) c[ai] = { ...c[ai], results_truncated: false, ...doneFields, role: "assistant", content: answer, sql_log: sqlLog, figure, suggestions, clarify, id: msgId ?? c[ai].id, pending: false, error: failed };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
         return c;
       });

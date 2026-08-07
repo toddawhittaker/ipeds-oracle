@@ -252,6 +252,16 @@ export async function mockRenameConversation(page, id, { httpStatus = 200 } = {}
  * "+ New chat" mid-stream. The whole response (SSE body) still lands as one
  * chunk once the delay elapses; this only defers *when* it lands, since
  * route.fulfill can't drip a body incrementally.
+ *
+ * `doneExtra` is an escape hatch: an object merged into the `done` event
+ * AFTER every named option above, so a spec can put an arbitrary field on the
+ * live `done` frame (e.g. a brand-new server field this mock has no named
+ * option for yet) without this function growing a new option/spread pair for
+ * every one — the same hand-enumeration shape CLAUDE.md names as the bug
+ * class this whole feature exists to close, reproduced here in the mock
+ * layer if left to grow indefinitely. Named options above still win on a key
+ * collision (doneExtra is spread first, then the named fields), so existing
+ * call sites are unaffected.
  */
 export async function mockStreamChat(page, {
   conversationId,
@@ -270,6 +280,7 @@ export async function mockStreamChat(page, {
   tableCellsChecked = null,
   tableCellsMatched = null,
   resultsTruncated = null,
+  doneExtra = null,
   delayMs = 0,
 } = {}) {
   const calls = [];
@@ -292,7 +303,8 @@ export async function mockStreamChat(page, {
       { type: "answer", text: answer },
       // `duration_ms`, when set, drives the "Thought for N seconds" label on the
       // settled answer (server wall-clock in the real done event). Omitted null.
-      { type: "done", message_id: messageId, user_message_id: userMessageId,
+      { type: "done", ...(doneExtra || {}),
+        message_id: messageId, user_message_id: userMessageId,
         model: "test", tokens: 0, ...(title ? { title } : {}),
         ...(durationMs != null ? { duration_ms: durationMs } : {}),
         // The server's verdict on whether the figure's number reproduces from
