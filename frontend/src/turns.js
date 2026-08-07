@@ -23,12 +23,6 @@ export function laterTurnsLost(messages, index) {
   return Math.max(0, Math.ceil((list.length - index - 2) / 2));
 }
 
-// Whether this edit/rerun needs a confirmation. False for the last turn (the
-// common, safe refine) and for anything out of range.
-export function needsDestructiveConfirm(messages, index) {
-  return laterTurnsLost(messages, index) > 0;
-}
-
 // The confirm dialog's body. Names the count, because "this can't be undone" is
 // only actionable if the user knows how much "this" is.
 export function editConfirmBody(lost) {

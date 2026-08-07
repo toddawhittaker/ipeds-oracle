@@ -172,6 +172,10 @@ export default function Imports({ onDataChanged }) {
       .catch(() => { /* the jobs table shows its own empty state */ });
     loadCatalog();
     return () => clearInterval(poll.current);
+    // `watch` and `loadJobs` are recreated every render, so listing them here
+    // would re-run this MOUNT effect on every render — re-adopting the job and
+    // restarting its poll interval repeatedly. This must run exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadCatalog]);
 
   const jobRunning = active != null && !TERMINAL_JOB_STATUSES.includes(active.status);

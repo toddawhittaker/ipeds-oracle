@@ -4,7 +4,6 @@ import {
   editConfirmBody,
   editConfirmLabel,
   laterTurnsLost,
-  needsDestructiveConfirm,
 } from "./turns.js";
 
 // Build a strictly alternating user/assistant thread of `n` turns, the shape
@@ -52,19 +51,6 @@ describe("laterTurnsLost", () => {
   });
 });
 
-describe("needsDestructiveConfirm", () => {
-  it("is false for the last turn — the ordinary refine must stay modal-free", () => {
-    expect(needsDestructiveConfirm(thread(4), 6)).toBe(false);
-  });
-
-  it("is true as soon as one later exchange would be lost", () => {
-    expect(needsDestructiveConfirm(thread(4), 4)).toBe(true);
-  });
-
-  it("is false for a single-turn conversation", () => {
-    expect(needsDestructiveConfirm(thread(1), 0)).toBe(false);
-  });
-});
 
 describe("confirm copy", () => {
   it("singularizes one lost exchange", () => {
