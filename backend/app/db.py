@@ -6,6 +6,7 @@ created idempotently on startup.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -500,10 +501,36 @@ def _apply_migrations(con: sqlite3.Connection,
         raise SchemaTooNewError(msg)
     for version, ddl in sorted(migrations):
         if version > current:
-            con.executescript(ddl)
-            # user_version can't be parameterized; version is our own trusted int.
-            con.execute(f"PRAGMA user_version = {int(version)}")
-            con.commit()
+            # ONE atomic script: the DDL *and* the version bump, or neither.
+            #
+            # `executescript` runs its statements sequentially with no
+            # transaction of its own, and the bump used to be a separate
+            # `execute` after it. Most shipped migrations are multi-statement,
+            # so a failure part-way (disk full, an OOM kill, a container stopped
+            # mid-`up -d`) left the earlier statements APPLIED with
+            # `user_version` un-bumped -- and every later boot then re-ran the
+            # whole migration and died on "duplicate column name", permanently,
+            # against the one irreplaceable database. `_snapshot_before_migrating`
+            # was added to make that recoverable; this makes it not happen.
+            #
+            # The BEGIN must be INSIDE the script: `executescript` issues an
+            # implicit COMMIT before it runs, so a `con.execute("BEGIN")`
+            # beforehand is discarded. `PRAGMA user_version` is itself
+            # transactional, so it reverts with the DDL.
+            #
+            # Verified both ways: without the wrapper a two-statement migration
+            # whose second statement fails leaves the first applied; with it,
+            # nothing is applied and `user_version` is unchanged.
+            try:
+                # user_version can't be parameterized; version is our own trusted int.
+                con.executescript(
+                    f"BEGIN;\n{ddl}\nPRAGMA user_version = {int(version)};\nCOMMIT;")
+            except Exception:
+                # The failing statement aborts the script, leaving the
+                # transaction open; roll it back so the connection is usable
+                # and nothing half-applied survives.
+                con.rollback()
+                raise
             current = version
     return current
 
@@ -572,9 +599,55 @@ def init_db() -> None:
         _apply_migrations(con)
         # data_version starts at 1 (bumped by each successful import swap)
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('data_version', '1')")
-        # Bootstrap admin accounts + allowlist from ADMIN_EMAILS.
-        now = time.time()
-        for email in s.admin_email_list:
+        _bootstrap_admins(con, s.admin_email_list)
+        con.commit()
+    finally:
+        con.close()
+
+
+_BOOTSTRAP_APPLIED_KEY = "bootstrap_admins_applied"
+
+
+def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
+    """Grant each ADMIN_EMAILS address allowlist + admin ONCE, not on every boot.
+
+    `init_db` runs on every startup, and this used to re-run the grant
+    unconditionally -- `ON CONFLICT(email) DO UPDATE SET is_admin=1`. So
+    offboarding a departed admin (demote, then remove) held only until the next
+    container restart: an image upgrade, a host reboot, or `restart:
+    unless-stopped` silently restored their allowlist row AND their admin bit,
+    and they could request a fresh magic link and walk back in. The README has
+    always described this as applying on FIRST boot; the code did not, and the
+    docs agreeing with the intent is why review never caught it.
+
+    Each address is now recorded in `meta` once applied (the same marker pattern
+    `skills.seed_from_schema_examples` uses for seeds), so a REMOVAL is a
+    decision later boots respect, while a genuinely new address added to
+    ADMIN_EMAILS still gets picked up.
+
+    The migration point matters: on an established database the marker is
+    absent, and re-granting "one last time" would reproduce the bug for exactly
+    the admin someone had already removed. So a database that already has an
+    allowlist is treated as having applied the current list -- recorded, not
+    re-granted. Only a genuinely empty allowlist (a fresh install) bootstraps.
+    """
+    raw = get_meta(con, _BOOTSTRAP_APPLIED_KEY)
+    applied = set(json.loads(raw or "[]"))
+    fresh = con.execute("SELECT COUNT(*) AS n FROM allowlist").fetchone()["n"] == 0
+    now = time.time()
+
+    # Three cases, and the middle one is the whole point:
+    #   fresh install (no allowlist at all)  -> grant; this is the real bootstrap
+    #   established, marker absent           -> record only. This is the upgrade
+    #       hop. Granting here would restore exactly the admin someone had
+    #       already removed -- reproducing the bug once on the way to fixing it.
+    #   established, marker present          -> grant anything NOT yet applied,
+    #       so an address the operator ADDS to ADMIN_EMAILS later still works.
+    grant = fresh or raw is not None
+    for email in emails:
+        if email in applied:
+            continue
+        if grant:
             con.execute(
                 "INSERT INTO allowlist(email, note, added_by, added_at) "
                 "VALUES (?, 'bootstrap admin', 'system', ?) "
@@ -582,9 +655,23 @@ def init_db() -> None:
             con.execute(
                 "INSERT INTO users(email, is_admin, created_at) VALUES (?, 1, ?) "
                 "ON CONFLICT(email) DO UPDATE SET is_admin=1", (email, now))
-        con.commit()
-    finally:
-        con.close()
+        applied.add(email)
+    set_meta(con, _BOOTSTRAP_APPLIED_KEY, json.dumps(sorted(applied)))
+
+    # An ADMIN_EMAILS address that is no longer an admin is a legitimate state
+    # (someone offboarded them) -- but it is also what a lockout looks like, and
+    # silence is what made the old behaviour invisible. Say it once at boot,
+    # naming the recovery, so neither case is a surprise.
+    for email in emails:
+        row = con.execute(
+            "SELECT is_admin FROM users WHERE email=?", (email,)).fetchone()
+        if row is None or not row["is_admin"]:
+            log.warning(
+                "ADMIN_EMAILS lists %s but it is not an admin on this deployment. "
+                "That is expected if the account was deliberately removed; nothing "
+                "is re-granted on restart. To bootstrap it again, delete the '%s' "
+                "row from the meta table in app.db and restart.",
+                email, _BOOTSTRAP_APPLIED_KEY)
 
 
 def get_meta(con: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

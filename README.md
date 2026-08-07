@@ -262,13 +262,23 @@ commented list. The essentials:
 | `LLM_API_KEY` / `LLM_BASE_URL` | LLM provider (OpenRouter by default) |
 | `MODEL_DEFAULT` / `MODEL_ESCALATION` | **which model to use — required, no default.** The app is provider‑agnostic, so it ships no vendor's model ID; use whatever your `LLM_BASE_URL` serves. `MODEL_ESCALATION` is an optional stronger model for hard questions (blank = never escalate) |
 | `MAIL_BACKEND` / `RESEND_API_KEY` / `SMTP_*` / `MAIL_FROM` | email delivery (see [Email](#email)) |
-| `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted on first boot |
+| `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted **once** — see below |
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `CHAT_RATE_MAX_PER_USER` | per-user question cap per window (default 30/60s) — the guard against one runaway script burning your provider spend |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
+
+**`ADMIN_EMAILS` grants each address allowlist + admin exactly once, not on every
+restart.** Once granted, an address is recorded as applied, so removing or
+demoting that account in Admin → Users is a decision later restarts respect —
+offboarding someone actually sticks. Adding a *new* address to `ADMIN_EMAILS`
+still grants it on the next start. If you ever need to re-bootstrap an address
+you removed (for example, you demoted your last admin and locked yourself out),
+delete the `bootstrap_admins_applied` row from the `meta` table in `app.db` and
+restart; the app logs a warning at boot naming any listed address that is not
+currently an admin, so this state is never silent.
 
 The published image reports its own version (the release tag it was built from) on
 the **About** dialog, which also shows the latest release available on GitHub; when
