@@ -86,22 +86,28 @@ def test_a_blocking_tool_call_does_not_stall_the_event_loop():
     console and /api/health — and even this turn's own already-queued
     `{"type": "sql"}` event can't flush.
 
-    This FORCES the bad branch rather than sampling for it (a timing test that
-    merely measures a fast query would pass either way). `dispatch` blocks on a
-    threading.Event that ONLY a concurrent asyncio task can set: off the loop it
-    is released in ~50ms; on the loop that task can never be scheduled, so the
-    wait burns its whole 2.0s timeout instead. The 1.0s bound sits an order of
-    magnitude away from both outcomes, so this is not a flaky margin.
+    This FORCES the bad branch rather than sampling for it: `dispatch` blocks on
+    a threading.Event that ONLY a concurrent asyncio task can set. Off the loop
+    the task is scheduled and `wait()` returns True; ON the loop that task can
+    never run at all, so `wait()` times out and returns False.
+
+    **The assertion is that boolean, NOT a stopwatch.** The first version of
+    this test bounded the whole turn at 1.0s and went red on CI at 1.06s — it
+    was timing `run_agent` end to end (which reads docs/SCHEMA.md to build the
+    system prompt, among other things), so it measured runner load rather than
+    the property under test. A wall-clock threshold is a proxy here; whether the
+    other task got to run IS the property, and it needs no margin. The timeout
+    only stops a genuine failure from hanging the suite.
     """
     import threading
-    import time
 
     calls = {"n": 0}
     released = threading.Event()
+    concurrent_task_ran = []
 
     def blocking_dispatch(*a, **k):
         calls["n"] += 1
-        released.wait(timeout=2.0)
+        concurrent_task_ran.append(released.wait(timeout=10.0))
         return "OK — 1 row(s)"
 
     async def fake_chat(client, model, messages, tools=None):
@@ -122,15 +128,13 @@ def test_a_blocking_tool_call_does_not_stall_the_event_loop():
         await task
         return res
 
-    t0 = time.monotonic()
     res = asyncio.run(drive())
-    elapsed = time.monotonic() - t0
 
     assert calls["n"] == 1, f"expected exactly one tool call, got {calls['n']}"
     assert res.error is None, f"unexpected error: {res.error}"
-    assert elapsed < 1.0, (
-        f"the tool call blocked the event loop for {elapsed:.2f}s — the "
-        "concurrent task could not run, so dispatch is back on the loop")
+    assert concurrent_task_ran == [True], (
+        "a concurrent asyncio task could not run while the tool call was in "
+        "flight, so dispatch is back on the event loop")
 
 
 def test_plain_answer_path(monkeypatch=None):
