@@ -30,6 +30,7 @@ ENV_EXAMPLE = ROOT / ".env.example"
 # the Dockerfile or a helper script rather than by config.Settings.
 NOT_APP_SETTINGS = {
     "IPEDS_TAG",        # compose.yaml: which published image tag to run
+    "BIND_ADDR",        # compose.yaml: host address :8000 is published on
     "SSL_CERTFILE",     # scripts/docker-entrypoint.sh
     "SSL_KEYFILE",      # scripts/docker-entrypoint.sh
     "BACKUP_REMOTE",    # scripts/backup_app_db.py (standalone, not app config)
