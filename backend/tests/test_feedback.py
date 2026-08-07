@@ -253,6 +253,38 @@ def test_distill_posts_url_headers_and_probe_timeout():
     assert call["timeout"] == llmhttp.PROBE_TIMEOUT, call["timeout"]
 
 
+def test_distill_reply_with_a_category_line_parses_the_same_as_without():
+    """Zero-blast-radius pin for critic.py's new CATEGORY: line (added for the
+    lesson-category gate): this module has no category concept of its own and
+    reuses critic.parse_verdict verbatim, so a reply that happens to carry a
+    CATEGORY: line -- the shape critic.py's OWN prompt now asks for, which this
+    module's prompt never does -- must still parse to the identical (headline,
+    description) pair as the same reply without one, and the return shape must
+    stay a plain 2-tuple, not silently grow a third element."""
+    without = _json_response({
+        "choices": [{"message": {"content":
+            "REVISE\n"
+            "HEADLINE: Ask a clarifying question before assuming an award-level scope.\n"
+            "DESCRIPTION: ask before picking a scope instead of silently assuming one."}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    with_category = _json_response({
+        "choices": [{"message": {"content":
+            "REVISE\n"
+            "HEADLINE: Ask a clarifying question before assuming an award-level scope.\n"
+            "DESCRIPTION: ask before picking a scope instead of silently assuming one.\n"
+            "CATEGORY: QUESTION_MISMATCH"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    r1, _u1 = _with_fake_transport(
+        without, lambda: asyncio.run(feedback.distill_feedback(_HISTORY, "feedback")))
+    r2, _u2 = _with_fake_transport(
+        with_category, lambda: asyncio.run(feedback.distill_feedback(_HISTORY, "feedback")))
+    assert r1 == r2, (r1, r2)
+    assert isinstance(r2, tuple) and len(r2) == 2, \
+        f"distill_feedback's return shape must stay a plain (headline, description) pair: {r2!r}"
+
+
 def test_distill_message_includes_history_and_latest_feedback():
     """The prior turn's Q&A and the user's corrective message must actually reach
     the model -- otherwise it has nothing to generalize a rule FROM."""
@@ -289,6 +321,8 @@ def run():
           test_distill_fail_open_paths_report_zero_usage)
     check("distill posts url/headers/PROBE_TIMEOUT via llmhttp",
           test_distill_posts_url_headers_and_probe_timeout)
+    check("a CATEGORY line in the reply doesn't change distill_feedback's output",
+          test_distill_reply_with_a_category_line_parses_the_same_as_without)
     check("the prompt carries the prior turn + the latest corrective message",
           test_distill_message_includes_history_and_latest_feedback)
     print()

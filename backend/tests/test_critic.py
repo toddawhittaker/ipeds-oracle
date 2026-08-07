@@ -142,15 +142,115 @@ def test_parse_never_throws_on_garbage():
             raise AssertionError(f"parse_verdict raised on {garbage!r}: {e}") from e
 
 
+# --- parse_category / the categorical lesson gate -------------------------------
+# Embedding similarity provably cannot separate the rejected "verify figures
+# before emitting them" class from a legitimate aggregation-rule lesson
+# (measured: within-class cosine 0.625-0.802, two genuinely different
+# legitimate lessons 0.673 -- no separating threshold exists). So the critic's
+# REVISE reply now carries a CATEGORY: line from a CLOSED set
+# (app/lessoncats.py), and only some categories are learnable.
+
+def test_parse_category_extracts_canonical_token_case_insensitively():
+    """CATEGORY: must parse tolerantly, the same way HEADLINE:/DESCRIPTION:
+    already do -- a well-formed 'CATEGORY: `CIP_ROLLUP`' or 'category:
+    cip_rollup' reading as unrecognized would silently drop a genuinely
+    learnable finding from the pool."""
+    assert critic.parse_category("CATEGORY: CIP_ROLLUP") == "CIP_ROLLUP"
+    assert critic.parse_category("category: cip_rollup") == "CIP_ROLLUP"
+    assert critic.parse_category("CATEGORY: `CIP_ROLLUP`") == "CIP_ROLLUP"
+    assert critic.parse_category("CATEGORY: [CIP_ROLLUP]") == "CIP_ROLLUP"
+    assert critic.parse_category('CATEGORY: "CIP_ROLLUP"') == "CIP_ROLLUP"
+    reply = "REVISE\nHEADLINE: h\nDESCRIPTION: d\nCATEGORY: SECOND_MAJOR"
+    assert critic.parse_category(reply) == "SECOND_MAJOR", critic.parse_category(reply)
+
+
+def test_parse_category_fails_closed_on_unrecognized_or_absent():
+    """THE fail-closed contract: a category the model invented, or simply
+    missing, must read as '' -- never learnable -- not as some best-guess
+    nearest token. A regression here would let an unrecognized label slip
+    through the gate as if it were real."""
+    assert critic.parse_category("CATEGORY: NOT_A_REAL_TOKEN") == ""
+    assert critic.parse_category("REVISE\nHEADLINE: h\nDESCRIPTION: d") == ""
+    assert critic.parse_category("") == ""
+    assert critic.parse_category("CATEGORY:") == ""
+    assert critic.parse_category("CATEGORY:    ") == ""
+
+
+def test_parse_category_never_throws_on_garbage():
+    for garbage in (None, 12345, object(), ["CATEGORY: CIP_ROLLUP"], "CATEGORY:::::", "CATEGORY"):
+        try:
+            critic.parse_category(garbage)  # noqa: F841 -- just must not raise
+        except Exception as e:  # noqa: BLE001
+            raise AssertionError(f"parse_category raised on {garbage!r}: {e}") from e
+
+
+def test_description_regex_does_not_swallow_a_following_category_line():
+    """THE headline regression this PR fixes: _DESCRIPTION_RE used to stop only
+    at the next HEADLINE: label (or end of string), so a reply ordering
+    DESCRIPTION before CATEGORY swallows the literal text 'CATEGORY:
+    UNGROUNDED_NUMBER' into the stored description -- which then gets
+    embedded, saved as a lesson, and shown to an admin. Must fail against
+    today's regex, which stops only at 'headline:'."""
+    reply = (
+        "REVISE\n"
+        "DESCRIPTION: the figure is not present in the retained result rows\n"
+        "CATEGORY: UNGROUNDED_NUMBER"
+    )
+    ok, headline, description = parse_verdict(reply)
+    assert ok is False, ok
+    assert "CATEGORY" not in description, \
+        f"description must not swallow the following CATEGORY label: {description!r}"
+    assert description == "the figure is not present in the retained result rows", description
+
+
+def test_adding_a_category_line_does_not_change_parsed_headline_or_description():
+    """Pins parse_verdict's exact 3-tuple contract as UNCHANGED -- it is shared
+    verbatim with app/feedback.py, so a CATEGORY: line anywhere in the reply
+    must not perturb the (ok, headline, description) parse_verdict already
+    returns for the identical reply without one."""
+    without = ("REVISE\nHEADLINE: Use majornum=1.\n"
+               "DESCRIPTION: Second majors double-count otherwise.")
+    with_category = without + "\nCATEGORY: SECOND_MAJOR"
+    assert parse_verdict(without) == parse_verdict(with_category), \
+        (parse_verdict(without), parse_verdict(with_category))
+
+
 # --- _SYSTEM / build_review_messages / revision_instruction --------------------
 
 def test_system_prompt_pins_key_substrings():
     # Only the labels the output parser consumes are load-bearing: a prompt
-    # reworded to emit anything other than HEADLINE/DESCRIPTION would silently
-    # break parse_verdict. (Prose wording of the rest of the prompt is free to
-    # change without a behavior regression, so it isn't pinned here.)
-    for s in ("HEADLINE", "DESCRIPTION"):
+    # reworded to emit anything other than HEADLINE/DESCRIPTION/CATEGORY (or
+    # that dropped a category token) would silently break
+    # parse_verdict/parse_category. (Prose wording of the rest of the prompt is
+    # free to change without a behavior regression, so it isn't pinned here.)
+    from app import lessoncats
+    for s in ("HEADLINE", "DESCRIPTION", "CATEGORY", *lessoncats.CATEGORIES):
         assert s in critic._SYSTEM, (s, critic._SYSTEM)
+
+
+def test_every_category_tags_exactly_one_system_bullet():
+    """The prompt/enum drift guard: critic._SYSTEM is meant to be ASSEMBLED
+    from lessoncats.BULLETS, so every token in the closed set appears as a
+    bracketed tag on exactly one bullet. A category added to lessoncats.py
+    with no matching bullet (or a bullet retagged/duplicated) would silently
+    desync the reviewer's instructions from what chat.py actually gates on."""
+    from app import lessoncats
+    for token in lessoncats.CATEGORIES:
+        tag = f"[{token}]"
+        count = critic._SYSTEM.count(tag)
+        assert count == 1, f"{tag} appears {count} time(s) in _SYSTEM, expected exactly 1"
+
+
+def test_system_prompt_never_discloses_which_categories_are_learnable():
+    """A future well-meaning edit could re-add a sentence like 'HEADLINE and
+    DESCRIPTION are stored as a learned lesson' -- the exact sentence this PR
+    deletes. That disclosure IS the gaming incentive this PR exists to close:
+    a model that learns its UNGROUNDED_NUMBER findings are discarded can just
+    relabel as a learnable category (or OTHER) to keep getting through. The
+    prompt must never say that any category becomes a stored lesson."""
+    lowered = critic._SYSTEM.lower()
+    assert "lesson" not in lowered, \
+        f"_SYSTEM must not disclose that a finding is stored as a lesson: {critic._SYSTEM!r}"
 
 
 def test_build_messages_includes_artifacts():
@@ -237,6 +337,7 @@ def test_review_fails_open_without_key():
     finally:
         critic.get_settings = orig
     assert c.ok is True, "no key must fail open"
+    assert c.category == "", "a fail-open Critique must carry no category"
 
 
 def test_review_disabled_fails_open():
@@ -248,6 +349,7 @@ def test_review_disabled_fails_open():
     finally:
         critic.get_settings = orig
     assert c.ok is True, "disabled critic must fail open"
+    assert c.category == "", "a fail-open Critique must carry no category"
 
 
 def _configured(**overrides):
@@ -309,6 +411,7 @@ def test_review_ok_verdict_live():
         resp, lambda: asyncio.run(critic.review("q", ["SELECT 1"], "ans")))
     assert c.ok is True, c
     assert c.headline == "" and c.description == "", c
+    assert c.category == "", c
     assert c.prompt_tokens == 40 and c.completion_tokens == 1, c
     assert c.cost == 0.0002, c
 
@@ -325,6 +428,24 @@ def test_review_revise_verdict_live():
     assert c.ok is False, c
     assert c.headline == "Add majornum=1.", c.headline
     assert "majornum" in c.description, c.description
+
+
+def test_review_revise_verdict_includes_category_live():
+    """review() must copy the parsed CATEGORY: token onto Critique.category --
+    without this, chat.py's lesson-recording gate always sees '' regardless of
+    what the model actually reported, and a genuinely learnable finding is
+    silently never recorded."""
+    resp = _json_response({
+        "choices": [{"message": {"content":
+            "REVISE\nHEADLINE: Add majornum=1.\n"
+            "DESCRIPTION: no majornum=1 filter, double counts second majors.\n"
+            "CATEGORY: SECOND_MAJOR"}}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 8},
+    })
+    c = _with_fake_transport(
+        resp, lambda: asyncio.run(critic.review("q", ["SELECT SUM(ctotalt) FROM c_a"], "ans")))
+    assert c.ok is False, c
+    assert c.category == "SECOND_MAJOR", c.category
 
 
 def test_review_transport_error_fails_open():
@@ -453,6 +574,98 @@ def test_revise_verdict_triggers_one_revision():
     assert calls["critic"] == 1, "critic must run at most once per turn"
     # run_sql, draft, revision-round run_sql, corrected answer
     assert calls["chat"] == 4, calls
+
+
+def test_critic_category_flows_from_review_into_agent_result():
+    """llm.py must copy Critique.category onto AgentResult.critic_category on
+    the MAIN-LOOP critic call site -- chat.py's lesson-recording gate reads
+    result.critic_category, so a missed copy here makes every finding
+    silently unlearnable, with no error anywhere (the exact 'lessons silently
+    stopped' failure mode this PR is about)."""
+    calls = {"chat": 0, "critic": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql", "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 2:
+            return {"choices": [{"message": {"content": "Draft: 4,000,000 (wrong)."}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 3:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c2", "type": "function", "function": {
+                    "name": "run_sql",
+                    "arguments": '{"sql": "SELECT SUM(ctotalt) FROM c_a WHERE majornum=1"}'
+                }}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        return {"choices": [{"message": {"content": "Corrected: 1,000,000."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    async def fake_review(question, sql_log, answer, *a, **kw):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="Add majornum=1.",
+                        description="missing majornum=1; ~4x overcount",
+                        category="CIP_ROLLUP")
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = critic.review
+    assert res.critic_revised is True, res.critic_revised
+    assert res.critic_category == "CIP_ROLLUP", res.critic_category
+
+
+def test_revise_still_fires_when_category_is_not_learnable():
+    """CRITICAL guard named in the PR: gating the LEARNING must never gate the
+    REVISE decision itself. An UNGROUNDED_NUMBER finding is exactly the
+    valuable half of the critic -- app/grounding.py can't force a re-query,
+    only the critic can -- so a future refactor that folds is_learnable()
+    into the revision check (turning 'stops learning' into 'stops flagging')
+    must fail this test: the correction round has to run and ship regardless
+    of category."""
+    calls = {"chat": 0, "critic": 0}
+
+    async def fake_chat(client, model, messages, tools=None):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {
+                    "name": "run_sql", "arguments": '{"sql": "SELECT 9999999"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 2:
+            return {"choices": [{"message": {"content": "Draft: 9,999,999 (invented)."}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if calls["chat"] == 3:
+            return {"choices": [{"message": {"content": "",
+                "tool_calls": [{"id": "c2", "type": "function", "function": {
+                    "name": "run_sql", "arguments": '{"sql": "SELECT 1000000"}'}}]}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        return {"choices": [{"message": {"content": "Corrected: 1,000,000."}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    async def fake_review(question, sql_log, answer, *a, **kw):
+        calls["critic"] += 1
+        return Critique(ok=False, headline="Number not in the data.",
+                        description="the figure is not present in the retained result rows",
+                        category="UNGROUNDED_NUMBER")
+
+    llm._chat = fake_chat
+    llm.critic.review = fake_review
+    registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+    try:
+        res = _run("q")
+    finally:
+        llm.critic.review = critic.review
+    assert res.answer == "Corrected: 1,000,000.", res.answer
+    assert res.critic_revised is True, \
+        "an UNGROUNDED_NUMBER finding must still force a revision round"
+    assert res.critic_category == "UNGROUNDED_NUMBER", res.critic_category
 
 
 def test_rebuttal_without_new_sql_reemits_clean_draft():
@@ -679,8 +892,22 @@ def run():
     check("parse bare REVISE gets a non-empty fallback",
           test_parse_bare_revise_gets_a_nonempty_fallback)
     check("parse_verdict never throws on garbage input", test_parse_never_throws_on_garbage)
-    check("_SYSTEM pins the parser's HEADLINE/DESCRIPTION labels",
+    check("parse_category extracts a canonical token, case-insensitively",
+          test_parse_category_extracts_canonical_token_case_insensitively)
+    check("parse_category fails closed on unrecognized/absent input",
+          test_parse_category_fails_closed_on_unrecognized_or_absent)
+    check("parse_category never throws on garbage input",
+          test_parse_category_never_throws_on_garbage)
+    check("_DESCRIPTION_RE does not swallow a following CATEGORY line",
+          test_description_regex_does_not_swallow_a_following_category_line)
+    check("a CATEGORY line does not change parse_verdict's headline/description",
+          test_adding_a_category_line_does_not_change_parsed_headline_or_description)
+    check("_SYSTEM pins the parser's HEADLINE/DESCRIPTION/CATEGORY labels + tokens",
           test_system_prompt_pins_key_substrings)
+    check("every lesson category tags exactly one _SYSTEM bullet",
+          test_every_category_tags_exactly_one_system_bullet)
+    check("_SYSTEM never discloses which categories are learnable",
+          test_system_prompt_never_discloses_which_categories_are_learnable)
     check("build_review_messages includes question/SQL/answer",
           test_build_messages_includes_artifacts)
     check("build_review_messages includes the actual result rows",
@@ -701,6 +928,8 @@ def run():
     check("review fails open when disabled", test_review_disabled_fails_open)
     check("review OK verdict (live transport)", test_review_ok_verdict_live)
     check("review REVISE verdict (live transport)", test_review_revise_verdict_live)
+    check("review REVISE verdict includes CATEGORY (live transport)",
+          test_review_revise_verdict_includes_category_live)
     check("review transport error fails open", test_review_transport_error_fails_open)
     check("review non-JSON 200 body fails open, does not raise",
           test_review_non_json_200_response_fails_open)
@@ -710,6 +939,10 @@ def run():
           test_ok_verdict_returns_draft_unchanged)
     check("REVISE verdict triggers exactly one revision",
           test_revise_verdict_triggers_one_revision)
+    check("critic_category flows from Critique into AgentResult (main-loop call site)",
+          test_critic_category_flows_from_review_into_agent_result)
+    check("REVISE still fires when the category is not learnable",
+          test_revise_still_fires_when_category_is_not_learnable)
     check("a rebuttal with no new SQL re-emits the clean draft (leak regression)",
           test_rebuttal_without_new_sql_reemits_clean_draft)
     check("a requery confirming the same answer is not a revision",
