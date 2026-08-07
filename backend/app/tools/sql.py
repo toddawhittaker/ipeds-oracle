@@ -337,6 +337,12 @@ def run_sql(sql: str, *, params: tuple | list = (), limit: int | None = None,
 
     timer = threading.Timer(timeout, _watchdog)
     timer.start()
+    # Bound BEFORE the try: the probe's `if timed_out.is_set(): raise` jumps
+    # past the assignment below straight into the DataError handler, which reads
+    # this to name the limit in force. Reproduced as an UnboundLocalError, which
+    # registry.py's broad `except Exception` would then hand to the model
+    # instead of the SQLTimeoutError steer.
+    eff_value_limit = SQL_MAX_VALUE_BYTES
     try:
         # Bound ONE ROW before any row exists.
         #

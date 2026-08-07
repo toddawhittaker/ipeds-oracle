@@ -6,7 +6,7 @@ import {
 import { svgToPngDataUrl } from "./chartimg.js";
 import { IconCopy, IconCheck, IconTag, IconMaximize } from "./icons.jsx";
 import ChartModal from "./ChartModal.jsx";
-import { pctChange, trendValues } from "./trendstats.js";
+import { deltaAnnouncement, pctChange, trendValues } from "./trendstats.js";
 
 // Series colors. Muted/earthy to match the app's archival cream+teal+ochre
 // aesthetic (the old palette read as neon on both themes), but still six
@@ -326,10 +326,7 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
                 that renders "→ 0.3%" in neutral grey as "down 0.3%" — a
                 sighted user and a screen-reader user being told opposite
                 things, on the one element whose whole job is direction. */}
-            <span className="sr-only">
-              {delta.dir === "up" ? "up " : delta.dir === "down" ? "down " : "roughly unchanged, "}
-              {Math.abs(delta.pct).toFixed(1)}% over the range shown
-            </span>
+            <span className="sr-only">{deltaAnnouncement(delta)}</span>
           </span>
         )}
         <div className="chart-head-tools">

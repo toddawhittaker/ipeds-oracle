@@ -40,3 +40,20 @@ export function pctChange(data, key) {
   const dir = pct > 0.5 ? "up" : pct < -0.5 ? "down" : "flat";
   return { pct, first, last, dir };
 }
+
+
+// The screen-reader sentence for a delta badge. Pure, so the THREE-way
+// direction is pinned at the vitest tier rather than left in JSX where a
+// collapse back to two-way is silent — the badge's glyph and colour are
+// aria-hidden, so this string is the only thing a screen-reader user gets, and
+// axe cannot rate a wrong-but-present name.
+export function deltaAnnouncement(delta) {
+  if (!delta) return "";
+  const pct = Math.abs(delta.pct).toFixed(1);
+  if (delta.dir === "up") return `up ${pct}% over the range shown`;
+  if (delta.dir === "down") return `down ${pct}% over the range shown`;
+  // "flat" is |pct| <= 0.5, NOT zero — so it still reports the number, and must
+  // never say "down": a series rendering "→ 0.3%" in neutral grey announcing
+  // "down 0.3%" tells sighted and screen-reader users opposite things.
+  return `roughly unchanged, ${pct}% over the range shown`;
+}

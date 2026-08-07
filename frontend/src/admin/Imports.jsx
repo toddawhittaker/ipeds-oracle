@@ -59,9 +59,19 @@ function YearCard({ entry, locked, checked, onToggle, onRemove }) {
   // "Integrate 2022-23 (Final)" with its "Integrated" badge gone — an
   // affordance that does not exist — and `release` is null for an unprobed or
   // unknown year, which rendered the literal string "(null)".
-  const label = entry.selectable
-    ? `Integrate ${entry.year_label}${entry.release ? ` (${entry.release})` : ""}`
-    : `${entry.year_label} — ${STATUS_TEXT[entry.status] || entry.status}`;
+  // Three cases, not two. `update` is BOTH integrated and selectable (loaded as
+  // Provisional, a Final is now out), so it fell through to the "Integrate …"
+  // branch and rendered byte-identically to a never-loaded year — _derive_status
+  // only returns `update` when release == "Final". With role="checkbox" pruning
+  // the "↑ Update" badge, a screen-reader admin had no way to tell a re-fetch of
+  // data they already have from a genuinely new year. Same defect the
+  // non-selectable branch below was added to fix, surviving in the one state
+  // that is both.
+  const label = entry.status === "update"
+    ? `Update ${entry.year_label} to ${entry.release || "the latest release"}`
+    : entry.selectable
+      ? `Integrate ${entry.year_label}${entry.release ? ` (${entry.release})` : ""}`
+      : `${entry.year_label} — ${STATUS_TEXT[entry.status] || entry.status}`;
   const cls = ["year-card", entry.status, checked ? "selected" : "", locked ? "locked" : ""]
     .filter(Boolean).join(" ");
 
@@ -436,7 +446,8 @@ export default function Imports({ onDataChanged }) {
       title: adding === 0
         ? "Rebuild the database?"
         : `Rebuild the database with ${adding} more year${adding === 1 ? "" : "s"}?`,
-      body: `This rebuilds from all ${total} years (${already} already loaded`
+      body: `This rebuilds from all ${total} year${total === 1 ? "" : "s"}`
+        + ` (${already} already loaded`
         + `${adding ? `, ${adding} new` : `, re-fetching ${total === 1 ? "a year" : "years"} you already have`}`
         + `).${cost} The live database is only replaced if every check`
         + " passes — until then it keeps answering questions.",

@@ -9,3 +9,4 @@ export declare function pctChange(data: any, key: any): {
     last: any;
     dir: string;
 };
+export declare function deltaAnnouncement(delta: any): string;
