@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 import app.nces as nces
-from app import estimate, importer, skills
+from app import estimate, importer, lessoncats, skills
 from app.auth import canon_email, require_admin
 from app.config import get_settings, resolve_tz
 from app.db import connect
@@ -1246,11 +1246,97 @@ def list_skills():
         # verified library.
         rows = con.execute(
             "SELECT id, question, headline, lesson, canonical_sql, notes, upvotes, "
-            "downvotes, hits, verified, created_by, created_at FROM skills "
+            "downvotes, hits, verified, created_by, category, created_at FROM skills "
             "ORDER BY verified ASC, created_at DESC, id DESC LIMIT 500").fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()
+
+
+# --- Lesson categories (A2: lesson-rejection memory) --------------------------
+# Registered BEFORE the /skills/{skill_id} PATCH/DELETE routes below:
+# FastAPI/Starlette matches a bare `{skill_id}` path segment structurally
+# against ANY string (the `int` type is enforced only afterward, by pydantic
+# dependency resolution) and does not fall through to a later route on a
+# conversion failure. A static "/skills/categories" or "/skills/rejections"
+# path registered AFTER "/skills/{skill_id}" would therefore never be reached
+# — DELETE /skills/rejections would 422 on "rejections" not being an int
+# instead of matching the rejections route at all (verified empirically).
+@router.get("/skills/categories")
+def list_skill_categories():
+    """The closed category set (app.lessoncats), each with its live admin
+    state: whether it's muted, and how many PENDING (unverified) lessons
+    currently carry it — a token the admin has never seen isn't worth muting."""
+    con = connect()
+    try:
+        muted = skills.muted_categories(con)
+        pending_counts = dict(con.execute(
+            "SELECT category, COUNT(*) FROM skills "
+            "WHERE verified=0 AND category IS NOT NULL GROUP BY category").fetchall())
+    finally:
+        con.close()
+    return [
+        {"token": t, "label": lessoncats.LABELS[t], "learnable": t in lessoncats.LEARNABLE,
+         "muted": t in muted, "pending": int(pending_counts.get(t, 0))}
+        for t in lessoncats.CATEGORIES
+    ]
+
+
+@router.post("/skills/categories/{token}/mute")
+def mute_skill_category(token: str):
+    if token not in lessoncats.CATEGORIES:
+        raise HTTPException(404, "Unknown lesson category.")
+    skills.set_category_muted(token, True)
+    return {"ok": True}
+
+
+@router.delete("/skills/categories/{token}/mute")
+def unmute_skill_category(token: str):
+    if token not in lessoncats.CATEGORIES:
+        raise HTTPException(404, "Unknown lesson category.")
+    skills.set_category_muted(token, False)
+    return {"ok": True}
+
+
+# --- Lesson-rejection tombstones (A2) ------------------------------------------
+@router.get("/skills/rejections")
+def list_skill_rejections():
+    """Every rejected-lesson tombstone, newest first. NEVER selects `embedding`
+    — bytes aren't JSON-serialisable, and returning it would 500 the whole
+    panel the moment a real tombstone existed."""
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT id, headline, description, category, created_by, skill_id, "
+            "was_verified, hits, created_at FROM lesson_rejections "
+            "ORDER BY created_at DESC, id DESC LIMIT 500").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+@router.delete("/skills/rejections/{rejection_id}")
+def delete_skill_rejection(rejection_id: int):
+    """Idempotent: deleting an already-gone id still reports ok."""
+    con = connect()
+    try:
+        con.execute("DELETE FROM lesson_rejections WHERE id=?", (rejection_id,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+@router.delete("/skills/rejections")
+def clear_skill_rejections():
+    """Clear every rejection tombstone. Idempotent."""
+    con = connect()
+    try:
+        con.execute("DELETE FROM lesson_rejections")
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
 
 
 class SkillUpdate(BaseModel):
@@ -1313,10 +1399,50 @@ def update_skill(skill_id: int, body: SkillUpdate):
 
 
 @router.delete("/skills/{skill_id}")
-def delete_skill(skill_id: int):
+def delete_skill(skill_id: int, mute_category: bool = False):
+    """Reject a lesson. Idempotent by contract (like clear_access_denial): a
+    missing id still reports {"ok": true} and writes no tombstone.
+
+    A2 (lesson-rejection memory): before removing the row, write a tombstone to
+    lesson_rejections so a near-identical proposal can be recognized and
+    suppressed later instead of silently repeating the admin's judgment (see
+    app.skills._check_tombstone). Reuses the skill's own STORED embedding
+    (already _embed_source-derived, free, and works even when fastembed is
+    down) — only a NULL stored embedding triggers a fresh embed() call.
+
+    `mute_category=1` folds a category mute into the SAME transaction as the
+    tombstone + delete: one atomic admin intent, not two chained requests a
+    partial failure could split (the mute is the entire point of the "Reject &
+    mute <category>" action).
+
+    `skills.id` is a plain `INTEGER PRIMARY KEY` (no AUTOINCREMENT), so SQLite
+    CAN reassign a freed high id to a later, entirely unrelated lesson —
+    `skill_id` on a tombstone is therefore a non-unique PROVENANCE breadcrumb
+    only, never an identity, and nothing may key off it (in particular: never
+    delete-or-replace an existing tombstone by skill_id before inserting a new
+    one — two tombstones legitimately sharing a skill_id is expected, and
+    erasing an earlier one would silently restore the very lesson it was
+    recorded to keep suppressed)."""
     con = connect()
     try:
-        con.execute("DELETE FROM skills WHERE id=?", (skill_id,))
+        row = con.execute(
+            "SELECT headline, lesson, embedding, category, created_by, verified "
+            "FROM skills WHERE id=?", (skill_id,)).fetchone()
+        if row is not None:
+            emb = row["embedding"]
+            if emb is None:
+                source = skills._embed_source(row["headline"] or "", row["lesson"] or "")
+                v = skills.embed(source) if source else None
+                emb = skills._to_blob(v) if v is not None else None
+            con.execute(
+                "INSERT INTO lesson_rejections(headline, description, embedding, "
+                "category, created_by, skill_id, was_verified, hits, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (row["headline"], row["lesson"], emb, row["category"], row["created_by"],
+                 skill_id, int(row["verified"]), 0, time.time()))
+            con.execute("DELETE FROM skills WHERE id=?", (skill_id,))
+            if mute_category and row["category"]:
+                skills._set_category_muted_on(con, row["category"], True)
         con.commit()
     finally:
         con.close()

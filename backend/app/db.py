@@ -459,6 +459,43 @@ MIGRATIONS: list[tuple[int, str]] = [
     # DEFAULT 0 = "reported", which is correct for every existing row: they
     # predate the switch and carry OpenRouter's billed figure.
     (34, "ALTER TABLE usage_log ADD COLUMN cost_estimated INTEGER NOT NULL DEFAULT 0;"),
+    # 35 (A2: lesson-rejection memory) -- rejecting a lesson is a hard DELETE
+    # with no trace, so app.skills._find_duplicate can never suppress the same
+    # proposal recurring: the evidence a rejection should have left behind is
+    # destroyed by the rejection itself.
+    #
+    # skills.category: a nullable classification (the critic's closed
+    # app.lessoncats token) so a lesson can be grouped and, from the admin UI,
+    # muted as a whole category. Pre-existing/seed/feedback rows stay NULL --
+    # only the critic path populates it going forward.
+    #
+    # lesson_rejections: one tombstone row per DELETEd lesson (written by
+    # app.routers.admin.delete_skill BEFORE the DELETE), carrying enough to
+    # recognize + attribute a future near-duplicate: the rejected headline +
+    # description, the embedding (reused from the deleted skill row, not
+    # recomputed), its category, its source, and whether it had been verified.
+    # `hits` counts how many times a later candidate matched this tombstone
+    # (mirrors skills.hits); `skill_id` is kept for provenance/display only.
+    #
+    # Deliberately NO foreign key on skill_id: the referenced skill row is gone
+    # BY DEFINITION (that is the whole point of a tombstone), and db.connect()
+    # sets PRAGMA foreign_keys=ON -- a real FK here would make every DELETE
+    # .../skills/{id} that writes a tombstone fail outright.
+    (35, "ALTER TABLE skills ADD COLUMN category TEXT;\n"
+         "CREATE TABLE lesson_rejections (\n"
+         "    id INTEGER PRIMARY KEY,\n"
+         "    headline TEXT,\n"
+         "    description TEXT,\n"
+         "    embedding BLOB,\n"
+         "    category TEXT,\n"
+         "    created_by TEXT,\n"
+         "    skill_id INTEGER,\n"
+         "    was_verified INTEGER NOT NULL DEFAULT 0,\n"
+         "    hits INTEGER NOT NULL DEFAULT 0,\n"
+         "    created_at REAL NOT NULL\n"
+         ");\n"
+         "CREATE INDEX ix_lesson_rejections_created "
+         "ON lesson_rejections(created_at DESC);"),
 ]
 
 

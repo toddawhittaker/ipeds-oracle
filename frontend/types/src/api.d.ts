@@ -34,8 +34,15 @@ export declare const api: {
     attention: () => Promise<any>;
     markLogsSeen: () => Promise<any>;
     skills: () => Promise<any>;
-    deleteSkill: (id: any) => Promise<any>;
+    deleteSkill: (id: any, { muteCategory }?: {
+        muteCategory?: boolean;
+    }) => Promise<any>;
     patchSkill: (id: any, body: any) => Promise<any>;
+    skillCategories: () => Promise<any>;
+    muteSkillCategory: (token: any, muted: any) => Promise<any>;
+    skillRejections: () => Promise<any>;
+    deleteSkillRejection: (id: any) => Promise<any>;
+    clearSkillRejections: () => Promise<any>;
     importJobs: () => Promise<any>;
     importJob: (id: any) => Promise<any>;
     importCatalog: (refresh?: boolean) => Promise<any>;

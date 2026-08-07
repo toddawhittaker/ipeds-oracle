@@ -503,6 +503,61 @@ def test_migration_7_adds_headline_column():
     assert row[0] is None, row
 
 
+def test_migration_35_adds_category_and_lesson_rejections_table():
+    """A2 (lesson-rejection memory): rejecting a lesson currently DELETEs the row
+    outright with no trace, so skills._find_duplicate can never suppress the
+    same proposal recurring -- the evidence a rejection should have left behind
+    is destroyed by the rejection itself. Migration 35 adds a nullable
+    skills.category (pre-existing/seed/feedback rows stay NULL -- only the
+    critic path populates it going forward) and a lesson_rejections tombstone
+    table (+ its created_at index) that a DELETE writes to BEFORE removing the
+    skill row, so a near-identical candidate can be recognized and suppressed
+    instead of silently duplicating the admin's already-rejected judgment."""
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 34])
+    assert "category" not in _cols(con, "skills"), _cols(con, "skills")
+    tables = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "lesson_rejections" not in tables, tables
+
+    v = _apply_migrations(con, MIGRATIONS)
+    assert v == max(m[0] for m in MIGRATIONS), v
+
+    assert "category" in _cols(con, "skills"), _cols(con, "skills")
+    # Nullable: existing rows aren't backfilled by the DDL.
+    con.execute("INSERT INTO skills(question, canonical_sql, created_at) "
+               "VALUES ('q', 'SELECT 1', 0)")
+    row = con.execute("SELECT category FROM skills WHERE question='q'").fetchone()
+    assert row[0] is None, row
+
+    lr_cols = _cols(con, "lesson_rejections")
+    assert lr_cols == {"id", "headline", "description", "embedding", "category",
+                       "created_by", "skill_id", "was_verified", "hits",
+                       "created_at"}, lr_cols
+
+    idx_names = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "ix_lesson_rejections_created" in idx_names, idx_names
+
+    # Deliberately NO foreign key on skill_id -- the referenced skill row is
+    # gone by definition (that's the whole point of a tombstone), and
+    # db.connect() sets PRAGMA foreign_keys=ON, so a real FK here would make
+    # every DELETE .../skills/{id} that writes a tombstone fail outright.
+    fks = con.execute("PRAGMA foreign_key_list(lesson_rejections)").fetchall()
+    assert fks == [], f"lesson_rejections must carry NO foreign key on skill_id: {fks}"
+
+    # was_verified/hits default to 0 and are NOT NULL; created_at is NOT NULL
+    # with no default (every writer must supply it, like every other table here).
+    info = {r[1]: r for r in con.execute("PRAGMA table_info(lesson_rejections)")}
+    assert info["was_verified"][3] == 1 and info["was_verified"][4] == "0", info["was_verified"]
+    assert info["hits"][3] == 1 and info["hits"][4] == "0", info["hits"]
+    assert info["created_at"][3] == 1 and info["created_at"][4] is None, info["created_at"]
+
+    # Re-applying against an already-migrated db is a safe no-op.
+    v2 = _apply_migrations(con, MIGRATIONS)
+    assert v2 == v, f"expected version to stay {v}, got {v2}"
+
+
 def test_access_requests_email_index_exists():
     """Migration 8: is_denied() (backend/app/auth.py) runs a per-address lookup on
     access_requests on EVERY unauthenticated POST /api/auth/request, and the
@@ -744,6 +799,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "updated_at"
       ],
       "table": "conversations",
+      "unique": 0
+    },
+    "ix_lesson_rejections_created": {
+      "columns": [
+        "created_at"
+      ],
+      "table": "lesson_rejections",
       "unique": 0
     },
     "ix_msg_conv": {
@@ -998,6 +1060,78 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "REAL",
         1,
         null,
+        0
+      ]
+    ],
+    "lesson_rejections": [
+      [
+        "category",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_by",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "description",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "embedding",
+        "BLOB",
+        0,
+        null,
+        0
+      ],
+      [
+        "headline",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "hits",
+        "INTEGER",
+        1,
+        "0",
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "skill_id",
+        "INTEGER",
+        0,
+        null,
+        0
+      ],
+      [
+        "was_verified",
+        "INTEGER",
+        1,
+        "0",
         0
       ]
     ],
@@ -1303,6 +1437,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "canonical_sql",
         "TEXT",
         1,
+        null,
+        0
+      ],
+      [
+        "category",
+        "TEXT",
+        0,
         null,
         0
       ],
@@ -2000,6 +2141,8 @@ def run():
           test_migration_6_is_idempotent_and_noop_on_fresh_db)
     check("migration 7 adds skills.headline (nullable)",
           test_migration_7_adds_headline_column)
+    check("migration 35 adds skills.category + the lesson_rejections tombstone table",
+          test_migration_35_adds_category_and_lesson_rejections_table)
     check("migration 8 adds idx_access_requests_email (idempotent re-apply)",
           test_access_requests_email_index_exists)
     check("migration 9 adds access_requests.canon_email + index, backfills existing rows",

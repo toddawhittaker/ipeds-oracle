@@ -7,6 +7,7 @@ import SqlBlock from "../SqlBlock.jsx";
 import { useToast } from "../Toast.jsx";
 import { useConfirm } from "../ConfirmModal.jsx";
 import { ruleName } from "./format.js";
+import { canMuteCategory, categoryLabel, rejectionCountLabel } from "./lessoncats.js";
 
 export default function Skills({ onAttentionChanged }) {
   const toast = useToast();
@@ -14,6 +15,13 @@ export default function Skills({ onAttentionChanged }) {
   const refreshAttention = onAttentionChanged || (() => {});
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
+  // A2 (lesson-rejection memory): the closed category set (with live
+  // muted/pending state) and the rejection-tombstone list, each loaded
+  // independently of the lesson list above.
+  const [categories, setCategories] = useState([]);
+  const [rejections, setRejections] = useState([]);
+  const [rejectionsErr, setRejectionsErr] = useState("");
+  const rejectedSummaryRef = useRef(null);   // focus target after an Undo
   const [editingId, setEditingId] = useState(null);   // at most one card at a time
   const [draft, setDraft] = useState({ headline: "", lesson: "", canonical_sql: "" });
   // Focus returns to the "edit" button when the editor closes (a11y). We can't
@@ -29,7 +37,22 @@ export default function Skills({ onAttentionChanged }) {
   const load = () => api.skills()
     .then((d) => { setRows(d); setErr(""); })
     .catch((e) => setErr(loadErrorMessage("the lessons", e?.detail)));
-  useEffect(() => { load(); }, []);
+  // Categories: no visible error state on a load failure — canMuteCategory
+  // and categoryLabel both fail CLOSED on an empty/missing list (no pill, no
+  // "Reject & mute" action offered), which is the safe direction for this
+  // one, unlike the rejections list below. `Array.isArray` guards against a
+  // non-array response (e.g. a broad `**/skills/*` test fixture, or any other
+  // unexpected shape) crashing the whole panel on `.filter`/`.find`.
+  const loadCategories = () => api.skillCategories()
+    .then((d) => setCategories(Array.isArray(d) ? d : []))
+    .catch(() => setCategories([]));
+  // Rejections: a load failure must render a VISIBLE error, never "Rejected
+  // (0)" — the deniedError precedent (Allowlist.jsx): a failed load must
+  // never be indistinguishable from "confirmed nothing rejected".
+  const loadRejections = () => api.skillRejections()
+    .then((d) => { setRejections(Array.isArray(d) ? d : []); setRejectionsErr(""); })
+    .catch((e) => setRejectionsErr(loadErrorMessage("rejected lessons", e?.detail)));
+  useEffect(() => { load(); loadCategories(); loadRejections(); }, []);
 
   // Which "edit" button to focus once a save's reload has COMMITTED, as a fresh
   // `{ id }` object each time so the layout effect re-fires per save (even re-saving
@@ -135,6 +158,58 @@ export default function Skills({ onAttentionChanged }) {
     });
   };
 
+  // "Reject & mute <category>" — a change to FUTURE behaviour (every future
+  // proposal in that category is suppressed until unmuted), never the
+  // disposable-single-proposal shortcut reject() takes above: this ALWAYS
+  // confirms, whatever the lesson's own verified/votes/hits state.
+  const rejectAndMute = (s) => {
+    const label = categoryLabel(s.category, categories);
+    confirm({
+      variant: "danger",
+      title: `Reject this lesson and mute "${label}"?`,
+      body: `This deletes the lesson AND stops the assistant proposing any `
+          + `future "${label}" lesson until you unmute it.`,
+      details: ruleName(s),
+      confirmLabel: "Mute this category",
+      onConfirm: () => api.deleteSkill(s.id, { muteCategory: true }),
+      successToast: `Lesson rejected. "${label}" lessons are now muted.`,
+      errorToast: "Couldn't reject and mute that category.",
+      onSuccess: async () => {
+        await Promise.all([load(), loadCategories(), loadRejections()]);
+        focusHeading();
+        refreshAttention();
+      },
+    });
+  };
+
+  const unmuteCategory = (cat) =>
+    api.muteSkillCategory(cat.token, false)
+      .then(() => { announce(`"${cat.label}" lessons are unmuted.`, "ok"); return loadCategories(); })
+      .catch(() => announce("Couldn't unmute that category.", "error"));
+
+  // Removed OPTIMISTICALLY from local state rather than re-fetched: the server
+  // already confirmed the delete, and re-fetching adds nothing but latency
+  // (and a second request that could itself fail after the first succeeded).
+  const undoRejection = (r) =>
+    api.deleteSkillRejection(r.id)
+      .then(() => {
+        announce("Rejection cleared.", "ok");
+        setRejections((rs) => rs.filter((x) => x.id !== r.id));
+        requestAnimationFrame(() => rejectedSummaryRef.current?.focus?.());
+      })
+      .catch(() => announce("Couldn't clear that rejection.", "error"));
+
+  const clearRejections = () =>
+    api.clearSkillRejections()
+      .then(() => {
+        announce("Cleared every rejected-lesson record.", "ok");
+        setRejections([]);
+        requestAnimationFrame(() => rejectedSummaryRef.current?.focus?.());
+      })
+      .catch(() => announce("Couldn't clear the rejected-lesson list.", "error"));
+
+  const mutedCategories = categories.filter((c) => c.muted);
+
   return (
     <div className="panel">
       <h2 ref={headingRef} tabIndex={-1}>Learned lessons ({rows.length})</h2>
@@ -182,6 +257,13 @@ export default function Skills({ onAttentionChanged }) {
                 </span>
               </span>
               <span className="tag">hits {s.hits}</span>
+              {/* A2: category pill. categoryLabel fails closed (returns "")
+                  for a NULL/unrecognized category or a not-yet-loaded
+                  category list, so a pre-existing/seed/feedback row (whose
+                  category is always NULL) renders no pill at all. */}
+              {categoryLabel(s.category, categories) && (
+                <span className="tag">{categoryLabel(s.category, categories)}</span>
+              )}
             </span>
           </div>
           {editingId === s.id ? (
@@ -251,12 +333,74 @@ export default function Skills({ onAttentionChanged }) {
                     onClick={() => startEdit(s)}>edit</button>
             <button className="link danger" aria-label={`Reject lesson: ${ruleName(s)}`}
                     onClick={() => reject(s)}>reject</button>
+            {canMuteCategory(s, categories) && (
+              <button className="link danger"
+                      aria-label={`Reject & mute ${categoryLabel(s.category, categories)}: ${ruleName(s)}`}
+                      onClick={() => rejectAndMute(s)}>
+                Reject &amp; mute {categoryLabel(s.category, categories)}
+              </button>
+            )}
           </div>
           </>
           )}
         </div>
         );
       })}
+
+      {/* A2: muted categories -- collapsed by default, an Unmute action per
+          row. Always rendered (even at zero) so the count is a live status,
+          not something that appears only once something is muted. */}
+      <details className="lesson-desc">
+        <summary>{`Muted categories (${mutedCategories.length})`}</summary>
+        {mutedCategories.length === 0 ? (
+          <p className="muted small">No categories are muted.</p>
+        ) : (
+          mutedCategories.map((cat) => (
+            <div key={cat.token} className="skill">
+              <div className="skill-head">
+                <span className="lesson-rule">{cat.label}</span>
+                <button className="link" aria-label={`Unmute category: ${cat.label}`}
+                        onClick={() => unmuteCategory(cat)}>Unmute</button>
+              </div>
+            </div>
+          ))
+        )}
+      </details>
+
+      {/* A2: rejected-lesson tombstones -- collapsed by default, per-row Undo.
+          A load failure renders a visible error INSTEAD of the section (never
+          "Rejected (0)", which would read as a confirmed empty result). */}
+      {rejectionsErr ? (
+        <p className="denied-error" role="alert">{rejectionsErr}</p>
+      ) : (
+        <details className="lesson-desc">
+          <summary ref={rejectedSummaryRef} tabIndex={-1}>
+            {rejectionCountLabel(rejections, "")}
+          </summary>
+          {rejections.length === 0 ? (
+            <p className="muted small">No lessons have been rejected yet.</p>
+          ) : (
+            <>
+              {rejections.map((r) => {
+                const rHeadline = r.headline || r.description || "(no rule text)";
+                const rDescription = r.description && r.description !== r.headline
+                  ? r.description : "";
+                return (
+                  <div key={r.id} className="skill">
+                    <div className="skill-head">
+                      <span className="lesson-rule">{rHeadline}</span>
+                      <button className="link" aria-label={`Undo rejection: ${rHeadline}`}
+                              onClick={() => undoRejection(r)}>Undo</button>
+                    </div>
+                    {rDescription && <p className="muted small">{rDescription}</p>}
+                  </div>
+                );
+              })}
+              <button className="link" onClick={clearRejections}>Clear all</button>
+            </>
+          )}
+        </details>
+      )}
     </div>
   );
 }
