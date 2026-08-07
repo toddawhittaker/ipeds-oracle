@@ -1863,9 +1863,18 @@ def test_an_established_db_does_not_re_grant_on_the_upgrade_hop():
     removed -- reproducing the bug on the way to fixing it. An established
     deployment records the current list instead."""
     con = _boot_db()
-    # Established: an allowlist exists, and the departed admin is NOT on it.
+    # Established: an allowlist exists, and the departed admin has been
+    # OFFBOARDED -- which is a specific state, not merely "absent". _remove_user
+    # deletes the allowlist row and KEEPS the users row with is_admin=0, and
+    # that surviving row is what distinguishes a removal from an address this
+    # deployment has never seen (which SHOULD be granted; see the hop test
+    # above). The original version of this fixture inserted neither row, so it
+    # was asserting the right thing about the wrong state.
     con.execute("INSERT INTO allowlist(email, added_by, added_at) VALUES (?,?,?)",
                 ("colleague@example.edu", "admin", 0))
+    con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,0,?)",
+                ("departed@example.edu", 0))
+    con.commit()
     assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is None, "marker should be absent"
 
     _bootstrap_admins(con, ["departed@example.edu"])
@@ -1888,8 +1897,43 @@ def test_an_address_added_to_admin_emails_later_is_still_granted():
     con.close()
 
 
+def test_the_upgrade_hop_still_grants_an_address_this_deployment_has_never_seen():
+    """THE REGRESSION (found by a second review pass): the record-only upgrade
+    hop was applied to EVERY listed address, so an operator who edits .env and
+    pulls a new image in one `docker compose up -d` -- the ordinary upgrade --
+    got their newly added admin silently swallowed, AND recorded as applied so
+    the next restart would not grant it either. README said the opposite.
+
+    An offboarded admin and a never-seen address are distinguishable:
+    `_remove_user` deletes the allowlist row but KEEPS the users row with
+    is_admin=0. Asserts both halves in one established, pre-marker database."""
+    con = _boot_db()
+    # Established, no marker. `departed` was offboarded (users row survives,
+    # allowlist row gone); `dean` has never been seen here at all.
+    con.execute("INSERT INTO allowlist(email, added_by, added_at) VALUES (?,?,?)",
+                ("colleague@example.edu", "admin", 0))
+    con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,0,?)",
+                ("departed@example.edu", 0))
+    con.commit()
+    assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is None, "marker should be absent"
+
+    _bootstrap_admins(con, ["departed@example.edu", "dean@example.edu"])
+
+    assert not _is_admin(con, "departed@example.edu"), \
+        "the upgrade hop restored a deliberately offboarded admin"
+    assert _is_admin(con, "dean@example.edu"), \
+        "the upgrade hop swallowed an address this deployment had never seen"
+    # And it stays granted, rather than depending on a second restart.
+    _bootstrap_admins(con, ["departed@example.edu", "dean@example.edu"])
+    assert _is_admin(con, "dean@example.edu"), "the new admin did not persist"
+    assert not _is_admin(con, "departed@example.edu"), "a later boot restored them"
+    con.close()
+
+
 def run():
     print("app.db migration contract:")
+    check("the upgrade hop grants a NEVER-SEEN address but not an offboarded one",
+          test_the_upgrade_hop_still_grants_an_address_this_deployment_has_never_seen)
     check("removing a bootstrap admin SURVIVES a restart",
           test_removing_a_bootstrap_admin_survives_a_restart)
     check("a demoted bootstrap admin is not re-promoted by a restart",

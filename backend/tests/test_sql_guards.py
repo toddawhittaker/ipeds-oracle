@@ -144,6 +144,36 @@ assert len(_r.rows) == 5000, f"an ordinary wide-ish export must survive, got {le
 assert not _r.truncated, "5000 rows under a 100k cap must not report truncated"
 print(f"  ✓ an ordinary {len(_r.rows):,}-row export is unaffected")
 
+# THE SECOND-PASS REGRESSIONS. Both were found by review AFTER the byte budget
+# shipped, and both defeated it while it was "working": the budget refused the
+# query, but only once the memory had already been allocated.
+#
+# (a) ROW WIDTH. Nothing bounded one row (n_columns x 1 MiB). Measured on the
+#     real dataset with 500 columns of hex(zeroblob(500000)): 2,185 MB peak at
+#     limit=1 and 5,046 MB at limit=200 -- and the 25 s watchdog cannot fire
+#     inside 1.6 s. Now a LIMIT 0 probe reads the column count before any row is
+#     built, and the per-value limit is derived from it. Same query: 35 MB.
+_wide = "SELECT " + ", ".join(f"hex(zeroblob(500000)) AS c{i}" for i in range(300))
+try:
+    run_sql(_wide, limit=1)
+    raise AssertionError("a 300-column result of 1 MB values was returned whole")
+except SQLResultTooLargeError:
+    print("  ✓ a single very WIDE row is refused before it is materialized")
+
+# (b) NON-UNIFORM ROWS. The budget used to size a fetchmany() from the running
+#     AVERAGE row size, which only holds on a uniform result: with small rows
+#     first the average stayed tiny, the batch pinned at its 1000 ceiling, and
+#     one fetch pulled ~1 GB resident BEFORE the check ran. validate_sql accepts
+#     the shaping CASE, so this was reachable on the CSV path. Now checked per
+#     row: same query, 101 MB.
+_shaped = ("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<400) "
+           "SELECT CASE WHEN i < 50 THEN 'x' ELSE hex(zeroblob(500000)) END AS v FROM n")
+try:
+    run_sql(_shaped, limit=100_000)
+    raise AssertionError("a small-rows-then-large-rows result was returned whole")
+except SQLResultTooLargeError:
+    print("  ✓ small rows followed by large ones cannot defeat the budget")
+
 print("\n== ipeds_years / has_ipeds_data: fresh-deploy 'no data' probes ==")
 # Non-raising probes for the "no dataset loaded yet" state. Built entirely on
 # tiny throwaway sqlite files under a tempdir -- never the real ipeds.db, and

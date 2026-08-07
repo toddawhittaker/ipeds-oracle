@@ -282,3 +282,53 @@ test.describe("adding years is confirmed, like removing one", () => {
     expect(integrate.posts.length).toBe(0);
   });
 });
+
+test.describe("the Integrate confirmation states the truth", () => {
+  // THE REGRESSION: `_derive_status` makes a year with status "update" BOTH
+  // integrated and selectable — re-integrating picks up a Final release over a
+  // Provisional one. The confirmation counted `already + selected.size`, so
+  // ticking such a year counted it twice: the modal claimed the deployment
+  // would end up with one MORE year than it has, in the one dialog whose entire
+  // job is to state what is about to happen. The disk estimate directly above
+  // already did this correctly via a set union; the modal re-derived the same
+  // fact and disagreed with it.
+  const UPDATE_CATALOG = {
+    probed_at: 1_700_000_000,
+    partial: false,
+    years: [
+      { start_year: 2021, year: 2022, year_label: "2021-22", status: "integrated",
+        integrated: true, available: true, release: "Final", selectable: false },
+      { start_year: 2022, year: 2023, year_label: "2022-23", status: "update",
+        integrated: true, available: true, release: "Final", selectable: true },
+    ],
+  };
+
+  test("re-integrating an existing year is not counted as a new one", async ({ page }) => {
+    await mockImportCatalog(page, UPDATE_CATALOG);
+    await mockIntegrate(page, { jobId: 95 });
+    await openImportsTab(page);
+
+    await page.getByRole("checkbox", { name: "Integrate 2022-23 (Final)" }).click();
+    await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    // Two years loaded, one of them re-fetched -> still two years, none new.
+    await expect(dialog).toContainText("all 2 years");
+    await expect(dialog).not.toContainText("all 3 years");
+  });
+
+  test("a failed start keeps the modal open instead of dismissing like a success", async ({ page }) => {
+    await mockImportCatalog(page, CATALOG);
+    // A genuine server failure — NOT the 409 hand-off, which legitimately closes.
+    await mockIntegrate(page, { httpStatus: 500, detail: "Disk went away." });
+    await openImportsTab(page);
+
+    await page.getByRole("checkbox", { name: "Integrate 2023-24 (Final)" }).click();
+    await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Start rebuild" }).click();
+
+    // The dialog must survive and say why; dismissing would look like success.
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toContainText(/Disk went away|Could not start/i);
+  });
+});
