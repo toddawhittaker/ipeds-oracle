@@ -211,11 +211,24 @@ upgrade safety net, not a backup: it does nothing for ordinary data loss.
 
 ### HTTPS
 
-The app listens on **:8000**. Give it TLS one of two ways:
+The app listens on **:8000**, and `compose.yaml` publishes that port on
+**loopback only** (`BIND_ADDR`, default `127.0.0.1`). That default is a security
+control, not a convenience: Docker inserts published ports into its own iptables
+chain, which a host `ufw`/`firewalld` policy does **not** filter, so a port
+published on `0.0.0.0` is reachable from the network however the host firewall is
+configured. Option 1 below depends on it — see the warning there. Override it
+only for option 2.
+
+Give it TLS one of two ways:
 
 1. **Behind a reverse proxy or tunnel** (recommended for anything public) — let
    your proxy/tunnel terminate TLS and forward to `:8000`. Set `APP_PUBLIC_URL` to
    your public URL and `TRUSTED_PROXY_COUNT` to the number of proxy hops.
+   **Leave `BIND_ADDR` at `127.0.0.1`.** `TRUSTED_PROXY_COUNT=1` tells the app to
+   trust one `X-Forwarded-For` hop, so anything that can reach `:8000` *directly*
+   bypasses the proxy while the app still strips that hop — letting the caller
+   choose the address the per-IP limiter on `POST /api/auth/request` sees, and
+   defeating it. Publishing on loopback keeps the proxy the only route in.
    `TRUSTED_PROXY_COUNT` is the *only* thing that should interpret
    `X-Forwarded-For`, so the container runs uvicorn with `--no-proxy-headers`
    (uvicorn would otherwise trust the header itself whenever the proxy connects
@@ -229,8 +242,11 @@ The app listens on **:8000**. Give it TLS one of two ways:
    ```
 
    Uncomment the `./certs:/certs:ro` mount in `compose.yaml`, and in `.env` set
-   `SSL_CERTFILE=/certs/cert.pem`, `SSL_KEYFILE=/certs/key.pem`, and
-   `APP_PUBLIC_URL=https://your-host:8000`. Browsers warn until you trust the cert.
+   `SSL_CERTFILE=/certs/cert.pem`, `SSL_KEYFILE=/certs/key.pem`,
+   `APP_PUBLIC_URL=https://your-host:8000`, and **`BIND_ADDR=0.0.0.0`** — here a
+   routable bind is the point, since the app itself is terminating TLS and there
+   is no proxy hop to trust (leave `TRUSTED_PROXY_COUNT=0`). Browsers warn until
+   you trust the cert.
 
 Either way keep `COOKIE_SECURE=true` — the session cookie is only sent over HTTPS.
 
@@ -266,6 +282,7 @@ commented list. The essentials:
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |
 | `EMAIL_DOMAIN` | restrict who may request access (optional) |
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
+| `BIND_ADDR` | which host address compose publishes `:8000` on. Defaults to `127.0.0.1` (loopback only) so a reverse proxy is the only way in; set `0.0.0.0` only when the app terminates TLS itself (see [HTTPS](#https)) |
 | `CHAT_RATE_MAX_PER_USER` | per-user question cap per window (default 30/60s) — the guard against one runaway script burning your provider spend |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |

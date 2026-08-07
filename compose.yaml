@@ -38,4 +38,16 @@ services:
       # set SSL_CERTFILE=/certs/cert.pem, SSL_KEYFILE=/certs/key.pem in .env (README).
       # - ./certs:/certs:ro
     ports:
-      - "8000:8000"
+      # Published on LOOPBACK by default, and that default is a security control.
+      # Docker's published ports are inserted into its own iptables chain, which
+      # a host `ufw`/`firewalld` policy does NOT filter — so a bare "8000:8000"
+      # is reachable from the network no matter what the host firewall says.
+      # That matters because README HTTPS option 1 tells you to set
+      # TRUSTED_PROXY_COUNT=1: a client reaching :8000 DIRECTLY bypasses the
+      # proxy while the app still strips one hop off X-Forwarded-For, so the
+      # per-IP limiter on POST /api/auth/request keys on a value the caller
+      # chose. Loopback keeps the proxy the only way in.
+      # Set BIND_ADDR=0.0.0.0 in .env only for HTTPS option 2 (the app itself
+      # terminating TLS with a self-signed cert on a LAN box), where a routable
+      # bind is the point and there is no proxy hop to trust.
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
