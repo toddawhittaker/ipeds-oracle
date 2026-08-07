@@ -1114,9 +1114,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .grid.data td.blocked-email { white-space: normal; }
 .denied-primary { font-weight: 600; }
 .denied-note { font-size: 13px; color: var(--muted); }
-/* The two timestamp columns (Requested / Denied) get a fixed width; Email takes
-   the remaining space under the table's fixed layout. */
-.grid.data .col-when { width: 168px; }
+/* The timestamp columns (Pending's Requested; Blocked's Requested + Denied) get
+   a fixed width; Email takes the remaining space under the table's fixed layout.
+   210px, matching `.col-active`, because these render the SAME fmtDateTime: the
+   widest ordinary en-US stamp measures 174px of text + 20px padding = 194px, so
+   the old 168px could not fit one. The cells also carry `cell-trunc`, and that
+   is the load-bearing half — see the `.col-active` comment below for why width
+   alone is a race a wider locale or a different platform font eventually wins.
+   Width only keeps the ellipsis from showing in the ordinary case. */
+.grid.data .col-when { width: 210px; }
 .usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
 .usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
