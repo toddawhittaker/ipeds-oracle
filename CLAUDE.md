@@ -78,6 +78,31 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   100k-row CSV cap, is an OOM-kill of the container. The cap does not replace the
   watchdog, it **restores** it: with each value bounded, serious memory now needs
   thousands of values and therefore long enough for `con.interrupt()` to land.
+  **That last claim is true at the 200-row model cap and FALSE at the 100k-row
+  CSV cap** — measured at ~2.3 GB/s with values *under* the per-value cap, so
+  the 25 s watchdog is irrelevant there. Three bounds are therefore needed, and
+  each was added only after the previous one was defeated:
+  **(1) one value** ≤ 1 MiB (this cap); **(2) the whole result** ≤
+  `SQL_MAX_RESULT_BYTES` (64 MiB), accumulated **per ROW** — an earlier version
+  sized a `fetchmany` from the running AVERAGE row size, which a
+  small-rows-then-large result defeated for ~1 GB resident; **(3) one ROW**,
+  which is `n_columns × 1 MiB` and reached 5,046 MB before anything refused it.
+  The row bound needs the column count *before* a row exists, and
+  `con.execute()` **steps once**, so reading `cur.description` is already too
+  late (measured: tightening the limit there does nothing). A
+  `SELECT * FROM (<sql>) LIMIT 0` probe gives the count with zero rows built.
+  It **fails CLOSED** (to a 4 KiB floor) when a statement will not nest — failing
+  open was itself a HIGH finding, because the probe adds exactly one nesting
+  level and SQLite's parser overflows at depth 15, so SQL written at depth 14
+  parses while making the probe fail: 2,975 MB measured, i.e. the same hole
+  re-reached through nesting. And the derived limit must **only ever tighten** —
+  `SQLITE_LIMIT_LENGTH` is not a ratchet, and without a `min()` against the
+  per-value cap a 1-column query RAISED the documented 1 MiB cap 64×, returning
+  a 66 MB value. Net: 5,046 MB → 35 MB, and an ordinary 100k-row export is
+  unchanged at 0.18 s / 56 MB.
+  Note `_value_bytes` is deliberately ROUGH (a flat 8 for non-strings), so a
+  numeric-heavy result under-accounts ~5.6× and trips nearer 360 MB than 64 MB —
+  bounded, but not bounded *at* 64 MiB.
   Surfaces as **`sqlite3.DataError`**, NOT `OperationalError` — it needs its own
   `except` branch (`SQLResultTooLargeError` → `"SQL TOO LARGE: …"` in
   `tools/registry.py`) or it falls through to the generic handler and the model
@@ -1598,6 +1623,23 @@ overlay). Contrast on such elements needs a **direct computed-style assertion**
 (`contrastRatio()` in that spec measures resolved pixels, pinning readability
 rather than a colour literal). `--on-fg` is the token for text on an `--accent`
 fill; a hardcoded `#fff` there is the recurring bug.
+**(3) axe only contrast-checks text INSIDE the viewport** —
+`colorContrastEvaluate` opens with `if (!_isVisibleOnScreen(node)) return true`,
+a PASS, not an incomplete. This app pins `html, body { overflow: hidden }` and
+gives every screen its own inner scroller, so at Playwright's 1280×720 default
+everything below the fold went unmeasured: **34% of text nodes on
+`/admin/logs`**, and a real 4.44:1 violation sitting at y=767 that the scan
+reported clean. The axe describe therefore sets **1280×2600**, and any new scan
+needs it or it is theatre. Widening it also exposed a latent mid-animation flake
+elsewhere, so **`reducedMotion: "reduce"` now applies to EVERY scan**, not just
+Login's — that reasoning was never Login-specific, Login was just the only scan
+close enough to the top of the page to be bitten.
+**(4) `aria-prohibited-attr` returns `incomplete`, not a violation, whenever the
+element has text content** — so `aria-label` on a roleless `<span>` (role
+`generic`, where ARIA prohibits it) is never gated. Worse, Playwright's
+`getByLabel` computes the name WITHOUT applying the role prohibition, so an e2e
+assertion on it passes while screen readers ignore the attribute outright. Use
+`.sr-only` text instead, as `Skills.jsx` does.
 **One list, not two, for the backend suites:** `scripts/run_backend_suites.sh`
 globs `backend/tests/test_*.py` and is called by BOTH `run_ci_local.sh` and CI's
 backend job. It replaced a hand-kept array plus ~30 hand-written CI steps that had
