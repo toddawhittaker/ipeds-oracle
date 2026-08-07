@@ -19,11 +19,14 @@ os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
 
 from app.db import (
+    _BOOTSTRAP_APPLIED_KEY,
     MIGRATIONS,
     SchemaTooNewError,
     _apply_migrations,
+    _bootstrap_admins,
     _prune_snapshots,
     connect,
+    get_meta,
     init_db,
 )
 from app.seeds import SEED_LESSON_REWRITES
@@ -1746,8 +1749,159 @@ def test_pruning_is_safe_with_fewer_snapshots_than_the_cap():
     assert (d / "app.db.pre-v29").exists(), "a single snapshot must be kept"
 
 
+def test_a_failed_migration_applies_nothing_and_leaves_the_version_alone():
+    """THE REGRESSION: `executescript` runs statements sequentially with no
+    transaction, and the user_version bump used to be a SEPARATE execute after
+    it. Most shipped migrations are multi-statement, so a failure part-way
+    (disk full, an OOM kill, a container stopped mid-`up -d`) left the earlier
+    statements APPLIED with user_version un-bumped -- and every later boot
+    re-ran the whole migration and died on "duplicate column name", forever,
+    against the one irreplaceable database.
+
+    Asserts the pair: the first statement must NOT survive, and user_version
+    must not move. Without the BEGIN/COMMIT wrapper the column IS present and
+    this fails."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.executescript("CREATE TABLE t (id INTEGER);")
+    before = con.execute("PRAGMA user_version").fetchone()[0]
+    bad = (1, "ALTER TABLE t ADD COLUMN a INTEGER;\n"
+              "ALTER TABLE does_not_exist ADD COLUMN b INTEGER;")
+    try:
+        _apply_migrations(con, [bad])
+        raise AssertionError("a failing migration must propagate, not pass silently")
+    except sqlite3.OperationalError:
+        pass
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(t)")}
+    assert "a" not in cols, (
+        "the first statement of a failed migration survived -- the migration is "
+        f"not atomic; columns on t: {sorted(cols)}")
+    assert con.execute("PRAGMA user_version").fetchone()[0] == before, \
+        "user_version moved despite the migration failing"
+    con.close()
+
+
+def test_a_successful_migration_still_commits_and_leaves_no_open_transaction():
+    """The atomicity wrapper must not break the happy path: the DDL lands, the
+    version bumps, and the connection is left usable (an open transaction here
+    would deadlock the very next writer)."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.executescript("CREATE TABLE t (id INTEGER);")
+    _apply_migrations(con, [(1, "ALTER TABLE t ADD COLUMN a INTEGER;")])
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(t)")}
+    assert "a" in cols, f"migration did not apply; columns: {sorted(cols)}"
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 1, "version not bumped"
+    assert not con.in_transaction, "migration left an open transaction"
+    con.close()
+
+
+def _boot_db():
+    """A migrated in-memory app.db, ready for _bootstrap_admins."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    _apply_migrations(con, MIGRATIONS)
+    return con
+
+
+def _is_admin(con, email):
+    row = con.execute("SELECT is_admin FROM users WHERE email=?", (email,)).fetchone()
+    return bool(row and row["is_admin"])
+
+
+def _allowlisted(con, email):
+    return con.execute(
+        "SELECT 1 FROM allowlist WHERE email=?", (email,)).fetchone() is not None
+
+
+def test_removing_a_bootstrap_admin_survives_a_restart():
+    """THE REGRESSION: init_db runs on EVERY boot and re-ran the grant
+    unconditionally (`ON CONFLICT(email) DO UPDATE SET is_admin=1`). So
+    offboarding a departed admin -- demote, then remove -- held only until the
+    next container restart (an image upgrade, a host reboot,
+    `restart: unless-stopped`), which silently restored BOTH their allowlist row
+    and their admin bit. They could then request a fresh magic link and walk
+    back in with full access to every user's usage, the allowlist, and imports.
+
+    Simulates: fresh boot grants, an admin offboards them, the next boot must
+    leave them gone."""
+    con = _boot_db()
+    _bootstrap_admins(con, ["founder@example.edu"])
+    assert _is_admin(con, "founder@example.edu"), "fresh install must bootstrap"
+
+    # Offboard, exactly as the admin router does.
+    con.execute("DELETE FROM allowlist WHERE email=?", ("founder@example.edu",))
+    con.execute("DELETE FROM users WHERE email=?", ("founder@example.edu",))
+
+    _bootstrap_admins(con, ["founder@example.edu"])  # the restart
+    assert not _allowlisted(con, "founder@example.edu"), \
+        "a restart re-allowlisted a removed admin"
+    assert not _is_admin(con, "founder@example.edu"), \
+        "a restart restored a removed admin's is_admin bit"
+    con.close()
+
+
+def test_a_demoted_bootstrap_admin_is_not_re_promoted_by_a_restart():
+    """The narrower half: the account is still a legitimate USER (kept on the
+    allowlist), only its admin bit was taken away. `DO UPDATE SET is_admin=1`
+    put it straight back on the next boot."""
+    con = _boot_db()
+    _bootstrap_admins(con, ["founder@example.edu"])
+    con.execute("UPDATE users SET is_admin=0 WHERE email=?", ("founder@example.edu",))
+
+    _bootstrap_admins(con, ["founder@example.edu"])
+    assert not _is_admin(con, "founder@example.edu"), \
+        "a restart re-promoted a deliberately demoted admin"
+    assert _allowlisted(con, "founder@example.edu"), \
+        "demotion must not remove their access entirely"
+    con.close()
+
+
+def test_an_established_db_does_not_re_grant_on_the_upgrade_hop():
+    """The migration point. On a database that predates the marker, granting
+    'one last time' would restore precisely the admin someone had already
+    removed -- reproducing the bug on the way to fixing it. An established
+    deployment records the current list instead."""
+    con = _boot_db()
+    # Established: an allowlist exists, and the departed admin is NOT on it.
+    con.execute("INSERT INTO allowlist(email, added_by, added_at) VALUES (?,?,?)",
+                ("colleague@example.edu", "admin", 0))
+    assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is None, "marker should be absent"
+
+    _bootstrap_admins(con, ["departed@example.edu"])
+    assert not _allowlisted(con, "departed@example.edu"), \
+        "the upgrade hop re-granted a previously removed admin"
+    assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is not None, \
+        "the marker must be recorded so later boots are decided by it"
+    con.close()
+
+
+def test_an_address_added_to_admin_emails_later_is_still_granted():
+    """Bootstrap-once must not become bootstrap-never: an operator who adds a
+    NEW address to ADMIN_EMAILS on an established deployment still gets it,
+    because it was never in the applied set."""
+    con = _boot_db()
+    _bootstrap_admins(con, ["founder@example.edu"])          # fresh install
+    _bootstrap_admins(con, ["founder@example.edu", "new@example.edu"])
+    assert _is_admin(con, "new@example.edu"), \
+        "a newly listed ADMIN_EMAILS address was never granted"
+    con.close()
+
+
 def run():
     print("app.db migration contract:")
+    check("removing a bootstrap admin SURVIVES a restart",
+          test_removing_a_bootstrap_admin_survives_a_restart)
+    check("a demoted bootstrap admin is not re-promoted by a restart",
+          test_a_demoted_bootstrap_admin_is_not_re_promoted_by_a_restart)
+    check("an established db does not re-grant on the upgrade hop",
+          test_an_established_db_does_not_re_grant_on_the_upgrade_hop)
+    check("an address added to ADMIN_EMAILS later is still granted",
+          test_an_address_added_to_admin_emails_later_is_still_granted)
+    check("a FAILED migration applies nothing and leaves user_version alone",
+          test_a_failed_migration_applies_nothing_and_leaves_the_version_alone)
+    check("a successful migration commits and leaves no open transaction",
+          test_a_successful_migration_still_commits_and_leaves_no_open_transaction)
     check("a db from a NEWER build is refused, not silently accepted",
           test_a_db_from_a_newer_build_is_refused)
     check("an up-to-date db is not mistaken for a downgrade",
