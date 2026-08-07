@@ -149,8 +149,19 @@ export const api = {
   attention: () => j("GET", "/api/admin/attention"),
   markLogsSeen: () => j("POST", "/api/admin/logs/seen"),
   skills: () => j("GET", "/api/admin/skills"),
-  deleteSkill: (id) => j("DELETE", `/api/admin/skills/${id}`),
+  // A2 (lesson-rejection memory): `muteCategory` folds a category mute into
+  // the SAME delete request (one atomic admin intent) — backwards-compatible
+  // default so every existing call site (a plain reject) is unaffected.
+  deleteSkill: (id, { muteCategory = false } = {}) =>
+    j("DELETE", `/api/admin/skills/${id}${muteCategory ? "?mute_category=1" : ""}`),
   patchSkill: (id, body) => j("PATCH", `/api/admin/skills/${id}`, body),
+  skillCategories: () => j("GET", "/api/admin/skills/categories"),
+  muteSkillCategory: (token, muted) =>
+    j(muted ? "POST" : "DELETE",
+      `/api/admin/skills/categories/${encodeURIComponent(token)}/mute`),
+  skillRejections: () => j("GET", "/api/admin/skills/rejections"),
+  deleteSkillRejection: (id) => j("DELETE", `/api/admin/skills/rejections/${id}`),
+  clearSkillRejections: () => j("DELETE", "/api/admin/skills/rejections"),
   importJobs: () => j("GET", "/api/admin/import/jobs"),
   importJob: (id) => j("GET", `/api/admin/import/jobs/${id}`),
   importCatalog: (refresh = false) =>

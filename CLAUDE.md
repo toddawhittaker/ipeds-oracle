@@ -1079,6 +1079,69 @@ The three guards:
   unverified pool: the **critic** (`app/critic.py`) mines the MODEL's own mistake
   — when it catches one it phrases it as a headline+description in one call,
   reused as both the revision feedback and the stored lesson
+  **A REJECTION IS NOW REMEMBERED, AND SUPPRESSION HAS A FIXED ORDER.**
+  Rejecting a lesson was a hard `DELETE FROM skills` leaving no trace, and
+  `_find_duplicate` can only match rows that still exist — so every rejection
+  erased the very evidence that would have suppressed the next proposal, which
+  is why the same lesson came back forever. **Migration 35** adds
+  `skills.category`, a `lesson_rejections` tombstone table (headline,
+  description, embedding, category, `was_verified`, `hits`) and
+  `meta['muted_lesson_categories']` (a JSON list, the `seed_lessons_applied`
+  precedent — ≤7 elements and admin-mutable at runtime, so it is state, not
+  config; corrupt JSON **fails OPEN**, since a corrupt marker should re-queue
+  for review, never keep silently suppressing).
+  `delete_skill` writes a tombstone before deleting — for **every** deletion,
+  approved or queued, because retiring an approved rule also means "don't
+  re-suggest this" — reusing the row's **stored** embedding rather than
+  re-embedding (free, and it works when fastembed is down). It takes
+  `?mute_category=1` so "Reject & mute" is **one atomic request**; chaining two
+  calls can leave the delete done and the mute failed, and the mute is the whole
+  point of the button.
+  **`skill_id` on a tombstone is a non-unique provenance breadcrumb — NOTHING
+  may key off it.** `skills.id` is `INTEGER PRIMARY KEY` with no AUTOINCREMENT,
+  so SQLite reuses a freed id. An earlier implementation deleted prior
+  tombstones sharing a `skill_id`, which **defeated the whole feature**:
+  rejecting a new lesson that inherited a reused id erased a genuinely
+  different earlier lesson's tombstone, letting it be re-proposed forever. Two
+  tombstones sharing a `skill_id` is expected. The tests learned the same
+  lesson — they discriminate by **headline**, since these suites share one
+  `app.db` for the whole file (a `skill_id` filter matched every tombstone the
+  file had ever created: measured `[8, 8, 8, 8, 8, 8, 8, 8, 8]`).
+  **The order in `_upvote_or_save` IS the design**, both halves mutation-pinned:
+  (1) muted-category gate, in `record_lesson_from_critic` **before any embed**
+  (deterministic, and the only step that still works with embeddings
+  unavailable) → (2) embed → (3) **tombstone check** → (4) the existing
+  `_find_duplicate` same-source upvote check, **unchanged** → (5) the widened
+  `_find_suppressor` → (6) save. Step 3 precedes step 4 or a rejected idea still
+  inflates a pending row's upvotes. Step 5 **follows** step 4 because the two
+  predicates are complements that can each match a *different* row for the same
+  candidate — checking the wider net first would suppress on a verified match
+  and never reach the same-source upvote, silently dropping the everyday "this
+  rule came up again" signal the review queue runs on.
+  **`_find_suppressor` is deliberately ASYMMETRIC** (`include_pending_other_source`):
+  its **verified arm applies to every source** — an approved rule is already
+  active in the prompt, so restating it adds nothing — while the
+  **different-source-pending arm is critic-only**, because a user's correction
+  and the model's own self-critique on the same scenario are *different
+  evidence* and the queue should show both (pinned by
+  `test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario`). The
+  predicate needs `IFNULL(created_by,'') != ?` — `created_by` is nullable and
+  `NULL != 'critic'` evaluates to NULL, not true, silently excluding every
+  NULL-source row. Reuses `skill_dedup_threshold`; **no new setting**, which
+  would only invite re-opening the hole.
+  **Every suppression logs at INFO** naming the reason — suppression is
+  invisible by construction (no row appears), so without the log a legitimate
+  lesson vanishes with no trace and nobody can learn the feature over-reaches.
+  Admin → Logs is already substring-searchable, so this needed no new UI.
+  Admin → Skills gains a category pill, "Reject & mute", and collapsed
+  "Rejected (N)" / "Muted categories (N)" sections with Undo/Unmute; a
+  rejections **load failure renders an error, never "Rejected (0)"** (the
+  `deniedError` precedent). Pure logic in `admin/lessoncats.js` (vitest) —
+  `categoryLabel` returns `""` for a NULL category, which is what stops a
+  pre-migration row rendering "Reject and mute **undefined**".
+  **Known limit:** rows queued before migration 35 have `category = NULL`, so
+  "Reject & mute" isn't offered on them; clearing that backlog is a one-time
+  manual pass.
   (`skills.record_lesson_from_critic`); the **feedback distiller**
   (`app/feedback.py`, `distill_feedback`) mines the USER's own corrective
   feedback on a follow-up turn ("you should have kept the bachelor's scope") the

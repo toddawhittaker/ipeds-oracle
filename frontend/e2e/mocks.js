@@ -536,6 +536,92 @@ export async function mockSkills(page, rows) {
   });
 }
 
+/**
+ * GET /api/admin/skills/categories ->
+ * [{token,label,learnable,muted,pending}]. The closed 7-token category set
+ * (backend/app/lessoncats.py) plus per-token admin-mutable state -- see
+ * frontend/e2e/admin-lesson-mute.spec.js. Routed on the literal `/categories`
+ * suffix so it never collides with mockSkills' bare `.../skills` route.
+ */
+export async function mockSkillCategories(page, rows) {
+  await page.route("**/api/admin/skills/categories", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+}
+
+/**
+ * POST/DELETE /api/admin/skills/categories/{token}/mute -> {ok:true} (or a
+ * non-200 httpStatus). Captures each (method, token) call so a spec can assert
+ * exactly which token was muted/unmuted and how many times.
+ */
+export async function mockMuteCategory(page, { httpStatus = 200 } = {}) {
+  const calls = [];
+  await page.route("**/api/admin/skills/categories/*/mute", async (route) => {
+    const url = new URL(route.request().url());
+    const parts = url.pathname.split("/");
+    const token = decodeURIComponent(parts[parts.length - 2]);
+    calls.push({ method: route.request().method(), token });
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: "Could not update that category." }) });
+    }
+  });
+  return { calls };
+}
+
+/**
+ * GET /api/admin/skills/rejections ->
+ * [{id,headline,description,category,created_by,skill_id,was_verified,hits,
+ *   created_at}] (or a non-200 httpStatus, e.g. 500, to exercise the
+ * load-failure state -- see the deniedError precedent in mockDeniedRequests).
+ * Never carries an `embedding` field, matching the real endpoint's contract
+ * (bytes aren't JSON-serialisable).
+ */
+export async function mockSkillRejections(page, rows, { httpStatus = 200 } = {}) {
+  await page.route("**/api/admin/skills/rejections", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: "Could not load rejected lessons." }) });
+    }
+  });
+}
+
+/**
+ * DELETE /api/admin/skills/rejections/{id} (single) and
+ * DELETE /api/admin/skills/rejections (clear-all) -> {ok:true}. Captures each
+ * call's id (`null` for the clear-all route) so a spec can assert which
+ * row(s) were removed.
+ *
+ * Call AFTER mockSkillRejections(...) in a spec, same convention as
+ * mockDeleteConversation above: the GET pass-through here uses `fallback()`,
+ * not `continue()` -- `continue()` goes straight to the network, skipping any
+ * earlier-registered handler for the same URL (Playwright runs the
+ * newest-registered matching route first), so a spec that also mocks the GET
+ * would have it silently bypassed rather than served.
+ */
+export async function mockDeleteRejections(page) {
+  const calls = [];
+  await page.route("**/api/admin/skills/rejections/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    const url = new URL(route.request().url());
+    const id = Number(url.pathname.split("/").pop());
+    calls.push(id);
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+  await page.route("**/api/admin/skills/rejections", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    calls.push(null);
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+  return { calls };
+}
+
 /** GET /api/admin/import/jobs -> [{id,filename,status,updated_at}]. */
 export async function mockImportJobs(page, rows) {
   await page.route("**/api/admin/import/jobs", async (route) => {

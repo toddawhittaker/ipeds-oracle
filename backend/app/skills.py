@@ -49,6 +49,13 @@ _EMBED_SOURCE_VERSION = "2"
 # — including ones added in a release the deployment upgraded INTO.
 _SEED_APPLIED_KEY = "seed_lessons_applied"
 
+# `meta` key holding the JSON list of app.lessoncats tokens an admin has muted
+# (A2: lesson-rejection memory) — state, not config, so it lives beside
+# _SEED_APPLIED_KEY rather than in a table: at most a handful of elements,
+# admin-mutable at runtime. Mirrors _applied_seed_keys' fail-open convention on
+# a corrupt/unreadable marker (see muted_categories below).
+_MUTED_CATEGORIES_KEY = "muted_lesson_categories"
+
 
 def _embedder():
     global _model, _embed_ok
@@ -165,18 +172,19 @@ def bump_hits(skill_ids: list[int]) -> None:
 
 def save_skill(question: str, canonical_sql: str, *, headline: str = "",
                notes: str = "", lesson: str = "", created_by: str = "system",
-               verified: bool = False, tags: str = "") -> int:
+               verified: bool = False, tags: str = "",
+               category: str | None = None) -> int:
     source = _embed_source(headline, lesson)
     v = embed(source) if source else None
     con = connect()
     try:
         cur = con.execute(
             "INSERT INTO skills(question, canonical_sql, notes, lesson, headline, "
-            "embedding, tags, verified, created_by, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "embedding, tags, verified, created_by, category, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (question, canonical_sql, notes, lesson, headline or None,
              _to_blob(v) if v is not None else None,
-             tags, int(verified), created_by, time.time()))
+             tags, int(verified), created_by, category, time.time()))
         con.commit()
         return cur.lastrowid
     finally:
@@ -228,18 +236,180 @@ def _find_duplicate(con, qvec: np.ndarray | None, question: str,
     return row["id"] if row else None
 
 
+def _find_suppressor(con, qvec: np.ndarray | None, headline: str,
+                     description: str, source: str, *,
+                     include_pending_other_source: bool) -> int | None:
+    """Id of a lesson a new candidate is near-identical to, from OUTSIDE
+    `_find_duplicate`'s (verified=0, same source) upvote scope — a match here
+    means "suppress, insert nothing, upvote nothing", never an upvote, since
+    writing to a curated/verified row or a different source's pending row
+    from an unreviewed candidate would corrupt the admin's ranking signal.
+
+    Two arms, asymmetric ON PURPOSE — `include_pending_other_source` picks
+    which:
+
+    - VERIFIED, for every caller/source (always searched). An approved lesson
+      is already live guidance in the prompt; a fresh candidate restating it
+      — from ANY source — adds nothing to suppress.
+    - unverified + a DIFFERENT source, only when `include_pending_other_source`
+      is True (today: the critic path only). A user's corrective feedback and
+      the model's own self-critique are DIFFERENT EVIDENCE about the same
+      scenario, and the review queue should be able to show both rather than
+      let one silently swallow the other — pinned by
+      test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario.
+      record_lesson_from_feedback therefore passes False here: its dedup
+      reach for a PENDING row stays exactly _find_duplicate's own-source-only
+      scope, unchanged from before this widening existed.
+
+    `IFNULL(created_by,'') != ?` is required on the different-source arm, not
+    `created_by != ?`: `created_by` is nullable, and SQL's
+    `NULL != 'critic'` evaluates to NULL (not true), which a WHERE clause
+    reads as false — silently excluding every NULL-source row from
+    suppression. Same dimension-mismatch skip guard as `_find_duplicate`, so
+    a row embedded under a stale embed_model can't crash the dot product."""
+    if include_pending_other_source:
+        predicate = "(verified=1 OR IFNULL(created_by,'') != ?)"
+        params: tuple = (source,)
+    else:
+        predicate = "verified=1"
+        params = ()
+    if qvec is not None:
+        rows = con.execute(
+            f"SELECT id, embedding FROM skills WHERE embedding IS NOT NULL AND {predicate}",
+            params).fetchall()
+        dim = qvec.shape[0]
+        floor = get_settings().skill_dedup_threshold
+        best_id, best_sim = None, floor
+        for r in rows:
+            vec = _from_blob(r["embedding"])
+            if vec.shape[0] != dim:  # stale blob from a prior embed model — skip
+                continue
+            sim = float(vec @ qvec)
+            if sim >= best_sim:
+                best_id, best_sim = r["id"], sim
+        return best_id
+    # Exact-match fallback, mirroring _find_duplicate's: embeddings are
+    # unavailable system-wide, so fall back to a verbatim headline+description
+    # match over the same (arm-dependent) scope.
+    row = con.execute(
+        f"SELECT id FROM skills WHERE headline=? AND lesson=? AND {predicate}",
+        (headline, description, *params)).fetchone()
+    return row["id"] if row else None
+
+
+def _check_tombstone(con, qvec: np.ndarray | None, headline: str,
+                     description: str) -> bool:
+    """True if a near-identical lesson was already rejected (a row in
+    lesson_rejections), bumping its `hits` counter. Unrestricted by source or
+    verified status — an admin's rejection is a judgment about the IDEA, not
+    about who is proposing it this time, so it must suppress a repeat from ANY
+    source. Same dimension-mismatch skip guard as _find_duplicate/_find_suppressor,
+    and the same exact-text fallback for when embeddings are unavailable
+    system-wide."""
+    if qvec is not None:
+        rows = con.execute(
+            "SELECT id, embedding FROM lesson_rejections "
+            "WHERE embedding IS NOT NULL").fetchall()
+        dim = qvec.shape[0]
+        floor = get_settings().skill_dedup_threshold
+        best_id, best_sim = None, floor
+        for r in rows:
+            vec = _from_blob(r["embedding"])
+            if vec.shape[0] != dim:
+                continue
+            sim = float(vec @ qvec)
+            if sim >= best_sim:
+                best_id, best_sim = r["id"], sim
+    else:
+        row = con.execute(
+            "SELECT id FROM lesson_rejections WHERE headline=? AND description=?",
+            (headline, description)).fetchone()
+        best_id = row["id"] if row else None
+    if best_id is None:
+        return False
+    con.execute("UPDATE lesson_rejections SET hits=hits+1 WHERE id=?", (best_id,))
+    return True
+
+
+def muted_categories(con) -> set[str]:
+    """The set of app.lessoncats tokens an admin has muted. Fails OPEN (empty
+    set, logged) on a corrupt/unreadable marker — mirrors
+    `_applied_seed_keys`'s convention, and the direction matters: reading a
+    corrupt marker as "everything muted" would silently keep suppressing an
+    admin-visible control that's supposed to be reversible, while reading it
+    as "nothing muted" just re-queues candidates for review, the safe
+    direction for a corrupt marker to fail in."""
+    raw = get_meta(con, _MUTED_CATEGORIES_KEY)
+    if raw is None:
+        return set()
+    try:
+        return set(json.loads(raw))
+    except (ValueError, TypeError):
+        log.warning("unreadable %s marker; treating as no categories muted",
+                    _MUTED_CATEGORIES_KEY)
+        return set()
+
+
+def _set_category_muted_on(con, category: str, muted: bool) -> None:
+    """Read-modify-write the muted-categories marker on an EXISTING
+    connection, inside the CALLER's transaction (no commit here) — lets
+    admin.delete_skill fold a mute into the same atomic tombstone+delete
+    request. Preserves any token this build doesn't recognize, so a rollback
+    to an image with fewer categories doesn't forget a newer mute."""
+    current = muted_categories(con)
+    if muted:
+        current.add(category)
+    else:
+        current.discard(category)
+    set_meta(con, _MUTED_CATEGORIES_KEY, json.dumps(sorted(current)))
+
+
+def set_category_muted(category: str, muted: bool) -> None:
+    con = connect()
+    try:
+        _set_category_muted_on(con, category, muted)
+        con.commit()
+    finally:
+        con.close()
+
+
 def _upvote_or_save(question: str, canonical_sql: str, *, headline: str = "",
-                    lesson: str, source: str) -> None:
-    """Dedup gate shared by every lesson-writing path: bump an existing
-    same-source unverified near-duplicate's upvotes (backfilling its headline
-    and rule if it had none, so no lesson text is lost), else insert a new
-    UNVERIFIED lesson pending admin review (retrieve_skills_block only returns
-    verified=1 rows). The embedding used for the dedup lookup is the
-    headline+description vector (the RULE, not the question)."""
+                    lesson: str, source: str, category: str | None = None) -> None:
+    """Dedup gate shared by every lesson-writing path, in a FIXED order (each
+    step's position is deliberate — see the inline notes):
+
+      1. (muted-category gate lives in the CALLER, record_lesson_from_critic,
+         before this is even reached — see there)
+      2. embed the candidate's headline+description
+      3. tombstone check (_check_tombstone) — a rejected idea must not recur
+      4. _find_duplicate's existing same-source unverified upvote check
+      5. _find_suppressor's widened (verified OR different-source) check
+      6. insert a new UNVERIFIED lesson
+
+    Step 3 runs BEFORE step 4: a rejected idea must not inflate an existing
+    pending row's upvotes either — checking the upvote target first would let
+    a tombstoned candidate "vote" for a row an admin never actually approved.
+
+    Step 5 runs AFTER step 4, not before: _find_suppressor's predicate is the
+    COMPLEMENT of _find_duplicate's (verified=1 OR a DIFFERENT source), so the
+    two searches never both match the same row — but the ORDER still matters
+    because they can each independently find a DIFFERENT row for the same
+    candidate (e.g. an old same-source pending duplicate AND a newer verified
+    near-identical lesson from someone else). Checking the widened net first
+    would suppress on the verified match and never reach the same-source
+    upvote — silently dropping the everyday "this exact rule came up again"
+    case instead of upvoting it, destroying the recurrence signal the review
+    queue depends on. Upvoting the ordinary repeat first is the more useful
+    outcome whenever both exist."""
     embed_source = _embed_source(headline, lesson)
     v = embed(embed_source) if embed_source else None
     con = connect()
     try:
+        if _check_tombstone(con, v, headline, lesson):
+            con.commit()
+            log.info("lesson suppressed (tombstoned): %s",
+                    headline or (lesson[:80] if lesson else "(untitled)"))
+            return
         dup = _find_duplicate(con, v, question, canonical_sql, source)
         if dup is not None:
             if headline or lesson:  # preserve a rule: backfill onto a rule-less match
@@ -248,29 +418,72 @@ def _upvote_or_save(question: str, canonical_sql: str, *, headline: str = "",
                     "AND (headline IS NULL OR headline='') "
                     "AND (lesson IS NULL OR lesson='')",
                     (headline, lesson, dup))
+            if category:  # backfill a NULL category, never overwrite a set one
+                con.execute(
+                    "UPDATE skills SET category=? WHERE id=? AND category IS NULL",
+                    (category, dup))
             con.execute("UPDATE skills SET upvotes=upvotes+1 WHERE id=?", (dup,))
             con.commit()
+            return
+        # _find_suppressor runs for EVERY source, but its two arms are
+        # asymmetric (see that function's docstring for the full reasoning):
+        #
+        # - VERIFIED lessons are searched regardless of source. An approved
+        #   rule is already live guidance; a feedback candidate that's
+        #   genuinely near-identical to one is redundant by definition (Todd:
+        #   "before a new skill is suggested, it should check to see if
+        #   something similar already exists or is already queued") — that's
+        #   exactly the review-queue noise this PR exists to cut.
+        # - the unverified + DIFFERENT-source arm is CRITIC-ONLY.
+        #   record_lesson_from_feedback's dedup scope for a PENDING row stays
+        #   exactly _find_duplicate's own-source-only reach, unchanged from
+        #   before this widening existed — pinned by
+        #   test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario,
+        #   which needs an IDENTICAL feedback+critic pair on the same scenario
+        #   to survive as two separate rows: a user's correction and the
+        #   model's own self-critique are different EVIDENCE about the same
+        #   scenario, and the review queue should show both.
+        sup = _find_suppressor(con, v, headline, lesson, source,
+                              include_pending_other_source=(source == "critic"))
+        if sup is not None:
+            con.commit()
+            log.info("lesson suppressed (duplicate-of-%s): %s", sup,
+                    headline or (lesson[:80] if lesson else "(untitled)"))
             return
     finally:
         con.close()
     save_skill(question, canonical_sql, headline=headline, lesson=lesson,
-              created_by=source, verified=False)
+              created_by=source, verified=False, category=category)
 
 
 def record_lesson_from_critic(question: str, canonical_sql: str, headline: str,
-                              description: str) -> None:
+                              description: str, category: str | None = None) -> None:
     """The post-answer critic caught a likely mistake and forced a revision; its
     finding IS the rule that fixes it — a generalized headline + description.
     Capture it as an UNVERIFIED lesson (deduped only against other pending
     critic candidates) pending admin review — this is the real self-learning
     signal, a mistake the model actually made rather than an answer a user
-    happened to like. No-op if both headline and description are blank."""
+    happened to like. No-op if both headline and description are blank.
+
+    The muted-category gate (A2) runs HERE, first, before any embed call — the
+    only step that still works when embeddings are unavailable, and cheap
+    enough to check unconditionally."""
     headline = (headline or "").strip()
     description = (description or "").strip()
     if not headline and not description:
         return
+    if category:
+        con = connect()
+        try:
+            muted = category in muted_categories(con)
+        finally:
+            con.close()
+        if muted:
+            log.info("lesson suppressed (muted-category): %s [%s]",
+                    headline or description[:80], category)
+            return
     _upvote_or_save(question, canonical_sql or "", headline=headline,
-                    lesson=description, source="critic")
+                    lesson=description, source="critic", category=category)
 
 
 def record_lesson_from_feedback(question_context: str, headline: str,

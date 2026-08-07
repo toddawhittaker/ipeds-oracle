@@ -23,9 +23,11 @@ dedup/retrieval paths reproducibly, and also covers the no-embeddings fallbacks.
 """
 import hashlib
 import json
+import logging
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -52,6 +54,25 @@ def check(name, fn):
     except AssertionError as e:
         FAILURES.append(name)
         print(f"  ✗ {name}: {e}")
+
+
+def check_pending(name, fn):
+    """Like check(), but for the A2 (lesson-rejection memory) block below, whose
+    target surface (skills.muted_categories/set_category_muted/_find_suppressor,
+    the tombstone check in _upvote_or_save, category on save_skill) doesn't
+    exist yet. check() only catches AssertionError -- deliberately, so an
+    EXISTING test's genuinely unexpected exception crashes loudly rather than
+    reading as one more failure line. Calling not-yet-implemented API instead
+    raises AttributeError/TypeError, which check() would let escape and crash
+    the whole file, hiding every other new test's red status behind the first
+    one reached. Scoped to just this block so it changes nothing about how any
+    existing test is graded."""
+    try:
+        fn()
+        print(f"  ✓ {name}")
+    except Exception as e:
+        FAILURES.append(name)
+        print(f"  ✗ {name}: {type(e).__name__}: {e}")
 
 
 def _reset():
@@ -92,6 +113,40 @@ def _count(created_by=None):
         return con.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
     finally:
         con.close()
+
+
+# --- A2 helpers: lesson-rejection tombstones + muted categories (migration 35) -
+
+def _clear_rejections():
+    con = connect()
+    con.execute("DELETE FROM lesson_rejections")
+    con.commit()
+    con.close()
+
+
+def _clear_muted_categories():
+    con = connect()
+    con.execute("DELETE FROM meta WHERE key='muted_lesson_categories'")
+    con.commit()
+    con.close()
+
+
+def _insert_tombstone(headline, description, *, category=None, created_by=None,
+                      skill_id=None, was_verified=0, embed_fn=_fake_embed):
+    """Write a lesson_rejections row directly (bypassing the not-yet-written
+    admin.delete_skill), embedding headline+description the same way
+    skills._embed_source does for a real lesson -- so a candidate near-identical
+    to this tombstone is findable by cosine, exactly as a real rejection would be."""
+    source = skills._embed_source(headline, description)
+    v = embed_fn(source) if (embed_fn and source) else None
+    con = connect()
+    con.execute(
+        "INSERT INTO lesson_rejections(headline, description, embedding, category, "
+        "created_by, skill_id, was_verified, hits, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (headline, description, skills._to_blob(v) if v is not None else None,
+         category, created_by, skill_id, int(was_verified), 0, time.time()))
+    con.commit()
+    con.close()
 
 
 # --- _lesson_text (pure) -------------------------------------------------------
@@ -946,6 +1001,368 @@ def test_a_non_positive_cap_disables_the_sweep():
         skills.get_settings = orig
 
 
+# ---------------------------------------------------------------------------
+# A2: lesson-rejection memory (migration 35: skills.category + lesson_rejections)
+#
+# Two gaps A1 left open: rejecting a lesson is a hard DELETE with no trace, so
+# _find_duplicate can never suppress the same proposal recurring; and dedup is
+# scoped to (verified=0, same source) ONLY, so a candidate near-identical to an
+# already-VERIFIED lesson, or one queued from a DIFFERENT source, is saved as a
+# fresh duplicate. This block pins the NEW surface:
+#   skills.muted_categories(con) / skills.set_category_muted(token, muted)
+#   skills._find_suppressor(con, qvec, headline, description, source) -- the
+#     COMPLEMENT of _find_duplicate's scope: verified=1 OR a DIFFERENT source
+#     (IFNULL-safe against a nullable created_by)
+#   a tombstone check in _upvote_or_save, run BEFORE _find_duplicate's upvote
+#     check (or a rejected idea would inflate an existing row's upvotes) and
+#     AFTER it (or a same-source queued row would be silently dropped instead
+#     of upvoted, destroying the recurrence signal the queue depends on)
+#   category threaded through save_skill/_upvote_or_save, backfilled onto a
+#     NULL-category upvote target, never overwriting an already-set one
+#
+# Uses check_pending (not check): this surface doesn't exist yet (TDD red).
+# ---------------------------------------------------------------------------
+
+def test_tombstone_precedes_upvote_check_in_ordering():
+    """THE ORDERING REGRESSION: the tombstone check (step 3) must run BEFORE
+    _find_duplicate's same-source upvote check (step 4). Both a matching
+    tombstone AND a matching same-source unverified row are seeded here, so a
+    version that checks upvote-eligibility first would upvote the existing row
+    instead of dropping the candidate outright -- asserting on `upvotes`, not
+    just row count, is what catches that (a count-only assertion passes on the
+    buggy ordering too, since neither ordering inserts a new row)."""
+    _reset()
+    _clear_rejections()
+    q = "national total ordering probe"
+    headline = "Add majornum=1 for every completions total."
+    description = "no majornum=1 filter — double-counts second majors"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", headline=headline, lesson=description,
+        created_by="critic", verified=False))
+    _insert_tombstone(headline, description, created_by="critic")
+
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
+
+    assert _count() == 1, "nothing new must be inserted when a tombstone matches"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills WHERE created_by='critic'").fetchone()[0]
+    con.close()
+    assert up == 0, \
+        f"a tombstoned candidate must NOT inflate the existing pending row's upvotes, got {up}"
+
+
+def test_same_source_unverified_near_duplicate_still_upvotes():
+    """Scoping-preserved check: with the widened _find_suppressor now also live,
+    a same-source unverified near-duplicate (the ordinary repeat-finding case)
+    must still upvote, not get caught by the widened predicate. Catches a
+    too-wide suppressor that fails to exclude the candidate's own source."""
+    _reset()
+    _clear_rejections()
+    q = "same source still upvotes probe"
+    headline = "Filter awlevel to real codes, not rollups."
+    description = "award-level rollup mixing — filter awlevel to real codes only"
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
+    assert _count() == 1, "an identical same-source repeat must still upvote, not duplicate"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills WHERE created_by='critic'").fetchone()[0]
+    con.close()
+    assert up == 1, f"expected exactly 1 upvote on the deduped row, got {up}"
+
+
+def test_suppression_against_verified_lesson_no_insert_no_upvote():
+    """THE HIGH-VALUE dedup-scoping widening: a candidate near-identical to an
+    already-VERIFIED lesson must be suppressed outright -- no new row, and the
+    verified row's upvotes must NOT be inflated (upvoting a verified/curated row
+    from an unreviewed candidate would corrupt the admin's ranking signal, the
+    same reason _find_duplicate never touched verified rows either)."""
+    _reset()
+    _clear_rejections()
+    q = "verified suppression probe"
+    headline = "Use cipcode='99' for national totals."
+    description = "the '99' row is already the grand total; never sum leaf codes"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", headline=headline, lesson=description,
+        created_by="seed", verified=True))
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 2", headline, description))
+    assert _count() == 1, \
+        "a near-identical VERIFIED lesson must suppress a new duplicate, not insert one"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills WHERE created_by='seed'").fetchone()[0]
+    con.close()
+    assert up == 0, f"suppression must not inflate the verified lesson's upvotes, got {up}"
+
+
+def test_feedback_candidate_suppressed_against_an_already_verified_lesson():
+    """The VERIFIED arm of _find_suppressor applies to EVERY source, not just
+    critic -- an already-approved lesson is already active in the retrieval
+    prompt, so a feedback candidate restating it adds nothing whichever
+    pipeline happens to notice it second. This is deliberately asymmetric with
+    the DIFFERENT-SOURCE-PENDING arm, which stays critic-only (see
+    test_feedback_lesson_not_collapsed_into_a_critic_row_same_scenario): a
+    user's own corrective feedback and the model's self-critique on the SAME
+    scenario are DIFFERENT evidence, and the review queue should surface both
+    for an admin to weigh -- unlike an already-verified rule, which needs no
+    second vote to become effective.
+
+    Uses an IDENTICAL rule against the verified row (unlike
+    test_feedback_lesson_not_collapsed_into_verified_seed's DIFFERENT rule,
+    which never exercises this arm at all -- that test stays green precisely
+    because nothing here should change its outcome)."""
+    _reset()
+    _clear_rejections()
+    q = "national total associate degrees per year"
+    headline = "Use cipcode='99'."
+    description = "use the grand-total row"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", headline=headline, lesson=description,
+        created_by="seed", verified=True))
+    _with_embed(lambda: skills.record_lesson_from_feedback(q, headline, description))
+    assert _count() == 1, \
+        "a feedback candidate near-identical to an already-verified lesson must " \
+        "suppress, not insert a duplicate"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills WHERE created_by='seed'").fetchone()[0]
+    con.close()
+    assert up == 0, f"suppression must not inflate the verified lesson's upvotes, got {up}"
+
+
+def test_suppression_against_different_source_unverified_row():
+    """The other half of the widening: a candidate near-identical to an
+    UNVERIFIED row from a DIFFERENT source (a real, non-empty rule -- unlike
+    test_dedup_is_scoped_to_same_source's empty-rule row, which has no
+    embedding and so is unreachable by any cosine check) must also suppress."""
+    _reset()
+    _clear_rejections()
+    q = "cross source suppression probe"
+    headline = "Join hd on unitid and year."
+    description = "match state and control filters to the correct collection year"
+    _with_embed(lambda: skills.save_skill(
+        q, "SELECT 1", headline=headline, lesson=description,
+        created_by="user-feedback", verified=False))
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 2", headline, description))
+    assert _count() == 1, \
+        "a near-identical row from a DIFFERENT source must suppress, not duplicate"
+    con = connect()
+    up = con.execute(
+        "SELECT upvotes FROM skills WHERE created_by='user-feedback'").fetchone()[0]
+    con.close()
+    assert up == 0, f"suppression must not inflate the different-source row's upvotes, got {up}"
+
+
+def test_muted_learnable_category_blocks_recording_then_unmute_restores_it():
+    _reset()
+    _clear_rejections()
+    _clear_muted_categories()
+    q = "muted category probe"
+    headline = "Add majornum=1 for every completions total."
+    description = "no majornum=1 filter — double-counts second majors"
+
+    skills.set_category_muted("SECOND_MAJOR", True)
+    con = connect()
+    muted = skills.muted_categories(con)
+    con.close()
+    assert "SECOND_MAJOR" in muted, muted
+
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        q, "SELECT 1", headline, description, category="SECOND_MAJOR"))
+    assert _count() == 0, "a muted learnable category must record nothing"
+
+    skills.set_category_muted("SECOND_MAJOR", False)
+    con = connect()
+    muted_after = skills.muted_categories(con)
+    con.close()
+    assert "SECOND_MAJOR" not in muted_after, muted_after
+
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        q, "SELECT 1", headline, description, category="SECOND_MAJOR"))
+    assert _count() == 1, "unmuting must restore recording for that category"
+
+
+def test_feedback_candidate_with_no_category_still_records():
+    """Proves the muted-category gate lives ONLY in record_lesson_from_critic:
+    the feedback distiller never carries a category (feedback rows stay NULL
+    per spec) and must be unaffected by anything muted. Deliberately does not
+    touch lesson_rejections (migration 35) at all -- this must keep passing
+    unmodified whether or not that table exists yet."""
+    _reset()
+    _with_embed(lambda: skills.record_lesson_from_feedback(
+        "a feedback scenario the mute gate must not touch",
+        "Ask a clarifying question before assuming an award-level scope.",
+        "when a request doesn't specify an award level, ask instead of silently "
+        "assuming bachelor's-only"))
+    assert _count() == 1, "a feedback candidate (no category) must still record"
+
+
+def test_tombstone_fallback_exact_text_without_embeddings():
+    _reset()
+    _clear_rejections()
+    def _no_embed(_t):
+        return None
+    headline = "Filter to an exact leaf CIP code."
+    description = "never sum rollup rows together with the leaf level"
+    _insert_tombstone(headline, description, created_by="critic", embed_fn=_no_embed)
+
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        "exact fallback probe", "SELECT 1", headline, description), embed=_no_embed)
+    assert _count() == 0, "an exact-text tombstone match must suppress without embeddings"
+
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        "exact fallback probe two", "SELECT 2", "A completely different headline.",
+        "a completely different rule text, sharing nothing with the tombstone"),
+        embed=_no_embed)
+    assert _count() == 1, "a non-matching candidate must still insert when embeddings are off"
+
+
+def test_tombstone_dimension_mismatch_is_skipped_not_fatal():
+    """Reuses _find_duplicate's skip-on-dimension-mismatch guard: a tombstone
+    embedded under a stale/different embed_model must never crash the dot
+    product, only be treated as non-matching."""
+    _reset()
+    _clear_rejections()
+    con = connect()
+    con.execute(
+        "INSERT INTO lesson_rejections(headline, description, embedding, category, "
+        "created_by, skill_id, was_verified, hits, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("stale-dimension headline", "stale-dimension description",
+         np.zeros(3, dtype=np.float32).tobytes(), None, "critic", None, 0, 0, time.time()))
+    con.commit()
+    con.close()
+
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        "dimension mismatch probe", "SELECT 1", "A real headline.",
+        "a real description that shares nothing with the stale tombstone"))
+    assert _count() == 1, \
+        "a dimension-mismatched tombstone must be skipped, not crash or wrongly suppress"
+
+
+def test_suppression_reaches_a_null_created_by_row():
+    """THE IFNULL REGRESSION: created_by is nullable, and SQL's `NULL != 'critic'`
+    evaluates to NULL (not true) in a WHERE clause, which reads as false --
+    silently excluding every NULL-source row from suppression without an
+    explicit IFNULL wrap. Seeds a NULL-created_by row that a critic candidate is
+    near-identical to; it must still be suppressed."""
+    _reset()
+    _clear_rejections()
+    q = "null source suppression probe"
+    headline = "Express recent years as a constant bound."
+    description = "year > (SELECT MAX(year)-3 FROM _years), never a DISTINCT year join"
+    con = connect()
+    v = _fake_embed(skills._embed_source(headline, description))
+    con.execute(
+        "INSERT INTO skills(question, canonical_sql, headline, lesson, embedding, "
+        "verified, created_by, created_at) VALUES (?,?,?,?,?,0,NULL,?)",
+        (q, "SELECT 1", headline, description, skills._to_blob(v), time.time()))
+    con.commit()
+    con.close()
+
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 2", headline, description))
+    assert _count() == 1, \
+        "a NULL created_by row must still be reachable by suppression (IFNULL check)"
+    con = connect()
+    up = con.execute("SELECT upvotes FROM skills WHERE created_by IS NULL").fetchone()[0]
+    con.close()
+    assert up == 0, "suppression must not upvote the NULL-source row either"
+
+
+def test_category_stored_on_save():
+    _reset()
+    _with_embed(lambda: skills.save_skill(
+        "category storage probe", "SELECT 1", headline="H", lesson="L",
+        created_by="critic", verified=False, category="MAGNITUDE"))
+    con = connect()
+    cat = con.execute("SELECT category FROM skills").fetchone()[0]
+    con.close()
+    assert cat == "MAGNITUDE", cat
+
+
+def test_category_backfilled_onto_null_target_never_overwritten():
+    _reset()
+    _clear_rejections()
+    q = "category backfill probe"
+    headline = "Award-level mixing: filter to real codes."
+    description = "awlevel rollup codes summed together with real levels"
+    # First candidate carries no category (mirrors an older call site / a
+    # feedback-sourced row upvoting a critic row's scenario).
+    _with_embed(lambda: skills.record_lesson_from_critic(q, "SELECT 1", headline, description))
+    con = connect()
+    row = con.execute("SELECT category FROM skills WHERE created_by='critic'").fetchone()
+    con.close()
+    assert row["category"] is None, row["category"]
+
+    # A repeat WITH a category upvotes the same row and backfills its category.
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        q, "SELECT 1", headline, description, category="AWARD_LEVEL"))
+    con = connect()
+    row2 = con.execute(
+        "SELECT category, upvotes FROM skills WHERE created_by='critic'").fetchone()
+    con.close()
+    assert row2["category"] == "AWARD_LEVEL", row2["category"]
+    assert row2["upvotes"] == 1, row2["upvotes"]
+    assert _count() == 1, "must upvote the same row, not insert a second one"
+
+    # A THIRD repeat carrying a DIFFERENT category must NOT overwrite the
+    # now-set one.
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        q, "SELECT 1", headline, description, category="MAGNITUDE"))
+    con = connect()
+    row3 = con.execute("SELECT category FROM skills WHERE created_by='critic'").fetchone()
+    con.close()
+    assert row3["category"] == "AWARD_LEVEL", \
+        f"an existing category must never be overwritten, got {row3['category']}"
+
+
+def test_muted_categories_corrupt_json_fails_open():
+    """Mirrors skills._applied_seed_keys' fail-open convention: a corrupt marker
+    must re-queue (never permanently silence) — reading it as "everything is
+    muted" would be the wrong failure direction for an admin-visible control."""
+    con = connect()
+    from app.db import set_meta
+    set_meta(con, "muted_lesson_categories", "{not valid json[")
+    con.commit()
+    result = skills.muted_categories(con)
+    con.close()
+    assert result == set(), \
+        f"corrupt muted-categories JSON must fail OPEN (empty set), got {result}"
+
+
+def test_muted_category_suppression_logs_the_reason():
+    """Suppression is invisible by construction (no row appears anywhere), so
+    this INFO line is the only way an admin can ever learn the feature is
+    over-reaching -- worth pinning on its own. Production code must not
+    configure logging just to make that observable: app/skills.py sets no
+    logger level of its own (the one operator-overriding `setLevel` call that
+    used to exist here was removed), so `skills.log`'s EFFECTIVE level in this
+    standalone script is WARNING (nothing configures the root logger either) —
+    an attached handler alone would never see an INFO record, since Python's
+    logging filters at the logger level before a record ever reaches a
+    handler. The test sets the level itself, scoped to its own try/finally, so
+    it stays correct regardless of whatever the ambient logging config is."""
+    _reset()
+    _clear_rejections()
+    _clear_muted_categories()
+    skills.set_category_muted("QUESTION_MISMATCH", True)
+    records = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    h = _H()
+    orig_level = skills.log.level
+    skills.log.setLevel(logging.INFO)
+    skills.log.addHandler(h)
+    try:
+        _with_embed(lambda: skills.record_lesson_from_critic(
+            "muted logging probe", "SELECT 1", "H", "a rule",
+            category="QUESTION_MISMATCH"))
+    finally:
+        skills.log.removeHandler(h)
+        skills.log.setLevel(orig_level)
+        skills.set_category_muted("QUESTION_MISMATCH", False)
+    assert any("muted-category" in m for m in records), records
+
+
 def run():
     print("self-learning lessons:")
     check("_lesson_text leads with headline, then description, then SQL",
@@ -1030,6 +1447,35 @@ def run():
           test_cache_without_results_reports_none_not_a_crash)
     check("cache_store prunes past the row cap", test_cache_store_prunes_past_the_row_cap)
     check("a non-positive cap disables the sweep", test_a_non_positive_cap_disables_the_sweep)
+
+    print("A2: lesson-rejection memory (migration 35 -- not yet implemented):")
+    check_pending("tombstone check precedes the same-source upvote check (ordering)",
+                  test_tombstone_precedes_upvote_check_in_ordering)
+    check_pending("a same-source unverified near-duplicate still upvotes (scoping preserved)",
+                  test_same_source_unverified_near_duplicate_still_upvotes)
+    check_pending("suppression against an already-verified near-identical lesson",
+                  test_suppression_against_verified_lesson_no_insert_no_upvote)
+    check_pending("a feedback candidate is suppressed against an already-verified lesson too",
+                  test_feedback_candidate_suppressed_against_an_already_verified_lesson)
+    check_pending("suppression against a different-source unverified row",
+                  test_suppression_against_different_source_unverified_row)
+    check_pending("a muted learnable category records nothing; unmuting restores it",
+                  test_muted_learnable_category_blocks_recording_then_unmute_restores_it)
+    check("a feedback candidate (no category) still records",
+          test_feedback_candidate_with_no_category_still_records)
+    check_pending("tombstone suppression falls back to exact text without embeddings",
+                  test_tombstone_fallback_exact_text_without_embeddings)
+    check_pending("a dimension-mismatched tombstone is skipped, not fatal",
+                  test_tombstone_dimension_mismatch_is_skipped_not_fatal)
+    check_pending("suppression reaches a NULL created_by row (IFNULL)",
+                  test_suppression_reaches_a_null_created_by_row)
+    check_pending("category is stored on save", test_category_stored_on_save)
+    check_pending("category backfills onto a NULL target, never overwrites a set one",
+                  test_category_backfilled_onto_null_target_never_overwritten)
+    check_pending("muted_categories fails open on corrupt JSON",
+                  test_muted_categories_corrupt_json_fails_open)
+    check_pending("a muted-category suppression logs the reason",
+                  test_muted_category_suppression_logs_the_reason)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} lesson test(s) FAILED: {FAILURES}")

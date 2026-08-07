@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { gotoAdmin, mockMe, mockConversations, mockSkills } from "./mocks.js";
+import { gotoAdmin, mockMe, mockConversations, mockSkills, mockSkillCategories } from "./mocks.js";
 
 // Fill a React CONTROLLED input and confirm the value actually committed before
 // moving on. A one-shot `fill()` on a controlled `<input>/<textarea>` is racy
@@ -551,4 +551,74 @@ test("unverified pill renders as the warn pill, not the danger pill", async ({ p
   // regressed onto .tag.danger, this locator would find no such text.
   await expect(page.locator("span.tag.warn")).toHaveText("unverified");
   await expect(page.locator("span.tag.danger")).toHaveCount(0);
+});
+
+// --- A2: category pill (backend: migration 35's nullable skills.category,
+// GET /api/admin/skills/categories) -- not yet built, expected RED. ---
+
+const CATEGORY_ROWS = [
+  { token: "CIP_ROLLUP", label: "CIP rollup double-count", learnable: true, muted: false, pending: 1 },
+  { token: "SECOND_MAJOR", label: "Second-major double-count", learnable: true, muted: false, pending: 0 },
+  { token: "AWARD_LEVEL", label: "Award-level mixing", learnable: true, muted: false, pending: 0 },
+  { token: "MAGNITUDE", label: "Implausible magnitude", learnable: true, muted: false, pending: 0 },
+  { token: "QUESTION_MISMATCH", label: "Answer doesn't match the question", learnable: true, muted: false, pending: 0 },
+  { token: "UNGROUNDED_NUMBER", label: "Number not in the data", learnable: false, muted: false, pending: 0 },
+  { token: "OTHER", label: "Other", learnable: false, muted: false, pending: 0 },
+];
+
+test("a categorised lesson shows its category pill; a NULL-category lesson shows none", async ({ page }) => {
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockConversations(page, []);
+  await mockSkillCategories(page, CATEGORY_ROWS);
+  await mockSkills(page, [
+    {
+      id: 40, question: "q-categorised", headline: "Categorised lesson headline.",
+      lesson: "Categorised lesson description.", canonical_sql: "SELECT 1", notes: "",
+      verified: false, created_by: "critic", category: "CIP_ROLLUP",
+      upvotes: 0, downvotes: 0, hits: 0,
+    },
+    {
+      // A pre-A2/seed/feedback row: category is NULL (migration 35 adds the
+      // column nullable, with no backfill). THE REGRESSION this half guards:
+      // rendering "Reject and mute undefined"/"null" instead of no pill at all.
+      // (Question text deliberately avoids the substrings "null"/"undefined"
+      // themselves -- the "Example query" details renders it verbatim, and an
+      // earlier "q-null-category" here created a false-positive match against
+      // this test's own /undefined|null/i probe below, unrelated to any real
+      // rendering bug.)
+      id: 41, question: "q-no-category", headline: "No-category lesson headline.",
+      lesson: "No-category lesson description.", canonical_sql: "SELECT 1", notes: "",
+      verified: false, created_by: "user-feedback", category: null,
+      upvotes: 0, downvotes: 0, hits: 0,
+    },
+  ]);
+  // Deliberately NO catch-all `**/api/admin/skills/*` route here (unlike the
+  // PATCH/DELETE-exercising tests above): this test clicks nothing, only
+  // renders. A method-ungated catch-all registered after mockSkillCategories
+  // would swallow ITS GET too (Playwright resolves routes newest-first, and
+  // "categories" contains no slash, so `.../skills/*` matches
+  // `.../skills/categories`) -- exactly the bug that shadowed the categories
+  // fetch here and made Skills.jsx's defensive Array.isArray() guard render
+  // "no pill" for the WRONG reason (a `{"ok":true}` object instead of the
+  // categories array) rather than the real absent-category path this test
+  // means to exercise.
+
+  await page.goto("/");
+  await gotoAdmin(page);
+  await page.getByRole("link", { name: "Skills" }).click();
+
+  const categorised = page.locator(".skill").filter({ hasText: "Categorised lesson headline." });
+  const uncategorised = page.locator(".skill").filter({ hasText: "No-category lesson headline." });
+
+  // { exact: true }: the card's "Reject & mute CIP rollup double-count" button
+  // also CONTAINS this text, so a substring match (getByText's default)
+  // resolves to both it and the pill -- a strict-mode violation. Exact scopes
+  // to the pill alone (a <span>, whose full text is exactly the label).
+  await expect(categorised.getByText("CIP rollup double-count", { exact: true })).toBeVisible();
+  await expect(uncategorised.getByText(/undefined|null/i)).toHaveCount(0);
+  // Nothing readable as a category pill on the NULL-category card at all --
+  // not just "no literal undefined/null text", the pill itself is absent.
+  for (const other of CATEGORY_ROWS) {
+    await expect(uncategorised.getByText(other.label, { exact: true })).toHaveCount(0);
+  }
 });

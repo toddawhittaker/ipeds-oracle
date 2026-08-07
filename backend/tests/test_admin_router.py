@@ -50,7 +50,10 @@ mailer.send_access_request = lambda *a, **k: True
 mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or True
 
 from app import auth as auth_mod  # noqa: E402
-from app import skills  # noqa: E402
+from app import (
+    lessoncats,  # noqa: E402
+    skills,  # noqa: E402
+)
 from app.config import get_settings  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.main import app  # noqa: E402
@@ -88,6 +91,22 @@ def check(name, fn):
     except AssertionError as e:
         FAILURES.append(name)
         print(f"  ✗ {name}: {e}")
+
+
+def check_pending(name, fn):
+    """Like check(), but for the A2 (lesson-rejection memory) endpoints below,
+    which don't exist yet (TDD red) -- mirrors backend/tests/test_skills.py's
+    check_pending. A missing route/column surfaces as a raw sqlite3 error or a
+    404-shaped body indexed like a 200 one, not an AssertionError, and check()
+    would let that escape and crash the whole file rather than reporting one
+    more red line. Scoped to just this block; every existing test keeps using
+    check() unchanged."""
+    try:
+        fn()
+        print(f"  ✓ {name}")
+    except Exception as e:
+        FAILURES.append(name)
+        print(f"  ✗ {name}: {type(e).__name__}: {e}")
 
 
 def _login(c, email="admin@example.edu"):
@@ -2056,6 +2075,338 @@ def test_skills_delete_removes_the_row():
         assert not any(s["id"] == skill_id for s in after), after
 
 
+# ---------------------------------------------------------------------------
+# A2: lesson-rejection memory (migration 35). check_pending is used throughout
+# this block -- the routes/columns it targets don't exist yet.
+# ---------------------------------------------------------------------------
+
+# A deterministic, non-random embedding blob so a test can assert the tombstone
+# REUSES it byte-for-byte rather than calling skills.embed() again.
+_TOMBSTONE_TEST_EMBEDDING = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32).tobytes()
+
+
+def _seed_full_skill(headline="Tombstone headline.", description="Tombstone description.",
+                     category="MAGNITUDE", created_by="critic", verified=False,
+                     embedding=_TOMBSTONE_TEST_EMBEDDING):
+    """Insert one skills row with every A2-relevant field populated (headline,
+    lesson/description, category, embedding), bypassing skills.save_skill so the
+    embedding is a KNOWN, deterministic blob rather than whatever the fake
+    embedder would produce -- letting a test assert the tombstone reuses it
+    byte-for-byte instead of re-embedding. Raw SQL because `category` doesn't
+    exist on the `skills` table pre-migration-35 (part of the expected red)."""
+    con = connect()
+    cur = con.execute(
+        "INSERT INTO skills(question, canonical_sql, headline, lesson, category, "
+        "embedding, created_by, verified, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("q", "SELECT 1", headline, description, category, embedding, created_by,
+         int(verified), time.time()))
+    con.commit()
+    skill_id = cur.lastrowid
+    con.close()
+    return skill_id
+
+
+def _rejection_count():
+    con = connect()
+    try:
+        return con.execute("SELECT COUNT(*) FROM lesson_rejections").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_skills_delete_writes_a_tombstone_before_deleting():
+    """The core A2 fix: DELETE /skills/{id} currently erases the row with no
+    trace, so a rejected idea can recur forever. The tombstone must carry
+    enough to find + attribute a future near-duplicate: headline, description,
+    embedding, category, created_by, and was_verified.
+
+    Looked up by HEADLINE, never `skill_id`: `skills.id` is an
+    INTEGER PRIMARY KEY with no AUTOINCREMENT, so SQLite reuses a freed id,
+    and every test in this file shares one on-disk app.db, so a `skill_id=?`
+    lookup can silently match a DIFFERENT, earlier test's tombstone that
+    happened to inherit the same reused id -- the exact class of bug this
+    tombstone exists to prevent losing evidence of. The headline text below
+    is unique to this test."""
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill(headline="Award-level mixing rule.",
+                                    description="awlevel rollups summed with real levels",
+                                    category="AWARD_LEVEL", created_by="critic",
+                                    verified=True)
+
+        r = c.delete(f"/api/admin/skills/{skill_id}")
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+        con = connect()
+        row = con.execute(
+            "SELECT headline, description, embedding, category, created_by, "
+            "skill_id, was_verified FROM lesson_rejections WHERE headline=?",
+            ("Award-level mixing rule.",)).fetchone()
+        con.close()
+        assert row is not None, "DELETE must write a tombstone before removing the skill"
+        assert row["headline"] == "Award-level mixing rule.", dict(row)
+        assert row["description"] == "awlevel rollups summed with real levels", dict(row)
+        assert row["category"] == "AWARD_LEVEL", dict(row)
+        assert row["created_by"] == "critic", dict(row)
+        assert row["was_verified"] == 1, dict(row)
+
+
+def test_skills_delete_reuses_the_stored_embedding_rather_than_reembedding():
+    """A skill's embedding is already _embed_source-derived and free -- and
+    works even when fastembed is down, unlike a fresh embed() call. Reusing it
+    is both cheaper and more robust than recomputing.
+
+    Looked up by HEADLINE, not `skill_id` -- see
+    test_skills_delete_writes_a_tombstone_before_deleting's docstring for why
+    a skill_id lookup can match a different, earlier test's tombstone in this
+    shared-app.db file (a reused, no-AUTOINCREMENT id). An explicit headline
+    (not _seed_full_skill's shared default) keeps this test's row findable."""
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill(headline="Reused-embedding tombstone headline.")
+        called = {"n": 0}
+
+        def _counting(text):
+            called["n"] += 1
+            return _fake_embed(text)
+
+        orig_embed = skills.embed
+        skills.embed = _counting
+        try:
+            r = c.delete(f"/api/admin/skills/{skill_id}")
+        finally:
+            skills.embed = orig_embed
+        assert r.status_code == 200, r.text
+        assert called["n"] == 0, \
+            "delete must reuse the skill's stored embedding blob, not call embed() again"
+
+        con = connect()
+        row = con.execute(
+            "SELECT embedding FROM lesson_rejections WHERE headline=?",
+            ("Reused-embedding tombstone headline.",)).fetchone()
+        con.close()
+        assert row is not None and row["embedding"] == _TOMBSTONE_TEST_EMBEDDING, \
+            "tombstone embedding must be the skill's own stored blob, byte-for-byte"
+
+
+def test_skills_delete_with_null_embedding_computes_one_for_the_tombstone():
+    """The one case that SHOULD call embed(): a skill saved with a NULL
+    embedding (headline+description present but never embedded, e.g. embed()
+    was down when it was saved) has nothing to reuse."""
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill(embedding=None)
+        called = {"n": 0}
+
+        def _counting(text):
+            called["n"] += 1
+            return _fake_embed(text)
+
+        orig_embed = skills.embed
+        skills.embed = _counting
+        try:
+            r = c.delete(f"/api/admin/skills/{skill_id}")
+        finally:
+            skills.embed = orig_embed
+        assert r.status_code == 200, r.text
+        assert called["n"] >= 1, \
+            "a NULL stored embedding must trigger a fresh embed() for the tombstone"
+
+
+def test_skills_delete_on_missing_id_writes_no_tombstone_and_stays_ok():
+    """DELETE stays idempotent by contract (like clear_access_denial): deleting
+    an id that's already gone must still report ok, and must not fabricate a
+    tombstone for a row that was never seen."""
+    with TestClient(app) as c:
+        _login(c)
+        before_n = _rejection_count()
+        missing_id = 9_999_999
+        r = c.delete(f"/api/admin/skills/{missing_id}")
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+        assert _rejection_count() == before_n, \
+            "a delete on a nonexistent id must write no tombstone"
+
+
+def test_delete_mute_category_tombstones_deletes_and_mutes_in_one_call():
+    """?mute_category=1 is one atomic admin intent (tombstone + delete + mute),
+    not two chained requests a partial failure could split."""
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill(category="CIP_ROLLUP")
+
+        r = c.delete(f"/api/admin/skills/{skill_id}?mute_category=1")
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+        after = c.get("/api/admin/skills").json()
+        assert not any(s["id"] == skill_id for s in after), after
+        assert _rejection_count() >= 1, "mute_category=1 must still write the tombstone"
+
+        cats = c.get("/api/admin/skills/categories").json()
+        entry = next(x for x in cats if x["token"] == "CIP_ROLLUP")
+        assert entry["muted"] is True, entry
+
+
+def test_delete_mute_category_on_a_null_category_row_mutes_nothing_and_does_not_error():
+    # Compares muted STATE before vs. after, rather than asserting "nothing at
+    # all is muted": this file's tests share one on-disk app.db, and an
+    # earlier test (test_delete_mute_category_tombstones_deletes_and_mutes_in_
+    # one_call) legitimately leaves CIP_ROLLUP muted -- a global "nothing is
+    # muted" assertion trips on that unrelated, correct state instead of
+    # testing what this test actually means to: that THIS action changed
+    # nothing.
+    with TestClient(app) as c:
+        _login(c)
+        before = {row["token"]: row["muted"]
+                 for row in c.get("/api/admin/skills/categories").json()}
+        skill_id = _seed_full_skill(category=None)
+
+        r = c.delete(f"/api/admin/skills/{skill_id}?mute_category=1")
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+
+        after = c.get("/api/admin/skills").json()
+        assert not any(s["id"] == skill_id for s in after), after
+
+        after_muted = {row["token"]: row["muted"]
+                      for row in c.get("/api/admin/skills/categories").json()}
+        assert after_muted == before, \
+            ("a NULL-category row's mute_category=1 must not change ANY category's "
+             f"muted state: before={before} after={after_muted}")
+
+
+def test_skills_get_includes_category_field():
+    with TestClient(app) as c:
+        _login(c)
+        rows = c.get("/api/admin/skills").json()
+        assert rows, "expected at least the seed rows"
+        assert "category" in rows[0], f"skills list must expose the category field: {rows[0]}"
+
+
+def test_skills_categories_shape():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.get("/api/admin/skills/categories")
+        assert r.status_code == 200, r.text
+        rows = r.json()
+        tokens = {row["token"] for row in rows}
+        assert tokens == set(lessoncats.CATEGORIES), tokens
+        for row in rows:
+            assert set(row.keys()) == {"token", "label", "learnable", "muted", "pending"}, row
+            assert row["learnable"] == (row["token"] in lessoncats.LEARNABLE), row
+            assert row["label"] == lessoncats.LABELS[row["token"]], row
+
+
+def test_skills_categories_mute_unmute_round_trip():
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/api/admin/skills/categories/SECOND_MAJOR/mute")
+        assert r.status_code == 200, r.text
+        cats = c.get("/api/admin/skills/categories").json()
+        entry = next(x for x in cats if x["token"] == "SECOND_MAJOR")
+        assert entry["muted"] is True, entry
+
+        r2 = c.delete("/api/admin/skills/categories/SECOND_MAJOR/mute")
+        assert r2.status_code == 200, r2.text
+        cats2 = c.get("/api/admin/skills/categories").json()
+        entry2 = next(x for x in cats2 if x["token"] == "SECOND_MAJOR")
+        assert entry2["muted"] is False, entry2
+
+
+def test_skills_categories_mute_unknown_token_is_404():
+    # A real token succeeds FIRST -- proves the route exists and the 404 below
+    # comes from token VALIDATION, not just an unmatched path. Without this a
+    # totally missing endpoint (every path 404s) would pass this test by
+    # accident.
+    with TestClient(app) as c:
+        _login(c)
+        ok = c.post("/api/admin/skills/categories/MAGNITUDE/mute")
+        assert ok.status_code == 200, ok.text
+        c.delete("/api/admin/skills/categories/MAGNITUDE/mute")  # tidy up
+
+        r = c.post("/api/admin/skills/categories/NOT_A_REAL_TOKEN/mute")
+        assert r.status_code == 404, \
+            f"a typo'd category token must 404, not silently write garbage into meta: {r.text}"
+
+
+def test_skills_rejections_never_returns_the_embedding_blob():
+    """Bytes aren't JSON-serialisable -- returning the blob would 500 the whole
+    panel the moment a real (non-empty) tombstone existed."""
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill()
+        c.delete(f"/api/admin/skills/{skill_id}")
+
+        r = c.get("/api/admin/skills/rejections")
+        assert r.status_code == 200, r.text
+        rows = r.json()
+        assert rows, "expected at least the tombstone just written"
+        for row in rows:
+            assert "embedding" not in row, \
+                f"GET /skills/rejections must never return the embedding blob: {row}"
+
+
+def test_skills_rejections_newest_first():
+    # Discriminate by HEADLINE, never skill_id: `skills.id` is an
+    # INTEGER PRIMARY KEY with no AUTOINCREMENT, so SQLite freely reuses a
+    # freed id -- a seed-delete-seed sequence (exactly what this test does)
+    # can hand id1 and id2 the SAME value, and every test in this file shares
+    # one on-disk app.db for its whole run, so `skill_id` alone can't even
+    # discriminate THIS test's own two rows from tombstones earlier tests
+    # left behind. skill_id is a non-unique provenance breadcrumb (which
+    # skill a tombstone traces back to, for a human reading the row) -- not
+    # an identity to filter or sort by. Headline text is what's actually
+    # distinct here.
+    with TestClient(app) as c:
+        _login(c)
+        id1 = _seed_full_skill(headline="First rejected.")
+        c.delete(f"/api/admin/skills/{id1}")
+        id2 = _seed_full_skill(headline="Second rejected.")
+        c.delete(f"/api/admin/skills/{id2}")
+
+        rows = c.get("/api/admin/skills/rejections").json()
+        order = [row["headline"] for row in rows
+                if row.get("headline") in ("First rejected.", "Second rejected.")]
+        assert order == ["Second rejected.", "First rejected."], \
+            f"expected newest-first (Second, First), got {order}"
+
+
+def test_skills_rejections_single_delete_and_clear_all_are_idempotent():
+    # Explicit, unique headline + a headline-scoped lookup for the row_id --
+    # see test_skills_delete_writes_a_tombstone_before_deleting's docstring:
+    # `skill_id` is not a usable discriminator here (a reused, no-AUTOINCREMENT
+    # id could match a different, earlier test's tombstone in this shared
+    # app.db file).
+    with TestClient(app) as c:
+        _login(c)
+        skill_id = _seed_full_skill(headline="Idempotent-delete tombstone headline.")
+        c.delete(f"/api/admin/skills/{skill_id}")
+        rows = c.get("/api/admin/skills/rejections").json()
+        row_id = next(row["id"] for row in rows
+                     if row.get("headline") == "Idempotent-delete tombstone headline.")
+
+        r = c.delete(f"/api/admin/skills/rejections/{row_id}")
+        assert r.status_code == 200 and r.json()["ok"] is True, r.text
+        after = c.get("/api/admin/skills/rejections").json()
+        assert not any(row["id"] == row_id for row in after), after
+
+        # Idempotent: deleting the same (now-gone) row again is still ok.
+        r2 = c.delete(f"/api/admin/skills/rejections/{row_id}")
+        assert r2.status_code == 200 and r2.json()["ok"] is True, r2.text
+
+        # Clear-all.
+        skill_id2 = _seed_full_skill()
+        c.delete(f"/api/admin/skills/{skill_id2}")
+        assert c.get("/api/admin/skills/rejections").json(), \
+            "expected a rejection row before clear-all"
+        r3 = c.delete("/api/admin/skills/rejections")
+        assert r3.status_code == 200 and r3.json()["ok"] is True, r3.text
+        assert c.get("/api/admin/skills/rejections").json() == [], \
+            "clear-all must remove every rejection row"
+
+        # Idempotent.
+        r4 = c.delete("/api/admin/skills/rejections")
+        assert r4.status_code == 200 and r4.json()["ok"] is True, r4.text
+
+
 def test_server_logs_returns_records():
     with TestClient(app) as c:
         _login(c)
@@ -3660,6 +4011,34 @@ def run():
     check("skills PATCH on a missing id is 404, not 500 or a false ok",
           test_skills_patch_on_a_missing_id_is_404_not_500_or_a_false_ok)
     check("skills DELETE removes the row", test_skills_delete_removes_the_row)
+
+    print("A2: lesson-rejection memory (migration 35 -- not yet implemented):")
+    check_pending("DELETE /skills/{id} writes a tombstone before deleting",
+                  test_skills_delete_writes_a_tombstone_before_deleting)
+    check_pending("DELETE reuses the skill's stored embedding rather than re-embedding",
+                  test_skills_delete_reuses_the_stored_embedding_rather_than_reembedding)
+    check_pending("DELETE with a NULL stored embedding computes a fresh one for the tombstone",
+                  test_skills_delete_with_null_embedding_computes_one_for_the_tombstone)
+    check_pending("DELETE on a missing id writes no tombstone and stays ok",
+                  test_skills_delete_on_missing_id_writes_no_tombstone_and_stays_ok)
+    check_pending("?mute_category=1 tombstones, deletes, and mutes atomically",
+                  test_delete_mute_category_tombstones_deletes_and_mutes_in_one_call)
+    check_pending("?mute_category=1 on a NULL-category row mutes nothing, doesn't error",
+                  test_delete_mute_category_on_a_null_category_row_mutes_nothing_and_does_not_error)
+    check_pending("GET /skills includes the category field",
+                  test_skills_get_includes_category_field)
+    check_pending("GET /skills/categories shape", test_skills_categories_shape)
+    check_pending("category mute/unmute round trip",
+                  test_skills_categories_mute_unmute_round_trip)
+    check_pending("category mute on an unknown token is 404",
+                  test_skills_categories_mute_unknown_token_is_404)
+    check_pending("GET /skills/rejections never returns the embedding blob",
+                  test_skills_rejections_never_returns_the_embedding_blob)
+    check_pending("GET /skills/rejections sorts newest first",
+                  test_skills_rejections_newest_first)
+    check_pending("rejections single-delete and clear-all are idempotent",
+                  test_skills_rejections_single_delete_and_clear_all_are_idempotent)
+
     check("server logs endpoint returns records", test_server_logs_returns_records)
     check("server logs endpoint handles no handler installed",
           test_server_logs_with_no_handler_returns_empty)
