@@ -1,4 +1,3 @@
 export declare function laterTurnsLost(messages: any, index: any): number;
-export declare function needsDestructiveConfirm(messages: any, index: any): boolean;
 export declare function editConfirmBody(lost: any): string;
 export declare function editConfirmLabel(lost: any, verb?: string): string;
