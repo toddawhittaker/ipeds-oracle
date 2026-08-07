@@ -916,6 +916,12 @@ class AgentResult:
     critic_revised: bool = False    # the critic flagged the draft and forced a revision
     critic_headline: str = ""       # the critic's finding, headline (candidate lesson title)
     critic_description: str = ""    # the critic's finding, description (candidate lesson body)
+    # A closed app/lessoncats.py token (or "" — OK verdict, fail-open, or an
+    # unrecognized category). app/routers/chat.py reads this, not headline/
+    # description, to decide whether a REVISE finding may become a stored
+    # lesson — see app/lessoncats.py's module docstring for why only some
+    # categories are learnable.
+    critic_category: str = ""
     figure: dict | None = None      # structured hero statistic from the answer's figure fence
     # Whether the figure's number could be reproduced from the retained results
     # (app/grounding.py). OBSERVE-ONLY: recorded on usage_log, surfaced on
@@ -1261,6 +1267,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                         # new SQL) from a rebuttal (it doesn't) once it returns.
                         res.critic_headline = crit.headline
                         res.critic_description = crit.description
+                        res.critic_category = crit.category
                         draft_answer = answer
                         sql_count_at_critique = len(res.sql_log)
                         yield {"type": "status", "text": "Double-checking the result…"}
@@ -1420,6 +1427,7 @@ async def stream_agent(question: str, *, history: list[dict] | None = None,
                 if not crit.ok:
                     res.critic_headline = crit.headline
                     res.critic_description = crit.description
+                    res.critic_category = crit.category
                     draft = final
                     sql_count = len(res.sql_log)
                     yield {"type": "status", "text": "Double-checking the result…"}

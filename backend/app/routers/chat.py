@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app import feedback, guard, ratelimit, skills
+from app import feedback, guard, lessoncats, ratelimit, skills
 from app.auth import current_user
 from app.config import get_settings
 from app.db import connect
@@ -674,13 +674,29 @@ async def chat_stream(req: ChatRequest, user: sqlite3.Row = Depends(current_user
             # ("and for Ohio?") is a context-less, useless retrieval key. A clarify
             # turn never reaches here as a critic-revised turn (the critic never runs
             # on one — see app/llm.py), but the guard is explicit for clarity/safety.
+            #
+            # lessoncats.is_learnable gates only WHICH findings get stored — never
+            # whether the critic forces a revision, which already happened above
+            # this point regardless of category (see app/lessoncats.py's module
+            # docstring). UNGROUNDED_NUMBER is deliberately excluded: it's already
+            # enforced deterministically, per turn, by app/grounding.py, so a stored
+            # lesson for it can't fix anything and was the recurring "verify figures
+            # before emitting them" lesson an admin kept rejecting.
             if (not history and result.critic_revised
                     and (result.critic_headline or result.critic_description)
                     and result.error is None and result.sql_log
-                    and clarify is None):
-                await run_in_threadpool(
-                    skills.record_lesson_from_critic, question,
-                    result.sql_log[-1], result.critic_headline, result.critic_description)
+                    and clarify is None
+                    and lessoncats.is_learnable(result.critic_category)):
+                # Runs AFTER the answer is already persisted, so a failure here must
+                # cost only the lesson, never the stream — mirrors
+                # _record_feedback_lesson's own try/except below.
+                try:
+                    await run_in_threadpool(
+                        skills.record_lesson_from_critic, question,
+                        result.sql_log[-1], result.critic_headline,
+                        result.critic_description)
+                except Exception:
+                    log.exception("critic-derived lesson recording failed")
 
             # 4c) Mine corrective feedback on a follow-up turn into a candidate
             # lesson (symmetric to the critic above, but from the USER's own

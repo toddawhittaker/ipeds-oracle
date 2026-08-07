@@ -746,6 +746,46 @@ The three guards:
   `critic_revised=False`. This closes the observed leak where a *confirm*-by-
   requery rebuttal (same number, new "the reviewer's concern…" prose) slipped
   past the requeried-and-changed gate — see `backend/tests/test_critic.py`.
+  **Only SOME findings may become lessons, and the prompt never says which.**
+  The REVISE reply carries a **`CATEGORY:`** from the closed seven-token set in
+  **`backend/app/lessoncats.py`** (a dependency-free leaf module, `seeds.py`'s
+  precedent — three modules need the enum and `skills.py` reaching it via
+  `critic.py` would drag `httpx` into the skills import graph for a constant).
+  Five data-modeling categories are LEARNABLE; **`UNGROUNDED_NUMBER`** and
+  **`OTHER`** are not. The first IS the class Todd kept rejecting in production —
+  "verify figures against the query result before emitting them" — which
+  `grounding.py` already enforces deterministically per turn, so a lesson
+  retrieved at query time cannot fix it. The second is excluded because it would
+  otherwise be the **escape hatch**: a model whose `UNGROUNDED_NUMBER` findings
+  are discarded would simply relabel `OTHER`, making the gate a one-hop detour
+  rather than a fence. **No parseable category → no lesson** (fail closed); the
+  cost is that a genuinely novel insight fitting no bullet is never learned,
+  accepted because adding a bullet is a one-line change.
+  **The gate is CATEGORICAL because similarity provably cannot do it** —
+  measured with the app's own model: five phrasings of the rejected class sit at
+  cosine **0.625–0.802** to each other while two genuinely different legitimate
+  lessons sit at **0.673**, best separation **0.703 vs 0.681**, i.e. none. Don't
+  re-derive that by trying an embedding filter; it's in `lessoncats.py`'s
+  docstring.
+  **THE REVISE STILL FIRES FOR EVERY CATEGORY** — only the *learning* is gated,
+  and an `UNGROUNDED_NUMBER` finding must still force its revision round, the one
+  thing `grounding.py` can't do alone (make the model re-query and fix the number
+  before the user sees it). "The critic no longer handles X" is exactly the wrong
+  summary to act on.
+  `_SYSTEM`'s bullets are **assembled from `lessoncats.BULLETS`** so prompt and
+  enum can't drift, and its old closing line ("…AND stored as a learned lesson")
+  is **DELETED** — once categories gate storage that sentence invites relabeling.
+  The prompt now never uses the word "lesson" nor reveals the learnable set,
+  pinned by a **negative** test. Two bugs found on the way, both invisible to
+  review: `_DESCRIPTION_RE` stopped only at a following `headline:`, so a
+  DESCRIPTION-before-CATEGORY reply swallowed the literal `CATEGORY: X` into the
+  stored description (surfaced through `test_feedback.py`, since `feedback.py`
+  reuses `parse_verdict` — which keeps its **exact 3-tuple**, that suite passing
+  untouched being the behaviour-neutrality signal); and the critic-lesson
+  recording call was a bare `await` inside the SSE generator **after** the answer
+  is persisted with no `try/except`, while its feedback sibling has always been
+  guarded. `critic_category` must be set at **BOTH** `llm.py` critic call sites
+  (main loop AND exhaustion path) — missing the second fails closed and silently.
   **The critic also runs on the TOOL-BUDGET-EXHAUSTED path** (S5): when the agent
   burns all `llm_max_tool_iters` and falls back to the tools-disabled "best effort"
   synthesis (the highest-risk path, once shipped with ZERO review), it now gets the

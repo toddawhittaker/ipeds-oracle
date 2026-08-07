@@ -959,6 +959,11 @@ def test_retrieved_skills_bump_their_hit_count():
 
 
 def test_critic_revision_records_a_lesson():
+    """The anti-vacuous half of the category gate: a LEARNABLE category
+    (CIP_ROLLUP) must still let a critic-forced revision reach
+    record_lesson_from_critic. Without this test, an implementation that
+    suppresses every lesson (e.g. always failing lessoncats.is_learnable)
+    would pass the rest of this suite's "must NOT record" cases trivially."""
     with TestClient(app) as c:
         _login(c)
         captured = {}
@@ -969,7 +974,8 @@ def test_critic_revision_records_a_lesson():
                 answer="corrected answer", model_used="test-model", error=None,
                 sql_log=["SELECT SUM(x) FROM c_a"], critic_revised=True,
                 critic_headline="Add majornum=1.",
-                critic_description="no majornum=1 filter; double count")}
+                critic_description="no majornum=1 filter; double count",
+                critic_category="CIP_ROLLUP")}
 
         orig_agent = chat_router.stream_agent
         orig_block = skills.retrieve_skills_block
@@ -1009,7 +1015,11 @@ def test_critic_lesson_not_recorded_on_followup_turn():
             yield {"type": "done", "result": AgentResult(
                 answer="ans", model_used="test-model", error=None,
                 sql_log=["SELECT 1"], critic_revised=True,
-                critic_headline="A headline.", critic_description="a rule")}
+                critic_headline="A headline.", critic_description="a rule",
+                # A learnable category, so this test isolates the history gate
+                # (turn 1 records, turn 2 doesn't) from the category gate
+                # exercised separately below.
+                critic_category="CIP_ROLLUP")}
 
         orig_agent = chat_router.stream_agent
         orig_block = skills.retrieve_skills_block
@@ -1036,6 +1046,163 @@ def test_critic_lesson_not_recorded_on_followup_turn():
             skills.cache_store = orig_cache_store
             skills.record_lesson_from_critic = orig_record
         assert calls["n"] == 1, "a follow-up turn must not record a context-less lesson"
+
+
+def test_ungrounded_number_category_revises_but_records_no_lesson():
+    """UNGROUNDED_NUMBER is the rejected class this PR exists to stop from
+    becoming a lesson: app/grounding.py already enforces it deterministically
+    per-turn, and a retrieved lesson can't fix that. The revision round still
+    has to fire and ship (pinned separately, at the agent-loop level, in
+    test_critic.py's test_revise_still_fires_when_category_is_not_learnable) --
+    what this test pins is that chat.py's recording gate refuses to store it as
+    a lesson even though critic_revised is True and a headline/description are
+    present, exactly the shape a genuinely learnable finding has. Without the
+    category check this reaches skills.record_lesson_from_critic."""
+    with TestClient(app) as c:
+        _login(c)
+        calls = {"n": 0}
+
+        async def _critic_agent(question, *, history=None, skills_block="", prior_results=None):
+            yield {"type": "answer", "text": "corrected answer"}
+            yield {"type": "done", "result": AgentResult(
+                answer="corrected answer", model_used="test-model", error=None,
+                sql_log=["SELECT SUM(x) FROM c_a"], critic_revised=True,
+                critic_headline="Verify the figure against the query result.",
+                critic_description="the headline number was not present in the retained rows",
+                critic_category="UNGROUNDED_NUMBER")}
+
+        orig_agent = chat_router.stream_agent
+        orig_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        orig_record = skills.record_lesson_from_critic
+        chat_router.stream_agent = _critic_agent
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q, _uid=None: None
+        skills.cache_store = lambda *a, **k: None
+        skills.record_lesson_from_critic = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+        try:
+            r = c.post("/api/chat/stream", json={"question": "national bachelor total"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            skills.retrieve_skills_block = orig_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+            skills.record_lesson_from_critic = orig_record
+
+        assert r.status_code == 200, r.text
+        events = _parse_sse(r.text)
+        assert any(e.get("type") == "answer" and e.get("text") == "corrected answer"
+                   for e in events), \
+            "the (already-revised) answer must still reach the client unchanged"
+        assert calls["n"] == 0, \
+            "an UNGROUNDED_NUMBER finding must never be recorded as a lesson"
+
+
+def test_critic_category_reaches_the_lesson_gate_through_the_real_agent_loop():
+    """Guards the app.llm -> app.routers.chat SEAM for critic_category, as
+    opposed to the two tests above (and test_critic_revision_records_a_lesson),
+    which inject a canned AgentResult directly and so cannot see a category
+    that llm.py forgot to copy from Critique onto AgentResult, or that chat.py
+    read under the wrong name. This runs the REAL app.llm.stream_agent (not a
+    stub), with only the network-touching leaves faked, so a broken hand-off
+    anywhere along that path surfaces here. Without the wiring this fails
+    CLOSED -- no exception, no error event, the lesson is just silently never
+    recorded, exactly the "lessons silently stopped" symptom the PR names."""
+    from app import critic as critic_mod
+    from app import llm as llm_mod
+    from app.config import get_settings as _get_settings
+    from app.tools import registry as tool_registry
+
+    with TestClient(app) as c:
+        _login(c)
+        captured = {}
+        calls = {"chat": 0}
+
+        async def fake_chat(client, model, messages, tools=None):
+            if tools is None:  # generate_title's own call via the same _chat name
+                return {"choices": [{"message": {"content": "a title"}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            calls["chat"] += 1
+            if calls["chat"] == 1:
+                return {"choices": [{"message": {"content": "",
+                    "tool_calls": [{"id": "c1", "type": "function", "function": {
+                        "name": "run_sql",
+                        "arguments": '{"sql": "SELECT SUM(x) FROM c_a"}'}}]}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            if calls["chat"] == 2:
+                return {"choices": [{"message": {"content": "Draft: 4,000,000 (wrong)."}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            if calls["chat"] == 3:
+                return {"choices": [{"message": {"content": "",
+                    "tool_calls": [{"id": "c2", "type": "function", "function": {
+                        "name": "run_sql",
+                        "arguments": '{"sql": "SELECT SUM(x) FROM c_a WHERE majornum=1"}'
+                    }}]}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            return {"choices": [{"message": {"content": "Corrected: 1,000,000."}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+        async def fake_review(question, sql_log, answer, *a, **kw):
+            return critic_mod.Critique(ok=False, headline="Add majornum=1.",
+                                       description="missing majornum=1; ~4x overcount",
+                                       category="CIP_ROLLUP")
+
+        async def fake_retry_missing_figure(question, answer):
+            return llm_mod._FigureRetry()  # fails open — no network, no figure
+
+        real_settings = _get_settings()
+        patched_settings = real_settings.model_copy(update={
+            "llm_api_key": "test-key",
+            # Keep the plain-text tool-call path (matches test_critic.py's
+            # agent-loop fakes below) rather than the emit_answer tool-call
+            # shape, which these fakes don't speak.
+            "structured_emission_enabled": False,
+            "critic_enabled": True,
+        })
+
+        orig_agent = chat_router.stream_agent
+        orig_get_settings = llm_mod.get_settings
+        orig_chat = llm_mod._chat
+        orig_review = llm_mod.critic.review
+        orig_retry = llm_mod.retry_missing_figure
+        orig_dispatch = tool_registry.dispatch
+        orig_block = skills.retrieve_skills_block
+        orig_cache_lookup = skills.cache_lookup
+        orig_cache_store = skills.cache_store
+        orig_record = skills.record_lesson_from_critic
+
+        chat_router.stream_agent = llm_mod.stream_agent
+        llm_mod.get_settings = lambda: patched_settings
+        llm_mod._chat = fake_chat
+        llm_mod.critic.review = fake_review
+        llm_mod.retry_missing_figure = fake_retry_missing_figure
+        tool_registry.dispatch = lambda *a, **k: "OK — 1 row(s)"
+        skills.retrieve_skills_block = lambda q: ("", [])
+        skills.cache_lookup = lambda q, _uid=None: None
+        skills.cache_store = lambda *a, **k: None
+        skills.record_lesson_from_critic = \
+            lambda q, sql, headline, description: captured.update(
+                q=q, sql=sql, headline=headline, description=description)
+        try:
+            r = c.post("/api/chat/stream", json={"question": "national bachelor total, seam"})
+        finally:
+            chat_router.stream_agent = orig_agent
+            llm_mod.get_settings = orig_get_settings
+            llm_mod._chat = orig_chat
+            llm_mod.critic.review = orig_review
+            llm_mod.retry_missing_figure = orig_retry
+            tool_registry.dispatch = orig_dispatch
+            skills.retrieve_skills_block = orig_block
+            skills.cache_lookup = orig_cache_lookup
+            skills.cache_store = orig_cache_store
+            skills.record_lesson_from_critic = orig_record
+
+        assert r.status_code == 200, r.text
+        assert captured.get("headline") == "Add majornum=1.", \
+            f"a CIP_ROLLUP finding produced through the real agent loop must reach " \
+            f"record_lesson_from_critic: {captured}"
+        assert "majornum" in captured.get("description", ""), captured
 
 
 # ---------------------------------------------------------------------------
@@ -1833,6 +2000,10 @@ def run():
           test_fire_and_forget_runs_then_self_discards)
     check("a follow-up critic correction does NOT record a lesson",
           test_critic_lesson_not_recorded_on_followup_turn)
+    check("UNGROUNDED_NUMBER still revises but records no lesson",
+          test_ungrounded_number_category_revises_but_records_no_lesson)
+    check("critic_category reaches the lesson gate through the real agent loop",
+          test_critic_category_reaches_the_lesson_gate_through_the_real_agent_loop)
     check("conversation list/get/delete (+404s)", test_conversation_crud)
     check("conversation rename: trims, keeps sidebar order, rejects blank/overlong",
           test_conversation_rename)
