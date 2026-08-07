@@ -322,7 +322,11 @@ test("an 'update' status card shows an Update badge and is re-selectable", async
   // rather than passing on unstyled fallback text.
   await expect(updateCard.locator(".badge")).toHaveText(/Update/);
 
-  const checkbox = page.getByRole("checkbox", { name: "Integrate 2022-23 (Final)" });
+  const checkbox = page.getByRole("checkbox", {
+    // An `update` year is BOTH loaded and selectable, so its name says what
+    // the action IS — role=checkbox prunes the "↑ Update" badge, and
+    // "Integrate 2022-23 (Final)" was indistinguishable from a NEW year.
+    name: "Update 2022-23 to Final" });
   await expect(checkbox).toBeVisible();
 
   const submit = page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ });

@@ -308,7 +308,11 @@ test.describe("the Integrate confirmation states the truth", () => {
     await mockIntegrate(page, { jobId: 95 });
     await openImportsTab(page);
 
-    await page.getByRole("checkbox", { name: "Integrate 2022-23 (Final)" }).click();
+    await page.getByRole("checkbox", {
+      // An `update` year is BOTH loaded and selectable, so its name says what
+      // the action IS — role=checkbox prunes the "↑ Update" badge, and
+      // "Integrate 2022-23 (Final)" was indistinguishable from a NEW year.
+      name: "Update 2022-23 to Final" }).click();
     await page.getByRole("button", { name: /^Integrate selected \(\d+\)$/ }).click();
 
     const dialog = page.getByRole("alertdialog");

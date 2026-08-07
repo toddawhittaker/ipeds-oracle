@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { linearFit, trendValues, pctChange } from "./trendstats.js";
+import { deltaAnnouncement, linearFit, trendValues, pctChange } from "./trendstats.js";
 
 describe("linearFit", () => {
   it("fits a perfect upward line", () => {
@@ -51,5 +51,32 @@ describe("pctChange", () => {
   it("returns null from a zero base or with fewer than 2 points", () => {
     expect(pctChange([{ n: 0 }, { n: 5 }], "n")).toBeNull();
     expect(pctChange([{ n: 5 }], "n")).toBeNull();
+  });
+});
+
+describe("deltaAnnouncement", () => {
+  // THE REGRESSION: `dir` is three-valued but the sr-only text collapsed it to
+  // two, so a series rendering "→ 0.3%" in neutral grey announced "down 0.3%" —
+  // sighted and screen-reader users told opposite things, on the one element
+  // whose whole job is direction. The glyph and colour are aria-hidden, so this
+  // string is ALL a screen-reader user gets, and axe cannot rate a
+  // wrong-but-present accessible name.
+  it.each([
+    [{ dir: "up", pct: 12.34 }, "up 12.3% over the range shown"],
+    [{ dir: "down", pct: -5 }, "down 5.0% over the range shown"],
+    [{ dir: "flat", pct: 0.3 }, "roughly unchanged, 0.3% over the range shown"],
+    [{ dir: "flat", pct: -0.4 }, "roughly unchanged, 0.4% over the range shown"],
+    [{ dir: "flat", pct: 0 }, "roughly unchanged, 0.0% over the range shown"],
+  ])("%o -> %s", (delta, expected) => {
+    expect(deltaAnnouncement(delta)).toBe(expected);
+  });
+
+  it("never says a direction for a flat series", () => {
+    const s = deltaAnnouncement({ dir: "flat", pct: 0.49 });
+    expect(s).not.toMatch(/\b(up|down)\b/);
+  });
+
+  it("returns empty for no delta rather than throwing", () => {
+    expect(deltaAnnouncement(null)).toBe("");
   });
 });
