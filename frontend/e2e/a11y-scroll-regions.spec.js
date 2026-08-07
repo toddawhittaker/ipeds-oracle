@@ -115,6 +115,33 @@ test.describe("scrollable regions are keyboard reachable", () => {
     await expect(example).toHaveAttribute("tabindex", "0");
   });
 
+  test("the CSV-format example can actually be REACHED and KEPT by keyboard", async ({ page }) => {
+    // THE REGRESSION: existing coverage asserted the region was visible and
+    // carried tabindex=0 — but never focused it, so it passed while the region
+    // was unreachable. HelpPopover tracked focus on the TRIGGER only, so Tabbing
+    // into the popover blurred the trigger, fired closeSoon(), and unmounted the
+    // region out from under the focused element 140ms later. Measured before the
+    // fix: focus was the region immediately after Tab, and <body> 400ms later,
+    // with the popover gone. That makes the tabindex=0 added for WCAG 2.1.1
+    // decorative, and strands the user at the top of the document.
+    await adminMocks(page);
+    await mockLogs(page, []);
+    await page.goto("/admin/users/current");
+    await page.getByText("Import from CSV").click();
+    await page.getByRole("button", { name: "CSV format help" }).focus();
+
+    await page.keyboard.press("Tab");
+    const example = page.getByRole("region", { name: "CSV format example" });
+    await expect(example).toBeFocused();
+
+    // Past closeSoon()'s 140ms timer: the popover must NOT have closed under it.
+    // Asserted synchronously after the wait, because an auto-retrying matcher
+    // would happily wait out a transient and report the wrong thing either way.
+    await page.waitForTimeout(400);
+    expect(await example.evaluate((el) => el === globalThis.document.activeElement)).toBe(true);
+    await expect(example).toBeVisible();
+  });
+
   test("the import job log is a focusable, named region", async ({ page }) => {
     await adminMocks(page);
     await mockLogs(page, []);

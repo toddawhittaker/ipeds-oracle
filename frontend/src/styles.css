@@ -638,8 +638,15 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .sqlblock .token.comment { color: var(--muted); font-style: italic; }
 .sqlblock .token.keyword { color: var(--accent-d); font-weight: 600; }
 .sqlblock .token.string { color: #1c7a4b; }
+/* #8a4b12, the same ink as .token.function below, NOT the old #a15c00: that
+   measured 4.44:1 on --bg and failed AA (1.4.3) while every sibling token
+   passed. The axe gate could not see it — the fixture SQL's only number is the
+   one-character `3`, and axe files a one-character element as `incomplete`
+   rather than a violation. A DIRECT contrast assertion in a11y.spec.js is what
+   catches a regression here; widening the fixture's SQL alone was measured to
+   be insufficient (that note lives with the SQL const). */
 .sqlblock .token.number,
-.sqlblock .token.boolean { color: #a15c00; }
+.sqlblock .token.boolean { color: #8a4b12; }
 .sqlblock .token.function,
 .sqlblock .token.builtin { color: #8a4b12; }
 .sqlblock .token.operator,
@@ -704,7 +711,17 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    recognized" signal; struck/linked text also get width-safe decorations. */
 .md-hl-marker, .md-hl-quote, .md-hl-hr, .md-hl-fence { color: var(--muted); }
 .md-hl-heading, .md-hl-list { color: var(--accent); }
-.md-hl-code { color: var(--ochre); }
+/* Explicit ink, not var(--ochre): light --ochre (#a66a12) measures 4.31:1 on
+   --panel (the composer) and 3.83:1 on --bg (the inline prompt editor), both
+   under AA. This is text the user is actively typing and reading, and it is
+   structurally invisible to axe — the glyphs live in the aria-hidden <pre>
+   mirror under a transparent textarea, which axe reports as `incomplete`.
+   Dark keeps --ochre (#d89a4b), which is already comfortable there. */
+.md-hl-code { color: #8a4b12; }
+:root[data-theme="dark"] .md-hl-code { color: var(--ochre); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .md-hl-code { color: var(--ochre); }
+}
 .md-hl-strike { color: var(--muted); text-decoration: line-through; }
 .md-hl-link { color: var(--accent); text-decoration: underline; }
 .md-hl-linkurl { color: var(--muted); text-decoration: underline; }
