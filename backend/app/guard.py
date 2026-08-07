@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
+from app.llmhttp import CHAT_ERRORS, PROBE_TIMEOUT, Usage, chat_completion
 
 # Shown to the user (Markdown) when a message is refused.
 REFUSAL = (
@@ -116,7 +116,7 @@ async def classify(question: str, history: list[dict] | None = None) -> Verdict:
     # ValueError covers a 200 whose body isn't JSON — an endpoint fronted by a proxy
     # or captive portal answering with HTML. json() raises that, not an HTTPError, so
     # without it the failure escapes this handler and kills the SSE stream.
-    except (httpx.HTTPError, ValueError):
+    except CHAT_ERRORS:
         return Verdict(allowed=True)  # fail open — system prompt is the backstop
 
     content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""

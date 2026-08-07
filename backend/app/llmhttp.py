@@ -20,6 +20,23 @@ import httpx
 DEFAULT_TIMEOUT = 120.0  # full agent turns (tool-calling rounds)
 PROBE_TIMEOUT = 30.0     # cheap guard / critic classification calls
 
+# What a call through `chat_completion` can raise, as ONE list.
+#
+# `ValueError` is not decoration: it covers a **200 whose body isn't JSON** — an
+# endpoint fronted by a proxy, captive portal, or gateway answering with an HTML
+# error page. `Response.json()` raises `json.JSONDecodeError`, a ValueError, NOT
+# an `httpx.HTTPError`, so an `except httpx.HTTPError` does not see it.
+#
+# This existed as a hand-copied tuple in five places and was MISSING from the
+# five that matter most — the agent loop's own call sites. There, an escaping
+# ValueError killed the SSE generator mid-response: no terminal `done`, so
+# `_persist` never ran (the turn's answer AND its spend both lost), the new
+# conversation was reversed by `_delete_if_empty`, an unhandled traceback landed
+# in logs.db, and the user got a blank assistant bubble that never resolved.
+#
+# One name so the sixth call site cannot get it wrong.
+CHAT_ERRORS = (httpx.HTTPError, ValueError)
+
 
 def cached_tokens(usage: dict) -> int:
     """Prompt tokens the provider served from ITS OWN prompt cache, for this

@@ -25,7 +25,7 @@ import httpx
 
 from app import critic
 from app.config import get_settings
-from app.llmhttp import PROBE_TIMEOUT, Usage, chat_completion
+from app.llmhttp import CHAT_ERRORS, PROBE_TIMEOUT, Usage, chat_completion
 
 _SYSTEM = (
     "You are reviewing a USER's follow-up message in a conversation with an "
@@ -86,7 +86,7 @@ async def distill_feedback(history: list[dict], latest_user_msg: str
             data = await chat_completion(client, model=s.model_default, messages=messages,
                                          temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
-    except (httpx.HTTPError, ValueError):
+    except CHAT_ERRORS:
         return None, Usage()  # fail open — never drop or crash a chat turn over this
 
     usage = Usage.from_response(data)
