@@ -191,7 +191,12 @@ jobs:
 
       - name: Coverage gate (backend/app/ >= 80%)
         run: |
-          pip install coverage==7.15.2
+          # coverage's version is pinned once, in backend/requirements-dev.txt
+          # (also installs ruff — dev-only, harmless here, and not worth a
+          # second hand-kept file just to skip it). An inline `pip install
+          # coverage==X` literal here would be a second copy of that pin, and
+          # the two silently drifted (7.15.2 here vs. 7.15.3 there).
+          pip install -r backend/requirements-dev.txt
           scripts/coverage_check.sh
 
   unit:

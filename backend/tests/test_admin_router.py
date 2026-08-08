@@ -1864,6 +1864,106 @@ def test_usage_series_buckets_in_the_requested_timezone():
         assert bucket("Not/AZone") is not None
 
 
+@contextlib.contextmanager
+def _configured_timezone(name):
+    """Temporarily set TIMEZONE and clear the lru_cache'd get_settings() so a
+    request made inside the block sees it — same reason as test_secheaders.py's
+    `_public_url`: a middleware/handler that read Settings once at import would
+    never observe an env change, which is exactly the class of bug this file's
+    fallback test targets. Restores an unset TIMEZONE (this suite's default:
+    nothing else in it configures one) on exit."""
+    os.environ["TIMEZONE"] = name
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        del os.environ["TIMEZONE"]
+        get_settings.cache_clear()
+
+
+def test_usage_falls_back_to_the_configured_timezone_when_the_browser_sends_none():
+    """[[tzinfo-dead-code]] resolve_tz's fallback for an absent/unknown zone
+    used to be the hardcoded America/New_York constant, full stop — the
+    TIMEZONE setting had NO reader anywhere in the app (the only thing that
+    ever consulted it, Settings.tzinfo(), was itself dead code, called from
+    nowhere). So a self-hoster who set TIMEZONE in production got no effect:
+    a request with no `tz` param (the browser couldn't resolve one, or any
+    non-browser caller) silently bucketed in America/New_York regardless.
+
+    Picks a configured zone (Asia/Tokyo, UTC+9, no DST) with a UTC offset far
+    enough from the hardcoded fallback (America/New_York, UTC-4 in June) that
+    a wrong fallback lands the row in a different bucket STRING (different
+    hour AND calendar date) — not just a different zone *name* for the same
+    wall-clock reading, which would pass whether or not the fix landed."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    # 2 PM EDT == 18:00 UTC == 3 AM JST the next calendar day.
+    t = datetime(2021, 6, 15, 14, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
+    _clear_usage_log()
+    with _configured_timezone("Asia/Tokyo"):
+        with TestClient(app) as c:
+            _login(c)
+            _seed_usage_log("tz-fallback@x.edu", "q", created_at=t)
+            # No `tz` param — this is the "browser sent none" case.
+            r = c.get("/api/admin/usage", params={"since": t - 1800, "until": t + 1800})
+            assert r.status_code == 200, r.text
+            s = r.json()["series"]
+            got = s[0]["t"] if s else None
+            assert got == "2021-06-16 03:00", (
+                f"expected the row bucketed in the CONFIGURED Asia/Tokyo zone "
+                f"(2021-06-16 03:00 local), got {got!r} — resolve_tz's no-tz-param "
+                f"fallback must read the TIMEZONE setting, not the hardcoded "
+                f"America/New_York constant")
+
+
+def test_usage_survives_an_invalid_configured_timezone():
+    """[[tzinfo-dead-code]] resolve_tz's request-tz -> configured-TIMEZONE ->
+    hardcoded-_DEFAULT_TZ chain must stay TOTAL: a typo'd TIMEZONE in a
+    self-hoster's .env must not turn every Admin -> Usage request into a 500 —
+    that would be a strictly worse bug than the inert setting the fallback
+    fix was written to close. Drives BOTH candidates invalid in the same
+    call (an unrecognized configured TIMEZONE, and — in the second case —
+    an unrecognized `tz` request param too), so the ONLY thing left standing
+    is the unconditional final `return ZoneInfo(_DEFAULT_TZ)`.
+
+    Asserts on the RESPONSE (200 + a series bucketed in America/New_York),
+    not on a log record — the contract under test is "the endpoint still
+    answers", and the warning resolve_tz logs on the way is incidental."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    t = datetime(2021, 6, 15, 14, 0, tzinfo=ZoneInfo("America/New_York")).timestamp()
+    _clear_usage_log()
+    with _configured_timezone("Not/AConfiguredZone"):
+        with TestClient(app) as c:
+            _login(c)
+            _seed_usage_log("tz-invalid-config@x.edu", "q", created_at=t)
+
+            # Case 1: no `tz` param, invalid configured TIMEZONE — both
+            # non-hardcoded candidates are unusable.
+            r = c.get("/api/admin/usage", params={"since": t - 1800, "until": t + 1800})
+            assert r.status_code == 200, r.text
+            s = r.json()["series"]
+            got = s[0]["t"] if s else None
+            assert got == "2021-06-15 14:00", (
+                f"expected a clean 200 bucketed in the hardcoded America/New_York "
+                f"default, got status={r.status_code} bucket={got!r} — an invalid "
+                f"configured TIMEZONE must degrade, never 500 or raise")
+
+            # Case 2: an invalid `tz` param TOO, on top of the invalid
+            # configured TIMEZONE — the request-level candidate is also
+            # unusable, so only the hardcoded default is left.
+            r2 = c.get("/api/admin/usage",
+                       params={"since": t - 1800, "until": t + 1800, "tz": "Also/Bogus"})
+            assert r2.status_code == 200, r2.text
+            s2 = r2.json()["series"]
+            got2 = s2[0]["t"] if s2 else None
+            assert got2 == "2021-06-15 14:00", (
+                f"expected a clean 200 bucketed in the hardcoded America/New_York "
+                f"default, got status={r2.status_code} bucket={got2!r} — an invalid "
+                f"tz param stacked on an invalid configured TIMEZONE must still "
+                f"degrade to the hardcoded default, never 500 or raise")
+
+
 def test_usage_log_question_column_still_written():
     """Deliberate, and the flip side of the privacy fix: usage_log.question
     KEEPS being written to the database -- only the admin-facing /usage
@@ -3998,6 +4098,10 @@ def run():
           test_usage_totals_series_top_users_unaffected_by_recent_removal)
     check("usage series buckets in the requested (viewer) timezone",
           test_usage_series_buckets_in_the_requested_timezone)
+    check("usage series falls back to the CONFIGURED timezone when the browser sends none",
+          test_usage_falls_back_to_the_configured_timezone_when_the_browser_sends_none)
+    check("usage survives an invalid configured TIMEZONE (never a 500)",
+          test_usage_survives_an_invalid_configured_timezone)
     check("usage_log.question is still written to the DB (deliberate, not dropped)",
           test_usage_log_question_column_still_written)
     check("skills GET includes the headline field", test_skills_get_includes_headline_field)
