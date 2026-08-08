@@ -632,6 +632,65 @@ test.describe("copy menu (UX-H3)", () => {
     expect(clip).toContain("The copyable answer.");
   });
 
+  // Both copy helpers swallow their errors and return false, and neither call
+  // site had an `else` — so a denied clipboard was indistinguishable from
+  // success: no toast, no state change, the trigger still reading "Copy". The
+  // user believes the answer is on their clipboard and pastes something else.
+  //
+  // Blocking BOTH routes matters: copyText falls through from
+  // navigator.clipboard to a document.execCommand fallback, so stubbing only
+  // the first would still succeed and the test would prove nothing.
+  async function blockTheClipboard(page) {
+    await page.addInitScript(() => {
+      Object.defineProperty(globalThis.navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new Error("denied")),
+          write: () => Promise.reject(new Error("denied")),
+          readText: () => Promise.resolve(""),
+        },
+      });
+      globalThis.document.execCommand = () => false;
+    });
+  }
+
+  test("a blocked clipboard reports the failure instead of claiming success", async ({ page }) => {
+    await blockTheClipboard(page);
+    await openAnswer(page);
+
+    const trigger = page.getByRole("button", { name: "Copy", exact: true });
+    await trigger.click();
+    await page.getByRole("menu", { name: "Copy answer" })
+      .getByRole("menuitem", { name: "Copy Markdown" }).click();
+
+    const toast = page.locator(".toast");
+    await expect(toast).toHaveClass(/\berror\b/);
+    await expect(toast).toContainText(/couldn't copy/i);
+    // And it must never claim success — "Copied!" appearing at all is the bug.
+    await expect(page.getByRole("button", { name: "Copied!" })).toHaveCount(0);
+    await expect(trigger).toBeVisible();
+  });
+
+  test("a blocked clipboard reports the failure from Copy SQL too", async ({ page }) => {
+    await blockTheClipboard(page);
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 9, title: "Past chat" }]);
+    await mockConversation(page, 9, [
+      { id: 1, role: "user", content: "an earlier question" },
+      { id: 2, role: "assistant", content: "The copyable answer.", sql_log: ["SELECT 1"] },
+    ]);
+    await page.goto("/chat/9");
+    // The second handler with the same shape — a separate call site, so a fix
+    // applied only to doCopy would leave this one silent.
+    await page.getByRole("button", { name: /^SQL/ }).click();
+    await page.getByRole("button", { name: "Copy SQL" }).click();
+
+    const toast = page.locator(".toast");
+    await expect(toast).toHaveClass(/\berror\b/);
+    await expect(toast).toContainText(/couldn't copy/i);
+    await expect(page.getByRole("button", { name: "Copied!" })).toHaveCount(0);
+  });
+
   test("Escape closes the menu and restores focus to the trigger; click-outside closes", async ({ page }) => {
     await openAnswer(page);
     const trigger = page.getByRole("button", { name: "Copy", exact: true });
