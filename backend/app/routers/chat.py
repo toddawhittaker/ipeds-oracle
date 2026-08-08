@@ -337,6 +337,13 @@ def _results_for_storage(results) -> list | None:
     # Truncating rows can only cost grounding a match it would otherwise have
     # made, i.e. a false `ungrounded`/`partial`, never a false ✓ — the safe
     # direction, and the same trade `to_storage`'s 200-row cap already makes.
+    if blobs and len(json.dumps(blobs)) > RESULT_STORE_MAX_BYTES:
+        # Flag it BEFORE halving, not after: the halved blob's bytes must sit
+        # INSIDE the ceiling this loop measures below, or a borderline blob
+        # could slip back over RESULT_STORE_MAX_BYTES once the key is added.
+        # A halved blob is exactly as unsound for grounding to aggregate over
+        # as one run_sql itself flagged truncated — same reasoning, same flag.
+        blobs[0]["truncated"] = True
     while blobs and len(json.dumps(blobs)) > RESULT_STORE_MAX_BYTES:
         rows = blobs[0]["rows"]
         blobs[0]["rows"] = rows[: len(rows) // 2]
