@@ -1553,6 +1553,25 @@ def test_run_import_no_rollback_of_data_dir_after_a_successful_swap():
         "the backup was left on disk after a post-swap exception — once the " \
         "swap has happened nothing can restore it, so it must be deleted"
 
+    # THE REGRESSION this PR fixes: the swap already happened (build_check_swap
+    # already wrote status='swapped' with a good report internally) before
+    # _record_provenance raised, but the raise propagates to run_import's
+    # outer except-Exception handler, which unconditionally overwrote that
+    # 'swapped' row with 'failed' — reporting a LIVE dataset as a failed
+    # import. The Imports tab (frontend/src/admin/Imports.jsx) toasts "Import
+    # failed — the live database was not changed" on 'failed', which is false
+    # here: the database WAS changed, and stays changed.
+    row = _job_row(jid)
+    assert row["status"] == "swapped", (
+        "a completed swap was reported as a failed job because "
+        f"_record_provenance raised afterward: {row}")
+    assert "app.db is locked" in (row["report"] or ""), \
+        f"the report must name the post-swap failure, not just say 'swapped': {row}"
+    progress = json.loads(row["progress"] or "{}")
+    assert progress.get("overall", {}).get("phase") == "done", (
+        "status='swapped' but phase!='done' is the exact status/phase "
+        f"contradiction the Imports tab polls both of: {progress}")
+
 
 def test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_the_move():
     """Regression at the actual swap boundary (distinct from the test above,
@@ -1616,6 +1635,24 @@ def test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_th
          "desynced from the live db that was already built from this file")
     assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
         "the data_dir .accdb's bytes changed after a post-move failure"
+
+    # THE REGRESSION this PR fixes: invalidate_cache raised from INSIDE
+    # _activate_staging, AFTER the real shutil.move(staging -> ipeds.db) had
+    # already landed — so build_check_swap never reached its own
+    # _set_status(job_id, 'swapped', ...) line, and the raise propagates all
+    # the way to run_import's outer except-Exception handler, which
+    # overwrites the job to 'failed'. A live, already-swapped dataset must
+    # not be reported as a failed import.
+    row = _job_row(jid)
+    assert row["status"] == "swapped", (
+        "a post-move failure inside _activate_staging was reported as a "
+        f"failed job even though the swap already happened: {row}")
+    assert "cache invalidation blew up" in (row["report"] or ""), \
+        f"the report must name the post-swap failure, not just say 'swapped': {row}"
+    progress = json.loads(row["progress"] or "{}")
+    assert progress.get("overall", {}).get("phase") == "done", (
+        "status='swapped' but phase!='done' is the exact status/phase "
+        f"contradiction the Imports tab polls both of: {progress}")
 
 
 # ---------------------------------------------------------------------------
@@ -2002,7 +2039,11 @@ def test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year
 
     swap_calls = []
 
-    def fake_build_check_swap(jid, ddir):
+    def fake_build_check_swap(jid, ddir, *, on_swapped=None):
+        # Tolerates the on_swapped keyword run_integrate is expected to start
+        # passing (matching the real build_check_swap's signature) — a bare
+        # (jid, ddir) fake TypeErrors the moment that lands. This test's own
+        # assertions don't care about on_swapped, so it's accepted and unused.
         swap_calls.append((jid, str(ddir)))
 
     orig_settings = importer.get_settings
@@ -2308,8 +2349,15 @@ def test_run_integrate_proceeds_when_disk_headroom_sufficient():
 
     swap_called = {"hit": False}
 
-    def fake_build_check_swap(jid, ddir):
+    def fake_build_check_swap(jid, ddir, *, on_swapped=None):
         swap_called["hit"] = True
+        # Fires the callback the way the real build_check_swap does (right at
+        # the swap, before returning) — one fake in this file actually
+        # exercises the plumbing rather than merely tolerating the keyword,
+        # mirroring test_run_import_multi_file_success_records_all_provenance's
+        # _fake_activate_staging precedent.
+        if on_swapped is not None:
+            on_swapped()
         return True
 
     def fake_disk_usage(path):
@@ -2369,7 +2417,10 @@ def test_run_integrate_writes_progress_json_reaching_done_on_success():
     orig_swap = importer.build_check_swap
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.nces.fetch_year = fake_fetch_year
-    importer.build_check_swap = lambda jid, ddir: True
+    # *, on_swapped=None tolerates the keyword run_integrate is expected to
+    # start passing (matching the real build_check_swap's signature) — a
+    # bare (jid, ddir) fake TypeErrors the moment that lands.
+    importer.build_check_swap = lambda jid, ddir, *, on_swapped=None: True
     try:
         jid = create_job("integrate", "admin@example.edu")
         run_integrate(jid, [2026])
@@ -2522,7 +2573,10 @@ def test_run_integrate_records_nces_provenance_for_every_union_year_on_success()
     orig_swap = importer.build_check_swap
     importer.get_settings = lambda: _fake_settings(live, data_dir)
     importer.nces.fetch_year = fake_fetch_year
-    importer.build_check_swap = lambda jid, ddir: True
+    # *, on_swapped=None tolerates the keyword run_integrate is expected to
+    # start passing (matching the real build_check_swap's signature) — a
+    # bare (jid, ddir) fake TypeErrors the moment that lands.
+    importer.build_check_swap = lambda jid, ddir, *, on_swapped=None: True
     try:
         jid = create_job("integrate", "admin@example.edu")
         # union = sorted({2023,2024} | {2020}) = [2020, 2023, 2024]
@@ -2965,6 +3019,373 @@ def test_activate_staging_removes_the_previous_copy():
     assert not staging.exists(), "the staging file should have been moved, not copied"
 
 
+# ---------------------------------------------------------------------------
+# Post-swap status/phase reporting — a swap that has already landed must
+# never be reported to the admin as a failed job (frontend/src/admin/
+# Imports.jsx toasts "...failed — the live database was not changed", which
+# would be a lie once the swap has happened). The two tests extended above
+# (test_run_import_no_rollback_of_data_dir_after_a_successful_swap and
+# test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_
+# the_move) already drive the exact windows this bug lives in; the four
+# tests below cover the guardrail (a GENUINE pre-swap failure must still
+# fail) and the two other call sites (run_integrate, run_deintegrate) that
+# have the same defect.
+# ---------------------------------------------------------------------------
+
+def test_a_failure_before_the_move_still_fails_and_rolls_back():
+    """THE GUARDRAIL. The fix for the post-swap status bug must key off
+    whether shutil.move(staging -> ipeds.db) actually happened, not off
+    "we reached/entered _activate_staging" — an over-broad version that
+    treats any exception once _activate_staging has been called as a
+    completed swap would report a job 'swapped' (and leave the STALE live db
+    and a rolled-back data_dir permanently out of sync with it) even though
+    the swap never occurred.
+
+    Breaks _update_overall_phase, but ONLY for the phase="swapping" call —
+    the very FIRST statement inside _activate_staging, which runs strictly
+    before either shutil.move (the move-aside of the old live db, and the
+    real swap-critical move of staging into place). Earlier phase="building"/
+    "checking" calls (from build_check_swap, before _activate_staging is even
+    reached) must still succeed, or the test would never get this far.
+
+    Asserts the ORIGINAL contract, unchanged by this PR: status 'failed',
+    phase 'failed', and data_dir rolled back to its pre-import bytes with no
+    orphaned .bak — exactly as if build_check_swap itself had never been
+    given the swap a chance to run at all."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, content=b"new-upload-bytes")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    existing = data_dir / upload.name
+    existing.write_bytes(b"previous-accdb-bytes")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    orig_phase = importer._update_overall_phase
+
+    def _boom_before_the_move(job_id, phase, message):
+        if phase == "swapping":
+            raise RuntimeError("phase update blew up before the swap")
+        return orig_phase(job_id, phase, message)
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer._update_overall_phase = _boom_before_the_move
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer._update_overall_phase = orig_phase
+
+    assert not live.exists(), \
+        "the swap must never have happened — this test is only meaningful " \
+        "if shutil.move(staging -> ipeds.db) never ran"
+    row = _job_row(jid)
+    assert row["status"] == "failed", (
+        "a genuine pre-swap failure must still fail the job, not be swept "
+        f"into 'swapped' by an over-broad fix: {row}")
+    progress = json.loads(row["progress"] or "{}")
+    assert progress.get("overall", {}).get("phase") == "failed", progress
+    assert (data_dir / upload.name).read_bytes() == b"previous-accdb-bytes", \
+        "data_dir must still be rolled back to its pre-import bytes when the swap never happened"
+    assert not (data_dir / (upload.name + ".bak")).exists(), \
+        "the backup must be consumed by a genuine restore, not orphaned"
+
+
+def test_run_integrate_post_swap_provenance_failure_reports_swapped():
+    """run_integrate is WORSE OFF than run_import here: it calls
+    build_check_swap with no on_swapped callback at all
+    (`build_check_swap(job_id, work)`), so it has no signal of its own for
+    "did the swap actually happen" beyond build_check_swap's return value.
+    Once build_check_swap has returned True — meaning the swap already
+    landed and build_check_swap already wrote status='swapped' with a good
+    report internally — a raise from run_integrate's OWN post-swap
+    _record_provenance call propagates to the bottom except-Exception
+    handler, which overwrites BOTH the job status to 'failed' AND
+    progress.overall.phase to 'failed', reporting a live NCES integrate
+    (which already replaced ipeds.db) as though nothing happened. No
+    existing test drives this window for run_integrate at all."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated -> {2024}
+    staging = live.with_name("ipeds_staging.db")
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    def _boom(rows):
+        raise RuntimeError("app.db is locked")
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    orig_record = importer._record_provenance
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer._record_provenance = _boom
+    try:
+        jid = create_job("integrate", "admin@example.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer._record_provenance = orig_record
+
+    assert live.read_bytes() == b"new-staging-content", (
+        "the live db was not actually swapped before _record_provenance "
+        "raised — this test is only meaningful once the swap has already happened")
+    row = _job_row(jid)
+    assert row["status"] == "swapped", (
+        "a completed NCES integrate swap was reported as a failed job "
+        f"because run_integrate's own post-swap _record_provenance raised: {row}")
+    assert "app.db is locked" in (row["report"] or ""), \
+        f"the report must name the post-swap failure, not just say 'swapped': {row}"
+    progress = json.loads(row["progress"] or "{}")
+    assert progress.get("overall", {}).get("phase") == "done", (
+        "status='swapped' but phase!='done' is the exact status/phase "
+        f"contradiction the Imports tab polls both of: {progress}")
+
+
+def test_run_integrate_reports_swapped_when_the_status_write_itself_fails():
+    """The narrow window that survives even after run_integrate learns to
+    infer `swapped = bool(ok)` from build_check_swap's return value.
+    build_check_swap's own tail is:
+
+        caveat = _activate_staging_guarded(job_id, staging, on_swapped=on_swapped)
+        _set_status(job_id, "swapped", "Import succeeded and is now live.\\n\\n" + ...)
+        return True
+
+    `_set_status` is a real app.db connect + commit sitting between the
+    already-landed swap and `return True` — an ENOSPC-on-a-shared-volume or
+    "database is locked" failure there (PR #299 established this class of
+    failure as reachable) raises OUT of build_check_swap. run_integrate's
+    `ok = build_check_swap(job_id, work)` never completes its assignment, so
+    `swapped` (seeded False at the top of run_integrate) never becomes True —
+    even though the staging -> live move already happened and is permanent.
+    The outer except-Exception handler then takes the `else` branch and
+    writes 'failed' over a dataset that is, at that moment, already live.
+
+    Unlike the other post-swap tests in this file, `on_swapped` firing INSIDE
+    _activate_staging can't save this one: this failure is not inside
+    _activate_staging (which _activate_staging_guarded already absorbs) but
+    in the SEPARATE _set_status call build_check_swap itself makes right
+    after — later than every existing on_swapped signal fires.
+
+    The status write is the very thing being broken, so asserting an exact
+    resulting `status` string is the wrong shape (this mock refuses every
+    attempt to persist "swapped", by construction — that's what makes it a
+    faithful model of the underlying DB failure). The honest, mirroring-the-
+    ENOSPC-rollback-test formulation: assert directly on the filesystem (the
+    live db really did swap) and on the one thing that must never be true —
+    the job ending up reported as 'failed'."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])  # already-integrated -> {2024}
+    staging = live.with_name("ipeds_staging.db")
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    real_set_status = importer._set_status
+
+    def _boom_on_the_swapped_write(job_id, status, report=None):
+        # Every OTHER status write in this run (the initial "running", any
+        # "checks"/phase bookkeeping that goes through _set_status rather
+        # than _update_overall_phase) must still succeed — only the specific
+        # write that would record the swap itself is broken, to isolate this
+        # exact window rather than reproducing the more general
+        # "app.db is unavailable" case other tests already cover.
+        if status == "swapped":
+            raise RuntimeError("database is locked")
+        return real_set_status(job_id, status, report)
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    orig_set_status = importer._set_status
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer._set_status = _boom_on_the_swapped_write
+    try:
+        jid = create_job("integrate", "admin@example.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer._set_status = orig_set_status
+
+    assert live.read_bytes() == b"new-staging-content", (
+        "the live db was not actually swapped before the status write raised "
+        "— this test is only meaningful once the swap has already happened")
+    row = _job_row(jid)
+    assert row["status"] != "failed", (
+        "a completed, already-live swap must never be reported as a failed "
+        "job just because the DB write recording that fact itself failed "
+        f"(the swapped write is permanently refused by this test's mock, so "
+        f"'swapped' itself may never land — but 'failed' must not either): {row}")
+
+
+def test_run_deintegrate_post_swap_tail_failure_reports_swapped():
+    """A completed, IRREVERSIBLE year removal must never be reported to the
+    admin as "Removal failed — the live database was not changed"
+    (frontend/src/admin/Imports.jsx's exact wording for status=='failed').
+    Unlike its own year_provenance cleanup (already wrapped in a try/except
+    with this exact reasoning spelled out in a comment), run_deintegrate
+    calls _activate_staging with NO on_swapped at all — so a raise from any
+    of _activate_staging's own post-move steps (prev.unlink, the
+    data_version bump + commit, invalidate_cache, _update_overall_phase)
+    propagates straight past the (never-reached) year_provenance cleanup
+    into the bottom except-Exception handler, overwriting the job to
+    'failed' after the DELETE + VACUUM + swap has already permanently
+    removed the year. Breaks invalidate_cache — called from inside
+    _activate_staging, after the real swap — to land in that window, mirroring
+    test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_the_move."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _deintegrate_fixture(live, years=[2024, 2025])  # remove start 2023, keep 2024
+    removed_start_year = 2023
+    surviving_end_year = 2025
+
+    def _boom():
+        raise RuntimeError("cache invalidation blew up")
+
+    orig_settings = importer.get_settings
+    orig_disk_usage = importer.shutil.disk_usage
+    orig_invalidate = importer.invalidate_cache
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.shutil.disk_usage = _ample_disk_usage
+    importer.invalidate_cache = _boom
+    try:
+        jid = create_job(f"deintegrate:{removed_start_year}", "admin@example.edu")
+        run_deintegrate(jid, removed_start_year)
+    finally:
+        importer.get_settings = orig_settings
+        importer.shutil.disk_usage = orig_disk_usage
+        importer.invalidate_cache = orig_invalidate
+
+    assert _years(live) == [surviving_end_year], (
+        "the removal did not actually happen — this test is only meaningful "
+        f"once the swap has already completed: {_years(live)}")
+    row = _job_row(jid)
+    assert row["status"] == "swapped", (
+        "a completed, irreversible year removal was reported as a failed "
+        f"job because invalidate_cache raised from inside _activate_staging: {row}")
+    assert "cache invalidation blew up" in (row["report"] or ""), \
+        f"the report must name the post-swap failure, not just say 'swapped': {row}"
+
+
+def test_a_cleanup_error_after_the_swap_does_not_fail_the_job():
+    """_unlink_quietly's own docstring reasons about exactly this branch:
+    called from run_import's success branch (inside the try/finally that ALSO
+    wraps _record_provenance, cleaning up the moved-aside .accdb backup), "an
+    escaping error would fall into the outer except Exception at run_import's
+    tail and report an import that is ALREADY LIVE as failed, naming a stray
+    file as the cause." _unlink_quietly itself swallows every exception
+    internally and is never supposed to raise — this test forces exactly that
+    branch by replacing it with a version that DOES raise (simulating a
+    future regression that reintroduces one), scoped to the backup-cleanup
+    call site only (the real _unlink_quietly still runs for the *uploaded
+    copy* cleanup in run_import's own outer `finally`, which is NOT protected
+    by any try/except and would otherwise crash this test outright — see the
+    docstring's second bullet). Pins that the caller's post-swap handling
+    still reports 'swapped', not 'failed', when a cleanup step misbehaves
+    after the swap has already landed."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, content=b"new-upload-bytes")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    existing = data_dir / upload.name
+    existing.write_bytes(b"previous-accdb-bytes")
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    real_unlink_quietly = importer._unlink_quietly
+
+    def _boom_for_backup_cleanup_only(job_id, what, path):
+        if what == "the backed-up .accdb":
+            raise RuntimeError(f"could not remove {what}")
+        return real_unlink_quietly(job_id, what, path)
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    orig_unlink_quietly = importer._unlink_quietly
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    importer._unlink_quietly = _boom_for_backup_cleanup_only
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+        importer._unlink_quietly = orig_unlink_quietly
+
+    assert live.read_bytes() == b"new-staging-content", (
+        "the swap did not actually happen — this test is only meaningful "
+        "once the live db has already been replaced")
+    row = _job_row(jid)
+    assert row["status"] == "swapped", (
+        "a cleanup error AFTER a completed swap must not fail the job: "
+        f"{row}")
+    assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
+        "data_dir must not be rolled back once the swap has happened"
+
+
 def test_reconcile_interrupted_jobs_clears_a_ghost_and_spares_terminal_rows():
     """THE REGRESSION: the rebuild runs on a DAEMON thread and only marks itself
     `failed` from its own except block, so a SIGKILL / OOM kill / host reboot /
@@ -3174,6 +3595,16 @@ def run():
           test_build_check_swap_parses_progress_markers_and_keeps_them_out_of_the_log)
     check("the atomic swap removes the previous ipeds.db copy",
           test_activate_staging_removes_the_previous_copy)
+    check("a failure BEFORE the move still fails the job and rolls data_dir back",
+          test_a_failure_before_the_move_still_fails_and_rolls_back)
+    check("run_integrate: a post-swap _record_provenance failure still reports 'swapped'",
+          test_run_integrate_post_swap_provenance_failure_reports_swapped)
+    check("run_integrate: a failure in the 'swapped' status write itself does not report 'failed'",
+          test_run_integrate_reports_swapped_when_the_status_write_itself_fails)
+    check("run_deintegrate: a post-swap _activate_staging tail failure still reports 'swapped'",
+          test_run_deintegrate_post_swap_tail_failure_reports_swapped)
+    check("a cleanup error after the swap does not fail the job",
+          test_a_cleanup_error_after_the_swap_does_not_fail_the_job)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

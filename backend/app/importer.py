@@ -218,6 +218,20 @@ def _set_status(job_id: int, status: str, report: str | None = None) -> None:
         con.close()
 
 
+def _append_report(job_id: int, text: str) -> None:
+    """Append to the job's `report` column without touching `status` — for a
+    best-effort post-swap caveat (a step AFTER the swap failed, but the swap
+    itself already landed and the job's status is already 'swapped'). Mirrors
+    `_log`'s own COALESCE-append shape, just on a different column."""
+    con = connect()
+    try:
+        con.execute("UPDATE import_jobs SET report=COALESCE(report,'') || ?, "
+                    "updated_at=? WHERE id=?", (text, time.time(), job_id))
+        con.commit()
+    finally:
+        con.close()
+
+
 TERMINAL_JOB_STATUSES = ("failed", "swapped")
 
 
@@ -259,7 +273,9 @@ def reconcile_interrupted_jobs() -> int:
             f"WHERE status NOT IN ({placeholders})",
             (time.time(),
              "\n\nInterrupted: the server restarted while this job was running. "
-             "Nothing was swapped into the live database — start it again.",
+             "Unless a note above records that the swap completed, nothing was "
+             "changed in the live database — check the loaded years, then start "
+             "it again.",
              *TERMINAL_JOB_STATUSES))
         con.commit()
         return cur.rowcount or 0
@@ -710,6 +726,85 @@ def _activate_staging(job_id: int, staging: Path,
     _update_overall_phase(job_id, "done", done_message)
 
 
+# Sentinel distinguishing "caller didn't override done_message" from any real
+# string (including one that happens to equal _activate_staging's own
+# default) — see _activate_staging_guarded's docstring for why this matters.
+_DONE_MESSAGE_UNSET = object()
+
+
+def _activate_staging_guarded(job_id: int, staging: Path,
+                              done_message: str | object = _DONE_MESSAGE_UNSET,
+                              *, on_swapped: Callable[[], None] | None = None) -> str:
+    """Runs `_activate_staging`, and tells apart the two kinds of failure it
+    can raise: a PRE-swap one (nothing on disk has changed yet — the
+    caller's own rollback-and-fail path must still run, so this re-raises
+    unchanged) and a POST-swap one (the staging -> live move already landed
+    and is irreversible, so letting the raise reach the caller would report a
+    LIVE dataset as a failed job — the defect this function exists to close).
+
+    A local wrapper around the caller's own `on_swapped` is what makes the
+    distinction: it fires only once the real move has completed (see
+    `_activate_staging`'s docstring), so whether it has fired by the time an
+    exception reaches here is a truthful "did the swap happen" signal —
+    truer than "we called `_activate_staging` at all", which an over-broad
+    fix might use instead: that would report a job 'swapped' even when the
+    very first statement inside `_activate_staging` (still pre-move) is what
+    raised, leaving the caller's rollback skipped over a live db that was
+    never actually replaced.
+
+    Omitting `done_message` (the `build_check_swap` call site — it always
+    wants `_activate_staging`'s own default) calls `_activate_staging` with
+    exactly the same two positional arguments + `on_swapped` keyword that
+    call site used before this function existed — a real fake in
+    `test_importer.py` stands in for `_activate_staging` with that literal
+    signature (`(job_id, st, on_swapped=None)`, no `done_message` parameter
+    at all), so widening the call to always pass a third positional argument
+    would TypeError against it. `run_deintegrate` passes its own
+    `done_message` positionally, unaffected by this.
+
+    Returns a caveat string — empty on a clean run, or a "\\n\\nWARNING: ..."
+    suffix naming the post-swap failure — for the CALLER to fold into the
+    job's `report`, rather than writing the job's status/report here: the two
+    callers (`build_check_swap`, `run_deintegrate`) each finish the swap with
+    their own report text (the integrity-checks report vs. the
+    de-integration-checks report) and their own bookkeeping in between (a
+    provenance write), which must still run either way."""
+    happened = False
+
+    def _mark() -> None:
+        nonlocal happened
+        happened = True
+        if on_swapped is not None:
+            on_swapped()
+
+    resolved_message = ("Import succeeded and is now live."
+                        if done_message is _DONE_MESSAGE_UNSET else done_message)
+    try:
+        if done_message is _DONE_MESSAGE_UNSET:
+            _activate_staging(job_id, staging, on_swapped=_mark)
+        else:
+            _activate_staging(job_id, staging, done_message, on_swapped=_mark)
+        return ""
+    except Exception as e:  # noqa: BLE001 — see the happened/not-happened split above
+        if not happened:
+            raise
+        log.warning("post-swap failure inside _activate_staging for job %s — the "
+                   "swap already landed, so the job is not being failed: %s: %s",
+                   job_id, type(e).__name__, e)
+        _log(job_id, f"WARNING: the swap completed, but a step after it failed: "
+                    f"{type(e).__name__}: {e}")
+        # Best-effort: re-assert phase="done" so status/phase never contradict
+        # each other. If the ORIGINAL failure was this very call (the last
+        # statement inside _activate_staging), swallow a second failure here
+        # too — this is already the fallback path, and it must not itself
+        # raise back out.
+        try:
+            _update_overall_phase(job_id, "done", resolved_message)
+        except Exception:  # noqa: BLE001 — see above; must not mask the caveat
+            pass
+        return f"\n\nWARNING: the swap completed, but a step after it failed: {e}"
+
+
 def build_check_swap(job_id: int, data_dir: Path, *,
                      on_swapped: Callable[[], None] | None = None) -> bool:
     """The core rebuild pipeline, shared by run_import (an uploaded .accdb
@@ -719,17 +814,21 @@ def build_check_swap(job_id: int, data_dir: Path, *,
     checks, and — only on success — the atomic swap + data_version bump +
     semantic-cache invalidation.
 
-    Returns True on a completed swap, False on a handled failure (the job row
-    is already marked 'failed' with a report; the caller decides what else,
-    if anything, needs cleaning up). Unexpected exceptions are NOT caught here
-    — they propagate to the caller, which mirrors run_import's/run_integrate's
-    own top-level except-and-fail-the-job handling — and that includes any
-    raised AFTER `_activate_staging` has already moved staging into place, so
-    a truthful "did the swap happen" signal cannot be this function's return
-    value. `on_swapped` (forwarded to `_activate_staging`, by KEYWORD — a
-    third positional argument would bind to `_activate_staging`'s
-    `done_message`) is that signal instead: it fires at the swap itself, not
-    at this function's return.
+    Returns True on a completed swap, False on a handled PRE-swap failure
+    (loader/integrity-checks; the job row is already marked 'failed' with a
+    report — the caller decides what else, if anything, needs cleaning up).
+    Unexpected exceptions before the swap are NOT caught here — they
+    propagate to the caller, which mirrors run_import's/run_integrate's own
+    top-level except-and-fail-the-job handling. A failure raised AFTER
+    `_activate_staging` has already moved staging into place is a different
+    matter: `_activate_staging_guarded` absorbs it there, so True really does
+    mean "the swap happened" even on that path — this function no longer
+    needs to propagate a post-swap exception for the caller to learn that.
+    `on_swapped` (forwarded through, by KEYWORD — a third positional argument
+    would bind to `_activate_staging`'s `done_message`) still fires at the
+    swap itself, not at this function's return, for callers (like
+    run_import) that need to know before this function returns at all — e.g.
+    to gate their own rollback of state outside the db.
     """
     s = get_settings()
     staging = s.ipeds_db_path.with_name("ipeds_staging.db")
@@ -789,9 +888,47 @@ def build_check_swap(job_id: int, data_dir: Path, *,
         return False
 
     # Atomic swap + data_version bump + semantic-cache invalidation (shared
-    # with run_deintegrate — see _activate_staging).
-    _activate_staging(job_id, staging, on_swapped=on_swapped)
-    _set_status(job_id, "swapped", "Import succeeded and is now live.\n\n" + report_text)
+    # with run_deintegrate — see _activate_staging). A failure AFTER the
+    # staging -> live move has landed must not report a live dataset as a
+    # failed job — see _activate_staging_guarded, whose caveat (empty on a
+    # clean run) rides in the report right alongside the checks that already
+    # passed.
+    caveat = _activate_staging_guarded(job_id, staging, on_swapped=on_swapped)
+    full_report = "Import succeeded and is now live.\n\n" + report_text + caveat
+    try:
+        _set_status(job_id, "swapped", full_report)
+    except Exception as e:  # noqa: BLE001 — the swap has already landed (the
+        # on_swapped callback above already fired) — this is one more app.db
+        # write, no less fallible than the ones _activate_staging_guarded
+        # already treats as non-fatal, and a raise here must not let a
+        # caller's except-Exception handler report a LIVE dataset as
+        # 'failed'. There is no "right" status to leave behind: 'swapped'
+        # itself is the very write that just failed, and fabricating success
+        # through a DIFFERENT, equally fallible statement (an immediate
+        # retry, or a new status value — deliberately not introduced, see
+        # this module's "no new status value" contract) would just move the
+        # same risk one line down. So: log it loudly, best-effort get the
+        # caveat/report text in front of an admin through a SEPARATE write
+        # (COALESCE-append, so it doesn't depend on the same failing UPDATE
+        # succeeding) rather than losing it, and still return True — the
+        # caller's own post-swap bookkeeping (recording provenance, etc.)
+        # must still run for a dataset that is, in fact, live, regardless of
+        # whether this specific write landed. The job row is left at
+        # whatever non-terminal status it last reached (e.g. 'checks') —
+        # visibly stuck rather than silently wrong in either direction.
+        log.warning("build_check_swap: could not write the final 'swapped' "
+                   "status for job %s — the swap already landed: %s: %s",
+                   job_id, type(e).__name__, e)
+        try:
+            _log(job_id, f"WARNING: the swap completed, but the final status "
+                        f"write failed: {type(e).__name__}: {e}")
+        except Exception:  # noqa: BLE001 — best-effort logging of a best-effort write
+            pass
+        try:
+            _append_report(job_id, full_report + "\n\nWARNING: the swap completed, "
+                           f"but the final status write failed: {type(e).__name__}: {e}")
+        except Exception:  # noqa: BLE001 — see above
+            pass
     return True
 
 
@@ -1066,6 +1203,19 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
                         prov.append((start_year, start_year + 1, None, "manual"))
                 if prov:
                     _record_provenance(prov)
+            except Exception as e:  # noqa: BLE001 — the swap already landed (build_check_swap
+                # already wrote status='swapped' with a good report); recording
+                # provenance is bookkeeping on top of that, and a failure here must
+                # never be reported as a failed import — mirrors run_deintegrate's
+                # own best-effort year_provenance cleanup, and _unlink_quietly's
+                # documented reasoning for why this branch of run_import exists.
+                log.warning("run_import: could not record provenance after a "
+                           "successful swap (job %s): %s: %s",
+                           job_id, type(e).__name__, e)
+                _log(job_id, f"WARNING: import succeeded, but could not record "
+                            f"provenance: {e}")
+                _append_report(job_id, f"\n\nWARNING: import succeeded, but could "
+                               f"not record provenance: {e}")
             finally:
                 # Once the swap has happened this backup can never usefully be
                 # restored (see _restore_all above), so drop it here
@@ -1075,9 +1225,22 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
                 # STORED backup Path rather than recomputing one: it is None
                 # exactly when nothing was moved aside, so there is no second
                 # rule about when a .bak exists to get wrong.
-                for e in staged:
-                    if e.backup is not None:
-                        _unlink_quietly(job_id, "the backed-up .accdb", e.backup)
+                #
+                # This loop gets its OWN try/except rather than trusting
+                # _unlink_quietly's internal one: it sits in a `finally` that
+                # runs even when the `try` above already failed, and an escape
+                # here — from a future regression in _unlink_quietly, say —
+                # must still not fail a job whose swap already landed.
+                try:
+                    for e in staged:
+                        if e.backup is not None:
+                            _unlink_quietly(job_id, "the backed-up .accdb", e.backup)
+                except Exception as e:  # noqa: BLE001 — see above
+                    log.warning("run_import: could not clean up a backed-up .accdb "
+                               "after a successful swap (job %s): %s: %s",
+                               job_id, type(e).__name__, e)
+                    _log(job_id, f"WARNING: import succeeded, but could not clean up "
+                                f"a backed-up .accdb: {e}")
         else:
             _restore_all()
     except Exception as e:  # noqa: BLE001
@@ -1091,8 +1254,30 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         # _restore_all makes this reordering safe: it's already a no-op
         # once a swap has happened, regardless of when it's called.
         _restore_all()
-        _log(job_id, f"ERROR: {type(e).__name__}: {e}")
-        _set_status(job_id, "failed", f"Unexpected error: {e}")
+        if swapped:
+            # By construction this should be unreachable — build_check_swap
+            # (via _activate_staging_guarded) and the try/except/finally just
+            # above already absorb every post-swap failure they know about —
+            # but it's a second line of defense for the one invariant that
+            # actually matters: once `swapped` is True, nothing may report
+            # this job as 'failed'.
+            log.warning("run_import: a post-swap error escaped to the outer "
+                       "handler (job %s): %s: %s — leaving status as swapped",
+                       job_id, type(e).__name__, e)
+            _log(job_id, f"WARNING: {type(e).__name__}: {e}")
+            _append_report(job_id, f"\n\nWARNING: {e}")
+        else:
+            _log(job_id, f"ERROR: {type(e).__name__}: {e}")
+            _set_status(job_id, "failed", f"Unexpected error: {e}")
+            # Best-effort: a pre-swap failure that leaves progress.overall.phase
+            # at "swapping"/"building"/"checking" while status reads 'failed' is
+            # the same status/phase contradiction this PR closes in the other
+            # direction — see _activate_staging_guarded. Never let this write
+            # itself mask the real error already being handled above.
+            try:
+                _update_overall_phase(job_id, "failed", f"Unexpected error: {e}")
+            except Exception:  # noqa: BLE001
+                pass
     finally:
         _discard_uploads()
 
@@ -1115,6 +1300,22 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
     s = get_settings()
     work = Path(s.nces_work_dir) / f"integrate_{job_id}"
     progress: dict | None = None
+    swapped = False  # True once build_check_swap has swapped in a new live db
+
+    def _mark_swapped() -> None:
+        # Fires from inside _activate_staging the instant the rename
+        # completes (forwarded through _activate_staging_guarded and
+        # build_check_swap's own on_swapped parameter) — NOT inferred from
+        # build_check_swap's return value. A fallible statement can still
+        # sit in build_check_swap's tail AFTER the swap (its own
+        # _set_status(..., "swapped", ...) write, for one) and raise before
+        # that function ever returns — inferring `swapped` from a clean
+        # return would leave it False in exactly that window and let the
+        # outer except-Exception handler below report a LIVE dataset as
+        # 'failed'. Mirrors run_import's own _mark_swapped precedent.
+        nonlocal swapped
+        swapped = True
+
     try:
         _set_status(job_id, "running")
 
@@ -1264,12 +1465,34 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
                 raise
 
         # --- (d) build/check/swap + provenance --------------------------------
-        ok = build_check_swap(job_id, work)
+        # `swapped` (set by _mark_swapped above) is the truthful "did the
+        # swap happen" signal, NOT build_check_swap's return value: a
+        # fallible statement can still sit in build_check_swap's own tail
+        # AFTER the swap (its trailing _set_status(..., "swapped", ...)
+        # write, for one) and raise before that function ever returns `ok`
+        # at all — inferring `swapped` from a clean return would leave it
+        # False in exactly that window. Mirrors run_import's own on_swapped
+        # plumbing exactly.
+        ok = build_check_swap(job_id, work, on_swapped=_mark_swapped)
         if ok:
-            _record_provenance([(sy, sy + 1, releases.get(sy), "nces") for sy in union])
-            progress["overall"] = {"phase": "done",
-                                   "message": "Integration complete and now live."}
-            _set_progress(job_id, progress)
+            try:
+                _record_provenance([(sy, sy + 1, releases.get(sy), "nces") for sy in union])
+                progress["overall"] = {"phase": "done",
+                                       "message": "Integration complete and now live."}
+                _set_progress(job_id, progress)
+            except Exception as e:  # noqa: BLE001 — the swap already landed
+                # (build_check_swap already wrote status='swapped' with a good
+                # report); recording provenance + the final progress write are
+                # bookkeeping on top of that, and a failure here must never be
+                # reported as a failed integration — mirrors run_import's own
+                # post-swap provenance guard.
+                log.warning("run_integrate: could not finish post-swap "
+                           "bookkeeping (job %s): %s: %s",
+                           job_id, type(e).__name__, e)
+                _log(job_id, f"WARNING: integration succeeded, but could not "
+                            f"finish post-swap bookkeeping: {e}")
+                _append_report(job_id, f"\n\nWARNING: integration succeeded, but "
+                               f"could not finish post-swap bookkeeping: {e}")
     except NCESFetchError as e:
         # Deliberately-worded failure — pass the message through as-is (no
         # "Unexpected error:" prefix; see NCESFetchError's docstring).
@@ -1279,11 +1502,22 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
         _log(job_id, f"ERROR: {e}")
         _set_status(job_id, "failed", str(e))
     except Exception as e:  # noqa: BLE001 — mirror run_import: never propagate
-        if progress is not None:
-            progress["overall"] = {"phase": "failed", "message": f"Unexpected error: {e}"}
-            _set_progress(job_id, progress)
-        _log(job_id, f"ERROR: {type(e).__name__}: {e}")
-        _set_status(job_id, "failed", f"Unexpected error: {e}")
+        if swapped:
+            # By construction this should be unreachable (see the try/except
+            # around the post-swap bookkeeping above) — a second line of
+            # defense so a post-swap error can never overwrite 'swapped' with
+            # 'failed', mirroring run_import's own outer-handler guard.
+            log.warning("run_integrate: a post-swap error escaped to the outer "
+                       "handler (job %s): %s: %s — leaving status as swapped",
+                       job_id, type(e).__name__, e)
+            _log(job_id, f"WARNING: {type(e).__name__}: {e}")
+            _append_report(job_id, f"\n\nWARNING: {e}")
+        else:
+            if progress is not None:
+                progress["overall"] = {"phase": "failed", "message": f"Unexpected error: {e}"}
+                _set_progress(job_id, progress)
+            _log(job_id, f"ERROR: {type(e).__name__}: {e}")
+            _set_status(job_id, "failed", f"Unexpected error: {e}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -1316,6 +1550,12 @@ def run_deintegrate(job_id: int, start_year: int) -> None:
     end_year = start_year + 1
     live = Path(s.ipeds_db_path)
     staging = s.ipeds_db_path.with_name("ipeds_staging.db")
+    swapped = False  # True once _activate_staging has swapped in the new live db
+
+    def _mark_swapped() -> None:
+        nonlocal swapped
+        swapped = True
+
     try:
         _set_status(job_id, "running")
 
@@ -1391,8 +1631,16 @@ def run_deintegrate(job_id: int, start_year: int) -> None:
                                   "De-integration checks failed — live DB untouched.")
             return
 
-        _activate_staging(job_id, staging,
-                          done_message=f"Year {year_label} removed and the database is now live.")
+        # A failure AFTER the staging -> live move has landed must not report
+        # a completed, IRREVERSIBLE removal as a failed job — unlike
+        # build_check_swap, run_deintegrate calls _activate_staging directly,
+        # so it needs the same guard build_check_swap gets from
+        # _activate_staging_guarded. `caveat` (empty on a clean run) rides in
+        # the final report right alongside the checks that already passed.
+        caveat = _activate_staging_guarded(
+            job_id, staging,
+            f"Year {year_label} removed and the database is now live.",
+            on_swapped=_mark_swapped)
 
         # The swap above is irreversible — the removal has ALREADY succeeded
         # at this point. Tidying up year_provenance is best-effort bookkeeping:
@@ -1417,9 +1665,20 @@ def run_deintegrate(job_id: int, start_year: int) -> None:
 
         _set_status(
             job_id, "swapped",
-            f"Year {year_label} removed and the database is now live.\n\n" + report_text)
+            f"Year {year_label} removed and the database is now live.\n\n" + report_text + caveat)
     except Exception as e:  # noqa: BLE001 — mirror run_import: never propagate
-        _log(job_id, f"ERROR: {type(e).__name__}: {e}")
-        _set_status(job_id, "failed", f"Unexpected error: {e}")
+        if swapped:
+            # By construction this should be unreachable — _activate_staging_guarded
+            # already absorbs every post-swap failure it knows about — but it's
+            # a second line of defense mirroring run_import's own outer guard:
+            # once `swapped` is True, nothing may report this job as 'failed'.
+            log.warning("run_deintegrate: a post-swap error escaped to the outer "
+                       "handler (job %s, start_year=%s): %s: %s — leaving status "
+                       "as swapped", job_id, start_year, type(e).__name__, e)
+            _log(job_id, f"WARNING: {type(e).__name__}: {e}")
+            _append_report(job_id, f"\n\nWARNING: {e}")
+        else:
+            _log(job_id, f"ERROR: {type(e).__name__}: {e}")
+            _set_status(job_id, "failed", f"Unexpected error: {e}")
     finally:
         staging.unlink(missing_ok=True)
