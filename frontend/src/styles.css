@@ -755,6 +755,14 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
   margin: 0; font-family: var(--serif); font-style: italic;
   color: var(--muted); font-size: 14.5px;
 }
+/* "Check now" sits inside an italic serif sentence, so it needs to leave that
+   voice to read as an action rather than as emphasis: upright, the UI face, and
+   underlined (accent colour alone is not enough on a line that is already
+   coloured differently from the surrounding prose). */
+.stopped-note .link {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-style: normal; font-size: 13.5px; text-decoration: underline;
+}
 
 /* Conversation-loading skeleton: three ghost bars where the thread will be.
    Shimmer is opacity-only (cheap, no layout) and disabled under

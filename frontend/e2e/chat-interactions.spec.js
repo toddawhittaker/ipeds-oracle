@@ -51,7 +51,7 @@ test.describe("stop generating", () => {
     await stop.click();
     // The pending bubble becomes the stopped note; the composer is usable
     // again immediately (Send back, focus landed in the box).
-    await expect(page.getByText(/^Stopped\. If the answer finishes/)).toBeVisible();
+    await expect(page.getByText(/^Stopped\./)).toBeVisible();
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
     await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeFocused();
 
@@ -59,7 +59,7 @@ test.describe("stop generating", () => {
     // must be allowed to persist). Its answer must NOT replace the stopped
     // note or navigate the viewer to /chat/7.
     await page.waitForTimeout(1800);
-    await expect(page.getByText(/^Stopped\. If the answer finishes/)).toBeVisible();
+    await expect(page.getByText(/^Stopped\./)).toBeVisible();
     await expect(page.getByText("The eventual answer.")).toHaveCount(0);
     await expect(page).toHaveURL("/");
   });
@@ -196,6 +196,98 @@ test.describe("stop generating", () => {
       await expect.poll(() => calls.length).toBe(3);
       expect(calls[2].question).toBe("second question");
       expect(calls[2].edit_message_id).toBe(51);
+    });
+
+  test("the stopped note waits for the answer, then offers a check that works",
+    async ({ page }) => {
+      // The note used to say "reopen it in a moment to check", and there was no
+      // way to do that. settleTurn deliberately schedules no reload for a
+      // stopped turn (the no-yank), and re-clicking the conversation you are
+      // already in is not a route change — so nothing refetched, and the only
+      // thing that actually worked was a page reload, which kills the turn the
+      // note promises will be saved.
+      //
+      // Three contracts in one flow, because they only make sense together: the
+      // answer must not arrive on its own, the check must not be offered before
+      // it can succeed, and the click must fetch exactly once.
+      await mockMe(page, USER);
+      await mockConversations(page, [{ id: 1, title: "Chat" }]);
+
+      const base = [
+        { id: 900, role: "user", content: "an earlier question" },
+        { id: 901, role: "assistant", content: "its answer" },
+      ];
+      const withAnswer = [...base,
+        { id: 902, role: "user", content: "slow question" },
+        { id: 903, role: "assistant", content: "The eventual answer." }];
+      // The thread the server would return, before and after the drained turn
+      // commits. A static fixture cannot express this test at all: the whole
+      // question is whether a fetch issued at the wrong moment brings the
+      // answer back or the thread as it stood before the question.
+      let persisted = false;
+      let convCalls = 0;
+      await page.route("**/api/chat/conversations/1", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        convCalls += 1;
+        await route.fulfill({
+          status: 200, contentType: "application/json",
+          body: JSON.stringify(persisted ? withAnswer : base),
+        });
+      });
+      let streamCalls = 0;
+      await page.route("**/api/chat/stream", async (route) => {
+        streamCalls += 1;
+        await new Promise((r) => setTimeout(r, 1200));
+        // _persist commits BEFORE the done event is yielded, so the rows are on
+        // disk by the time the client settles the turn.
+        persisted = true;
+        const body = [
+          { type: "conversation", id: 1 },
+          { type: "answer", text: "The eventual answer." },
+          { type: "done", message_id: 903, user_message_id: 902, model: "t", tokens: 0 },
+        ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+        await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+      });
+
+      await page.goto("/chat/1");
+      await expect(page.getByText("an earlier question")).toBeVisible();
+      expect(convCalls).toBe(1);
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+
+      // Mid-drain: the answer is NOT on disk yet, so there is nothing to check
+      // and the button must not be there. Asserted synchronously — an
+      // auto-retrying matcher would simply wait the 1.2s stream out and pass
+      // having never looked at the state this assertion is about.
+      await expect(page.getByText(/^Stopped\. The answer is still being written/)).toBeVisible();
+      expect(await page.getByRole("button", { name: "Check now" }).count()).toBe(0);
+
+      // The drained stream lands. The note flips to the settled wording and
+      // offers the check...
+      await expect.poll(() => streamCalls).toBe(1);
+      const check = page.getByRole("button", { name: "Check now" });
+      await expect(check).toBeVisible();
+      await expect(page.getByText(/^Stopped\. The answer has been saved/)).toBeVisible();
+
+      // ...and the answer still has NOT been pulled in under the reader who
+      // chose to stop watching. No refetch happened on its own: convCalls is
+      // the direct pin on the no-yank, and it fails if a future change makes
+      // settleTurn bump the counter for a hidden turn.
+      await expect(page.getByText("The eventual answer.")).toHaveCount(0);
+      expect(convCalls).toBe(1);
+
+      await check.click();
+      await expect(page.getByText("The eventual answer.")).toBeVisible();
+      await expect(page.getByText(/^Stopped\./)).toHaveCount(0);
+      // The click destroys its own button, so focus has to be put somewhere
+      // deliberate or it falls to <body> and the next Tab restarts at the top
+      // of the page.
+      await expect(page.getByPlaceholder("Ask about IPEDS data…")).toBeFocused();
+      // Exactly one fetch — the counter is a useEffect dep, and a value that
+      // could change again on the same click would refetch in a loop.
+      expect(convCalls).toBe(2);
     });
 });
 
