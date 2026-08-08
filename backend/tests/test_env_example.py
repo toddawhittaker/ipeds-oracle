@@ -36,6 +36,8 @@ NOT_APP_SETTINGS = {
     "BACKUP_REMOTE",    # scripts/backup_app_db.py (standalone, not app config)
     "BACKUP_DIR",
     "BACKUP_KEEP",
+    "IPEDS_UID",        # compose.yaml: uid the app container runs as (non-root)
+    "IPEDS_GID",        # compose.yaml: gid the app container runs as (non-root)
 }
 
 # Settings deliberately left out of .env.example. Empty on purpose — add here

@@ -5,7 +5,14 @@
 #        srv-data/ipeds.db          the built database
 #        srv-data/accdb/*.accdb     source Access files (for admin re-imports)
 #   2. Copy .env.example -> .env and fill it in (keys, ADMIN_EMAILS, APP_PUBLIC_URL).
-#   3. docker compose up -d --build
+#   3. The image runs as a fixed non-root uid:gid (10001:10001 by default — see
+#      `user:` below). Docker never chowns a bind mount for you, so give the
+#      host directory to that uid BEFORE the first start:
+#        sudo chown -R 10001:10001 ./srv-data
+#      (If you override IPEDS_UID/IPEDS_GID in .env, chown to those instead —
+#      they must match the `user:` the container actually runs as, or the
+#      startup preflight refuses to boot and names the unwritable path.)
+#   4. docker compose up -d --build
 #
 # The app listens on :8000. For HTTPS either put it behind a reverse proxy or
 # tunnel that terminates TLS, or serve TLS directly with a self-signed cert — see
@@ -22,6 +29,16 @@ services:
     image: ghcr.io/toddawhittaker/ipeds-oracle:${IPEDS_TAG:-latest}
     build: .
     restart: unless-stopped
+    # Match the bind-mounted ./srv-data's host ownership (step 3 above) — the
+    # image's own USER (10001:10001) only sets the DEFAULT; this is what a
+    # self-hoster actually adjusts. Nothing else at runtime needs root: port
+    # 8000 is above 1024, apt-get/chmod are build-time, and certs (if any) are
+    # generated on the host and mounted read-only.
+    user: "${IPEDS_UID:-10001}:${IPEDS_GID:-10001}"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     env_file: .env
     environment:
       IPEDS_DB_PATH: /data/ipeds.db

@@ -23,6 +23,22 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/srv/backend
 COPY backend/requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
+# Dedicated non-root account the app runs as at runtime (see the final USER
+# line). Fixed NUMERIC uid/gid 10001, chosen deliberately: not 65534/nobody
+# (a shared identity, and NFS root-squash maps root -> nobody, so files owned
+# by 65534 are ambiguous — did the app write them, or root-squash?) and not
+# 1000 (the image default some other tool/first host user already claims;
+# 1000 stays available as an override via IPEDS_UID in compose.yaml). `/srv`
+# itself stays root-owned and read-only to the app — only `/srv/models`
+# (below) is handed to this account, pre-created so the fastembed warm-up can
+# write directly into it AS uid 10001 instead of a `chown -R` after the fact,
+# which would duplicate the ~90 MB model cache into a whole new layer.
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /home/app \
+    --create-home --shell /usr/sbin/nologin app \
+ && mkdir -p /srv/models \
+ && chown app:app /srv/models
+
 # Bake the local embedding model (fastembed → HF Hub) into an EARLY layer, ABOVE
 # the app-code COPYs, so its build-cache key depends only on the lockfile — a
 # code change doesn't re-download the ~65 MB model, and CI's `type=gha,mode=max`
@@ -32,8 +48,25 @@ RUN pip install --no-cache-dir -r requirements.lock
 # no first-request download latency and no "unauthenticated HF Hub" warning.
 # Must match config.embed_model's default; a self-hoster who overrides
 # EMBED_MODEL just downloads that model on first use, as before.
+#
+# Run AS the app user (USER app, below) so /srv/models ends up owned by the
+# same uid that reads it at runtime — checked, not assumed: huggingface_hub's
+# cache-hit path still does an unconditional `mkdir(parents=True,
+# exist_ok=True)` on the blob/pointer/lock directories on every call (even
+# when nothing new is downloaded), which needs those directories to already
+# exist and be traversable by this uid. Baking them as their eventual owner
+# is what makes that safe without a runtime-writable /srv/models.
+# `huggingface_hub`'s xet transport writes a separate chunk cache under
+# $HF_HOME (= $HOME/.cache/huggingface/xet by default), NOT under
+# FASTEMBED_CACHE_PATH, so it has to be cleaned explicitly — and in this SAME
+# RUN, since a later `rm` only adds a new layer on top and does not shrink
+# the image.
 ENV FASTEMBED_CACHE_PATH=/srv/models
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+USER app
+ENV HOME=/home/app
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" \
+ && rm -rf "$HOME/.cache/huggingface/xet"
+USER root
 
 # App code + the loader + the schema guide (used as the system prompt).
 COPY backend/app ./backend/app
@@ -43,6 +76,8 @@ COPY docs/SCHEMA.md ./docs/SCHEMA.md
 COPY --from=frontend /frontend/dist ./frontend/dist
 
 # Data (ipeds.db, app.db, uploads) lives on a mounted volume; see compose.yaml.
+# Nothing at runtime needs it inside the image itself — /srv stays root-owned
+# and read-only to the app.
 
 RUN chmod +x scripts/docker-entrypoint.sh
 
@@ -55,6 +90,12 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
 EXPOSE 8000
+# Numeric, not `USER app` — a `runAsNonRoot`/`runAsUser` admission check (or
+# any SBOM/policy scanner) can only verify a bare uid, and this survives a
+# `user:` override in compose.yaml cleanly either way. Nothing at runtime
+# needs root: port 8000 is above 1024, apt-get/chmod above were build-time,
+# and TLS certs (if used) are generated on the host and mounted read-only.
+USER 10001:10001
 # The entrypoint serves plain HTTP on :8000, or HTTPS when SSL_CERTFILE and
 # SSL_KEYFILE are set (a self-signed cert — see the README). With neither set it's
 # a bare `uvicorn app.main:app`, so the default is unchanged.
