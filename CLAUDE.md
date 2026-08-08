@@ -1803,22 +1803,31 @@ opt-in and a tested module can't stay silently ungated. Browser-tested component
 (`Chat.jsx`, `src/admin/*.jsx`, …) have no `*.test.js` and so stay out of the floor —
 Playwright covers them. The derivation walks `src/` **recursively**; it must, or a
 module in a subdirectory escapes the floor silently (see the `src/admin/` note above).
-**Open a `HelpPopover` in e2e with `focus()`, NEVER a bare `click()`.** The
-component opens on hover AND focus while its `onClick` **toggles**, so a
-`.click()` (which dispatches mouseenter → focus → click) is a race: if React has
-already committed the mouseenter's `setOpen(true)` when `onFocus` reads `open`,
-`openedByFocus` is never armed and the click toggles the popover **shut**. Those
-events batch into one task normally and spread apart under load, which is why
-`a11y-scroll-regions.spec.js` failed roughly one loaded run in four and passed
-100/100 under `--repeat-each=25`. `focus()` calls `openNow()` unconditionally —
-no toggle, no race — and is the keyboard route besides. The component is **not**
-wrong (for a mouse user, hover-opens-then-click-closes is that `onClick`'s stated
-intent), so the fix is in the spec; `csv-import.spec.js`'s awaited
-`focus()`-then-`click()` is deliberately testing the touch-tap swallow and is
-correct as written. Generalizing: **when a flake has a candidate mechanism,
-construct the input that FORCES the bad branch rather than sampling for it** —
-repetition proved nothing here, while a throwaway spec that hovered, awaited
-visibility, then clicked failed 5/5 against the fix's 5/5 pass.
+**Open a `HelpPopover` in e2e with `focus()` or `tap()`, never a bare
+`click()`** — the component opens on hover AND focus while its `onClick`
+**toggles**, so a mouse click on an already-open popover closes it, which is
+that handler's intent and not a bug. **The click-swallow latch is armed from
+`onPointerDown`, and the reason is the whole point of the component's history.**
+It used to arm from `onFocus` behind `if (!open)`, which assumed focus arrives
+before the wrapper's `mouseenter` has committed `setOpen(true)`. On a REAL touch
+tap it does not: Chromium emits the compatibility mouse events first
+(pointerdown → touchstart → mouseenter/mousedown → focus → click), so `open`
+already read true, the latch never armed, and **every tap closed the popover it
+had just opened** — with Admin → Usage telling the admin to "Hover or tap the
+ⓘ". `pointerdown` lands before that compat `mouseenter`, so `open` is reliably
+false there; `pointerType !== "mouse"` keeps a genuine mouse click toggling, and
+the `!open` test is what lets a SECOND tap dismiss (arming on every touch
+pointerdown would swallow that one too, and since it fires no new focus nothing
+would ever clear the latch). Pinned by a `test.use({ hasTouch: true })` describe
+in `csv-import.spec.js` whose assertions are **synchronous** past `closeSoon`'s
+140 ms timer — an auto-retrying matcher would wait out a transiently-open
+popover. **All eight earlier specs passed with this bug present**, including one
+NAMED for the touch tap that staged `focus()` before `click()` and so armed the
+latch cleanly; it has been replaced. Two lessons, both still live: **when a
+flake has a candidate mechanism, construct the input that FORCES the bad branch
+rather than sampling for it** (repetition proved nothing, while a throwaway
+spec that hovered-then-clicked failed 5/5), and **a test named for a scenario it
+cannot actually produce is worse than no test** — it reads as coverage.
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
 and now SCANS THE APP** — a rendered answer with its disclosures open, a
 MID-STREAM answer, and all seven admin paths in **both themes** (19 scans).

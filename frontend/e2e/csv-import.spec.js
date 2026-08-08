@@ -113,14 +113,81 @@ test("the format help popover opens on focus, survives the pointer entering it, 
   await expect(pop).toBeHidden();
 });
 
-test("the click that follows a focus-open does not toggle the popover shut (touch tap)", async ({ page }) => {
+// A REAL touch tap, which the focus()-then-click() shape above could never
+// produce. Chromium emits the compatibility mouse events FIRST on a tap
+// (pointerdown -> touchstart -> mouseenter/mousedown -> focus -> click), so if
+// the click-swallow latch is armed from onFocus behind `if (!open)`, the
+// wrapper's mouseenter has already committed setOpen(true) by then, the latch
+// never arms, and the trailing click toggles the popover shut. Both taps leave
+// it closed, while Admin -> Usage tells the admin to "Hover or tap the ⓘ".
+//
+// These need hasTouch, which the single chromium project does not set; a
+// describe-level `test.use` is the established way to widen it for one file
+// (a11y.spec.js and chat-interactions.spec.js do the same for viewport and
+// reducedMotion) and costs one extra browser context rather than a second
+// project across the whole suite.
+test.describe("help popover on a touch device", () => {
+  test.use({ hasTouch: true });
+
+  test("one tap opens the help and it stays open", async ({ page }) => {
+    await openImporter(page);
+    const trigger = page.getByRole("button", { name: "CSV format help" });
+    const pop = page.locator(".help-popover");
+
+    await expect(pop).toBeHidden();
+    await trigger.tap();
+    // Past closeSoon's 140ms timer, and asserted SYNCHRONOUSLY: an auto-retrying
+    // matcher would happily wait out a popover that is briefly open, which is
+    // exactly the transient this test exists to reject.
+    await page.waitForTimeout(400);
+    expect(await pop.isVisible()).toBe(true);
+  });
+
+  test("a second tap dismisses it", async ({ page }) => {
+    await openImporter(page);
+    const trigger = page.getByRole("button", { name: "CSV format help" });
+    const pop = page.locator(".help-popover");
+
+    await trigger.tap();
+    await expect(pop).toBeVisible();
+    // The latch must arm only while closed. Arming on every touch pointerdown
+    // would swallow this click too — the second tap fires no new focus, so
+    // nothing would ever clear it and the popover could never be dismissed.
+    await trigger.tap();
+    await page.waitForTimeout(400);
+    expect(await pop.isVisible()).toBe(false);
+  });
+});
+
+test("a mouse hover-then-click closes the popover", async ({ page }) => {
   await openImporter(page);
   const trigger = page.getByRole("button", { name: "CSV format help" });
   const pop = page.locator(".help-popover");
-  // A touch tap fires focus (opens) then click; the click must be swallowed, not
-  // toggle it back shut, or the help is unreachable on touch devices.
-  await trigger.focus();
+  // The counterweight to the tap tests: an over-broad latch (one that ignores
+  // pointerType) would swallow a genuine mouse click, leaving a mouse user
+  // unable to dismiss what hovering opened. onClick's toggle is its stated
+  // intent for a pointer.
+  await trigger.hover();
   await expect(pop).toBeVisible();
   await trigger.click();
+  await page.waitForTimeout(400);
+  expect(await pop.isVisible()).toBe(false);
+});
+
+test("Tab opens the popover, Enter closes it, Escape closes it", async ({ page }) => {
+  await openImporter(page);
+  const trigger = page.getByRole("button", { name: "CSV format help" });
+  const pop = page.locator(".help-popover");
+
+  await trigger.focus();
   await expect(pop).toBeVisible();
+  // Enter reaches onClick. With the latch armed at focus time this was
+  // swallowed and the first keypress did nothing; armed from pointerdown, the
+  // keyboard toggle works as onClick intends.
+  await page.keyboard.press("Enter");
+  await expect(pop).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(pop).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(pop).toBeHidden();
 });
