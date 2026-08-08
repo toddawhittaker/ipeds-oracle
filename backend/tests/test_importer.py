@@ -533,6 +533,62 @@ def test_run_import_preflight_failure_no_swap():
         "the uploaded copy was left on disk after a preflight failure"
 
 
+def test_discard_uploads_does_not_delete_when_identity_cannot_be_proven():
+    """Pins the CALLER half of PR #297's fail-closed rule, not just the
+    helper. test_same_file_none_for_an_unstattable_path (above) already pins
+    that _same_file itself can answer None; nothing pinned that
+    _discard_uploads actually branches on that answer rather than treating
+    it as "not aliased, safe to delete" — and that's exactly the kind of
+    guard that regresses silently, since every OTHER test in this file
+    drives _same_file through real filesystem state and never makes it
+    return None, so a caller-side regression (e.g. collapsing `if same is
+    None: ...continue` into the False branch) would still pass everything
+    else here.
+
+    Monkeypatches importer._same_file to unconditionally return None and
+    drives the cheapest real path into _discard_uploads (a preflight
+    failure, which runs in run_import's `finally` before data_dir even
+    exists) — so this exercises exactly the None branch regardless of what
+    the real identity check would say for these paths. Asserts on the
+    FILESYSTEM (the upload is still there), not the warning _discard_uploads
+    also logs — the log line is incidental, non-deletion is the contract.
+
+    VERIFIED BY HAND that this fails if the None branch fell through to the
+    unlink: edited a scratch copy of importer.py's _discard_uploads (never
+    the repo file) to `same = False` whenever `_same_file(...)` returned
+    None instead of `continue`-ing past the unlink, ran this exact scenario
+    against that mutated copy via a sys.path swap, and confirmed the upload
+    was deleted (`upload.exists()` came back False) — then reran the same
+    scenario against the real, unmutated importer.py and confirmed the
+    upload survived. So this assertion actually depends on the fail-closed
+    branch and isn't vacuously true either way."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d)
+
+    orig_settings, orig_preflight = importer.get_settings, importer.preflight
+    orig_same_file = importer._same_file
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (False, "bad file, rejected")
+    importer._same_file = lambda a, b: None
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer._same_file = orig_same_file
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert upload.exists(), \
+        ("_discard_uploads deleted the uploaded copy even though _same_file "
+         "returned None (identity unprovable) — PR #297's fail-closed rule "
+         "requires leaving an upload with unprovable identity on disk, not "
+         "treating 'can't tell' as 'safe to delete'")
+
+
 def test_run_import_loader_failure_restores_data_dir():
     d = Path(tempfile.mkdtemp())
     live = d / "ipeds.db"
@@ -999,6 +1055,428 @@ def test_run_import_a_failed_import_does_not_delete_the_dataset_when_upload_dir_
     assert upload.read_bytes() == b"the admins own dataset file", \
         "the dataset file's bytes changed after a failed import that should " \
         "have touched nothing in this configuration"
+
+
+# ---------------------------------------------------------------------------
+# _same_file — inode-identity aliasing, replacing the two Path.resolve()
+# string comparisons above (importer.py's staging loop and _discard_uploads).
+# Path.resolve() normalises symlinks and ".." but NOT case, and never
+# considers inode identity, so two names for one file (a differently-cased
+# path on a case-insensitive filesystem, or any other alias reaching the
+# same inode by a different string) compare unequal. A case-insensitive
+# filesystem can't be mounted in CI; a hard link is the portable proxy —
+# os.link gives two path strings, resolve()-distinct, for one inode, which is
+# exactly the condition the string compare gets wrong. These tests reference
+# `importer._same_file` via module-attribute access (never imported at
+# module level) so the whole file still collects and every OTHER test in it
+# still runs before the fix lands — an AttributeError is converted to a
+# clear AssertionError, the same pattern test_access_gate.py's
+# `auth_mod.is_denied` guard and test_admin_router.py's `denied_resp` check
+# already use in this codebase for a not-yet-implemented symbol.
+# ---------------------------------------------------------------------------
+
+def _not_yet_implemented(name, e):
+    raise AssertionError(
+        f"app.importer.{name} does not exist yet — this test can only run "
+        f"once the fix adds it: {e}") from e
+
+
+def test_same_file_true_for_a_hardlink_in_another_directory():
+    """Regression for the string-identity aliasing bug at both importer.py
+    call sites: os.link the SAME inode into a second directory under a
+    different name, so the two resolve() strings differ even though it is
+    one file. This must fail against TODAY's code (no _same_file exists —
+    caught below as a clear AttributeError-derived assertion) AND against a
+    normcase-only fix — os.path.normcase is the identity function on POSIX,
+    so it wouldn't make these two strings equal either, and a test that
+    can't tell the two apart would let a wrong fix through. It passes only
+    once _same_file compares real os.stat()+os.path.samestat identity."""
+    d = Path(tempfile.mkdtemp())
+    dir_a = d / "a"
+    dir_b = d / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    original = dir_a / "IPEDS202526.accdb"
+    original.write_bytes(b"same file, two names")
+    linked = dir_b / "uploaded.accdb"
+    os.link(original, linked)
+    assert original.resolve() != linked.resolve(), \
+        "test setup error: the two paths must differ as strings for this to be a real test"
+    try:
+        result = importer._same_file(original, linked)
+    except AttributeError as e:
+        _not_yet_implemented("_same_file", e)
+    assert result is True, \
+        (f"_same_file must recognize a hard link reached from another "
+         f"directory as the same file, got {result!r}")
+
+
+def test_same_file_true_through_a_symlinked_directory():
+    """The behaviour Path.resolve() already had and must not lose: a file
+    reached through a symlinked directory is the same file as reached
+    directly (importer.py's own comment: 'this also catches a symlinked
+    upload_dir'). Not a hard-link proxy — this drives the real symlink case
+    resolve() always handled correctly, so _same_file must keep handling it
+    too, not just the new hard-link case."""
+    d = Path(tempfile.mkdtemp())
+    real_dir = d / "real"
+    real_dir.mkdir()
+    target = real_dir / "IPEDS202526.accdb"
+    target.write_bytes(b"reached two ways")
+    link_dir = d / "linked"
+    os.symlink(real_dir, link_dir)
+    via_symlink = link_dir / "IPEDS202526.accdb"
+    try:
+        result = importer._same_file(target, via_symlink)
+    except AttributeError as e:
+        _not_yet_implemented("_same_file", e)
+    assert result is True, \
+        (f"_same_file must still recognize a file reached through a "
+         f"symlinked directory as the same file, got {result!r}")
+
+
+def test_same_file_false_for_two_distinct_files():
+    """The false-success bug a blanket .casefold()/normcase-style fix would
+    introduce: two genuinely DIFFERENT files, even with byte-identical
+    content, must never compare equal — or a real UPLOAD_DIR=/data/accdb,
+    DATA_DIR=/data/AccDB pair on a case-SENSITIVE filesystem would be
+    declared aliased, the staging loop would skip the real copy, and the job
+    would report success while the live rebuild still ran off the OLD
+    file."""
+    d = Path(tempfile.mkdtemp())
+    a = d / "IPEDS202526.accdb"
+    b = d / "IPEDS202021.accdb"
+    a.write_bytes(b"identical content")
+    b.write_bytes(b"identical content")
+    try:
+        result = importer._same_file(a, b)
+    except AttributeError as e:
+        _not_yet_implemented("_same_file", e)
+    assert result is False, \
+        f"_same_file must not treat two distinct files as the same file, got {result!r}"
+
+
+def test_same_file_false_when_the_candidate_does_not_exist():
+    """PR #297's fail-closed rule for the upload-discard guard, pinned so a
+    future edit can't quietly widen 'unprovable' to cover this: a MISSING
+    candidate must answer False, not None. A nonexistent path definitely
+    is NOT the file being compared against, and _discard_uploads must still
+    discard the uploaded copy on the preflight-failure exit — where
+    data_dir has not been created yet, so the would-be data_dir/<name>
+    target never exists. Answering None there instead of False would make
+    the caller skip the delete (None means 'can't tell, don't risk it') and
+    leak every upload on that exit path."""
+    d = Path(tempfile.mkdtemp())
+    existing = d / "IPEDS202526.accdb"
+    existing.write_bytes(b"the upload")
+    missing = d / "does-not-exist" / "IPEDS202526.accdb"
+    try:
+        result = importer._same_file(existing, missing)
+    except AttributeError as e:
+        _not_yet_implemented("_same_file", e)
+    assert result is False, \
+        (f"_same_file must answer False (not None) when a candidate path "
+         f"doesn't exist, got {result!r}")
+
+
+def test_same_file_none_for_an_unstattable_path():
+    """The fail-closed 'unprovable' case, distinct from 'missing' above: a
+    symlink loop makes os.stat raise OSError(errno ELOOP) — Path.resolve()
+    used to raise RuntimeError for the very same thing, which is exactly why
+    _discard_uploads' current comment says its resolve()-based catch
+    wouldn't have helped even wrapped around the unlink alone. Neither
+    caller may treat 'can't prove it' as a green light for the destructive
+    branch, so this must come back None (not False, and not True) so both
+    call sites keep falling through to their existing fail-closed
+    handling."""
+    d = Path(tempfile.mkdtemp())
+    loop = d / "loop"
+    os.symlink(loop, loop)
+    existing = d / "IPEDS202526.accdb"
+    existing.write_bytes(b"the upload")
+    try:
+        result = importer._same_file(existing, loop)
+    except AttributeError as e:
+        _not_yet_implemented("_same_file", e)
+    assert result is None, \
+        f"_same_file must answer None for an unstattable path (fail closed), got {result!r}"
+
+
+def test_run_import_does_not_delete_the_dataset_when_the_upload_is_a_hardlink_of_it():
+    """End-to-end regression for the string-identity aliasing bug at BOTH
+    importer.py call sites (the staging loop's `data_target.resolve() ==
+    up.resolve()` and _discard_uploads' `up.resolve() == (data_dir /
+    up.name).resolve()`). A case-insensitive filesystem (macOS APFS, NTFS, a
+    case-insensitive bind mount) can't be mounted in CI, so this uses the
+    same portable proxy as the _same_file unit tests above: os.link the
+    dataset already sitting in data_dir into upload_dir under the SAME name,
+    giving two resolve()-distinct path strings for one inode.
+
+    VERIFIED against today's actual code first (with shutil.move/copy2/
+    _unlink_quietly instrumented to print every call it made): the described
+    "_unlink_quietly deletes the dataset source" outcome does NOT reproduce
+    through the full run_import pipeline on this ext4/Linux filesystem, and
+    the reason is structural, not incidental — a hard link is two
+    INDEPENDENT directory entries, so unlinking one (_discard_uploads' own
+    `up.unlink`) can never remove the other (data_target) as long as they
+    are still two separate entries, which they still are by the time
+    _discard_uploads runs. shutil.copy2 in the staging loop always runs
+    BEFORE either name is ever removed, so the dataset's BYTES survive today
+    purely by accident of that ordering — an existence/byte assertion alone
+    cannot tell today's buggy code apart from the fix, and would read as
+    already passing (confirmed by tracing an actual run). A genuinely
+    case-insensitive filesystem has no such safety net: there is only ONE
+    directory entry there, so moving it aside under one spelling makes the
+    OTHER spelling stop resolving too — os.link's two independent entries
+    are a deliberately weaker stand-in for that, not an exact reproduction,
+    which is why this test pins something narrower but still real and still
+    red today.
+
+    What the missed alias DOES still provably cause on this filesystem: the
+    staging loop fails to recognize data_target and up as one file, so it
+    needlessly moves the dataset aside to a .bak and re-copies the upload
+    over it — burning a FRESH inode for a file that never needed to move at
+    all. That is the direct, mechanical fingerprint of the missed alias, and
+    it is exactly what _same_file's fix (recognizing the hard link and
+    skipping the backup/copy dance entirely) changes: the dataset's inode is
+    preserved. Pinned on both counts — the dataset must still exist with its
+    original bytes (the safety net from the task description, already true
+    today, kept here as a regression guard against a fix that over-deletes)
+    AND its inode must be UNCHANGED (the part that is actually red today)."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = d / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    name = "IPEDS202526.accdb"
+    dataset = data_dir / name
+    dataset.write_bytes(b"the-real-dataset-bytes")
+    upload = upload_dir / name
+    os.link(dataset, upload)  # same inode, two resolve()-distinct path strings
+    orig_ino = os.stat(dataset).st_ino
+    assert dataset.resolve() != upload.resolve(), \
+        "test setup error: the two paths must differ as strings for this to be a real test"
+
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"new-staging-content")
+        return _FakeProc(0, ["build ok"])
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = lambda staging_, live_: (True, ["✓ all good"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    row = _job_row(jid)
+    assert row["status"] == "swapped", row
+    assert dataset.exists(), \
+        "the dataset source in data_dir was deleted by a successful import " \
+        "of its own hard-linked alias"
+    assert dataset.read_bytes() == b"the-real-dataset-bytes", \
+        "the dataset source's bytes changed after a successful import of its own hard-linked alias"
+    assert os.stat(dataset).st_ino == orig_ino, (
+        "the staging loop's string-compare aliasing guard missed a "
+        "same-inode alias reached by two different path strings, so it "
+        "needlessly moved the dataset aside to a .bak and re-copied the "
+        "upload over it (burning a fresh inode) instead of recognizing the "
+        "upload as the file it already had staged")
+
+
+def test_discard_uploads_removes_a_hardlinked_upload_in_a_separate_directory():
+    """Regression the _same_file fix itself introduced: the staging loop and
+    _discard_uploads ask two DIFFERENT questions, and _same_file's fix
+    answered both the same way. The staging loop asks "does data_target
+    already hold exactly this content?" — INODE identity, correctly
+    skipping the copy for a hard link (the sibling test above). But
+    _discard_uploads asks "will unlinking `up` remove the loader's own
+    source ENTRY?" — DIRECTORY-ENTRY identity: a hard link is two
+    independent entries, so unlinking `up` provably cannot touch
+    data_target, and it SHOULD be unlinked. Using inode identity there
+    instead (as landed) makes _discard_uploads treat ANY hard-linked upload
+    as aliased and skip the delete — so an operator whose ingest pipeline
+    hard-links .accdb files into UPLOAD_DIR (rather than posting through
+    the HTTP handler) gets every import leaving its upload behind forever:
+    exactly the leak PR #297 shipped to close, reopened for that
+    configuration.
+
+    Both operands of the entry-identity question are built from the same
+    basename (`s.data_dir / up.name`), so the basenames are identical by
+    construction and the real question collapses to "is up.parent the same
+    directory as data_dir?" — i.e. _same_file(up.parent, s.data_dir).
+
+    VERIFIED against today's actual code by tracing a real run: with the
+    dataset hard-linked into a SEPARATE upload_dir under the same name
+    (same setup as the sibling test above, which deliberately never asserts
+    on the upload's own survival — this is why), `_same_file(data_dir /
+    up.name, up)` reports True (same inode, ignoring which directory either
+    path is in), so `if same: continue` skips the delete and the upload is
+    still on disk after the job completes. This test is that exact
+    reproduction, pinning the OTHER half of the contract: the upload ENTRY
+    must be gone while the dataset survives untouched. Together with the
+    sibling test (which pins the dataset must never be lost), this covers
+    both directions of what "aliased" has to mean at this call site."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = d / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    name = "IPEDS202526.accdb"
+    dataset = data_dir / name
+    dataset.write_bytes(b"the-real-dataset-bytes")
+    upload = upload_dir / name
+    os.link(dataset, upload)  # same inode, SEPARATE directory entries
+
+    orig_settings, orig_preflight = importer.get_settings, importer.preflight
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (False, "bad file, rejected")
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert not upload.exists(), (
+        "the hard-linked upload entry in upload_dir was left on disk — "
+        "_discard_uploads must ask whether unlinking `up` would remove the "
+        "loader's own source ENTRY (directory identity: is up.parent the "
+        "same directory as data_dir?), not whether `up` merely shares an "
+        "INODE with it; a hard link in a separate directory can always be "
+        "safely unlinked without touching data_dir's copy")
+    assert dataset.exists(), "the dataset in data_dir must survive regardless"
+    assert dataset.read_bytes() == b"the-real-dataset-bytes", \
+        "the dataset's bytes must be untouched"
+
+
+def test_run_import_stages_a_second_bak_for_a_hardlinked_data_target_in_one_batch():
+    """The duplicate-target guard (`if resolved in staged_targets: continue`,
+    five lines after the _same_file fix above, in the staging loop) still
+    keys `staged_targets` on `data_target.resolve()` — a STRING — so it
+    can't recognize that two DIFFERENT upload filenames in one batch
+    resolve to the SAME data_dir target when that target is reached by two
+    names for one inode. The real trigger is a case-insensitive filesystem:
+    "IPEDS202324.accdb" and "ipeds202324.accdb" both pass FILENAME_RE
+    (re.IGNORECASE), and on such a filesystem they are literally the same
+    directory entry. The guard's own comment names exactly what this is
+    meant to prevent: iteration 2 seeing iteration 1's own just-staged copy
+    and moving IT aside onto a second `.bak`, "silently OVERWRITING the
+    .bak that still held the operator's true original."
+
+    HONESTY ABOUT WHAT THIS DOES AND DOES NOT MODEL — a case-insensitive
+    filesystem cannot be mounted in CI. A hard link is the portable proxy:
+    two names, resolve()-distinct, one inode. That IS enough to prove the
+    guard fails to recognize the alias (verified below: today's code stages
+    BOTH names independently, producing TWO `.bak` files for what was, before
+    the batch started, ONE file with two names). It does NOT reproduce the
+    actual data-LOSS step of the real bug: a hard link is two INDEPENDENT
+    directory entries, so moving one aside can never affect the other, and
+    the second `.bak` here is an independent, correctly-restorable file —
+    not an overwrite of the first. On a genuine case-insensitive filesystem
+    there is only ONE directory entry, so the second "move aside" IS the
+    first `.bak`'s entry, which is what actually destroys the operator's
+    original. Do not read a pass here as proof the data-loss step is
+    covered; it is not, and cannot be, in CI — only the guard's missed
+    identity is.
+
+    VERIFIED against today's actual code by tracing an instrumented run: a
+    FAILING loader's rollback (_restore_all) correctly restores BOTH
+    hard-linked names on this filesystem — moving one hard link aside and
+    back never disturbs the other, so the guard's miss is completely
+    invisible in the FINAL state (0 `.bak` files, both names holding the
+    original bytes, indistinguishable from a correctly-behaving guard). The
+    miss is only observable MID-PIPELINE, before the rollback erases the
+    evidence — which is why this snapshots via a spy on `integrity_checks`
+    (mirroring test_run_import_integrity_checks_failure_no_swap's
+    forced-failure technique: staging completes normally, then a fake
+    integrity_checks captures state and fails cleanly) rather than
+    asserting on run_import's return state. That snapshot shows TWO `.bak`
+    files today (IPEDS202324.accdb.bak AND ipeds202324.accdb.bak) where a
+    guard that recognized the alias would produce exactly ONE — the second
+    upload's data_target should have been recognized as already staged and
+    skipped, the same way an EXACT duplicate filename in one batch already
+    is (see test_run_import_a_duplicate_upload_filename_does_not_clobber_the_previous_year)."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = d / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    name_a = "IPEDS202324.accdb"
+    name_b = "ipeds202324.accdb"  # case-different; FILENAME_RE is re.IGNORECASE
+    original = data_dir / name_a
+    original.write_bytes(b"operators-true-original")
+    os.link(original, data_dir / name_b)  # data_dir already has TWO names, one inode
+    assert (data_dir / name_a).resolve() != (data_dir / name_b).resolve(), \
+        "test setup error: the two data_dir paths must differ as strings"
+
+    up1 = upload_dir / name_a
+    up1.write_bytes(b"first-uploaded-bytes")
+    up2 = upload_dir / name_b
+    up2.write_bytes(b"second-uploaded-bytes")
+
+    staging = live.with_name("ipeds_staging.db")
+
+    def _fake_popen(*a, **k):
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_bytes(b"build ok")
+        return _FakeProc(0, ["build ok"])
+
+    snapshot = {}
+
+    def _spy_checks(staging_, live_):
+        # Mid-pipeline: staging has just finished, _restore_all() has not
+        # run yet — the only point the guard's miss is observable on this
+        # filesystem (see the docstring).
+        snapshot["baks"] = sorted(p.name for p in data_dir.glob("*.bak"))
+        return False, ["✗ forced failure to snapshot mid-pipeline state"]
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_checks = importer.integrity_checks
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = _fake_popen
+    importer.integrity_checks = _spy_checks
+    try:
+        jid = create_job("2 files", "admin@example.edu")
+        run_import(jid, [up1, up2])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.integrity_checks = orig_checks
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert snapshot.get("baks") == [name_a + ".bak"], (
+        f"expected exactly one .bak — the second upload's data_target is a "
+        f"hard link of the first's already-staged target, so the "
+        f"duplicate-target guard should have recognized it (via real "
+        f"filesystem identity, not a resolve() string) and skipped "
+        f"re-staging it instead of independently backing it up too — got "
+        f"{snapshot.get('baks')}")
 
 
 def test_unlink_quietly_never_raises_on_a_path_it_cannot_delete():
@@ -2592,6 +3070,8 @@ def run():
           test_restore_data_dir_leaves_an_existing_target_alone_when_no_backup_was_taken)
     check("run_import: preflight failure fails the job, no swap",
           test_run_import_preflight_failure_no_swap)
+    check("_discard_uploads: does not delete when _same_file's identity check is unprovable (None)",
+          test_discard_uploads_does_not_delete_when_identity_cannot_be_proven)
     check("run_import: loader failure restores the data dir",
           test_run_import_loader_failure_restores_data_dir)
     check("run_import: integrity-checks failure leaves live db untouched",
@@ -2615,6 +3095,22 @@ def run():
     check("run_import: a failed import does not delete the dataset when "
           "upload_dir == data_dir",
           test_run_import_a_failed_import_does_not_delete_the_dataset_when_upload_dir_equals_data_dir)
+    check("_same_file: true for a hard link reached from another directory",
+          test_same_file_true_for_a_hardlink_in_another_directory)
+    check("_same_file: true through a symlinked directory (resolve()'s old behavior kept)",
+          test_same_file_true_through_a_symlinked_directory)
+    check("_same_file: false for two distinct files (casefold/normcase false-success guard)",
+          test_same_file_false_for_two_distinct_files)
+    check("_same_file: false (not None) when the candidate does not exist",
+          test_same_file_false_when_the_candidate_does_not_exist)
+    check("_same_file: none for an unstattable path (symlink loop, fail closed)",
+          test_same_file_none_for_an_unstattable_path)
+    check("run_import: does not delete the dataset when the upload is a hard link of it",
+          test_run_import_does_not_delete_the_dataset_when_the_upload_is_a_hardlink_of_it)
+    check("_discard_uploads: removes a hard-linked upload sitting in a separate directory",
+          test_discard_uploads_removes_a_hardlinked_upload_in_a_separate_directory)
+    check("run_import: stages a needless second .bak for a hard-linked data_target in one batch",
+          test_run_import_stages_a_second_bak_for_a_hardlinked_data_target_in_one_batch)
     check("_unlink_quietly never raises on a path it cannot delete",
           test_unlink_quietly_never_raises_on_a_path_it_cannot_delete)
     check("run_import: no rollback of data_dir after a successful swap",
