@@ -544,7 +544,36 @@ The three guards:
   columns, and is **figure-only** — `check_table` grades hundreds of cells, so
   widening its match surface would inflate Grounded-cells with coincidental hits.
   A kernel that cannot reproduce a CORRECT number manufactures evidence of model
-  error, the most damaging way this measurement can be wrong. Retention is the foundation: `AgentResult.results`
+  error, the most damaging way this measurement can be wrong.
+  **A TRUNCATED result may not supply a column aggregate.** `run_sql` cuts at
+  `sql_row_cap_model` and tells the model not to total the page; when the model
+  did it anyway, the kernel recomputed that same total from those same partial
+  rows and called it `derived` — corroborating the error it exists to catch. The
+  rule: a route may run over a truncated result **iff its value is invariant to
+  appending the rows that were cut**. Truncation drops a SUFFIX, so a value at a
+  known row index is invariant (verbatim cell, hedge bound, `row_total`, the
+  row-wise ops, `prev_diff`/`prev_pct_change`) and stays allowed; anything
+  reading the column's EXTENT (`sum`/`mean`/`share`/`pct_change`/`diff`, and a
+  `_cross_scalars` total or complement sourced FROM a cut result) refuses. The
+  gate is keyed **per RESULT, never per turn** — `sql.py`/`prompt.py` tell the
+  model to fix a cut ranking with a separate `SELECT SUM(...)`, so an
+  untruncated sibling in the same turn must stay fully checkable; a per-turn
+  form is pinned against by `..._when_a_SIBLING_is_truncated`, which fails on
+  the DERIVATION (`cross`/-1 instead of `sum`/1), not on the status — a bare
+  "is it derived?" assertion does not discriminate. **`max`/`min` are named in
+  the rule but cannot actually refuse**: `compute("max", …)` always returns a
+  value that IS a cell, so the always-allowed verbatim route matches first. That
+  is correct — grounding attests REPRODUCTION, not that the model's "this is the
+  maximum" reading of the number is right. It needs **no migration**:
+  `to_storage` carries `truncated` (emitted only when true, so an untruncated
+  blob stays byte-identical and a legacy blob still reads False), and also sets
+  it when its OWN `max_rows` cut rows — a blob that lost rows is exactly as
+  unsound to aggregate over, whichever layer cut them. **NOT observe-only in
+  effect**: the verdict itself still alters nothing, but two existing consumers
+  act on `ungrounded` — `_maybe_retry_figure` SUPPRESSES a retry-recovered
+  figure and `_s5_fabricated` can degrade a tool-exhausted answer — so widening
+  what lands ungrounded feeds both, and steps Grounded figures / Grounded cells
+  down on truncated turns by design. Retention is the foundation: `AgentResult.results`
   keeps every call's result (in call order), where `last_result` used to overwrite.
   **The persisted-results cap really is a cap now** (`_results_for_storage`,
   `routers/chat.py`). It drops the largest results first, but that loop was

@@ -180,20 +180,33 @@ class QueryResult:
         """A JSON-able snapshot (columns + up to `max_rows` rows) for persisting a
         turn's result so a LATER turn can ground a figure against it
         (app/grounding.py is conversation-scoped). Only what grounding needs —
-        columns + cell values; the SQL text, notes and truncation flag are not
-        reloaded. Tuples become lists (JSON has no tuple)."""
-        return {"columns": list(self.columns),
-                "rows": [list(r) for r in self.rows[:max_rows]]}
+        columns + cell values, plus `truncated` when it's True; the SQL text and
+        notes are model-facing prose and are never reloaded, but `truncated` is
+        an input to grounding's arithmetic (a column-extent aggregate over a cut
+        result must refuse), so it has to survive the round trip. Emitted only
+        when True — `self.truncated` OR this call's OWN `max_rows` cut rows —
+        so an untruncated blob stays byte-identical to before (from_storage's
+        tolerant default already reads absence as False) and adds no bytes to
+        the RESULT_STORE_MAX_BYTES budget in the common case. Tuples become
+        lists (JSON has no tuple)."""
+        out = {"columns": list(self.columns),
+               "rows": [list(r) for r in self.rows[:max_rows]]}
+        if self.truncated or len(self.rows) > max_rows:
+            out["truncated"] = True
+        return out
 
     @classmethod
     def from_storage(cls, data: dict) -> QueryResult:
         """Rebuild a QueryResult from to_storage() JSON. Rows stay as lists —
         grounding indexes them positionally, so tuples aren't needed. Tolerant of
         a malformed/partial blob (missing keys → empty), since it reads
-        persisted data that must never break a live turn."""
+        persisted data that must never break a live turn. A blob with no
+        `truncated` key (every blob written before this field existed) defaults
+        to False, so a legacy persisted turn behaves exactly as it always has."""
         cols = list((data or {}).get("columns") or [])
         rows = [tuple(r) for r in ((data or {}).get("rows") or [])]
-        return cls(columns=cols, rows=rows, row_count=len(rows))
+        return cls(columns=cols, rows=rows, row_count=len(rows),
+                   truncated=bool((data or {}).get("truncated")))
 
 
 def _strip_comments(sql: str, pattern: re.Pattern) -> str:

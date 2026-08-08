@@ -991,11 +991,21 @@ def _synthetic_corpus() -> list[tuple[str, QueryResult]]:
         rows=[(s, 40000 + i * 7300, 41000 + i * 7900)
               for i, s in enumerate(["CA", "TX", "NY", "FL", "OH", "PA", "IL", "MI"])],
         row_count=8)
+    # A TRUNCATED listing: verbatim cells only, no total column. The truncation
+    # gate refuses column-EXTENT aggregates, not per-cell lookups, so a listing
+    # made entirely of verbatim cells must keep grounding/refusing exactly like
+    # any other result -- appended (not inserted) so the shared rng draws below
+    # don't reshuffle the other cases' numbers.
+    truncated_listing = QueryResult(
+        columns=["instnm", "total_degrees"],
+        rows=[(f"College {i:03d}", 200 + i * 47) for i in range(60)],
+        row_count=60, truncated=True)
     # (name, results, renderer) — an entry can carry SEVERAL results, because a
     # single-result corpus cannot exercise anything cross-result.
     return [("ranking", [ranking], _render), ("pivoted", [pivoted], _render),
             ("states", [states], _render), ("cross-result", _cross_pair(), _render_cross),
-            ("many-scalars", _many_scalars(), _render)]
+            ("many-scalars", _many_scalars(), _render),
+            ("truncated-listing", [truncated_listing], _render)]
 
 
 def _render(results, rng: random.Random | None = None) -> tuple[str, int]:
@@ -1157,6 +1167,471 @@ def test_an_UNANCHORED_table_cell_still_does_not_use_row_totals():
         f"an unanchored row total must not ground a table cell (matched {r.cells_matched})"
 
 
+# --- Truncation and grounding ---------------------------------------------------
+# app/tools/sql.py's own comment on the ⚠ AGGREGATION CHECK note names this
+# exactly: summing/counting/averaging a CUT page as a TOTAL "looks perfect (and
+# which grounding would "validate" — the same partial rows recompute the same
+# wrong total)". Before this section QueryResult.truncated was never read by
+# this module at all (`grep -c truncat app/grounding.py` -> 0): a figure/table
+# cell reconciled against a truncated result exactly as if nothing had been
+# cut, so the model's wrong total came back "verified".
+#
+# The rule: a route may run over a truncated result IFF its value is invariant
+# to appending the rows that were cut. Truncation removes a SUFFIX of rows, so
+# a value at a KNOWN ROW is invariant (a verbatim cell, a row-wise op, a
+# row-anchored prev-row op); anything that reads the column's EXTENT (sum,
+# mean, max, min, share, pct_change, diff, and a cross-result total/complement
+# sourced FROM a truncated result) is not, and must refuse. There is no new
+# status: a refused figure lands as the existing UNGROUNDED, a refused table
+# cell simply doesn't count toward cells_matched.
+
+def test_a_column_sum_over_a_truncated_result_does_not_ground():
+    """THE HEADLINE regression. app/tools/sql.py's own comment on the
+    truncation note: 'grounding would "validate" — the same partial rows
+    recompute the same wrong total'. A SUM over a result CUT by
+    sql_row_cap_model must not ground, even though the arithmetic over the
+    VISIBLE page is exact — the model may have reported the same wrong total
+    sql.py warns about, and check_figure must not corroborate it."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    total = sum(v for _, v in rows)
+    assert total == 4550
+    got = grounding.check_figure({"value": "4,550", "label": "Total awards"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+
+
+def test_a_truncated_mean_max_min_and_share_all_refuse():
+    """Catches a fix that gates `sum` alone and leaves its column-extent
+    siblings reachable. mean and share are genuinely refused: neither's
+    computed value ever coincides with a raw cell, so there is no other route
+    that could ground them by accident.
+
+    max/min are a documented EXCEPTION, not a gap: compute("max"/"min", ...)
+    always returns an actual cell (the largest/smallest cell IS one of the
+    cells), so a claimed max/min is indistinguishable from a verbatim-cell
+    claim and grounds via the always-allowed EXACT "value" route regardless of
+    truncation — what the gate changes for them is that "max"/"min" itself
+    never fires as the REPORTED derivation over a truncated result."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    values = [v for _, v in rows]
+    r = result(["year", "awards"], rows, truncated=True)
+    mean = sum(values) / len(values)
+    assert mean == 1137.5
+    got = grounding.check_figure({"value": "1,137.5", "label": "Average awards"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+    share = values[-1] / sum(values) * 100.0
+    got = grounding.check_figure({"value": f"{share:.1f}%", "label": "2024 share"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+    got = grounding.check_figure({"value": "1,250", "label": "Max"}, [r])
+    assert got.status == grounding.EXACT and got.derivation.op == "value", got
+    got = grounding.check_figure({"value": "1,000", "label": "Min"}, [r])
+    assert got.status == grounding.EXACT and got.derivation.op == "value", got
+
+
+def test_a_column_pct_change_over_a_truncated_result_does_not_ground():
+    """Catches "it isn't an aggregate so it's safe" reasoning: pct_change reads
+    like a two-point calculation, but `values[-1]` is the CUT BOUNDARY once a
+    result is truncated, not the series' true endpoint — both its start and end
+    are only "the last row I happen to have", which shifts with the cap."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    pct = (1250 - 1000) / 1000 * 100.0
+    assert pct == 25.0
+    got = grounding.check_figure({"value": "+25.0%", "label": "Change since 2021"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+
+
+def test_a_truncated_result_does_not_supply_a_cross_result_total():
+    """`_cross_scalars` feeds the widest search in the module: a measure
+    column's SUM from ANY retained result, plus pairwise complements. If that
+    result was CUT, its sum is the same wrong partial total sql.py's note
+    warns about — so a truncated result must be SKIPPED as a source of
+    cross-result totals/complements entirely, not merely have its own cells
+    excluded from the in-result sum route (see the previous test).
+
+    NOTE ON WHAT THIS DOES AND DOESN'T COVER: this exercises `_cross_scalars`'
+    OWN `if result.truncated: continue` guard, a mechanism entirely separate
+    from `_reconcile_value`'s per-result `whole_column=not result.truncated`
+    gate on the plain column sum/mean/share routes. Mutating the LATTER to a
+    per-turn form (`not any(r.truncated for r in results)`) does not touch
+    `_cross_scalars` at all, so this test still passes under that mutation —
+    it is not coverage of the `whole_column` gate. See
+    test_an_untruncated_result_still_grounds_its_own_column_sum_when_a_SIBLING_is_truncated
+    for that."""
+    top, total = _cross_pair()
+    top = QueryResult(columns=top.columns, rows=top.rows, truncated=True,
+                      row_count=top.row_count)
+    page_total = sum(v for _, v in top.rows)
+    assert page_total == 30568
+    grand_total = total.rows[0][0]
+    assert grand_total == 45883
+    share = page_total / grand_total * 100.0
+    got = grounding.check_figure(
+        {"value": f"{share:.1f}%", "label": "Top 5 share of the state total"},
+        [top, total])
+    assert got.status == grounding.UNGROUNDED, got
+    complement = grand_total - page_total
+    assert complement == 15315
+    got2 = grounding.check_figure(
+        {"value": f"{complement:,}", "label": "All others"}, [top, total])
+    assert got2.status == grounding.UNGROUNDED, got2
+
+
+def test_a_table_column_total_over_a_truncated_result_is_not_matched():
+    """A per-row "Grand Total" cell repeating the WHOLE column's sum is
+    verified through the anchored row's column-scoped route
+    (_ANCHORED_COLUMN_OPS) — a column-extent aggregate exactly as vulnerable to
+    a truncated cut as the figure path. The row's own verbatim cell still
+    grounds; only the aggregate refuses, so the table reads PARTIAL rather than
+    either extreme."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    total = sum(v for _, v in rows)
+    assert total == 4550
+    md = ("| Year | Awards | Grand Total |\n| --- | --- | --- |\n"
+          f"| 2021 | 1,000 | {total:,} |\n")
+    got = grounding.check_table(md, [r])
+    assert got.cells_checked == 2, got
+    assert got.cells_matched < got.cells_checked, \
+        f"a column-extent total over a truncated result must not fully match: {got}"
+    assert got.status == grounding.TABLE_PARTIAL, got
+
+
+def test_a_share_of_a_truncated_column_total_is_not_matched():
+    """The `share` sub-branch of the anchored route is pinned to THIS row but
+    still divides by the whole column's SUM — the same truncated denominator as
+    the Grand Total case above, only expressed as a percentage."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    total = sum(v for _, v in rows)
+    share = 1000 / total * 100.0
+    md = (f"| Year | Awards | Share |\n| --- | --- | --- |\n"
+          f"| 2021 | 1,000 | {share:.1f}% |\n")
+    got = grounding.check_table(md, [r])
+    assert got.cells_checked == 2, got
+    assert got.cells_matched < got.cells_checked, \
+        f"a share of a truncated column total must not match: {got}"
+    assert got.status == grounding.TABLE_PARTIAL, got
+
+
+def test_a_verbatim_cell_in_a_truncated_result_still_grounds():
+    """A present row is not made wrong by the cut: the recall counterpart to
+    the sum test above — same result and truncation, a cell instead of a
+    total."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    got = grounding.check_figure({"value": "1,250", "label": "Awards"}, [r])
+    assert got.status == grounding.EXACT, got
+    assert got.derivation.column == "awards", got.derivation
+
+
+def test_an_untruncated_result_still_grounds_every_aggregate_op():
+    """The anti-vacuity pair for the three refusal tests above: the IDENTICAL
+    rows, only untruncated, must still ground every aggregate op. If this test
+    failed alongside the refusal tests it would prove the new gate keys on
+    something other than `.truncated` — e.g. always refusing aggregates, or a
+    coincidence in the column name."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=False)
+    got = grounding.check_figure({"value": "4,550", "label": "Total"}, [r])
+    assert got.status == grounding.DERIVED and got.derivation.op == "sum", got
+    got = grounding.check_figure({"value": "1,137.5", "label": "Average"}, [r])
+    assert got.status == grounding.DERIVED and got.derivation.op == "mean", got
+    got = grounding.check_figure({"value": "+25.0%", "label": "Change"}, [r])
+    assert got.status == grounding.DERIVED and got.derivation.op == "pct_change", got
+    got = grounding.check_figure({"value": "250", "label": "Absolute change"}, [r])
+    assert got.status == grounding.DERIVED and got.derivation.op == "diff", got
+    got = grounding.check_figure({"value": "27.5%", "label": "2024 share"}, [r])
+    assert got.status == grounding.DERIVED and got.derivation.op == "share", got
+    # max/min always ground via the always-allowed verbatim "value" route (see
+    # the previous refusal test's docstring) — unaffected by truncation either
+    # way, so the recall bound here is only that they still ground SOMEHOW.
+    got = grounding.check_figure({"value": "1,250", "label": "Max"}, [r])
+    assert got.grounded, got
+    got = grounding.check_figure({"value": "1,000", "label": "Min"}, [r])
+    assert got.grounded, got
+
+
+def test_a_row_total_still_grounds_in_a_truncated_result():
+    """row_total is built from ONE held row's own cells (_row_totals) and is
+    unaffected by rows that were cut — allowed even when truncated, the
+    truncated counterpart of test_a_row_total_grounds."""
+    p = _pivoted()
+    truncated = result(p.columns, p.rows, truncated=True)
+    got = grounding.check_figure(
+        {"value": "324,575", "label": "Peak national nursing degrees in 2022"},
+        [truncated])
+    assert got.status == grounding.DERIVED and got.derivation.op == "row_total", got
+    assert got.derivation.describe() == "row_total(q1.row2)", got.derivation.describe()
+
+
+def test_a_row_wise_pct_change_column_still_grounds_in_a_truncated_result():
+    """The anchored row-wise routes work from ONE anchored row's own cells and
+    must stay reachable under truncation — the truncated counterpart of
+    test_a_correct_row_wise_pct_change_column_grounds."""
+    truncated = QueryResult(columns=_ROWWISE.columns, rows=_ROWWISE.rows,
+                            truncated=True, row_count=_ROWWISE.row_count)
+    md = ("| State | 2021 | 2024 | % change |\n| --- | --- | --- | --- |\n"
+          "| CA | 100,000 | 110,000 | +10.0% |\n"
+          "| TX | 200,000 | 190,000 | -5.0% |\n"
+          "| NY | 50,000 | 52,500 | +5.0% |\n"
+          "| FL | 80,000 | 88,000 | +10.0% |\n")
+    got = grounding.check_table(md, [truncated])
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert (got.cells_matched, got.cells_checked) == (12, 12), got
+
+
+def test_a_prior_row_change_column_still_grounds_in_a_truncated_result():
+    """prev_diff/prev_pct_change compare an anchored row against the PREVIOUS
+    anchored row — both endpoints are held rows, so this is allowed under
+    truncation. Catches a fix that wraps the WHOLE anchored column route in the
+    truncation guard instead of scoping it to the column-extent ops."""
+    truncated = QueryResult(columns=_YOY.columns, rows=_YOY.rows, truncated=True,
+                            row_count=_YOY.row_count)
+    pct = ("| Year | Awards | % vs prior |\n| --- | --- | --- |\n"
+           "| 2022 | 550 | +10.0% |\n| 2023 | 610 | +10.9% |\n| 2024 | 700 | +14.8% |\n")
+    got = grounding.check_table(pct, [truncated])
+    assert (got.cells_matched, got.cells_checked) == (6, 6), got
+
+
+def test_a_cross_result_share_still_grounds_when_only_the_numerator_result_is_truncated():
+    """app/tools/sql.py and app/prompt.py both tell the model to fix a
+    truncated ranking by running a SEPARATE `SELECT SUM(...)` for the true
+    total — so a cut top-N page plus a one-row scalar from an UNTRUNCATED
+    query must stay fully verifiable for the TABLE path (check_table's row
+    anchoring + `_match_at_row`'s cross-result route).
+
+    CORRECTED CLAIM (was headlined "THE MOST IMPORTANT recall test" —
+    mutation-tested and found not to earn that): this exercises
+    `_cross_scalars`' own per-result `if result.truncated: continue` guard,
+    the SAME mechanism as test_a_truncated_result_does_not_supply_a_
+    cross_result_total above, not `_reconcile_value`'s separate `whole_column`
+    gate on the plain column sum/mean/share routes. A per-turn version of
+    THAT gate (`whole_column=not any(r.truncated for r in results)`) leaves
+    `_cross_scalars` untouched and this test keeps passing — it does not
+    discriminate per-result from per-turn for `whole_column`. That
+    discrimination is
+    test_an_untruncated_result_still_grounds_its_own_column_sum_when_a_SIBLING_is_truncated,
+    which mutation-testing confirmed DOES fail under the per-turn form. This
+    test is kept for its own real property (the table cross-result route
+    tolerates a truncated numerator result), just not the one its old name
+    claimed."""
+    top, total = _cross_pair()
+    top = QueryResult(columns=top.columns, rows=top.rows, truncated=True,
+                      row_count=top.row_count)
+    md = ("| Institution | Bachelor's | Share |\n| --- | --- | --- |\n"
+          "| Alpha University | 11,620 | 25.3% |\n"
+          "| Beta College | 6,287 | 13.7% |\n")
+    got = grounding.check_table(md, [top, total])
+    assert (got.cells_matched, got.cells_checked) == (4, 4), got
+    assert got.status == grounding.TABLE_MATCHED, got
+
+
+def test_an_untruncated_result_still_grounds_its_own_column_sum_when_a_SIBLING_is_truncated():
+    """THE MOST IMPORTANT recall test for `_reconcile_value`'s `whole_column`
+    gate specifically (the property the two tests above turned out NOT to
+    cover — mutation-tested and found to pass under a per-turn version of
+    THIS gate).
+
+    `_reconcile_value` passes `whole_column=not result.truncated`, computed
+    FRESH for the result the candidate column actually belongs to. A plausible
+    but wrong rewrite — `whole_column=not any(r.truncated for r in results)`
+    — checks the whole TURN instead: every aggregate refuses the instant any
+    result in the turn was cut, even one this candidate column has nothing to
+    do with. That is a real cost, not a theoretical one: it is exactly the
+    remediation sql.py/prompt.py instruct — a truncated ranking page plus a
+    SEPARATE untruncated query — so the per-turn bug would refuse the
+    honest, fully-reproducible total from the second query merely because the
+    first was cut.
+
+    The figure is the untruncated sibling's own column SUM, chosen (and
+    verified below) to coincide with no raw cell in EITHER result at the
+    rounding tolerance "4,550" implies — otherwise the always-allowed
+    verbatim/rounded-cell route would match it regardless of `whole_column`,
+    and the test would pass for the wrong reason exactly like the two above.
+
+    Verified both ways per the coordinator's request, by temporarily applying
+    the exact mutation to app/grounding.py and restoring the file afterward:
+    passes green against the code as shipped (DERIVED, op "sum",
+    result_index 1); under the mutation the assertion still fails, though NOT
+    via UNGROUNDED as first assumed -- with the in-result sum route gated
+    off, the value still falls through to the module's cross-result fallback
+    (`_cross_scalars` is untouched by this particular mutation, and the
+    sibling's own scalar is still in its candidate list), landing on
+    `derivation.op == "cross"` / `result_index == -1` instead of the correct
+    in-result `"sum"` / `1`. Asserting the SPECIFIC op and result_index, not
+    just DERIVED-ness, is what catches that -- a looser
+    `got.status == grounding.DERIVED` alone would NOT discriminate here."""
+    top, _unused_total = _cross_pair()
+    truncated_ranking = QueryResult(columns=top.columns, rows=top.rows,
+                                    truncated=True, row_count=top.row_count)
+    sibling_rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    sibling = result(["year", "awards"], sibling_rows, truncated=False)
+    sibling_sum = sum(v for _, v in sibling_rows)
+    assert sibling_sum == 4550
+    # Not reachable via the always-allowed verbatim/rounded routes in EITHER
+    # result at the "4,550" rounding tolerance (+/-5) -- if it were, this test
+    # would pass whether the gate is per-result or per-turn, and would not
+    # discriminate.
+    all_cells = [v for _, v in top.rows] + [v for _, v in sibling_rows]
+    assert all(abs(sibling_sum - c) > 5 for c in all_cells), all_cells
+
+    got = grounding.check_figure(
+        {"value": f"{sibling_sum:,}", "label": "Total awards (untruncated query)"},
+        [truncated_ranking, sibling])
+    assert got.status == grounding.DERIVED, got
+    assert got.derivation.op == "sum", got.derivation
+    assert got.derivation.result_index == 1, \
+        f"expected the derivation to name the untruncated sibling (index 1): {got.derivation}"
+
+
+# --- Truncation telemetry: blocked_by_truncation / cells_blocked --------------
+# Both fields exist so a false ⚠/UNGROUNDED caused by the truncation gate is
+# DISTINGUISHABLE from an ordinary transcription miss or an invented number —
+# check_table's own docstring makes exactly this false-alarm-measurability
+# promise (pointing at the figure's "truncated" figure_derivation label as the
+# fallback measurement), but the label it points to is written only by
+# check_figure, and only on an already-failed figure — a truncated-turn TABLE
+# that raises the caution records nothing distinguishing a gate refusal from
+# an ordinary miss. These tests pin both halves of the fix.
+
+def test_blocked_by_truncation_is_false_for_a_figure_nothing_could_reproduce():
+    """THE REGRESSION. check_figure currently sets `blocked = any(r.truncated
+    for r in results)` — true whenever ANY retained result was cut, whether or
+    not the gate is what refused THIS figure. An invented number (8,675,309 —
+    the reviewer's own example) would not be reproduced even with the gate
+    disabled, so `blocked_by_truncation` must read False here; the `any()`
+    form reads True purely because a truncated result happens to be in the
+    mix, which is exactly the over-reporting the reviewer measured (a wholly
+    invented figure recording figure_derivation="truncated")."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    got = grounding.check_figure({"value": "8,675,309", "label": "Awards"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+    assert got.blocked_by_truncation is False, \
+        f"an unreproducible number must not read as gate-blocked: {got}"
+
+
+def test_blocked_by_truncation_is_true_only_when_the_gate_is_what_refused():
+    """The positive half, so the fix can't be 'always False': the truncated
+    result's own column SUM — reproducible with the gate open, refused only
+    because it is closed — must still read blocked_by_truncation=True. This
+    already passes under the current `any()` form (it isn't the discriminator
+    on its own), but a fix that always returns False would fail it."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    total = sum(v for _, v in rows)
+    assert total == 4550
+    got = grounding.check_figure({"value": "4,550", "label": "Total awards"}, [r])
+    assert got.status == grounding.UNGROUNDED, got
+    assert got.blocked_by_truncation is True, \
+        f"a value the gate alone refused must still read as gate-blocked: {got}"
+
+
+def test_check_table_counts_cells_only_a_truncated_aggregate_would_have_matched():
+    """THE REGRESSION for the table half: `TableGroundingCheck` has no
+    `cells_blocked` field at all today, so a truncated-turn table that raises
+    the ⚠ caution records nothing distinguishing a gate refusal from an
+    ordinary transcription miss — exactly the gap check_table's own docstring
+    claims is covered (it isn't; that label is figure-only).
+
+    A `cells_blocked` that simply equalled `cells_checked - cells_matched`
+    would be worthless — it would say nothing the existing two counts don't
+    already say. So this fixture carries THREE kinds of cell: a verbatim cell
+    (always matches, regardless of truncation), the truncated result's own
+    column SUM (gate-blocked — would match if the gate were open, the "Total"
+    cell), and a wholly fabricated cell (would never match regardless of the
+    gate). Only the middle one may count as blocked."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    total = sum(v for _, v in rows)
+    assert total == 4550
+    md = ("| Year | Awards | Total |\n| --- | --- | --- |\n"
+          f"| 2021 | 1,000 | {total:,} |\n"
+          "| 2022 | 88,888 | — |\n")
+    got = grounding.check_table(md, [r])
+    assert got.cells_checked == 3, got
+    assert got.cells_matched == 1, got   # only the 2021 Awards cell (1,000)
+    assert got.status == grounding.TABLE_PARTIAL, got
+    # getattr, not direct attribute access: TableGroundingCheck has no
+    # cells_blocked field yet, and a bare `got.cells_blocked` would raise
+    # AttributeError, which the hand-rolled `check()` runner (catches
+    # AssertionError only) can't report as a clean failure.
+    assert getattr(got, "cells_blocked", None) == 1, \
+        f"exactly the Total cell (gate-blocked) should count, not the " \
+        f"fabricated 88,888 cell: {got}"
+
+
+def test_cells_blocked_is_zero_when_no_result_was_truncated():
+    """Anti-vacuity partner: an ordinary, wholly wrong table with NO truncated
+    result anywhere must report cells_blocked=0 — catches a `cells_blocked`
+    that defaults to something nonzero, or that counts every unmatched cell
+    regardless of cause (which the previous test's fabricated-cell half
+    already guards from the other side)."""
+    md = "| A | B |\n| --- | --- |\n| 88888 | 77777 |\n"
+    got = grounding.check_table(md, [YEARS])
+    assert got.status == grounding.TABLE_UNMATCHED, got
+    assert getattr(got, "cells_blocked", None) == 0, \
+        f"nothing here was refused by the truncation gate: {got}"
+
+
+# --- Truncated-result persistence (to_storage/from_storage) -------------------
+# to_storage previously emitted only {"columns","rows"} and DROPPED `truncated`
+# entirely, so from_storage always rebuilt truncated=False — a borrowed prior
+# result (grounding is conversation-scoped) could never refuse an aggregate, no
+# matter how the checks above behave live.
+
+def test_to_storage_preserves_the_truncated_flag():
+    """Without this, a borrowed prior result can never refuse an aggregate,
+    regardless of what check_figure/check_table do with the flag. `.get()`,
+    not `[...]`, so a not-yet-fixed to_storage fails this as a clean
+    AssertionError rather than a KeyError the hand-rolled `check()` runner
+    (catches AssertionError only) can't report."""
+    r = result(["n"], [(1,), (2,)], truncated=True)
+    assert r.to_storage().get("truncated") is True
+
+
+def test_to_storage_flags_a_result_its_own_row_cap_cut():
+    """to_storage's OWN max_rows cap can cut a result that run_sql itself
+    never flagged as truncated (persistence's cap need not match the
+    model-facing row cap). The stored blob must reflect ITS OWN cut, not just
+    whatever the QueryResult carried in."""
+    r = result(["n"], [(i,) for i in range(500)], truncated=False)
+    blob = r.to_storage(max_rows=200)
+    assert blob.get("truncated") is True, blob
+    assert len(blob["rows"]) == 200, blob
+
+
+def test_from_storage_defaults_truncated_false_for_a_legacy_blob():
+    """A pre-change blob has no 'truncated' key at all — from_storage must
+    default False so an existing persisted turn behaves exactly as before. And
+    an UNTRUNCATED to_storage blob must still carry NO key (never a literal
+    False), which is what keeps test_chat_router.py's exact blob literal
+    `[{"columns": ["n"], "rows": [[1], [2]]}]` valid."""
+    legacy = {"columns": ["n"], "rows": [[1], [2]]}
+    back = QueryResult.from_storage(legacy)
+    assert back.truncated is False
+    r = result(["n"], [(1,), (2,)], truncated=False)
+    blob = r.to_storage()
+    assert "truncated" not in blob, blob
+
+
+def test_a_borrowed_prior_result_refuses_an_aggregate_after_a_round_trip():
+    """The end-to-end for the borrowed-results half: grounding is
+    conversation-scoped, so a prior turn's results are re-hydrated via
+    from_storage for a LATER turn to check against. A persisted truncation
+    must survive that round trip, or a borrowed truncated result could
+    validate the same wrong total the LIVE turn correctly refuses."""
+    rows = [(2021, 1000), (2022, 1100), (2023, 1200), (2024, 1250)]
+    r = result(["year", "awards"], rows, truncated=True)
+    back = QueryResult.from_storage(r.to_storage())
+    assert back.truncated is True
+    got = grounding.check_figure({"value": "4,550", "label": "Total awards"}, [back])
+    assert got.status == grounding.UNGROUNDED, got
+    got = grounding.check_figure({"value": "1,250", "label": "Awards"}, [back])
+    assert got.status == grounding.EXACT, got
+
+
 def run():
     print("Testing figure grounding (app/grounding.py)...")
     check("QueryResult storage round-trip preserves columns/cells",
@@ -1297,6 +1772,55 @@ def run():
           test_a_cross_result_SHARE_needs_the_percent_marker)
     check("a cross-result share over 100% is refused",
           test_a_cross_result_share_over_100_percent_is_refused)
+    print("  -- truncated results: refuse column-extent aggregates, allow row-scoped ones --")
+    check("a column SUM over a truncated result does not ground (headline regression)",
+          test_a_column_sum_over_a_truncated_result_does_not_ground)
+    check("a truncated mean/max/min/share all refuse (max/min ground only via verbatim)",
+          test_a_truncated_mean_max_min_and_share_all_refuse)
+    check("a column pct_change over a truncated result does not ground",
+          test_a_column_pct_change_over_a_truncated_result_does_not_ground)
+    check("a truncated result does not supply a cross-result total",
+          test_a_truncated_result_does_not_supply_a_cross_result_total)
+    check("a table column total over a truncated result is not matched",
+          test_a_table_column_total_over_a_truncated_result_is_not_matched)
+    check("a share of a truncated column total is not matched",
+          test_a_share_of_a_truncated_column_total_is_not_matched)
+    check("a verbatim cell in a truncated result still grounds",
+          test_a_verbatim_cell_in_a_truncated_result_still_grounds)
+    check("an untruncated result still grounds every aggregate op (anti-vacuity)",
+          test_an_untruncated_result_still_grounds_every_aggregate_op)
+    check("a row total still grounds in a truncated result",
+          test_a_row_total_still_grounds_in_a_truncated_result)
+    check("a row-wise pct_change column still grounds in a truncated result",
+          test_a_row_wise_pct_change_column_still_grounds_in_a_truncated_result)
+    check("a prior-row change column still grounds in a truncated result",
+          test_a_prior_row_change_column_still_grounds_in_a_truncated_result)
+    check("a cross-result share still grounds when only the numerator result "
+          "is truncated (table cross-result route, NOT the whole_column gate "
+          "-- see corrected docstring)",
+          test_a_cross_result_share_still_grounds_when_only_the_numerator_result_is_truncated)
+    check("an untruncated result still grounds its own column sum when a "
+          "SIBLING is truncated (the actual most-important recall test for "
+          "the whole_column gate)",
+          test_an_untruncated_result_still_grounds_its_own_column_sum_when_a_SIBLING_is_truncated)
+    print("  -- truncation telemetry: blocked_by_truncation / cells_blocked --")
+    check("blocked_by_truncation is False for a figure nothing could reproduce",
+          test_blocked_by_truncation_is_false_for_a_figure_nothing_could_reproduce)
+    check("blocked_by_truncation is True only when the gate is what refused",
+          test_blocked_by_truncation_is_true_only_when_the_gate_is_what_refused)
+    check("check_table counts cells only a truncated aggregate would have matched",
+          test_check_table_counts_cells_only_a_truncated_aggregate_would_have_matched)
+    check("cells_blocked is zero when no result was truncated",
+          test_cells_blocked_is_zero_when_no_result_was_truncated)
+    print("  -- truncated-result persistence (to_storage/from_storage) --")
+    check("to_storage preserves the truncated flag",
+          test_to_storage_preserves_the_truncated_flag)
+    check("to_storage flags a result its own row cap cut",
+          test_to_storage_flags_a_result_its_own_row_cap_cut)
+    check("from_storage defaults truncated=False for a legacy blob",
+          test_from_storage_defaults_truncated_false_for_a_legacy_blob)
+    check("a borrowed prior result refuses an aggregate after a round trip",
+          test_a_borrowed_prior_result_refuses_an_aggregate_after_a_round_trip)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} grounding test(s) FAILED: {FAILURES}")

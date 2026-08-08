@@ -34,12 +34,57 @@ across every numeric column of every result, a number can find a coincidental
 match. `check_figure` therefore records WHICH derivation matched, so the
 false-positive rate is inspectable before any policy hangs off the status. A
 model-declared provenance removes the search entirely and is the real fix.
+
+TRUNCATION. app/tools/sql.py cuts a result at sql_row_cap_model (200) and
+prompt.py tells the model to fix a cut ranking with a separate
+`SELECT SUM(...)` — but a model that instead sums the visible page gets a
+wrong total that, before this, reconciled against those SAME partial rows and
+came back "verified" (sql.py's own `⚠ AGGREGATION CHECK (truncated)` note is
+the upstream half of this same problem: it warns the MODEL not to aggregate a
+cut page; this is the check that must not corroborate it if the model does
+anyway). The rule: a route may run over a truncated result IFF its value is
+invariant to appending the rows that were cut. Truncation drops a SUFFIX of
+rows, so a value at a KNOWN ROW INDEX is invariant (a verbatim cell, a
+row-wise op, a row-anchored prev-row op) and stays allowed; anything that
+reads the column's EXTENT — sum, mean, share, pct_change, diff, and a
+cross-result total/complement sourced FROM a truncated result — is not, and
+must refuse.
+
+`max`/`min` are a DOCUMENTED EXCEPTION, not a gap in the gate: `compute("max"
+/"min", …)` always returns an actual cell — the column's largest/smallest
+value IS one of its cells — so a claimed max/min is indistinguishable from a
+verbatim-cell claim and is caught by the always-allowed EXACT "value" route
+before the gate is ever reached. Refusing every cell that happens to sit at a
+page extremum would reject honest transcriptions, and a false NEGATIVE (a
+correct answer flagged wrong) is the direction this module treats as more
+damaging than a false positive — see the KNOWN LIMITATION above. What the gate
+DOES change for them: "max"/"min" itself never fires as the REPORTED
+derivation over a truncated result; the number still grounds, just via
+"value" rather than "max"/"min". Grounding attests reproduction of the
+number, not that the model's "this is the maximum" reading of a cut page is
+correct — that reading isn't and can't be checked here.
+
+The gate is therefore keyed on the (result, axis) pair at each call site, not
+inside `compute()` itself, since `compute()` has no way to know which axis its
+caller is using a column on.
+
+No new STATUS is introduced by any of this — a refused figure still records
+the existing UNGROUNDED, and a refused table cell simply isn't counted toward
+cells_matched — but that does NOT make the gate inert. UNGROUNDED already
+drives real behaviour downstream: llm._maybe_retry_figure SUPPRESSES a
+retry-recovered figure that grades ungrounded, and llm._s5_fabricated can
+degrade a tool-budget-exhausted answer when an ungrounded figure pairs with no
+grounded table. So a truncated turn that used to verify (wrongly) now trips
+both of those, and Admin -> Usage's grounding rates move down on truncated
+turns BY DESIGN — a real, not merely observational, effect. Both downstream
+behaviours are correct to keep (a partial-page total really is wrong); this
+paragraph exists so "no new status" is never misread as "nothing changes".
 """
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.tools.sql import QueryResult
 
@@ -176,6 +221,19 @@ class GroundingCheck:
     status: str
     derivation: Derivation | None = None
     value: float | None = None   # the parsed figure value, when parseable
+    # True only when the truncation gate is SPECIFICALLY what refused this
+    # figure: nothing reproduced it with the gate applied, but a second
+    # reconciliation pass with every truncated result's gate forced OPEN would
+    # have matched it. Telemetry only (see llm._derivation_label), so the
+    # backend-only figure_derivation string can record WHY an UNGROUNDED figure
+    # was refused instead of merely reproduced-or-not. Deliberately NOT
+    # `any(r.truncated for r in results)` — that reads True whenever ANY
+    # retained result was cut, whether or not it had anything to do with THIS
+    # figure, and over-reports on exactly the ranking turns where a wholly
+    # invented number is also common (see check_figure). Does not change
+    # `status` or `grounded` — no new status value is introduced (see the
+    # module docstring's TRUNCATION paragraph).
+    blocked_by_truncation: bool = False
 
     @property
     def grounded(self) -> bool:
@@ -388,13 +446,22 @@ def compute(op: str, values: list[float], index: int | None = None) -> float | N
 
 
 def _match_in_column(target: float, raw_value, column: str,
-                     values: list[float]) -> tuple[str, str] | None:
+                     values: list[float], *, whole_column: bool = True
+                     ) -> tuple[str, str] | None:
     """Try to reproduce `target` from one column. Returns (status, op) — the op
     is the point, since it is what makes a coincidental match recognizable when
     reviewing recorded statuses — or None when nothing reproduced it.
 
     Ordered cheapest-and-most-certain first, so a verbatim cell is never
     reported as a coincidental derivation.
+
+    `whole_column` (default True) gates the aggregation routes below the
+    verbatim/hedge checks: False means the caller's result was truncated, so
+    every route that reads this column's EXTENT (sum/mean/max/min/pct_change/
+    diff/share) would be reading a cut suffix as if it were the whole column —
+    see the module docstring's TRUNCATION paragraph. The verbatim and hedge
+    routes above run either way; a value at a known row is unaffected by which
+    rows are missing.
     """
     # A hedged cell ("<0.1%") states a BOUND, so every route below tests the
     # inequality instead of equality — see satisfies_hedge.
@@ -412,8 +479,11 @@ def _match_in_column(target: float, raw_value, column: str,
             for v in values:
                 if abs(target - v) <= tol:
                     return ROUNDED, "value"
-    # Aggregations only make sense over a MEASURE. See _DIMENSION_COL_RE.
-    if is_dimension(column):
+    # Aggregations only make sense over a MEASURE (see _DIMENSION_COL_RE), and
+    # only over a column whose EXTENT is actually known — a truncated result's
+    # column is missing however many rows were cut, so its sum/mean/etc. would
+    # be the same wrong partial total sql.py's note warns the model against.
+    if not whole_column or is_dimension(column):
         return None
 
     def reproduces(got: float | None) -> bool:
@@ -437,6 +507,17 @@ def _match_in_column(target: float, raw_value, column: str,
     return None
 
 
+def _ungate(results: list[QueryResult]) -> list[QueryResult]:
+    """The same results with every truncation flag forced OFF.
+
+    Used ONLY to answer "would this have matched if the truncation gate were
+    open?" — for `blocked_by_truncation` and `TableGroundingCheck.cells_blocked`,
+    never to ground anything for real. A shallow `dataclasses.replace`, so the
+    row data itself is shared, not copied.
+    """
+    return [replace(r, truncated=False) if r.truncated else r for r in results]
+
+
 def check_figure(figure: dict | None,
                  results: list[QueryResult] | None) -> GroundingCheck:
     """Can this figure's number be reproduced from the retained results?
@@ -456,9 +537,19 @@ def check_figure(figure: dict | None,
         return GroundingCheck(NO_FIGURE)
     if not results:
         return GroundingCheck(UNCHECKED, value=target)
-    match = _reconcile_value(target, figure.get("value"), results)
+    raw_value = figure.get("value")
+    match = _reconcile_value(target, raw_value, results)
     if match is None:
-        return GroundingCheck(UNGROUNDED, value=target)
+        # Telemetry only (see GroundingCheck.blocked_by_truncation): re-run the
+        # SAME reconciliation with every truncated result's gate forced open,
+        # and only report "blocked" when that second pass is what would have
+        # matched. `any(r.truncated for r in results)` alone over-reports — a
+        # wholly invented number still refuses with the gate open, and would
+        # be wrongly marked "truncated" just because some retained result in
+        # the mix happened to be cut.
+        blocked = (any(r.truncated for r in results)
+                   and _reconcile_value(target, raw_value, _ungate(results)) is not None)
+        return GroundingCheck(UNGROUNDED, value=target, blocked_by_truncation=blocked)
     status, derivation = match
     return GroundingCheck(status, derivation, target)
 
@@ -547,6 +638,15 @@ def _cross_scalars(results: list[QueryResult]) -> list[tuple[str, float]]:
     pairwise complements. The label names the derivation for telemetry."""
     totals: list[tuple[str, float]] = []
     for r_idx, result in enumerate(results):
+        # A truncated result's column sum is the same wrong partial total
+        # sql.py's note warns against — skip it as a SOURCE of totals/
+        # complements entirely, rather than filtering its cells out below,
+        # so it never enters `out` and can't seed a complement either.
+        # `enumerate` stays over the FULL list (not just the survivors) so
+        # the `q{r_idx+1}` labels keep naming their real result — renumbering
+        # would make a recorded derivation point at the wrong result.
+        if result.truncated:
+            continue
         for name, values in measure_columns(result).items():
             dense = [v for v in values if v is not None]
             if dense:
@@ -617,7 +717,12 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
         for column, values in numeric_columns(result).items():
             if not allow_dimension and is_dimension(column):
                 continue  # a code/dimension column can't stand in for a data cell
-            match = _match_in_column(target, raw_value, column, values)
+            # Keyed per-RESULT, not per-turn (see the module docstring's
+            # TRUNCATION paragraph) — sql.py/prompt.py both tell the model to
+            # fix a cut ranking with a separate untruncated SELECT SUM(...), so
+            # an untruncated result in the same turn must stay fully checkable.
+            match = _match_in_column(target, raw_value, column, values,
+                                     whole_column=not result.truncated)
             if match is None:
                 continue
             status, op = match
@@ -702,6 +807,16 @@ class TableGroundingCheck:
     status: str
     cells_checked: int = 0
     cells_matched: int = 0
+    # How many FAILED cells were refused specifically BY the truncation gate —
+    # i.e. a second reconciliation pass with the gate forced open would have
+    # matched them. Deliberately NOT `cells_checked - cells_matched`, which
+    # would just restate the existing counts: it is computed by actually
+    # re-running the failed cells with the gate open (see check_table), so it
+    # counts only a gate refusal, never an ordinary transcription miss or a
+    # wholly fabricated number that fails either way. In-memory telemetry only
+    # — no usage_log column, no migration; see llm._stamp_table_grounding for
+    # where it surfaces (an INFO log line, not a persisted field).
+    cells_blocked: int = 0
 
 
 def _split_row(line: str) -> list[str]:
@@ -810,6 +925,7 @@ class _Prepared:
     series: list[list[float]]                  # per row: measure values, column order
     row_labels: list[set[str]]                 # per row: normalized text cells
     row_numbers: list[set[float]]              # per row: numeric cells, for O(1) lookup
+    truncated: bool                            # was this result CUT — gates column-extent ops
 
 
 def _prepare(result: QueryResult) -> _Prepared:
@@ -834,7 +950,7 @@ def _prepare(result: QueryResult) -> _Prepared:
                        if _as_number(cell) is None and (lbl := _norm_label(cell))})
         numbers.append({v for cell in row if (v := _as_number(cell)) is not None})
     return _Prepared(measures, dense, dense_pos, aggs, row_series(result),
-                     labels, numbers)
+                     labels, numbers, bool(result and result.truncated))
 
 
 def _anchor_rows(table_row: list[str], prep: _Prepared) -> list[int]:
@@ -957,17 +1073,24 @@ def _match_at_row(target: float, raw_value, prep: _Prepared, index: int,
     #    mistranscription this check exists to catch (copying the top row's
     #    number down a column). Same for `pct_change`/`diff`, which describe a
     #    column's trend and are meaningless on one entity's row.
+    #
+    #    Column-extent (sum/mean/share-of-total) is gated on `prep.truncated` —
+    #    those three read the column's TOTAL, which a cut result never truly
+    #    has. `dense_pos` is hoisted OUTSIDE the guard because route 4 below
+    #    (prev_diff/prev_pct_change) needs it too and is allowed either way —
+    #    both its endpoints are held rows, unaffected by which rows were cut.
     for name, values in prep.dense.items():
-        aggs = prep.aggs[name]
-        for op, got in zip(_ANCHORED_COLUMN_OPS, aggs, strict=True):
-            if reproduces(got):
-                return op
-        # share, from the already-summed total rather than compute(), which would
-        # re-fsum the whole column once per graded cell.
         pos = prep.dense_pos[name].get(index)
-        total = aggs[0]
-        if pos is not None and total and reproduces(values[pos] / total * 100.0):
-            return "share"
+        if not prep.truncated:
+            aggs = prep.aggs[name]
+            for op, got in zip(_ANCHORED_COLUMN_OPS, aggs, strict=True):
+                if reproduces(got):
+                    return op
+            # share, from the already-summed total rather than compute(), which
+            # would re-fsum the whole column once per graded cell.
+            total = aggs[0]
+            if pos is not None and total and reproduces(values[pos] / total * 100.0):
+                return "share"
         # 4. Change against the PREVIOUS ROW — a "% vs prior year" / "Change"
         #    column, which is neither across the row (route 2) nor a whole-column
         #    aggregate. Found by probing the anchored kernel for what it still
@@ -1011,7 +1134,24 @@ def check_table(answer_markdown: str,
     against an unrelated row of a long column. A row that can't be anchored falls
     back to the unrestricted search, so reshaped and summary tables are unaffected.
 
-    NO_TABLE/UNCHECKED carry no counts so they don't move the rate."""
+    NO_TABLE/UNCHECKED carry no counts so they don't move the rate.
+
+    A truncated result refuses its column-extent routes (see the module
+    docstring's TRUNCATION paragraph) but the cell is still COUNTED — a middle
+    path of excluding blocked cells from `cells_checked`, so an all-blocked
+    table went silent instead of raising the ⚠, was considered and rejected: a
+    cell that matches ONLY the partial column sum is, with high probability,
+    precisely the wrong total this fix exists to catch, so silencing it there
+    would invert the feature. If the ⚠ turns out to fire often on genuinely
+    correct truncated-turn answers in production, `cells_blocked` on the
+    returned TableGroundingCheck is what makes that measurable: a failed cell
+    counts there only when a second reconciliation pass with the truncation
+    gate forced OPEN would have matched it — never merely
+    `cells_checked - cells_matched`, which can't distinguish a gate refusal
+    from an ordinary transcription miss or a wholly fabricated number.
+    llm._stamp_table_grounding logs it at INFO when nonzero; that log line is
+    the production visibility, not a new persisted field (see
+    TableGroundingCheck.cells_blocked)."""
     # (value, raw, table_row) — the row is kept so the cell can be anchored.
     cells: list[tuple[float, str, list[str]]] = []
     for header, body in parse_markdown_tables(answer_markdown or ""):
@@ -1037,8 +1177,21 @@ def check_table(answer_markdown: str,
 
     preps = [_prepare(result) for result in results]
     scalars = _cross_scalars(results)
+    # The gate-open second pass is built ONCE per call, and only when it can
+    # possibly matter — guarded on whether ANY result was truncated at all, so
+    # the overwhelming majority of turns (nothing truncated) pay nothing extra.
+    # It re-derives everything the first pass derived (preps, cross scalars)
+    # from the same results with every truncation flag forced off, so a failed
+    # cell can be re-tried through the identical anchored/unrestricted routes.
+    any_truncated = any(r.truncated for r in results)
+    results_open = _ungate(results) if any_truncated else None
+    preps_open = ([_prepare(result) for result in results_open]
+                  if results_open is not None else None)
+    scalars_open = _cross_scalars(results_open) if results_open is not None else None
+
     anchors: dict[int, list[list[int]]] = {}   # table row identity -> per-result groups
     matched = 0
+    blocked = 0
     for v, raw, row in cells:
         key = id(row)
         if key not in anchors:
@@ -1052,13 +1205,32 @@ def check_table(answer_markdown: str,
         # the source — that result is no longer refused as "ambiguous" — so this
         # stays a strict either/or and the unrestricted search is still reserved
         # for rows that anchor nowhere.
-        if any(row_anchors):
+        anchored = any(row_anchors)
+        if anchored:
             ok = any(_match_at_row(v, raw, prep, i, scalars) is not None
                      for prep, group in zip(preps, row_anchors, strict=True)
                      for i in group)
         else:
             ok = _reconcile_value(v, raw, results, allow_dimension=False) is not None
-        matched += 1 if ok else 0
+        if ok:
+            matched += 1
+            continue
+        # Failed — was the truncation gate specifically what refused it? Reuse
+        # the SAME anchor groups (anchoring itself doesn't depend on
+        # `truncated`, only on labels/numbers already present in the rows) but
+        # evaluate them against the gate-open preps/results/scalars.
+        if preps_open is None:
+            continue
+        if anchored:
+            would_match = any(
+                _match_at_row(v, raw, prep, i, scalars_open) is not None
+                for prep, group in zip(preps_open, row_anchors, strict=True)
+                for i in group)
+        else:
+            would_match = _reconcile_value(
+                v, raw, results_open, allow_dimension=False) is not None
+        if would_match:
+            blocked += 1
     checked = len(cells)
     if matched == checked:
         status = TABLE_MATCHED
@@ -1066,4 +1238,5 @@ def check_table(answer_markdown: str,
         status = TABLE_UNMATCHED
     else:
         status = TABLE_PARTIAL
-    return TableGroundingCheck(status, cells_checked=checked, cells_matched=matched)
+    return TableGroundingCheck(status, cells_checked=checked, cells_matched=matched,
+                               cells_blocked=blocked)

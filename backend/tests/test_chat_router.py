@@ -1597,6 +1597,28 @@ def test_results_for_storage_caps_a_lone_oversized_result():
         {"columns": ["n"], "rows": [[1], [2]]}]
 
 
+def test_results_for_storage_flags_a_blob_it_halved():
+    """THE REGRESSION for the halving loop specifically: `truncated` must be
+    set on the surviving blob BEFORE it is halved, so the key's own bytes are
+    inside the RESULT_STORE_MAX_BYTES ceiling the loop measures. Setting the
+    flag AFTER halving would let a borderline blob slip back over the ceiling
+    -- the loop would have measured a smaller (unflagged) blob than the one it
+    actually stores, which is exactly the gap app/grounding.py's truncation
+    gate depends on being closed."""
+    huge = QueryResult(columns=["a", "b"],
+                       rows=[(i, "x" * 10_000) for i in range(200)], row_count=200)
+    out = chat_router._results_for_storage([huge])
+    assert out is not None
+    # `.get()`, not `[...]` -- a not-yet-fixed to_storage omits the key
+    # entirely, and this must fail as a clean AssertionError, not a KeyError
+    # the hand-rolled `check()` runner (catches AssertionError only) can't
+    # report.
+    assert out[0].get("truncated") is True, out[0]
+    assert len(json.dumps(out)) <= chat_router.RESULT_STORE_MAX_BYTES, (
+        f"stored {len(json.dumps(out))} bytes, ceiling is "
+        f"{chat_router.RESULT_STORE_MAX_BYTES}")
+
+
 def test_csv_probes_are_time_bounded_but_the_winning_rerun_is_not():
     """THE REGRESSION: _select_table_sql probes EVERY query in the answer's
     sql_log at `LIMIT 1`, and LIMIT 1 bounds the ROWS returned, never the WORK
@@ -2235,6 +2257,8 @@ def run():
           test_results_for_storage_caps_and_drops_largest_over_budget)
     check("_results_for_storage caps a LONE oversized result too",
           test_results_for_storage_caps_a_lone_oversized_result)
+    check("_results_for_storage flags a blob it halved (flag set before halving)",
+          test_results_for_storage_flags_a_blob_it_halved)
     check("CSV probes are time-bounded; the winning re-run is not",
           test_csv_probes_are_time_bounded_but_the_winning_rerun_is_not)
     check("a cache hit keeps the conversation grounding chain intact",

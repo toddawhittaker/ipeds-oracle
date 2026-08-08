@@ -235,6 +235,15 @@ def _stamp_table_grounding(res: AgentResult) -> None:
     res.table_grounding = check.status
     res.table_cells_checked = check.cells_checked
     res.table_cells_matched = check.cells_matched
+    # cells_blocked is in-memory telemetry only (no usage_log column, no
+    # migration — see TableGroundingCheck.cells_blocked) — this log line is
+    # its entire production visibility, and is what makes check_table's
+    # docstring promise ("cells_blocked is what makes that measurable") true.
+    if check.cells_blocked:
+        log.info("table grounding: %d cell(s) blocked by the truncation gate "
+                  "(status=%s, checked=%d, matched=%d)",
+                  check.cells_blocked, check.status, check.cells_checked,
+                  check.cells_matched)
 
 
 def _ground_results(res: AgentResult) -> tuple[list, int]:
@@ -250,9 +259,17 @@ def _derivation_label(check, n_current: int, retried: bool = False) -> str:
     """Format the recorded figure_derivation, marking provenance the way the
     metric consumes it: `retry:` when the figure was recovered by a forced retry,
     `ctx:` when it was grounded against an EARLIER turn's results (matched index
-    beyond this turn's own). Both compose (`retry:ctx:sum(q3.x)`)."""
+    beyond this turn's own). Both compose (`retry:ctx:sum(q3.x)`).
+
+    `check.derivation is None` with `blocked_by_truncation` set is its own case,
+    reported as "truncated" — this is a REFUSAL (figure_grounding stays the
+    existing UNGROUNDED; no new status is added), but recording WHY tells apart
+    "nothing here reproduces this number" from "the arithmetic that would have
+    reproduced it was refused because its source result was cut", which is what
+    makes the rate at which sql.py's truncation note gets refused here
+    measurable at all."""
     if check.derivation is None:
-        return ""
+        return "truncated" if check.blocked_by_truncation else ""
     prefix = ("retry:" if retried else "")
     if check.derivation.result_index >= n_current:
         prefix += "ctx:"
