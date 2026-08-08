@@ -119,7 +119,14 @@ def me(user: sqlite3.Row = Depends(current_user)):
             "years": {"min": years[0], "max": years[-1]} if years else None,
             # Only the RESOLVED boolean crosses to the browser — never the raw
             # setting or any other config. Gates the chat privacy warning only.
-            "trust_llm_provider": get_settings().trust_llm_provider_enabled}
+            "trust_llm_provider": get_settings().trust_llm_provider_enabled,
+            # Same rule, same reason as `years` above: the browser was PRINTING
+            # this number ("First 200 rows · the full result is larger") from a
+            # hardcoded constant, while sql_row_cap_model is env-overridable per
+            # deployment. A deployment that raised or lowered it told its readers
+            # a figure that was simply wrong. The resolved int crosses; the
+            # setting itself does not.
+            "sql_row_cap": get_settings().sql_row_cap_model}
 
 
 @router.post("/logout")

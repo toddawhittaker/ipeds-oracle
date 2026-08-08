@@ -1,11 +1,11 @@
-export declare const ROW_CAP = 200;
 export declare function canCaptionTruncation({ truncated, tableCount, messageId }: {
     messageId: any;
     tableCount: any;
     truncated: any;
 }): boolean;
-export declare function truncationCaption(truncated: any): "" | "First 200 rows · the full result is larger";
-export declare function sortScopeNote({ truncated, sorted, rowsShown }: {
+export declare function truncationCaption(truncated: any, rowCap: any): string;
+export declare function sortScopeNote({ truncated, sorted, rowsShown, rowCap }: {
+    rowCap: any;
     rowsShown: any;
     sorted: any;
     truncated: any;

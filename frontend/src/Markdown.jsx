@@ -82,7 +82,7 @@ function SortCaret({ dir }) {
 // while sort/CSV/compare keep using the extracted text. Compare mode's leading
 // checkbox is rendered inline (selection keyed by the entity LABEL, so it
 // survives a re-sort); that's why the old CompareContext/tr-override is gone.
-function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label, truncated }) {
+function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label, truncated, rowCap }) {
   const [sort, setSort] = useState({ col: null, dir: null });
   const numericByCol = useMemo(
     () => headers.map((_, c) => columnIsNumeric(rows, c)), [headers, rows]);
@@ -167,7 +167,7 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label,
         The full set is in the CSV (whole-query order). */}
     {sort.col != null && (
       <p className={"sort-note " + sortNoteTone(truncated)} role="note">
-        {sortScopeNote({ truncated, sorted: true, rowsShown: rows.length })}
+        {sortScopeNote({ truncated, sorted: true, rowsShown: rows.length, rowCap })}
       </p>
     )}
     </>
@@ -182,7 +182,7 @@ function SortableTable({ headers, rows, cellNodes, cmp, selected, toggle, label,
 // table + one chart), `sideChart` is the answer's own chart, rendered SIDE BY SIDE
 // with this table, and `pairChart` drops the "Chart this" toggle (a chart is
 // already shown — the toggle would be redundant).
-function DataTable({ node, sideChart, pairChart, serverCsvId, truncated }) {
+function DataTable({ node, sideChart, pairChart, serverCsvId, truncated, rowCap }) {
   const { headers, rows, cellNodes } = useMemo(() => extractTable(node), [node]);
   const inferred = useMemo(() => chartSpecFromTable(headers, rows), [headers, rows]);
   const [showChart, setShowChart] = useState(false);
@@ -212,10 +212,16 @@ function DataTable({ node, sideChart, pairChart, serverCsvId, truncated }) {
   const label = headers.length ? `Result table: ${headers.join(", ").slice(0, 60)}` : "Result table";
   const table = (
     <div className="table-block">
-      <SortableTable truncated={truncated} headers={headers} rows={rows} cellNodes={cellNodes} cmp={cmp}
+      <SortableTable truncated={truncated} rowCap={rowCap} headers={headers} rows={rows}
+                     cellNodes={cellNodes} cmp={cmp}
                      selected={selected} toggle={toggle} label={label} />
       {truncated && (
-        <p className="table-caption field-label">{truncationCaption(true)}</p>
+        // A statement of fact about what you are looking at, not decoration.
+        // This used to borrow `field-label` -- the 11px uppercase mono ornament
+        // -- which left the ALWAYS-PRESENT disclosure quieter than the OPTIONAL
+        // sort note beside it. Escalation ladder: this states, the sort note
+        // (--warn) warns about an action you just took.
+        <p className="table-caption" role="note">{truncationCaption(true, rowCap)}</p>
       )}
       <div className="table-tools">
         {/* When the answer is a single table with a persisted message id, the
@@ -359,11 +365,14 @@ const Anchor = ({ node, ...props }) => <a {...props} target="_blank" rel="norefe
  * @property {boolean} [resultsTruncated] True when the stored result rows were cut
  *   at the server row cap. Adds the "First N rows" caption and the warn-toned sort
  *   note.
+ * @property {number} [rowCap] The server's resolved row cap (GET /api/auth/me ->
+ *   sql_row_cap). Printed in the truncation caption and sort note; when absent
+ *   both keep their claim and drop the number.
  */
 
 /** @param {MarkdownProps} props */
 export default function Markdown({ children, messageId, hasSql = true,
-                                   resultsTruncated = false }) {
+                                   resultsTruncated = false, rowCap }) {
   const src = typeof children === "string" ? normalizeMarkdown(children) : children;
   const brief = useMemo(() => briefLayout(src), [src]);
   // Server-side full-dataset CSV is only unambiguous when the answer has exactly
@@ -393,10 +402,10 @@ export default function Markdown({ children, messageId, hasSql = true,
     table: (p) => <DataTable {...p} pairChart={brief.pair}
                              sideChart={brief.pair ? brief.chart : null}
                              serverCsvId={serverCsvId}
-                             truncated={captionTruncation} />,
+                             truncated={captionTruncation} rowCap={rowCap} />,
     a: Anchor,
     pre: (p) => <Pre {...p} suppressChart={brief.pair} />,
-  }), [brief, serverCsvId, captionTruncation]);
+  }), [brief, serverCsvId, captionTruncation, rowCap]);
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

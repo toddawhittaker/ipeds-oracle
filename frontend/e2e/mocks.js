@@ -35,9 +35,14 @@ export async function mockMe(page, user) {
         status: 200,
         contentType: "application/json",
         // `years` mirrors the real /me: the loaded collection-year bounds, which
-        // the chat empty state names instead of hardcoding a range. Spread last
-        // so a test can override or drop it.
-        body: JSON.stringify({ has_data: true, years: { min: 2020, max: 2025 }, ...user }),
+        // the chat empty state names instead of hardcoding a range.
+        // `sql_row_cap` likewise mirrors the server's resolved row cap, which the
+        // truncation caption and sort note PRINT — the specs that assert "First
+        // 200 rows" read it from here, so the default matches config.py's own.
+        // Spread `user` last so a test can override either or drop them.
+        body: JSON.stringify({
+          has_data: true, years: { min: 2020, max: 2025 }, sql_row_cap: 200, ...user,
+        }),
       });
     }
   });

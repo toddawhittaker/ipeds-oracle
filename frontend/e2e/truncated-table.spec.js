@@ -30,8 +30,8 @@ function convo({ truncated }) {
   ];
 }
 
-async function open(page, { truncated }) {
-  await mockMe(page, USER);
+async function open(page, { truncated, rowCap }) {
+  await mockMe(page, rowCap === undefined ? USER : { ...USER, sql_row_cap: rowCap });
   await mockVersion(page);
   await mockAttention(page);
   await mockConversations(page, [{ id: 5, title: "Awards", updated_at: 0 }]);
@@ -49,6 +49,47 @@ test.describe("a truncated result says so", () => {
     // Nothing computes a real total, so the caption must never imply one.
     await expect(caption).not.toContainText(/of \d/i);
   });
+
+  test("the cap comes from the SERVER, not a hardcoded 200", async ({ page }) => {
+    // sql_row_cap_model is env-overridable, so a deployment that raised it was
+    // told a number that was simply wrong. This is what catches the prop being
+    // dropped at any of the three hops (Chat -> Markdown -> the table) --
+    // vitest cannot see that plumbing, only the wording.
+    await open(page, { truncated: true, rowCap: 1000 });
+    const caption = page.locator(".table-caption");
+    await expect(caption).toContainText(/first 1,000 rows/i);
+    await expect(caption).not.toContainText("200");
+
+    await page.locator("th .th-sort").filter({ hasText: "Awards" }).click();
+    await expect(page.locator(".sort-note")).toContainText("1,000");
+  });
+
+  test("an older backend that sends no cap keeps the claim and drops the number",
+    async ({ page }) => {
+      // Number(null) is 0 and finite -- "First 0 rows" is the failure this
+      // guards. Saying less is fine; saying something false is not.
+      await open(page, { truncated: true, rowCap: null });
+      const caption = page.locator(".table-caption");
+      await expect(caption).toBeVisible();
+      await expect(caption).toContainText(/larger/i);
+      await expect(caption).not.toContainText(/\d/);
+    });
+
+  test("the caption is a statement, not the decorative field-label device",
+    async ({ page }) => {
+      // It is ALWAYS present on a truncated table, while the sort note is
+      // optional -- so rendering it in the 11px uppercase mono ornament made the
+      // permanent disclosure quieter than the occasional warning. axe cannot see
+      // this (it files short text as `incomplete`), so assert the computed style.
+      await open(page, { truncated: true });
+      const caption = page.locator(".table-caption");
+      const style = await caption.evaluate((el) => {
+        const cs = globalThis.getComputedStyle(el);
+        return { transform: cs.textTransform, size: parseFloat(cs.fontSize) };
+      });
+      expect(style.transform).not.toBe("uppercase");
+      expect(style.size).toBeGreaterThanOrEqual(13);
+    });
 
   test("a complete result carries no caption at all", async ({ page }) => {
     await open(page, { truncated: false });
