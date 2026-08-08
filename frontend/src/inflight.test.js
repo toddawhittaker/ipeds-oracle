@@ -118,6 +118,70 @@ describe("inflight registry", () => {
     expect(r.getSnapshot().turns.some((t) => t.key === liveKey)).toBe(true);
   });
 
+  it("refetches on an explicit check, and only then", () => {
+    // THE STOPPED NOTE'S WAY OUT, and its counterweight.
+    //
+    // settleTurn must keep NOT bumping for a stopped turn (the yank test
+    // above), which is exactly what left the note's "check in a moment"
+    // impossible to act on — nothing in the app produced a refetch short of a
+    // page reload, and a reload kills the turn the note promises will be saved.
+    // reloadNow is that missing bump, on an explicit click.
+    //
+    // Both directions are pinned here because a future "fix" that simply makes
+    // settleTurn bump for hidden turns would satisfy the first half alone while
+    // re-introducing the yank.
+    const r = createInflightRegistry();
+    const k = start(r);
+    r.hideTurn(k);
+    r.settleTurn(k);
+    expect(r.getSnapshot().reloads[3] ?? 0).toBe(0);
+
+    r.reloadNow(3);
+    expect(r.getSnapshot().reloads[3]).toBe(1);
+    r.reloadNow(3);
+    expect(r.getSnapshot().reloads[3]).toBe(2);
+    // Another conversation is untouched — the loader keys on its own id.
+    expect(r.getSnapshot().reloads[5]).toBeUndefined();
+  });
+
+  it("has nothing to check for a chat whose id never arrived", () => {
+    // Stopping before the server's `conversation` event leaves convId null.
+    // Chat.jsx withholds the button, and the registry is inert rather than
+    // writing a `null` key that no loader will ever read.
+    const r = createInflightRegistry();
+    const before = r.getSnapshot();
+    r.reloadNow(null);
+    r.reloadNow(undefined);
+    expect(r.getSnapshot()).toBe(before);
+    expect(r.getSnapshot().reloads).toEqual({});
+  });
+
+  it("reports whether a stopped turn's stream is still open", () => {
+    // The gate on offering "Check now". While the stream is open the answer is
+    // not on disk, so a refetch returns the thread as it stood BEFORE the
+    // question and replaces the stopped note with it — the reader's own
+    // question vanishing. Hiding the turn must NOT read as finished: that is
+    // the exact state the button is offered in.
+    const r = createInflightRegistry();
+    const k = start(r);
+    r.hideTurn(k);
+    expect(r.isTurnLive(k)).toBe(true);
+    r.settleTurn(k);
+    expect(r.isTurnLive(k)).toBe(false);
+    // An unknown key (a turn from a previous page, or never started) reads as
+    // finished — the note is only rendered for a turn this session stopped.
+    expect(r.isTurnLive(999)).toBe(false);
+    expect(r.isTurnLive(undefined)).toBe(false);
+
+    // ...and the flag is the question, not the key. An ABANDONED turn (settled
+    // without being stopped) stays in the map as a placeholder until the loader
+    // supersedes it, so "is there an entry?" would answer this one wrong.
+    const abandoned = start(r, "abandoned", 3);
+    r.settleTurn(abandoned);
+    expect(r.getSnapshot().turns.some((t) => t.key === abandoned)).toBe(true);
+    expect(r.isTurnLive(abandoned)).toBe(false);
+  });
+
   it("never lowers a reload counter", () => {
     // The counter is a useEffect dependency. If clearing could reset it, the dep
     // would oscillate and the loader would refetch forever.

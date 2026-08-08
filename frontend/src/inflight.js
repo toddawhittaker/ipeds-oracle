@@ -130,6 +130,37 @@ export function createInflightRegistry() {
       emit();
     },
 
+    /** Refetch this conversation now, because the reader explicitly asked to.
+     *
+     *  The stopped note promises the answer will be saved, and settleTurn
+     *  deliberately does NOT schedule a reload for a stopped turn (that is the
+     *  no-yank above). Re-clicking the conversation you are already looking at
+     *  is not a route change either, so nothing else in the app can produce a
+     *  refetch — which left the note's "reopen it to check" pointing at the
+     *  page reload that KILLS the turn it is promising to save.
+     *
+     *  Bumps the same monotonic counter settleTurn uses, so there is one
+     *  refetch mechanism rather than a second one to keep in step. A null
+     *  conversation is a brand-new chat whose id never arrived; there is
+     *  nothing to fetch, so this is inert rather than an error. */
+    reloadNow(convId) {
+      if (convId == null) return;
+      reloads = { ...reloads, [convId]: (reloads[convId] ?? 0) + 1 };
+      emit();
+    },
+
+    /** Is this turn's stream still open?
+     *
+     *  Chat.jsx asks before it offers "Check now" on a stopped bubble. The
+     *  answer only reaches the database when the drained stream finishes, so
+     *  checking earlier fetches the thread as it stood BEFORE the question and
+     *  replaces the stopped note with it — the reader's question vanishing is a
+     *  worse outcome than the wait. Pure over the snapshot, like pendingFor, so
+     *  the caller re-derives during render instead of holding a second copy. */
+    isTurnLive(key, s = snap) {
+      return s.turns.some((t) => t.key === key && t.live);
+    },
+
     /** A full server load of this conversation supersedes any settled
      *  placeholder for it. Called from the loader so the placeholder disappears
      *  in the SAME commit the real rows arrive — no flicker.

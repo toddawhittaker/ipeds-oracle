@@ -192,6 +192,41 @@ function TableTrust({ status, cellsChecked, cellsMatched, hasSql }) {
   );
 }
 
+// What a stopped turn tells the reader, and the way out.
+//
+// Stop generating is abandon-and-drain: the request keeps running so the server
+// still persists the answer. But the client throws its own copy away, so the
+// answer only becomes visible on a refetch — and the old note said "reopen it in
+// a moment to check", which does not work. Re-clicking the conversation you are
+// already in is not a route change, and settleTurn deliberately schedules no
+// reload for a stopped turn. The only thing that DID work was a page reload,
+// which kills the very turn the note promises will be saved.
+//
+// So the note now says which of the two states it is in, and offers the check
+// only once it can succeed. `live` is the whole gate: while the stream is open
+// the answer is not on disk yet, and fetching then would replace the note with
+// the thread as it stood BEFORE the question — the reader's own question
+// disappearing, which is worse than waiting. `canCheck` additionally excludes a
+// conversation with no id (a brand-new chat stopped before the server's
+// `conversation` event) and a view that is busy streaming a LATER turn, whose
+// finalize writes positionally into `messages` and would land on the refetched
+// rows.
+function StoppedNote({ live, canCheck, onCheck }) {
+  return (
+    <p className="stopped-note">
+      {live
+        ? "Stopped. The answer is still being written, and it will be saved to this chat."
+        : "Stopped. The answer has been saved to this chat."}
+      {!live && canCheck && (
+        <>
+          {" "}
+          <button type="button" className="link" onClick={onCheck}>Check now</button>
+        </>
+      )}
+    </p>
+  );
+}
+
 // A route :id is only ever a plain conversation id (see api.js); anything
 // else (e.g. "abc") is a malformed URL, not a real conversation, and must
 // never reach the network -- same notice, zero fetch.
@@ -707,6 +742,18 @@ export default function Chat({ me }) {
       return c;
     });
     requestAnimationFrame(() => taRef.current?.focus());
+  }
+
+  // "Check now" on a stopped bubble: refetch this conversation so the answer the
+  // drained stream saved actually appears. The refetch REPLACES the note, so the
+  // button unmounts and focus would fall to <body>; the composer is the one node
+  // that never unmounts here, and it is where this app parks focus after every
+  // other completed action (fillExample, saveEdit, stopGenerating). Focused
+  // synchronously rather than after the fetch, so it holds regardless of how the
+  // load lands. The answer itself is announced by the bubble's aria-live region.
+  function checkStoppedTurn() {
+    inflight.reloadNow(convId);
+    taRef.current?.focus();
   }
 
   // Edit a prior prompt inline, then re-run it — replacing that exchange and
@@ -1255,10 +1302,9 @@ export default function Chat({ me }) {
                         )}
                       </div>
                     ) : m.stopped ? (
-                      <p className="stopped-note">
-                        Stopped. If the answer finishes generating, it will be
-                        saved to this chat — reopen it in a moment to check.
-                      </p>
+                      <StoppedNote live={inflight.isTurnLive(m._turn, inflightSnap)}
+                                   canCheck={convId != null && !busy}
+                                   onCheck={checkStoppedTurn} />
                     ) : (
                       <>
                         {/* Sibling BEFORE <Markdown> (outside the .md node

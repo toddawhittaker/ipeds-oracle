@@ -315,6 +315,28 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   a turn refetches the conversation it just created (`midstream-nav`'s
   `conv7.calls === 0`); and the counter is **monotonic**, since it is a
   `useEffect` dep that could otherwise oscillate into a refetch loop.
+  **The stopped note tells the reader which state they are in, and offers the
+  only check that works.** It used to say "reopen it in a moment to check",
+  which nothing in the app could do: `settleTurn` deliberately schedules no
+  reload for a stopped turn (the no-yank above), and re-clicking the
+  conversation you are already in is not a route change — so the only thing that
+  actually refetched was a page reload, which **kills the very turn the note
+  promises will be saved**. `inflight.reloadNow(convId)` bumps that same
+  monotonic counter on an explicit click (one refetch mechanism, not two;
+  `settleTurn` is untouched), and `Chat.jsx`'s `StoppedNote` renders the **Check
+  now** button. The `isTurnLive(key)` gate is the load-bearing half: while the
+  drained stream is still open the answer is not on disk, so a fetch then
+  returns the thread as it stood BEFORE the question and replaces the note with
+  it — **the reader's own question vanishing**, which is worse than waiting. So
+  the note reads "still being written" with no button, then "has been saved"
+  with one. Also withheld when `convId` is null (stopped before the
+  `conversation` event) and while `busy` (a LATER turn is streaming, and its
+  finalize writes positionally into `messages`, which a refetch would move under
+  it). Pinned by the `refetches on an explicit check` / `reports whether a
+  stopped turn's stream is still open` cases in `inflight.test.js` and by
+  `the stopped note waits for the answer` in
+  `frontend/e2e/chat-interactions.spec.js`; all three guards were
+  mutation-verified.
   `clearForConversation` runs in the loader's `.then`/`.catch` so the placeholder
   dies in the **same commit** the real rows arrive (no flicker) but **keeps live
   entries** — and **only when the fetch returned something**. An empty fetch has
