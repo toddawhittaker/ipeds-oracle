@@ -25,6 +25,12 @@ export type MarkdownProps = {
      * note.
      */
     resultsTruncated?: boolean;
+    /**
+     * The server's resolved row cap (GET /api/auth/me ->
+     * sql_row_cap). Printed in the truncation caption and sort note; when absent
+     * both keep their claim and drop the number.
+     */
+    rowCap?: number;
 };
 /**
  * @typedef {object} MarkdownProps
@@ -41,6 +47,9 @@ export type MarkdownProps = {
  * @property {boolean} [resultsTruncated] True when the stored result rows were cut
  *   at the server row cap. Adds the "First N rows" caption and the warn-toned sort
  *   note.
+ * @property {number} [rowCap] The server's resolved row cap (GET /api/auth/me ->
+ *   sql_row_cap). Printed in the truncation caption and sort note; when absent
+ *   both keep their claim and drop the number.
  */
 /** @param {MarkdownProps} props */
-export default function Markdown({ children, messageId, hasSql, resultsTruncated }: MarkdownProps): React.JSX.Element;
+export default function Markdown({ children, messageId, hasSql, resultsTruncated, rowCap }: MarkdownProps): React.JSX.Element;

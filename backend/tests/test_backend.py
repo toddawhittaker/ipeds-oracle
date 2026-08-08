@@ -100,6 +100,20 @@ def run():
         assert me.json().get("trust_llm_provider") is False, me.text
         print("  ✓ /me exposes trust_llm_provider=False by default (warning visible)")
 
+        # /me carries the RESOLVED row cap, because the browser PRINTS it in the
+        # truncation caption ("First N rows") and the sort note. It hardcoded 200
+        # while sql_row_cap_model is env-overridable, so a deployment that changed
+        # the cap told its readers a number that was simply wrong. Asserting it
+        # TRACKS the setting rather than equals a literal is the point: a
+        # hardcoded 200 reappearing server-side would pass an == 200 check and
+        # make the whole change theatre.
+        from app.config import get_settings as _gs
+        cap = me.json().get("sql_row_cap")
+        assert isinstance(cap, int) and not isinstance(cap, bool), me.text
+        assert cap > 0, me.text
+        assert cap == _gs().sql_row_cap_model, (cap, _gs().sql_row_cap_model)
+        print("  ✓ /me exposes sql_row_cap, tracking sql_row_cap_model")
+
         # reused token must fail (already consumed by the POST above)
         c2 = TestClient(app)
         assert c2.post("/api/auth/verify", json={"token": token}).status_code == 400

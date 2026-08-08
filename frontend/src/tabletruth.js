@@ -8,9 +8,23 @@
 //
 // Two things follow from that, and this module owns the wording for both.
 
-// The row cap run_sql applies (backend config: sql_row_cap_model). Only used for
-// display; the server decides what actually truncates.
-export const ROW_CAP = 200;
+// The row cap comes from the SERVER (GET /api/auth/me -> sql_row_cap, resolved
+// from sql_row_cap_model), because it is env-overridable per deployment and this
+// module PRINTS it at the reader. A hardcoded 200 here quietly lied to any
+// deployment that changed it.
+//
+// It can legitimately be missing — an older backend, or the moment before /me
+// resolves — so every function below takes it as an argument and falls back to
+// wording that keeps the whole claim and drops only the number. Guard the empty
+// cases BEFORE Number(): Number(null) is 0 and Number.isFinite(0) is true, which
+// is how "First 0 rows" would reach a reader. That exact trap has shipped three
+// times in this codebase (years.js, tableTrustNote, the pre-migration cell
+// counts), so it is checked here rather than trusted to a caller.
+function capNumber(rowCap) {
+  if (rowCap == null || rowCap === "") return null;
+  const n = Number(rowCap);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 // Whether THIS table may carry a truncation caption.
 //
@@ -28,10 +42,12 @@ export function canCaptionTruncation({ truncated, tableCount, messageId }) {
 // the system knows one — QueryResult.row_count is the count AFTER the cut and no
 // code path runs a COUNT(*) — so "of 3,412" would be invented. Saying less and
 // meaning it beats a confident number nobody computed.
-export function truncationCaption(truncated) {
-  return truncated
-    ? `First ${ROW_CAP} rows · the full result is larger`
-    : "";
+export function truncationCaption(truncated, rowCap) {
+  if (!truncated) return "";
+  const n = capNumber(rowCap);
+  return n === null
+    ? "Showing the first page of rows · the full result is larger"
+    : `First ${n.toLocaleString()} rows · the full result is larger`;
 }
 
 // Shown once a sort is ACTIVE on a truncated table.
@@ -43,10 +59,12 @@ export function truncationCaption(truncated) {
 // appeared only AFTER sorting, in 12px muted text, and said "Sorted the N rows
 // shown here" where N was however many rows the model transcribed — a number
 // unrelated to both the cap and the true total.
-export function sortScopeNote({ truncated, sorted, rowsShown }) {
+export function sortScopeNote({ truncated, sorted, rowsShown, rowCap }) {
   if (!sorted) return "";
   if (truncated) {
-    return `Sorted within the first ${ROW_CAP} rows — this is NOT a ranking of the full result. `
+    const n = capNumber(rowCap);
+    const scope = n === null ? "this page of rows" : `the first ${n.toLocaleString()} rows`;
+    return `Sorted within ${scope} — this is NOT a ranking of the full result. `
       + "Download the CSV for the complete data.";
   }
   return `Sorted the ${rowsShown} rows shown here.`;

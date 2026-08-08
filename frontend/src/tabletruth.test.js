@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ROW_CAP,
   canCaptionTruncation,
   csvErrorMessage,
   csvLabel,
@@ -170,33 +169,66 @@ describe("truncationCaption", () => {
   it("NEVER states a total, because nothing computes one", () => {
     // THE REGRESSION GUARD: row_count is the count AFTER the cut and no code
     // path runs COUNT(*). A caption reading "of 3,412" would be invented.
-    const caption = truncationCaption(true);
-    expect(caption).toContain(String(ROW_CAP));
+    const caption = truncationCaption(true, 200);
+    expect(caption).toContain("200");
     expect(caption).toMatch(/larger/i);
     expect(caption).not.toMatch(/\bof\s+[\d,]+/i);
   });
 
   it("is empty for a complete result — no caption is the honest default", () => {
-    expect(truncationCaption(false)).toBe("");
+    expect(truncationCaption(false, 200)).toBe("");
   });
+
+  it("prints the SERVER's cap, not a hardcoded 200", () => {
+    // sql_row_cap_model is env-overridable, so a deployment that changed it was
+    // being told a number that was simply wrong.
+    expect(truncationCaption(true, 1000)).toContain("1,000");
+    expect(truncationCaption(true, 50)).toContain("50");
+  });
+
+  it.each([[null], [undefined], [0], [""], ["abc"], [NaN], [-5]])(
+    "keeps every claim but drops the number when the cap is %p", (cap) => {
+      // Number(null) is 0 and Number.isFinite(0) is true — the trap that has
+      // shipped three times here. A missing cap must never render "First 0
+      // rows"; it must say less, not something false.
+      const caption = truncationCaption(true, cap);
+      expect(caption).not.toMatch(/\d/);
+      expect(caption).toMatch(/larger/i);
+      expect(caption.length).toBeGreaterThan(0);
+    });
 });
 
 describe("sortScopeNote", () => {
   it("is silent until a sort is actually active", () => {
-    expect(sortScopeNote({ truncated: true, sorted: false, rowsShown: 200 })).toBe("");
+    expect(sortScopeNote({ truncated: true, sorted: false, rowsShown: 200, rowCap: 200 })).toBe("");
   });
 
   it("warns that a sorted page is not a ranking of the full result", () => {
     // The sharpest edge in the feature: sorting a page and reading off the top
     // answers "the biggest of the first 200", under an authoritative caret.
-    const note = sortScopeNote({ truncated: true, sorted: true, rowsShown: 200 });
+    const note = sortScopeNote({ truncated: true, sorted: true, rowsShown: 200, rowCap: 200 });
     expect(note).toMatch(/not a ranking/i);
-    expect(note).toContain(String(ROW_CAP));
+    expect(note).toContain("200");
     expect(note).toMatch(/csv/i);
   });
 
+  it("prints the server's cap in the sort note too", () => {
+    const note = sortScopeNote({ truncated: true, sorted: true, rowsShown: 200, rowCap: 1000 });
+    expect(note).toContain("1,000");
+  });
+
+  it.each([[null], [undefined], [0], ["abc"]])(
+    "keeps the NOT-a-ranking warning without a number when the cap is %p", (cap) => {
+      // The warning is the load-bearing half: losing the number must never lose
+      // the claim, or a truncated sort silently reads as authoritative again.
+      const note = sortScopeNote({ truncated: true, sorted: true, rowsShown: 200, rowCap: cap });
+      expect(note).toMatch(/not a ranking/i);
+      expect(note).toMatch(/csv/i);
+      expect(note).not.toMatch(/first \d/i);
+    });
+
   it("keeps the mild wording when the table is complete", () => {
-    const note = sortScopeNote({ truncated: false, sorted: true, rowsShown: 27 });
+    const note = sortScopeNote({ truncated: false, sorted: true, rowsShown: 27, rowCap: 200 });
     expect(note).toContain("27");
     expect(note).not.toMatch(/not a ranking/i);
   });

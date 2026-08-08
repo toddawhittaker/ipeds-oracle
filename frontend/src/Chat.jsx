@@ -1274,7 +1274,8 @@ export default function Chat({ me }) {
                             answer." The table is still on screen, so it falls
                             back to the client-side export of those rows. */}
                         <Markdown messageId={m.id} hasSql={m.sql_log?.length > 0}
-                                  resultsTruncated={!!m.results_truncated}>{m.content || ""}</Markdown>
+                                  resultsTruncated={!!m.results_truncated}
+                                  rowCap={me?.sql_row_cap}>{m.content || ""}</Markdown>
                         {/* hasSql: grounding is conversation-scoped, so a turn
                             that reshapes an earlier table is checked against
                             THAT turn's rows. Same claim, different source — and

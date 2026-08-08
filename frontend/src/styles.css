@@ -924,8 +924,19 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* A sort over a TRUNCATED table answers a different question than the one asked
    ("the biggest of the first 200"), so its note is a warning, not a footnote. */
 .sort-note.warn { color: var(--warn); font-weight: 600; }
-/* Row-cap caption, above the toolbar, in the mono micro-label device. */
-.table-caption { margin: 0 2px 4px; }
+/* Row-cap caption, above the toolbar. It used to borrow `field-label` — the
+   11px uppercase mono ornament — which left the ALWAYS-PRESENT disclosure
+   ("First 200 rows · the full result is larger") quieter than the OPTIONAL sort
+   note beside it. An escalation ladder instead: this STATES a fact about what
+   you are looking at, in readable body colour; .sort-note.warn WARNS about an
+   action you just took. Deliberately not --warn itself — two amber lines on a
+   sorted truncated table would flatten the distinction between them. */
+.table-caption {
+  margin: 0 2px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
 /* "N values reproduced from the query result" — the table's counterpart to the
    figure's ✓ mark, once per ANSWER (check_table grades the whole answer, not one
    table). Quiet on purpose: it should reassure on inspection, not compete with
