@@ -61,10 +61,15 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
-  // On a touch tap the button fires focus THEN click; without this, focus opens
-  // it and the very next click toggles it right back shut, so a tap never opens
-  // the help. Track a focus-open so the click that follows it is a no-op.
-  const openedByFocus = useRef(false);
+  // A touch tap ends in a click, and without this the click would toggle shut
+  // whatever the tap just opened — so a tap could never open the help at all.
+  // Armed from POINTERDOWN rather than from focus: Chromium emits a tap as
+  // pointerdown -> touchstart -> mouseenter/mousedown -> focus -> click, so by
+  // the time onFocus runs, the wrapper's mouseenter has already committed
+  // setOpen(true) and an `if (!open)` test there reads TRUE — the latch never
+  // armed and every tap closed the popover it had just opened. pointerdown
+  // lands before that compat mouseenter, so `open` is reliably still false.
+  const swallowClick = useRef(false);
 
   const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   const openNow = () => { clear(); setOpen(true); };
@@ -107,20 +112,29 @@ export default function HelpPopover({ label, children, icon: Icon = IconHelp, cl
         aria-label={label}
         aria-describedby={id}
         onClick={() => {
-          // Swallow the click that immediately follows a focus-open (touch tap);
-          // otherwise toggle (an explicit second tap / mouse click to dismiss).
-          if (openedByFocus.current) { openedByFocus.current = false; return; }
+          // Swallow the click that ends the tap which just opened this;
+          // otherwise toggle (a second tap, or a mouse click, to dismiss).
+          if (swallowClick.current) { swallowClick.current = false; return; }
           setOpen((o) => !o);
         }}
         // The wrapper above owns focus.current / openNow / closeSoon. What stays
-        // here is only the touch-tap bookkeeping, which is specific to THIS
-        // element: it must not arm when focus lands on the popover's content,
-        // or a subsequent click on the trigger would be wrongly swallowed.
-        // `open` still reads false here — the wrapper's capture-phase openNow()
-        // has queued setOpen(true) but React has not committed it yet — which is
-        // exactly the ordering the tap swallow already relied on.
-        onFocus={() => { if (!open) { openedByFocus.current = true; } }}
-        onBlur={() => { openedByFocus.current = false; }}
+        // here is only the tap bookkeeping, which is specific to THIS element:
+        // it must not arm when focus lands on the popover's content, or a
+        // subsequent click on the trigger would be wrongly swallowed.
+        //
+        // `pointerType !== "mouse"` keeps a genuine mouse click toggling: for a
+        // mouse user, hover-opens-then-click-closes is this onClick's intent.
+        // The `!open` test is what lets a SECOND tap dismiss — arming on every
+        // touch pointerdown would swallow that one too, and since a second tap
+        // fires no new focus, nothing would ever clear the latch and the
+        // popover could never be closed by touch at all.
+        onPointerDown={(e) => {
+          if (e.pointerType !== "mouse" && !open) { swallowClick.current = true; }
+        }}
+        // A tap that drags away fires neither click nor, reliably, blur — so
+        // clear on cancel too, or the latch survives to swallow a later click.
+        onPointerCancel={() => { swallowClick.current = false; }}
+        onBlur={() => { swallowClick.current = false; }}
       >
         <Icon />
       </button>
