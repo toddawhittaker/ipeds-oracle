@@ -228,6 +228,39 @@ test.describe("scroll containment", () => {
     await expect(page.getByText("Answer 7.")).toBeInViewport();
   });
 
+  // Asking a question scrolls YOUR OWN question into view. send() has always
+  // done this, but the three other paths that call submit() -- a suggestion
+  // chip, Rerun, and Save-edit -- did not, so from a scrolled-up thread the new
+  // pending bubble was appended off-screen and only the "Latest" pill changed.
+  // The click looked like it had done nothing at all.
+  //
+  // Only the CHIP path is pinned here, deliberately. Rerun and Save-edit share
+  // the same pin site (submit()), but they slice the thread SHORTER first, and
+  // that shrink already restores the near-bottom state on its own — a rerun
+  // test passed with the bug present at 8 turns and still at 30, so it would
+  // have been a test that cannot fail. They get the fix by construction; this
+  // is the path that could actually demonstrate the defect.
+  test("a suggestion chip scrolls its new turn into view from a scrolled-up "
+    + "thread", async ({ page }) => {
+    await mockMe(page, USER);
+    await mockConversations(page, [{ id: 1, title: "Long chat" }]);
+    const msgs = longConversation();
+    msgs[msgs.length - 1].suggestions = ["How about bachelor's only?"];
+    await mockConversation(page, 1, msgs);
+    await mockStreamChat(page, { conversationId: 1, answer: "Chip answer." });
+    await page.goto("/chat/1");
+    await expect(page.getByText("Answer 7.")).toBeVisible();
+
+    await page.locator(".messages").evaluate((el) => { el.scrollTop = 0; });
+    await expect(page.getByRole("button", { name: "Jump to latest message" })).toBeVisible();
+
+    await page.getByRole("button", { name: "How about bachelor's only?" }).click();
+    // The question the chip just asked must be on screen, and the pill gone --
+    // the pill still showing IS the "nothing happened" symptom.
+    await expect(page.getByText("How about bachelor's only?").last()).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Jump to latest message" })).toHaveCount(0);
+  });
+
   test("REGRESSION: a finalizing answer does not yank a viewer who has "
     + "scrolled up to read", async ({ page }) => {
     await mockMe(page, USER);
