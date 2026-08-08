@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 import app.nces as nces
 from app import estimate
@@ -277,13 +278,64 @@ def create_job(filename: str, created_by: str) -> int:
         con.close()
 
 
-def _restore_data_dir(data_target: Path, backup_accdb: Path | None) -> None:
+class _Staged(NamedTuple):
+    """One data_dir staging record. `backup` is set ONLY after the
+    move-aside actually completed (never just the computed .bak path), and
+    `existed_before` records whether *anything* was sitting at `target`
+    before this job touched it. Both are needed to tell apart three distinct
+    _restore_data_dir cases — see its docstring."""
+    target: Path
+    backup: Path | None
+    existed_before: bool
+
+
+def _restore_data_dir(data_target: Path, backup_accdb: Path | None, *,
+                      existed_before: bool = False) -> None:
     """Undo the data_dir staging done before a rebuild so a failed import
     doesn't leave a bad/corrupt .accdb sitting in the loader's data dir for a
-    later rebuild to pick up. Restores the previous file if one was backed
-    up, otherwise removes the newly-staged file."""
+    later rebuild to pick up.
+
+    Two branches, both guarded more loosely than "backup_accdb is
+    None/not-None" on purpose:
+      - `backup_accdb and backup_accdb.exists()`: restore from it.
+        `shutil.move` first tries `os.rename(src, dst)`; if THAT raises for
+        ANY reason (not only crossing a filesystem boundary — an
+        in-directory rename can also fail, e.g. a target name that lands
+        past `NAME_MAX`), it falls back to `copy_function(src, dst)` (here
+        `copy2`) followed by `os.unlink(src)` — verified against
+        `shutil.move`'s own source, which has no in-directory special case.
+        Either way, removing the source is the LAST step of every path
+        through `shutil.move`, so whenever the move-aside itself raises,
+        the source is still there — no partial move is possible. That's
+        what makes `existed_before`, not `backup_accdb is None`, the right
+        test for "was the original left under its own name".
+      - otherwise, `existed_before`: True leaves `data_target` alone
+        (nothing to restore, and nothing this job is entitled to remove —
+        either the move-aside never ran/never finished, per above, or a
+        backup WAS recorded but its `.bak` is no longer on disk, e.g.
+        `run_import`'s `_restore_all()` already restored it on an earlier
+        pass through this same entry: it runs inside `run_import`'s `try`,
+        so a raise from `_restore_data_dir` itself on a later entry lands
+        back in the `except` and replays the whole loop, including entries
+        already restored). False unlinks `data_target` if present — nothing
+        was there before, so only this job could have put a file there (a
+        first-time year, or a partial copy that failed mid-write).
+
+    One residual leak the move-aside branch of `shutil.move` can still
+    cause: `copy_function(src, dst)` succeeds (so `.bak` now holds a full
+    copy of the original), but the following `os.unlink(src)` then raises —
+    `shutil.move` as a whole still raises, so `run_import`'s staging loop
+    never reaches the point of recording that path as `backup` in `staged`,
+    and this function is called with `backup_accdb=None`,
+    `existed_before=True` and leaves `data_target` (still its original,
+    untouched, since the unlink that would have removed it failed) alone —
+    correctly. The full-size `.bak` copy is then just disk-space overhead,
+    not a correctness problem: `_data_dir_years`' `*.accdb` glob does not
+    match a `.bak`, so it's inert to `_guard_no_dropped_years`."""
     if backup_accdb and backup_accdb.exists():
         shutil.move(str(backup_accdb), str(data_target))
+    elif existed_before:
+        return  # nothing to restore/remove — see the docstring's two cases
     elif data_target.exists():
         data_target.unlink(missing_ok=True)
 
@@ -713,7 +765,7 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
     survives as the loader's source; on failure that copy is reverted or
     removed by _restore_data_dir, which is the point of staging it."""
     s = get_settings()
-    staged: list[tuple[Path, Path | None]] = []  # (data_target, backup or None)
+    staged: list[_Staged] = []
     swapped = False  # True once build_check_swap has swapped in a new live db
 
     def _restore_all() -> None:
@@ -726,8 +778,8 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         # sense while the live db was still the old one.
         if swapped:
             return
-        for target, backup in staged:
-            _restore_data_dir(target, backup)
+        for e in staged:
+            _restore_data_dir(e.target, e.backup, existed_before=e.existed_before)
 
     def _discard_uploads() -> None:
         for up in upload_paths:
@@ -776,24 +828,47 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
 
         # Stage all where the loader discovers them (back up any existing ones).
         s.data_dir.mkdir(parents=True, exist_ok=True)
+        staged_targets: set[Path] = set()  # resolved data_target paths seen so far
         for up in upload_paths:
             data_target = s.data_dir / up.name
             aliased = data_target.resolve() == up.resolve()
-            backup = None
-            if data_target.exists() and not aliased:
+            # In the UPLOAD_DIR == DATA_DIR configuration `up` IS
+            # data_target: no staging happens, this job changes NOTHING
+            # about the file, and it must never be recorded — recording it
+            # anyway would make a failed import's rollback call
+            # _restore_data_dir(data_target, None), which UNLINKS the
+            # admin's own dataset file that this job never touched.
+            if aliased:
+                continue
+            # A multipart POST with two parts sharing a filename (routers/admin.py
+            # builds `dest` from the filename alone and appends unconditionally)
+            # stages the SAME data_target twice in one batch. Without this guard,
+            # iteration 2 would see iteration 1's own just-copied upload sitting
+            # at data_target, move IT aside onto the same .bak path — silently
+            # OVERWRITING the .bak that still held the operator's true original
+            # with a second copy of the upload — and leave no way to tell the
+            # two apart afterward. Skip it: the first occurrence already staged
+            # this target for the batch, and re-staging it can only destroy that
+            # record.
+            resolved = data_target.resolve()
+            if resolved in staged_targets:
+                continue
+            staged_targets.add(resolved)
+            existed = data_target.exists()
+            # Record BEFORE mutating anything, so a raise from the
+            # move-aside or the copy still leaves a record for _restore_all
+            # to replay — that's the fix for the staging-record-after-
+            # mutation bug (see this function's docstring). `backup` starts
+            # None and is filled in only once the move-aside has actually
+            # completed; `existed` is what lets _restore_data_dir tell "the
+            # move-aside never completed, the original is still under its
+            # own name" apart from "nothing was here before".
+            staged.append(_Staged(data_target, None, existed))
+            if existed:
                 backup = data_target.with_suffix(".accdb.bak")
                 shutil.move(str(data_target), str(backup))
-            if not aliased:
-                shutil.copy2(str(up), str(data_target))
-            # In the UPLOAD_DIR == DATA_DIR configuration `up` IS
-            # data_target: neither guard above ran, so this job changed
-            # NOTHING about the file. `staged` records what this job
-            # changed (it's what _restore_all replays on a failure) —
-            # recording it anyway would make a failed import's rollback
-            # call _restore_data_dir(data_target, None), which UNLINKS the
-            # admin's own dataset file that this job never touched.
-            if not aliased:
-                staged.append((data_target, backup))
+                staged[-1] = staged[-1]._replace(backup=backup)
+            shutil.copy2(str(up), str(data_target))
         _log(job_id, f"Staged {len(upload_paths)} source file(s) into {s.data_dir} "
                      "(the uploaded copies are temporary and are removed once "
                      "this job finishes, whatever the outcome)")
@@ -819,8 +894,8 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         if build_check_swap(job_id, s.data_dir, on_swapped=_mark_swapped):
             try:
                 prov = []
-                for target, _ in staged:
-                    m = FILENAME_RE.match(target.name)
+                for e in staged:
+                    m = FILENAME_RE.match(e.target.name)
                     if m:
                         start_year = int(m.group(1))
                         prov.append((start_year, start_year + 1, None, "manual"))
@@ -835,15 +910,24 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
                 # STORED backup Path rather than recomputing one: it is None
                 # exactly when nothing was moved aside, so there is no second
                 # rule about when a .bak exists to get wrong.
-                for _, backup in staged:
-                    if backup is not None:
-                        _unlink_quietly(job_id, "the backed-up .accdb", backup)
+                for e in staged:
+                    if e.backup is not None:
+                        _unlink_quietly(job_id, "the backed-up .accdb", e.backup)
         else:
             _restore_all()
     except Exception as e:  # noqa: BLE001
+        # _restore_all() runs FIRST, ahead of the log/status writes below —
+        # each of those is its own real app.db connect()+commit(), with
+        # nothing here catching either, so a raise from one of them (a WAL
+        # commit onto a disk this same job just filled, or a plain
+        # "database is locked" after the busy timeout) would otherwise skip
+        # _restore_all() entirely and strand the rollback on the one
+        # occasion it's needed most. The `swapped` guard inside
+        # _restore_all makes this reordering safe: it's already a no-op
+        # once a swap has happened, regardless of when it's called.
+        _restore_all()
         _log(job_id, f"ERROR: {type(e).__name__}: {e}")
         _set_status(job_id, "failed", f"Unexpected error: {e}")
-        _restore_all()
     finally:
         _discard_uploads()
 

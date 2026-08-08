@@ -410,6 +410,41 @@ def test_restore_data_dir_noop_when_nothing_to_do():
     assert not target.exists()
 
 
+def test_restore_data_dir_leaves_an_existing_target_alone_when_no_backup_was_taken():
+    """Direct unit test of the new middle branch _restore_data_dir needs:
+    backup is None (the move-aside never completed, or was never attempted)
+    but existed_before is True (something was already sitting at data_target
+    when this job started). Both existing _restore_data_dir tests above keep
+    passing with no `existed_before` argument at all (it must be added as a
+    KEYWORD-ONLY parameter with a default, never a new positional one) — this
+    test is the one that actually exercises the new branch: no restore is
+    possible (there's no backup to move back) and no removal is correct
+    either (this job's own copy never overwrote it, since the move-aside that
+    would have preceded it never completed) — the target must be left
+    exactly as it was. Regression for the destructive middle case: without
+    `existed_before`, `_restore_data_dir(target, None)` today takes the
+    `elif data_target.exists(): unlink` branch and DELETES a file this job
+    never touched."""
+    d = Path(tempfile.mkdtemp())
+    target = d / "IPEDS202526.accdb"
+    target.write_bytes(b"untouched-original-bytes")
+    try:
+        importer._restore_data_dir(target, None, existed_before=True)
+    except TypeError as e:
+        raise AssertionError(
+            "_restore_data_dir must accept an `existed_before` keyword-only "
+            "argument distinguishing 'the move-aside never completed, the "
+            "original is still sitting under its own name' from 'nothing "
+            "was there before, only this job could have put a file there': "
+            f"{e}") from e
+    assert target.exists(), \
+        "an existing target with no backup and existed_before=True must be " \
+        "left alone, not deleted"
+    assert target.read_bytes() == b"untouched-original-bytes", \
+        "the existing target's bytes changed even though nothing should " \
+        "have restored or removed it"
+
+
 # ---------------------------------------------------------------------------
 # run_import — full pipeline, failure + success branches
 # ---------------------------------------------------------------------------
@@ -1103,6 +1138,355 @@ def test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_th
          "desynced from the live db that was already built from this file")
     assert (data_dir / upload.name).read_bytes() == b"new-upload-bytes", \
         "the data_dir .accdb's bytes changed after a post-move failure"
+
+
+# ---------------------------------------------------------------------------
+# run_import — staging record MUST be taken before the mutation it describes
+# can fail, not after (see the three tests below). The append in the staging
+# loop currently runs only after shutil.move/shutil.copy2 both succeed, so a
+# failure partway through leaves that file's staging unrecorded, and
+# _restore_all() (which replays `staged` through _restore_data_dir) never
+# sees it. A stranded backup is worse than an ordinary orphan: it survives as
+# <name>.accdb.bak, which _data_dir_years' `*.accdb` glob can't see, so
+# _guard_no_dropped_years then refuses every LATER import as though that
+# year had been dropped from the dataset.
+# ---------------------------------------------------------------------------
+
+def _copy2_failing_for(name, errno_=28):
+    """Wraps the REAL shutil.copy2, raising only when the destination
+    filename matches `name`. A blanket `importer.shutil.copy2 = boom` would
+    also break nothing here (copy2 isn't used during rollback), but this
+    selective form is kept for symmetry with `_move_failing_for_bak_dest`
+    below, where blanket-breaking `shutil.move` WOULD also break
+    _restore_data_dir's own rollback call and make every assertion fail for
+    the wrong reason."""
+    real_copy2 = importer.shutil.copy2
+
+    def f(src, dst, *a, **k):
+        if Path(dst).name == name:
+            raise OSError(errno_, "No space left on device")
+        return real_copy2(src, dst, *a, **k)
+    return f
+
+
+def test_run_import_enospc_on_the_second_file_restores_both_and_leaves_no_bak():
+    """Regression for the staging-record-after-mutation bug: staged.append
+    only runs after a file's move-aside AND copy succeed, so a copy2 failure
+    partway through a multi-file batch (ENOSPC is the realistic case) leaves
+    that file's just-taken backup unrecorded. _restore_all() then restores
+    only the files that came before the failure, and the failed file's
+    backup is stranded as <name>.accdb.bak forever. This asserts both files
+    end up back at their ORIGINAL bytes, no *.bak litter remains, and — the
+    assertion that matters most, since it's the actual wedge rather than just
+    the orphan — _data_dir_years still reports BOTH years afterward: a
+    stranded .bak is invisible to the `*.accdb` glob, so
+    _guard_no_dropped_years would otherwise refuse every subsequent
+    import."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    up1 = _new_upload(d, name="IPEDS202021.accdb", content=b"new-upload-1-bytes")
+    up2 = _new_upload(d, name="IPEDS202122.accdb", content=b"new-upload-2-bytes")
+    existing1 = data_dir / up1.name
+    existing2 = data_dir / up2.name
+    existing1.write_bytes(b"original-year-1-bytes")
+    existing2.write_bytes(b"original-year-2-bytes")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_copy2 = importer.shutil.copy2
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(0, [])  # must never run
+    importer.shutil.copy2 = _copy2_failing_for(up2.name)
+    try:
+        jid = create_job("2 files", "admin@example.edu")
+        run_import(jid, [up1, up2])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.shutil.copy2 = orig_copy2
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert existing1.exists() and existing1.read_bytes() == b"original-year-1-bytes", \
+        "file 1 was not restored to its original bytes after file 2's copy2 failed"
+    assert existing2.exists() and existing2.read_bytes() == b"original-year-2-bytes", \
+        "file 2 (the one whose own copy2 raised) was not restored to its " \
+        "original bytes — its backup was stranded, unrecorded, as a .bak"
+    leftover_bak = list(data_dir.glob("*.bak"))
+    assert leftover_bak == [], \
+        f"a stranded .accdb.bak was left behind: {leftover_bak}"
+    years = importer._data_dir_years(data_dir)
+    assert years == {2021, 2022}, \
+        (f"_data_dir_years only reports {years} — a stranded .bak is "
+         "invisible to the *.accdb glob, so _guard_no_dropped_years would "
+         "wrongly refuse every later import as though a year had been "
+         "dropped from the dataset")
+
+
+def test_run_import_partial_copy_of_a_first_time_year_is_removed():
+    """Regression for the FIRST-TIME-year twin of the same bug: no
+    pre-existing data_dir file means no move-aside happens (backup stays
+    None), but copy2 can still fail PARTWAY, having already written some
+    bytes to data_target before ENOSPC hits — and staged.append never ran
+    (it's after the copy2 call), so _restore_all() never sees this target and
+    the partially-written .accdb is left behind for the loader's next
+    rebuild to choke on."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    upload = _new_upload(d, name="IPEDS202526.accdb", content=b"full-upload-bytes")
+    # Deliberately no pre-existing data_dir/IPEDS202526.accdb.
+
+    def _copy2_partial_then_fail(src, dst, *a, **k):
+        Path(dst).write_bytes(b"partial-write-before-enospc")
+        raise OSError(28, "No space left on device")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_copy2 = importer.shutil.copy2
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(0, [])  # must never run
+    importer.shutil.copy2 = _copy2_partial_then_fail
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.shutil.copy2 = orig_copy2
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    leftover_accdb = list(data_dir.glob("*.accdb"))
+    assert leftover_accdb == [], \
+        f"a partially-written .accdb was left behind: {leftover_accdb}"
+    leftover_bak = list(data_dir.glob("*.bak"))
+    assert leftover_bak == [], \
+        f"an unexpected .bak was left behind: {leftover_bak}"
+
+
+def test_run_import_a_failed_move_aside_leaves_the_existing_file_untouched():
+    """The test that makes `existed_before` load-bearing rather than
+    decorative — it must FAIL against a naive "just hoist staged.append
+    above the mutations" fix and PASS against the three-state
+    (backup / existed_before) one. If the append merely moves earlier but
+    still records whatever `backup` PATH was computed (whether or not that
+    path was ever actually created on disk), then a failure IN THE
+    MOVE-ASIDE ITSELF still leaves `_restore_data_dir` seeing
+    `backup.exists() == False` and falling into the old
+    `elif data_target.exists(): unlink` branch — deleting the admin's
+    UNTOUCHED previous-year file. That turns "unrestorable orphan" into
+    "deletes a file this job never touched", strictly worse than the bug
+    it's meant to fix. The three-state fix must instead recognize the
+    original is still sitting under its own name (a same-directory
+    shutil.move takes the atomic os.rename path, so no partial move is
+    possible) and leave it alone."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload = _new_upload(d, name="IPEDS202526.accdb", content=b"new-upload-bytes")
+    existing = data_dir / upload.name
+    existing.write_bytes(b"original-existing-bytes")
+
+    real_move = importer.shutil.move
+
+    def _move_failing_for_bak_dest(src, dst, *a, **k):
+        if str(dst).endswith(".accdb.bak"):
+            raise OSError(28, "No space left on device")
+        return real_move(src, dst, *a, **k)
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_move = importer.shutil.move
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(0, [])  # must never run
+    importer.shutil.move = _move_failing_for_bak_dest
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload])
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.shutil.move = orig_move
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert existing.exists(), \
+        "the pre-existing data_dir file was DELETED after its own " \
+        "move-aside failed — existed_before must be tracked separately " \
+        "from whether the backup move actually completed"
+    assert existing.read_bytes() == b"original-existing-bytes", \
+        "the pre-existing data_dir file's bytes changed after a failed move-aside"
+
+
+def test_run_import_rolls_back_even_when_the_failure_log_write_fails():
+    """Regression: run_import's outer `except Exception` handler writes the
+    failure LOG (_log) and STATUS (_set_status) — each its own real app.db
+    connect()+commit(), with nothing catching either — BEFORE calling
+    _restore_all(). So if that log/status write itself raises, the raise
+    propagates straight out of the except block and _restore_all() — the one
+    call this whole handler exists to make — never runs. This is reachable
+    in exactly the scenario the ENOSPC test above already models: app_db_path,
+    data_dir and upload_dir all default under one ROOT, and the shipped
+    compose.yaml mounts the whole tree as one volume, so the multi-GB copy2
+    that just filled the disk is followed by a WAL commit onto that same
+    full filesystem — or, just as reachable, a plain 'database is locked'
+    after the busy timeout. A rollback ordered AFTER a status write is a
+    rollback that does not run on the one occasion it is needed most: when
+    the disk is full.
+
+    Drives the same two-file ENOSPC staging failure as the test above, and
+    additionally makes the app.db-backed _log call raise on its "ERROR:"
+    line — the only _log call inside run_import's own except block, so this
+    leaves every OTHER _log call (preflight, staging) working normally and
+    is a clean, restorable seam in this file's wrap-the-real-function style.
+
+    The job row's `status` may itself be unwritable in this exact scenario
+    (the failing write is the status write), so this asserts only on the
+    FILESYSTEM — pinning the job row here would assert something the fix
+    cannot deliver."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    up1 = _new_upload(d, name="IPEDS202021.accdb", content=b"new-upload-1-bytes")
+    up2 = _new_upload(d, name="IPEDS202122.accdb", content=b"new-upload-2-bytes")
+    existing1 = data_dir / up1.name
+    existing2 = data_dir / up2.name
+    existing1.write_bytes(b"original-year-1-bytes")
+    existing2.write_bytes(b"original-year-2-bytes")
+
+    real_log = importer._log
+
+    def _log_failing_on_error_line(job_id, line):
+        if line.startswith("ERROR:"):
+            raise sqlite3.OperationalError("database is locked")
+        return real_log(job_id, line)
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    orig_copy2 = importer.shutil.copy2
+    orig_log = importer._log
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(0, [])  # must never run
+    importer.shutil.copy2 = _copy2_failing_for(up2.name)
+    importer._log = _log_failing_on_error_line
+    try:
+        jid = create_job("2 files", "admin@example.edu")
+        try:
+            run_import(jid, [up1, up2])
+        except Exception:
+            # The engineered failure-log raise (modeling a disk-full/locked
+            # app.db) propagates straight out of run_import, uncaught —
+            # exactly as it does today on the background thread run_import
+            # normally runs on (an unhandled exception printed to stderr,
+            # with the job row left stuck at whatever it last wrote). This
+            # test's whole point is what ends up on disk despite that raise,
+            # so it's swallowed here rather than failing the test harness.
+            pass
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+        importer.shutil.copy2 = orig_copy2
+        importer._log = orig_log
+
+    assert existing1.exists() and existing1.read_bytes() == b"original-year-1-bytes", \
+        ("file 1 was not restored — the failure-log write raising skipped "
+         "_restore_all() entirely")
+    assert existing2.exists() and existing2.read_bytes() == b"original-year-2-bytes", \
+        ("file 2 was not restored — the failure-log write raising skipped "
+         "_restore_all() entirely")
+    leftover_bak = list(data_dir.glob("*.bak"))
+    assert leftover_bak == [], \
+        f"a stranded .accdb.bak was left behind: {leftover_bak}"
+    years = importer._data_dir_years(data_dir)
+    assert years == {2021, 2022}, \
+        (f"_data_dir_years only reports {years} — the rollback that should "
+         "have run before the failing log write never ran")
+
+
+def test_run_import_a_duplicate_upload_filename_does_not_clobber_the_previous_year():
+    """Regression for routers/admin.py's duplicate-destination bug: it builds
+    `dest = s.upload_dir / Path(uf.filename).name` and appends unconditionally
+    for every part of a multipart POST, so two parts sharing a filename yield
+    `upload_paths=[p, p]` — the same path, staged twice in one run_import
+    batch.
+
+    VERIFIED against today's actual code (already carrying the sibling
+    staging-record-order fix in this same file) before writing this
+    expectation, by driving this exact scenario and inspecting disk state
+    directly: iteration 1 moves the pre-existing file aside to
+    `<name>.accdb.bak` and copies the upload over `data_target`. Iteration 2
+    then sees `data_target` exists too — but that's iteration 1's OWN
+    just-staged copy, not a second pre-existing file — computes the SAME
+    `.bak` path, and moves `data_target` onto it, silently OVERWRITING the
+    `.bak` (which still held the operator's true original bytes) with a
+    second copy of the upload. That corruption happens during STAGING,
+    before any failure or rollback. A later failure's `_restore_all()` then
+    faithfully round-trips whatever is left in the `.bak` (the corrupted
+    upload copy, not the original) onto `data_target`, and the
+    `existed_before` no-op branch (the sibling fix in this file) stops the
+    second, now-backup-less restore entry from deleting it — so today's job
+    ends 'failed' with `data_target` silently holding the UPLOAD's bytes
+    and no `.bak`, instead of restoring the operator's previous year. Not a
+    regression (the old two-branch `_restore_data_dir` would have DELETED it
+    instead — strictly worse) and not reachable from the UI (admin-only),
+    but this loop is being rewritten anyway, so it's the cheap moment to
+    close it: the fix skips a `data_target` already staged earlier in the
+    same batch."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    upload = _new_upload(d, name="IPEDS202526.accdb", content=b"new-upload-bytes")
+    existing = data_dir / upload.name
+    existing.write_bytes(b"original-previous-year-bytes")
+
+    orig_settings = importer.get_settings
+    orig_preflight = importer.preflight
+    orig_popen = importer.subprocess.Popen
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.preflight = lambda p: (True, "Preflight OK")
+    # Fail fast right after staging, mirroring the existing loader-failure
+    # test, so this doesn't need a real rebuild.
+    importer.subprocess.Popen = lambda *a, **k: _FakeProc(1, ["loader output"])
+    try:
+        jid = create_job(upload.name, "admin@example.edu")
+        run_import(jid, [upload, upload])  # the admin.py duplicate-dest bug
+    finally:
+        importer.get_settings = orig_settings
+        importer.preflight = orig_preflight
+        importer.subprocess.Popen = orig_popen
+
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    assert existing.exists(), \
+        "the pre-existing data_dir file was deleted after a duplicate-filename batch"
+    assert existing.read_bytes() == b"original-previous-year-bytes", \
+        ("the pre-existing file's ORIGINAL bytes were lost — a duplicate "
+         "filename in the same batch let the second staging iteration "
+         "overwrite the .bak (still holding the true original) with the "
+         "job's own already-staged copy, so the rollback restored the "
+         "wrong content instead of the operator's previous year")
+    assert not (data_dir / (upload.name + ".bak")).exists(), \
+        "a stray .accdb.bak was left behind after the duplicate-filename batch"
 
 
 # ---------------------------------------------------------------------------
@@ -2203,6 +2587,9 @@ def run():
           test_restore_data_dir_unlinks_when_no_backup)
     check("_restore_data_dir is a no-op when there's nothing to restore",
           test_restore_data_dir_noop_when_nothing_to_do)
+    check("_restore_data_dir leaves an existing target alone when no backup "
+          "was taken (existed_before=True, backup=None)",
+          test_restore_data_dir_leaves_an_existing_target_alone_when_no_backup_was_taken)
     check("run_import: preflight failure fails the job, no swap",
           test_run_import_preflight_failure_no_swap)
     check("run_import: loader failure restores the data dir",
@@ -2234,6 +2621,17 @@ def run():
           test_run_import_no_rollback_of_data_dir_after_a_successful_swap)
     check("run_import: no rollback of data_dir when _activate_staging fails after the move",
           test_run_import_no_rollback_of_data_dir_when_activate_staging_fails_after_the_move)
+    check("run_import: ENOSPC on the second file restores both, leaves no "
+          ".bak, and _data_dir_years still sees both years",
+          test_run_import_enospc_on_the_second_file_restores_both_and_leaves_no_bak)
+    check("run_import: a partial copy of a first-time year is removed, not stranded",
+          test_run_import_partial_copy_of_a_first_time_year_is_removed)
+    check("run_import: a failed move-aside leaves the existing file untouched",
+          test_run_import_a_failed_move_aside_leaves_the_existing_file_untouched)
+    check("run_import: rolls back even when the failure-log write itself fails",
+          test_run_import_rolls_back_even_when_the_failure_log_write_fails)
+    check("run_import: a duplicate upload filename does not clobber the previous year",
+          test_run_import_a_duplicate_upload_filename_does_not_clobber_the_previous_year)
     check("run_integrate: union is correct, idempotent, fetches once per year",
           test_run_integrate_union_is_correct_and_idempotent_and_fetches_once_per_year)
     check("run_integrate: cleans up the temp work dir on success",
