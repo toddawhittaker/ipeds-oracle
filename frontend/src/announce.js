@@ -19,6 +19,14 @@
 // Shown when the DELETE request itself fails — a constant, not a builder.
 export const DELETE_FAILED = "Couldn't delete that chat.";
 
+// Shown when a copy action fails. Both copy helpers swallow their errors and
+// return false (a denied clipboard permission, an insecure context, or the
+// execCommand fallback refusing), so the CAUSE is genuinely unknown at the call
+// site — the wording must not guess at one. It names the escape hatch instead,
+// which is true whatever went wrong.
+export const COPY_FAILED =
+  "Couldn't copy to the clipboard. Select the text and copy it manually.";
+
 // Build the announcement for a successful delete.
 //   open      — the deleted conversation was the one currently open
 //   remaining — how many conversations remain after the delete (>= 0)
