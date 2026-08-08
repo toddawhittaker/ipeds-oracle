@@ -1547,6 +1547,23 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .grid.data td.actions { text-align: right; white-space: nowrap; width: 1%; }
 td.actions .icon-btn { display: inline-grid; vertical-align: middle; }
 td.actions .icon-btn + .icon-btn { margin-left: 6px; }
+/* A tooltip in the Actions column is anchored to its button's RIGHT edge, not
+   centred on it. That column is flush with the table's right edge, so a centred
+   `.tip::after` on the rightmost control hangs past the table — measured at
+   18px on Current users, and worst on Blocked, whose single button carries the
+   longest tip ("Allow new access request").
+   The buttons themselves fit: two 32px icons + a 6px gap is 70px of content in
+   the 76px box a 96px `.col-actions` leaves. It is the pseudo-element, and an
+   absolutely-positioned descendant still counts toward an ancestor's
+   SCROLLABLE OVERFLOW. Nothing shows today because `.admin`'s own scroller
+   absorbs it, but it leaves the table's scrollWidth 18px wider than the table
+   renders — so any scroll container of its own (the deferred WCAG 1.4.10
+   reflow wrapper) becomes a permanent horizontal scrollbar under every admin
+   table, and "does this table overflow?" cannot be measured at all.
+   Anchoring the right edge is the whole fix: overflow to the LEFT does not
+   enter scrollWidth in LTR, so the tip may still extend leftward over the
+   neighbouring column, which is what a tooltip is supposed to do. */
+.grid.data td.actions .tip::after { left: auto; right: 0; transform: none; }
 /* Trash reads red at rest (destructive); promote/demote stay neutral. */
 .icon-btn.danger { color: var(--danger); }
 .icon-btn.danger:hover, .icon-btn.danger:focus-visible { border-color: var(--danger); }
