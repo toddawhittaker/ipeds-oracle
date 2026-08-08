@@ -9,6 +9,7 @@ import Verify from "./Verify.jsx";
 import { inflight } from "./inflight.js";
 import { ToastProvider } from "./Toast.jsx";
 import { ConfirmProvider } from "./ConfirmModal.jsx";
+import ErrorBoundary from "./ErrorBoundary.jsx";
 import Wordmark from "./Wordmark.jsx";
 import UserMenu from "./UserMenu.jsx";
 import AboutModal from "./AboutModal.jsx";
@@ -266,6 +267,24 @@ function Shell() {
         />
       </header>
       {aboutOpen && <AboutModal isAdmin={user.is_admin} version={version} onClose={() => setAboutOpen(false)} />}
+      {/* A SECOND boundary, inside the shell. The outermost one (main.jsx) has
+          to wrap BrowserRouter so it survives a router throw, but that means a
+          throw anywhere below it replaces the ENTIRE app — top bar, account
+          menu, theme toggle, providers — leaving no way out but a reload, which
+          is the documented data-loss path for a live turn. Scoped here, a
+          subtree crash leaves the shell standing: the account menu is the route
+          out, and because <App/> stays mounted its `beforeunload` guard stays
+          ARMED, which the outer fallback structurally cannot manage.
+
+          resetKey, NOT a React key. Without any reset the boundary would hold
+          its caught error across navigation, so clicking away from the broken
+          route lands on the same broken card and the only escape is the reload
+          we are trying to avoid recommending. But a `key` would REMOUNT this
+          subtree on every URL change — and an admin sub-tab switch IS one, so it
+          would wipe the three DataTables' search, sort, page and selection,
+          which surviving a tab switch is an explicit contract of that screen.
+          (Caught by undo-denial.spec.js's focus test, which went 5/5 red.) */}
+      <ErrorBoundary resetKey={pathname}>
       <Routes>
         {/* key="chat" is a defensive pin, not what actually keeps Chat
             mounted across a "/" <-> "/chat/:id" URL change: react-router's
@@ -291,6 +310,7 @@ function Shell() {
         <Route path="/admin/:tab/:sub" element={adminOnly(<AdminRoute me={user} onDataChanged={refreshMe} attention={attention} onAttentionChanged={refreshAttention} version={version} />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </ErrorBoundary>
     </div>
     </ConfirmProvider>
     </ToastProvider>
