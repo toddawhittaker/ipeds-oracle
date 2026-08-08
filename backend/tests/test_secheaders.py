@@ -4,10 +4,24 @@ Every response — SPA, assets, and API, success or error — must carry the CSP
 anti-framing/nosniff/referrer headers. The CSP is the second line of defense under
 the LLM-markdown render surface, so this pins that it stays present AND restrictive
 (no 'unsafe-inline'/'unsafe-eval' in script-src, framing denied).
+
+Strict-Transport-Security is CONDITIONAL, not part of the always-on set: it must
+appear only when the deployment's `app_public_url` is https, and never carry
+`includeSubDomains`/`preload` (HSTS is host-scoped but PORT-agnostic, and the
+app can itself terminate TLS on `:8000` with a self-signed cert while the same
+host serves something else on :80 — see README's Self-hosting/HTTPS section).
+
+APP_PUBLIC_URL is pinned explicitly here (http, matching the dev/CI default),
+the same "test-env gotcha" workaround test_csrf.py/test_bodylimit.py already use:
+a developer's real .env sets APP_PUBLIC_URL to an https address, which would
+otherwise silently flip this whole file's default posture and mask the very
+regression the http-posture tests below exist to catch.
 """
 import os
+import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,13 +29,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 tmp = tempfile.mkdtemp()
 os.environ["APP_DB_PATH"] = str(Path(tmp) / "app.db")
 os.environ["ADMIN_EMAILS"] = "admin@example.edu"
+DEFAULT_PUBLIC_URL = "http://localhost:8000"
+os.environ["APP_PUBLIC_URL"] = DEFAULT_PUBLIC_URL
+os.environ["COOKIE_SECURE"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.config import get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.secheaders import SECURITY_HEADERS  # noqa: E402
 
 FAILURES = []
+
+
+@contextmanager
+def _public_url(url):
+    """Temporarily point APP_PUBLIC_URL at `url` for the duration of the block,
+    clearing the lru_cache'd get_settings() so a request made inside the block
+    sees it. Restores the file's pinned http default on exit. Clearing the
+    cache (rather than just editing os.environ) is deliberate: it is what
+    forces the posture check to happen at REQUEST time — a middleware that
+    instead computed its headers once at import would never see this change,
+    which is exactly the bug shape being probed here (see module docstring
+    and CLAUDE.md's note on this middleware's mounting)."""
+    os.environ["APP_PUBLIC_URL"] = url
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        os.environ["APP_PUBLIC_URL"] = DEFAULT_PUBLIC_URL
+        get_settings.cache_clear()
 
 
 def check(name, fn):
@@ -75,6 +112,73 @@ def test_headers_present_even_on_error_response():
         assert r.headers.get("x-frame-options") == "DENY"
 
 
+def test_hsts_present_under_https_posture():
+    """THE REGRESSION THIS CATCHES: a deployment reached over https (behind a
+    TLS-terminating proxy/tunnel, or the app's own self-signed :8000 mode) must
+    ship Strict-Transport-Security — without it, a browser has no signal to
+    prefer https on a repeat visit, so a single stripped first request
+    (sslstrip-style) has nothing stopping it. Also proves the header is derived
+    at REQUEST time, not computed once at import: this file imports app.main
+    under the http default, then flips posture and re-requests within the same
+    process — a middleware that captured its headers once at import (rather
+    than reading settings, like csrf.py's CSRFMiddleware already does per
+    request) would still show no header here."""
+    with _public_url("https://ipeds.example.edu"):
+        with TestClient(app) as c:
+            hsts = c.get("/api/health").headers.get("strict-transport-security")
+    assert hsts, "no Strict-Transport-Security header under an https app_public_url"
+    m = re.search(r"max-age=(\d+)", hsts, re.IGNORECASE)
+    assert m and int(m.group(1)) > 0, f"missing or zero max-age: {hsts!r}"
+
+
+def test_hsts_absent_under_http_posture():
+    """THE REGRESSION THIS CATCHES: HSTS must stay CONDITIONAL on an https
+    app_public_url — never hoisted into the unconditional header set. The
+    default/dev posture (`make up`'s COOKIE_SECURE=false APP_PUBLIC_URL=http://
+    localhost:8000, and any deployment without SSL_CERTFILE/SSL_KEYFILE per
+    scripts/docker-entrypoint.sh) serves plain http, where telling a browser to
+    force https would just break the site. This is the case that stops a future
+    'simplification' from moving Strict-Transport-Security into
+    SECURITY_HEADERS unconditionally."""
+    with TestClient(app) as c:
+        r = c.get("/api/health")
+    assert "strict-transport-security" not in r.headers, \
+        f"HSTS must not be sent under a plain-http app_public_url: " \
+        f"{r.headers.get('strict-transport-security')!r}"
+
+
+def test_hsts_has_no_subdomains_or_preload():
+    """THE REGRESSION THIS CATCHES: `includeSubDomains`/`preload` widen the
+    policy past this one host's :443 traffic — but HSTS is host-scoped and
+    PORT-agnostic, and the README documents a deployment mode where the app
+    terminates TLS itself on :8000 with a self-signed cert. A blanket policy
+    from that mode would force https onto anything ELSE the same host serves
+    on port 80. A reader who doesn't know this will 'complete' the header by
+    adding the usual directives — this fails the moment either one appears."""
+    with _public_url("https://ipeds.example.edu"):
+        with TestClient(app) as c:
+            hsts = c.get("/api/health").headers.get("strict-transport-security", "")
+    assert hsts, "expected a Strict-Transport-Security header under https to inspect"
+    assert "includesubdomains" not in hsts.lower(), hsts
+    assert "preload" not in hsts.lower(), hsts
+
+
+def test_all_headers_present_still_holds_under_https_posture():
+    """THE REGRESSION THIS CATCHES: test_all_headers_present_on_api_response
+    iterates SECURITY_HEADERS and demands every one of its keys on a response
+    made under this file's pinned http default — so if a future change folds
+    the conditional Strict-Transport-Security key into that always-applied
+    dict, THAT (unmodified) test starts demanding a header the http posture
+    deliberately withholds, and goes red. This test locks the other half of
+    the same arrangement: re-running the identical check under an https
+    posture must ALSO keep passing, which only holds if
+    strict-transport-security never joined SECURITY_HEADERS at all (a
+    conditional membership would make this pass while the http-posture run
+    above fails, and vice versa — both must hold together)."""
+    with _public_url("https://ipeds.example.edu"):
+        test_all_headers_present_on_api_response()
+
+
 def run():
     print("Security-headers contract:")
     check("all security headers present on an API response",
@@ -84,6 +188,14 @@ def run():
     check("anti-framing + nosniff + referrer values", test_anti_framing_and_nosniff_values)
     check("headers present even on a refused (403) response",
           test_headers_present_even_on_error_response)
+    check("Strict-Transport-Security present under an https posture",
+          test_hsts_present_under_https_posture)
+    check("Strict-Transport-Security absent under the default http posture",
+          test_hsts_absent_under_http_posture)
+    check("Strict-Transport-Security carries no includeSubDomains/preload",
+          test_hsts_has_no_subdomains_or_preload)
+    check("all-headers-present check still holds under an https posture too",
+          test_all_headers_present_still_holds_under_https_posture)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")
