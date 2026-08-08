@@ -8,6 +8,7 @@ import functools
 import io
 import json
 import logging
+import re
 import sqlite3
 import time
 import typing
@@ -1107,6 +1108,47 @@ def _select_table_sql(sql_list: list[str], cols: int | None, cap: int):
     return run_sql(sql_list[best_i], limit=cap)
 
 
+# A cell that parses as nothing but a plain signed integer/decimal — an
+# ordinary negative number, which IPEDS data legitimately contains (a
+# year-over-year delta) and must NOT be guarded, or every negative number in
+# every export would grow a stray leading apostrophe.
+_CSV_PLAIN_NEGATIVE_NUMBER_RE = re.compile(r"^-\d+(\.\d+)?$")
+
+
+def _csv_guard(value):
+    """Prefix a formula-injection-shaped STRING cell with a leading single
+    quote so Excel/Sheets renders it as text instead of evaluating it as a
+    formula (or, via DDE, an OS command) when the CSV is opened.
+
+    Mirrors `toCsv`'s `esc` guard in frontend/src/tabledata.js — the two exist
+    over different data (this one guards real query rows/aliases from
+    `ipeds.db`; that one guards the model's Markdown-table transcription) and
+    can't be unified, but the RULE must move together if it ever changes.
+
+    A cell is guarded when its first character is one of =, +, @, TAB, or CR
+    — none of those is ever a legitimate leading character in IPEDS data or a
+    SQL alias. A leading '-' is guarded only when the WHOLE cell doesn't parse
+    as a plain signed number (`_CSV_PLAIN_NEGATIVE_NUMBER_RE`): "-1234" is an
+    ordinary negative and is left alone, but "-1+cmd|' /C calc'!A0" has the
+    extra tokens a real DDE-injection payload needs and is guarded like the
+    other trigger characters.
+
+    Only `str` values are touched. `result.rows` also carries ints, floats,
+    and `None` straight from sqlite3 — none of those can carry a
+    formula-trigger character, and stringifying one here would change how
+    `csv.writer` renders it (an int must stay unquoted; `None` must stay the
+    empty field, not the text "None").
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    first = value[0]
+    if first in ("=", "+", "@", "\t", "\r"):
+        return "'" + value
+    if first == "-" and not _CSV_PLAIN_NEGATIVE_NUMBER_RE.match(value):
+        return "'" + value
+    return value
+
+
 @router.get("/messages/{message_id}/download.csv")
 def download_csv(message_id: int, request: Request, cols: int | None = None,
                  user: sqlite3.Row = Depends(current_user)):
@@ -1152,12 +1194,15 @@ def download_csv(message_id: int, request: Request, cols: int | None = None,
     def _csv_stream():
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(result.columns)
+        # Both the header (model-written SQL aliases) and the data rows are
+        # guarded against formula injection before csv.writer's own RFC-4180
+        # quoting runs — see `_csv_guard`.
+        w.writerow([_csv_guard(c) for c in result.columns])
         yield buf.getvalue()
         for r in result.rows:
             buf.seek(0)
             buf.truncate(0)
-            w.writerow(r)
+            w.writerow([_csv_guard(v) for v in r])
             yield buf.getvalue()
 
     return StreamingResponse(

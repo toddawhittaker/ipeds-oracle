@@ -38,6 +38,79 @@ describe("toCsv", () => {
   it("renders a null/undefined cell as an empty field", () => {
     expect(toCsv(["a", "b"], [[null, undefined]])).toBe("a,b\r\n,");
   });
+
+  // CSV FORMULA INJECTION GUARD. Every header comes from the model's own
+  // Markdown table headers and every cell is model-transcribed text — a real
+  // injection channel, not a theoretical one, since the model's input includes
+  // the user's question. A cell opened by Excel/Sheets whose first character is
+  // one of =, +, @, TAB, or CR is evaluated as a formula rather than shown as
+  // text, so each is prefixed with a leading single quote (') to force
+  // text-literal interpretation, matching the server-side guard in
+  // backend/app/routers/chat.py's `download_csv`. Regression this catches: a
+  // row or header cell starting with one of these lands in the exported CSV
+  // unmodified and a spreadsheet evaluates it as a formula/DDE command on open.
+  it("prefixes a ROW cell beginning with =, +, @, TAB, or CR with a leading single quote", () => {
+    expect(toCsv(["a"], [["=1+2"]])).toBe("a\r\n'=1+2");
+    expect(toCsv(["a"], [["+1+2"]])).toBe("a\r\n'+1+2");
+    expect(toCsv(["a"], [["@SUM(1)"]])).toBe("a\r\n'@SUM(1)");
+    expect(toCsv(["a"], [["\tx"]])).toBe("a\r\n'\tx");
+    // A leading CR also needs RFC-4180 quoting (see the \r test below), so the
+    // guarded cell is quoted too — the apostrophe must land INSIDE the quotes,
+    // ahead of the CR, or the guard is stripped/reordered by the quoting step.
+    expect(toCsv(["a"], [["\rx"]])).toBe('a\r\n"\'\rx"');
+  });
+
+  it("prefixes a HEADER cell (a model-written SQL alias) the same way a row cell is guarded", () => {
+    // The header comes from parsing the model's Markdown table, so it is just
+    // as attacker-influenced as a row value — a formula-shaped alias must not
+    // reach the spreadsheet unguarded either.
+    expect(toCsv(["=SUM(A1:A9)", "normal"], [["1", "2"]]))
+      .toBe("'=SUM(A1:A9),normal\r\n1,2");
+  });
+
+  // JUDGEMENT CALL: a leading "-" is also how an ordinary negative number is
+  // written, and IPEDS results legitimately contain negatives (e.g. a
+  // year-over-year delta). Blanket-prefixing every "-1234" would put a stray
+  // apostrophe in front of completely ordinary data in EVERY export. What
+  // distinguishes a dangerous cell from a harmless one isn't the leading
+  // character alone — "-1234" parses as nothing but a signed number, so a
+  // spreadsheet's formula evaluator has nothing to execute; "-1+cmd|'
+  // /C calc'!A0" does not parse as a plain number, and that's exactly the
+  // shape a real DDE-injection payload needs (extra tokens after the sign).
+  // Decision: guard a leading "-" only when the WHOLE cell isn't a plain
+  // signed integer/decimal; "=", "+", "@", TAB, and CR have no legitimate use
+  // as a leading character in this app's data (nothing here is ever written
+  // with an explicit leading "+"), so those stay unconditionally guarded.
+  it("does NOT guard a leading '-' when the whole cell is a plain negative number", () => {
+    expect(toCsv(["a"], [["-1234"]])).toBe("a\r\n-1234");
+    expect(toCsv(["a"], [["-12.5"]])).toBe("a\r\n-12.5");
+  });
+
+  it("DOES guard a leading '-' when the cell is not a plain number (the injection shape)", () => {
+    expect(toCsv(["a"], [["-1+cmd|' /C calc'!A0"]]))
+      .toBe("a\r\n'-1+cmd|' /C calc'!A0");
+  });
+
+  // THE \r GAP: `esc`'s quoting regex only matched comma/quote/"\n", so a cell
+  // holding a bare CR (no paired LF) was emitted UNQUOTED — but a lone \r is
+  // itself a record separator under RFC 4180, so an unquoted one silently
+  // splits what should be one row into two when re-parsed.
+  it("quotes a cell containing a bare \\r (RFC-4180 record separator), not just \\n", () => {
+    expect(toCsv(["a", "b"], [["line\rbreak", "ok"]]))
+      .toBe('a,b\r\n"line\rbreak",ok');
+  });
+
+  // REGRESSION GUARD: an ordinary export (strings, a comma-bearing string that
+  // already required quoting, a plain negative number, a positive integer, and
+  // an empty cell) must come out BYTE-IDENTICAL to today's output — the guard
+  // above must never touch a cell that doesn't need it.
+  it("leaves an ordinary row untouched (strings/ints/negative number/empty cell)", () => {
+    expect(toCsv(
+      ["Institution", "Awards", "Delta", "Note"],
+      [["Ohio State University", "1,234", "-42", ""]],
+    )).toBe('Institution,Awards,Delta,Note\r\n' +
+            'Ohio State University,"1,234",-42,');
+  });
 });
 
 describe("extractTable", () => {

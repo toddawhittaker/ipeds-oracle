@@ -168,8 +168,48 @@ export function chartSpecFromTable(headers, rows) {
   };
 }
 
+// A cell that parses as nothing but a plain signed integer/decimal — an
+// ordinary negative number, which IPEDS results legitimately contain (a
+// year-over-year delta) and must NOT be guarded, or every negative number in
+// every export would grow a stray leading apostrophe.
+const CSV_PLAIN_NEGATIVE_NUMBER_RE = /^-\d+(\.\d+)?$/;
+
+// Prefix a formula-injection-shaped cell with a leading single quote so
+// Excel/Sheets renders it as text instead of evaluating it as a formula (or,
+// via DDE, an OS command) when the CSV is opened.
+//
+// Mirrors `_csv_guard` in backend/app/routers/chat.py's `download_csv` — the
+// two exist over different data (this one guards the model's Markdown-table
+// transcription; that one guards real query rows/aliases straight from
+// `ipeds.db`) and can't be unified, but the RULE must move together if it
+// ever changes.
+//
+// A cell is guarded when its first character is one of =, +, @, TAB, or CR —
+// none of those is ever a legitimate leading character in a header (a
+// model-written SQL alias) or a row value here. A leading '-' is guarded
+// only when the WHOLE cell doesn't parse as a plain signed number
+// (CSV_PLAIN_NEGATIVE_NUMBER_RE): "-1234" is an ordinary negative and is left
+// alone, but "-1+cmd|' /C calc'!A0" has the extra tokens a real
+// DDE-injection payload needs and is guarded like the other trigger
+// characters.
+function csvGuard(str) {
+  if (!str) return str;
+  const first = str[0];
+  if (first === "=" || first === "+" || first === "@" || first === "\t" || first === "\r") {
+    return "'" + str;
+  }
+  if (first === "-" && !CSV_PLAIN_NEGATIVE_NUMBER_RE.test(str)) return "'" + str;
+  return str;
+}
+
 export function toCsv(headers, rows) {
-  const esc = (s) => (/[",\n]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : String(s ?? ""));
+  const esc = (s) => {
+    const guarded = csvGuard(String(s ?? ""));
+    // A bare \r is itself an RFC-4180 record separator (as is \n), so it must
+    // be quoted just like a comma/quote/newline or it silently splits one row
+    // into two when re-parsed.
+    return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
+  };
   return [headers, ...rows].map((r) => r.map(esc).join(",")).join("\r\n");
 }
 

@@ -15,6 +15,8 @@ chat_router.stream_agent is replaced per-test with a canned async generator
 (same pattern as backend/tests/test_guard.py) so every branch runs deterministically.
 """
 import asyncio
+import csv
+import io
 import json
 import os
 import sys
@@ -1526,6 +1528,125 @@ def test_download_csv_prefers_the_last_matching_query():
             f"expected the LAST 2-col query, got: {csv_r.text[:80]}"
 
 
+# ---------------------------------------------------------------------------
+# CSV formula-injection guard.
+#
+# `_csv_stream` writes with csv.writer's DEFAULT dialect — RFC-4180 quoting
+# only (a cell is quoted only if it holds a comma/quote/newline). It has no
+# check for a leading formula-trigger character. The CSV is served as
+# `text/csv` with an attachment disposition, so it lands directly in
+# Excel/Sheets, and a cell whose first character is one of =, +, @, TAB, or CR
+# is evaluated there as a formula (or, via DDE, an OS command) instead of
+# shown as text. BOTH the header row (SQL column aliases, which are the
+# MODEL'S OWN TEXT — the model's input includes the user's question, so a
+# crafted alias is a real channel) and the data rows (IPEDS data, or whatever
+# a crafted SQL literal selects) are affected, so both are exercised below.
+#
+# `_post_turn`'s `sql_log` is used, matching this file's existing CSV-section
+# convention (test_download_csv_picks_table_query_not_a_trailing_count etc.):
+# it re-runs a REAL query against the (fixture) ipeds.db, exactly like a live
+# turn's download would, rather than hand-inserting a row into app.db
+# (test_backend.py's convention) or extending the CI fixture schema — the
+# dangerous strings are simplest to produce as SQL literals/aliases, they need
+# no new fixture columns, and this is the path the download endpoint itself
+# already takes for every other CSV test in this module.
+# ---------------------------------------------------------------------------
+
+def test_download_csv_guards_row_values_starting_with_formula_trigger_chars():
+    """THE REGRESSION: a row value beginning with =, +, @, TAB, or CR reaches
+    the exported CSV UNMODIFIED today, so opening it in Excel/Sheets runs it as
+    a formula (or DDE command) instead of displaying it as text. Each such
+    cell must be prefixed with a leading single quote (forcing text-literal
+    interpretation) before the normal RFC-4180 quoting is applied."""
+    sql = ("SELECT '=1+2' AS eq_col, '+1+2' AS plus_col, '@SUM(1)' AS at_col, "
+           "(char(9) || 'x') AS tab_col, (char(13) || 'x') AS cr_col")
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a question whose result carries formula-shaped values",
+                       answer_text="see table", sql_log=[sql])
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 200, csv_r.text
+        # csv.reader (not a raw string compare) so an embedded CR that also
+        # needed RFC-4180 quoting is read back as ONE cell, not split.
+        rows = list(csv.reader(io.StringIO(csv_r.text)))
+        assert rows[0] == ["eq_col", "plus_col", "at_col", "tab_col", "cr_col"], rows[0]
+        assert rows[1] == ["'=1+2", "'+1+2", "'@SUM(1)", "'\tx", "'\rx"], rows[1]
+
+
+def test_download_csv_guards_header_aliases_starting_with_formula_trigger_chars():
+    """The header row is the SQL column ALIASES the model wrote
+    (`cur.description`, i.e. `SELECT ... AS <alias>`) — just as
+    model-influenced as a row value, and unguarded by the same code path
+    (`w.writerow(result.columns)` uses the identical csv.writer). A
+    formula-shaped alias must be guarded the same way a formula-shaped value
+    is."""
+    sql = ('SELECT 1 AS "=eq", 2 AS "+plus", 3 AS "@at", '
+           '4 AS "' + chr(9) + 'tab", 5 AS "' + chr(13) + 'cr"')
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a question whose answer table has formula-shaped column headers",
+                       answer_text="see table", sql_log=[sql])
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 200, csv_r.text
+        rows = list(csv.reader(io.StringIO(csv_r.text)))
+        assert rows[0] == ["'=eq", "'+plus", "'@at", "'\ttab", "'\rcr"], rows[0]
+        assert rows[1] == ["1", "2", "3", "4", "5"], rows[1]
+
+
+def test_download_csv_leading_minus_guarded_only_when_not_a_plain_number():
+    """JUDGEMENT CALL, pinned: a leading '-' is also how an ordinary negative
+    number is written, and IPEDS data legitimately contains negatives (e.g. a
+    year-over-year delta) — blanket-prefixing every "-1234" would put a stray
+    apostrophe in front of completely ordinary data in EVERY export.
+
+    What distinguishes a dangerous cell from a harmless one isn't the leading
+    character alone: "-1234" parses as nothing but a signed number, so a
+    spreadsheet's formula evaluator has nothing to execute once it lands in a
+    cell. "-1+cmd|' /C calc'!A0" does NOT parse as a plain number — the extra
+    tokens after the sign are exactly the shape a real DDE-injection payload
+    needs, and are what a formula evaluator (or Excel's legacy DDE launcher)
+    would actually execute.
+
+    Decision: guard a leading '-' only when the WHOLE cell isn't a plain
+    signed integer/decimal. A plain negative number is therefore left alone;
+    anything else starting with '-' is guarded like =/+/@/TAB/CR."""
+    sql = ("SELECT '-1234' AS neg_num, '-12.5' AS neg_float, "
+           "'-1+cmd|'' /C calc''!A0' AS neg_formula")
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "a question whose result carries a negative number and a "
+                       "minus-led formula payload", answer_text="see table", sql_log=[sql])
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 200, csv_r.text
+        rows = list(csv.reader(io.StringIO(csv_r.text)))
+        assert rows[1] == ["-1234", "-12.5", "'-1+cmd|' /C calc'!A0"], rows[1]
+
+
+def test_download_csv_ordinary_row_is_byte_identical_to_before_the_guard():
+    """THE REGRESSION GUARD: this is what stops the formula-injection fix from
+    corrupting every ordinary export. An everyday row — a plain string, a
+    positive integer, a negative integer, and an empty cell, none of which
+    need guarding — must produce EXACTLY the same CSV bytes the unfixed
+    endpoint already produces today (captured directly against this
+    environment's real `download_csv` before any guard existed)."""
+    sql = ("SELECT 'Ohio State University' AS instnm, 1234 AS awards, "
+           "-42 AS delta, '' AS note")
+    with TestClient(app) as c:
+        _login(c)
+        r = _post_turn(c, "an ordinary question with ordinary data",
+                       answer_text="see table", sql_log=[sql])
+        msg_id = next(e for e in _parse_sse(r.text) if e["type"] == "done")["message_id"]
+        csv_r = c.get(f"/api/chat/messages/{msg_id}/download.csv")
+        assert csv_r.status_code == 200, csv_r.text
+        assert csv_r.text == (
+            "instnm,awards,delta,note\r\n"
+            "Ohio State University,1234,-42,\r\n"
+        ), csv_r.text
+
+
 def test_version_endpoint_authed_and_shape():
     # GET /api/version is signed-in only and returns the three-key payload the
     # About dialog / Admin banner consume. version_info is stubbed so the test
@@ -2251,6 +2372,17 @@ def run():
           test_download_csv_picks_table_query_not_a_trailing_count)
     check("CSV download prefers the LAST column-count match",
           test_download_csv_prefers_the_last_matching_query)
+    check("CSV download guards row values starting with =/+/@/TAB/CR "
+          "(formula-injection)",
+          test_download_csv_guards_row_values_starting_with_formula_trigger_chars)
+    check("CSV download guards header aliases starting with =/+/@/TAB/CR "
+          "(formula-injection)",
+          test_download_csv_guards_header_aliases_starting_with_formula_trigger_chars)
+    check("CSV download guards a leading '-' only when the cell isn't a plain "
+          "number",
+          test_download_csv_leading_minus_guarded_only_when_not_a_plain_number)
+    check("CSV download of an ordinary row is byte-identical to before the guard",
+          test_download_csv_ordinary_row_is_byte_identical_to_before_the_guard)
     check("GET /api/version is authed and returns current/latest/update_available",
           test_version_endpoint_authed_and_shape)
     check("_results_for_storage caps and drops largest over budget",
