@@ -461,13 +461,27 @@ export async function mockDeleteConversation(page, { httpStatus = 200 } = {}) {
  * invited, mail_configured true/false) can each be driven deterministically —
  * see frontend/e2e/admin-allowlist-flash.spec.js. Defaults (200, {ok:true}) match
  * every pre-existing caller of this helper, which only cares about the GET.
+ *
+ * `httpStatus`/`detail` (new) let a spec fail the GET itself, mirroring
+ * mockDeniedRequests' load-failure shape — see error-visibility.spec.js's
+ * "a failed allowlist load does not read as an empty allowlist" case, which
+ * pins the regression where Allowlist.jsx's `api.allowlist().then(setRows)`
+ * carried no `.catch` at all (stale/no rows on screen, nothing said, and an
+ * unhandled promise rejection).
  */
-export async function mockAllowlist(page, rows, { postStatus = 200, postBody = { ok: true } } = {}) {
+export async function mockAllowlist(page, rows, {
+  postStatus = 200, postBody = { ok: true }, httpStatus = 200, detail,
+} = {}) {
   const posts = [];
   await page.route("**/api/admin/allowlist", async (route) => {
     const req = route.request();
     if (req.method() === "GET") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      if (httpStatus === 200) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      } else {
+        await route.fulfill({ status: httpStatus, contentType: "application/json",
+          body: JSON.stringify({ detail: detail || "Could not load users." }) });
+      }
     } else if (req.method() === "POST") {
       posts.push(req.postDataJSON());
       await route.fulfill({ status: postStatus, contentType: "application/json", body: JSON.stringify(postBody) });
@@ -485,11 +499,21 @@ export async function mockAllowlist(page, rows, { postStatus = 200, postBody = {
  * route — mirrors mockConversations. Lets a spec assert the Allowlist tab's
  * live refresh (visibility/focus + poll) picks up a new pending row with no
  * page reload (see admin-pending-live.spec.js).
+ *
+ * `httpStatus`/`detail` fail the GET itself (mirrors mockDeniedRequests) — see
+ * error-visibility.spec.js's "a failed allowlist load does not read as an
+ * empty allowlist" case, which pins the regression where Allowlist.jsx's
+ * `api.accessRequests().then(setReqs)` carried no `.catch` at all.
  */
-export async function mockAccessRequests(page, rows) {
+export async function mockAccessRequests(page, rows, { httpStatus = 200, detail } = {}) {
   let list = rows;
   await page.route("**/api/admin/access-requests", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(list) });
+    if (httpStatus === 200) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(list) });
+    } else {
+      await route.fulfill({ status: httpStatus, contentType: "application/json",
+        body: JSON.stringify({ detail: detail || "Could not load access requests." }) });
+    }
   });
   return { setList: (l) => { list = l; } };
 }
