@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -367,6 +368,94 @@ def _unlink_quietly(job_id: int, what: str, path: Path) -> None:
     except Exception as e:  # noqa: BLE001 — best-effort cleanup, never fatal
         log.warning("could not remove %s for job %s (%s): %s: %s",
                     what, job_id, path, type(e).__name__, e)
+
+
+def _same_file(a: Path, b: Path) -> bool | None:
+    """Device+inode identity via os.stat + os.path.samestat — replaces the
+    Path.resolve() STRING compare that used to sit at the alias-detection
+    call sites below.
+
+    resolve() normalises symlinks and ".." but never case, so a
+    differently-cased alias (macOS APFS, NTFS, a case-insensitive bind
+    mount) compared unequal and the aliasing was missed entirely; resolve()
+    also never considers inode identity, so a hard link — two independent
+    directory entries for one file — compared unequal too. samestat catches
+    both, from real filesystem identity rather than a string shape.
+
+    os.path.normcase was NOT the fix: it's the identity function on POSIX,
+    so it would only ever have covered NTFS and left macOS/APFS and a
+    case-insensitive bind mount exactly as broken. A blanket .casefold()
+    would be worse than useless: on a genuinely CASE-SENSITIVE filesystem
+    with two real, different files whose names differ only in case (e.g.
+    upload_dir=/data/accdb, data_dir=/data/AccDB), it would declare them
+    aliased, the staging loop would skip the real copy, and the job would
+    report SUCCESS having rebuilt from the old file.
+
+    Ternary on purpose, matching PR #297's fail-closed contract:
+      - True/False when os.stat can prove the answer.
+      - False specifically when a side is MISSING (os.stat raises
+        FileNotFoundError) — a path that doesn't exist definitely is not the
+        file being compared against. This must stay False, not None: the
+        _discard_uploads caller relies on False to keep discarding the
+        upload on run_import's preflight-failure exit, where data_dir hasn't
+        even been created yet and the would-be data_dir/<name> target never
+        exists — answering None there would make that fail-closed caller
+        skip the delete and leak every upload on that exit path, regressing
+        PR #297's fix.
+      - None also when either side reports st_ino == 0. This is a hedge, not
+        a case reproduced on this deployment's filesystem: some FUSE and
+        network mounts report a zeroed or duplicated st_ino, which would
+        make the samestat comparison below false-POSITIVE. That is the one
+        direction this function can fail SILENTLY rather than loudly — the
+        run_import staging loop would then treat two different files as one,
+        skip the copy, and the job would report success having rebuilt from
+        the OLD file — so an unreliable inode number must read as
+        "unprovable", never as a match.
+      - None for any OTHER OSError — unprovable. The two callers below both
+        treat "can't prove" as a reason NOT to take their risky branch, but
+        the risky branch differs, and so does what makes None safe there:
+        _discard_uploads' risky branch is unlinking `up`, which has no
+        undo — a wrongly-deleted file is just gone — so it treats None as
+        "leave it on disk". The run_import staging loop's risky branch is
+        moving data_target aside and copying over it, which stays safe
+        even on a wrong "not aliased" guess, because the move-aside runs
+        BEFORE the copy: if `a`/`b` really were one file, the rename
+        happens first and the following copy2(b, a) then fails on a
+        now-missing source, which propagates out to run_import's
+        except-Exception handler, and _restore_all() puts the backup back.
+        (shutil.copy2's own SameFileError guard does not already cover
+        this: os.path.samefile swallows the underlying OSError and returns
+        False in exactly this can't-stat situation, so it would not have
+        fired either way.) A symlink loop is the concrete unprovable case:
+        it raises OSError (errno 40 / ELOOP) from os.stat — measured on
+        this deployment's Python, 3.12.3, matching the Dockerfile's
+        python:3.12-slim — where Path.resolve() instead raises RuntimeError
+        for the very same condition, also measured. Worth stating
+        precisely, since a prior draft of this comment got it wrong:
+        _discard_uploads' OLD resolve()-based alias check wrapped its own
+        `except Exception` directly around the resolve() calls, so it DID
+        catch that RuntimeError fine — `except Exception` reaches it. The
+        real limit was one of SCOPE, not exception type: _unlink_quietly
+        (the shared best-effort delete helper, called only after the alias
+        check passed) has its own internal try/except, but that one wraps
+        only `path.unlink()` — the resolve() calls happened earlier, in the
+        caller, entirely outside _unlink_quietly, so narrowing a catch to
+        wrap just the unlink could never have reached it either way. (Note
+        for later readers: CPython 3.13 reimplemented Path.resolve() on
+        os.path.realpath() and it no longer raises for a symlink loop, so
+        the RuntimeError comparison above is pinned to this deployment's
+        interpreter version, not a lasting Python fact.)
+    """
+    try:
+        st_a = os.stat(a)
+        st_b = os.stat(b)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    if st_a.st_ino == 0 or st_b.st_ino == 0:
+        return None
+    return os.path.samestat(st_a, st_b)
 
 
 def preflight(upload_path: Path) -> tuple[bool, str]:
@@ -785,33 +874,54 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         for up in upload_paths:
             # upload_dir and data_dir are both free-form settings with no
             # validator between them (config.py:90-91), so a self-hoster CAN
-            # point UPLOAD_DIR at data_dir. In that configuration the
-            # "uploaded copy" IS data_dir/<name>.accdb — the loader's live
-            # source for that file — and deleting it would silently destroy
-            # the dataset instead of just the leaked streaming copy. Compare
-            # with .resolve() (not Path.samefile(), which raises
-            # FileNotFoundError, and non-strict resolve() is safe even on the
-            # preflight-failure exit, which returns before data_dir exists);
-            # this also catches a symlinked upload_dir.
+            # point UPLOAD_DIR at data_dir. In that configuration `up`'s
+            # directory ENTRY *is* data_dir/<name>.accdb — the loader's live
+            # source for that file — and unlinking it would silently destroy
+            # the dataset instead of just the leaked streaming copy. That is
+            # true only of this one-entry case: a hard-linked upload sitting
+            # in a SEPARATE directory is a different directory entry for the
+            # same inode, and unlinking `up`'s entry provably cannot remove
+            # data_dir's — inode identity says nothing about which entries
+            # would be affected by removing ONE of them, so it is the wrong
+            # question here (see the staging loop below for where it IS the
+            # right one).
             #
-            # .resolve() itself can raise (measured: a symlink loop raises
-            # RuntimeError, not OSError, on this box's Python — so
-            # _unlink_quietly's catch wouldn't help even wrapped around the
-            # unlink alone). This runs from run_import's `finally`, so an
-            # escape here would abort the loop mid-batch (every LATER upload
-            # leaks) and mask whatever exception was already propagating out
-            # of the daemon thread. Fail CLOSED: if we can't prove `up` is
-            # NOT the loader's own data_dir source file, leaving a stray
-            # upload on disk is strictly better than the alternative of
-            # deleting the dataset on a wrong guess.
-            try:
-                aliased = up.resolve() == (s.data_dir / up.name).resolve()
-            except Exception as e:  # noqa: BLE001 — see above: fail closed, keep going
-                log.warning("could not resolve upload path for job %s (%s): "
-                            "%s: %s — leaving it on disk", job_id, up,
-                            type(e).__name__, e)
+            # `up` and data_dir/up.name share the same basename by
+            # construction — this loop builds the latter FROM up.name — so
+            # the real question, "would unlinking `up` also remove the
+            # loader's data_dir source?", reduces to "is up.parent the SAME
+            # DIRECTORY as data_dir?", decided with _same_file (os.stat +
+            # os.path.samestat — device+inode) rather than a Path.resolve()
+            # STRING compare: resolve() normalises symlinks and ".." but
+            # never case, so a differently-cased alias (macOS APFS, NTFS, a
+            # case-insensitive bind mount) compared unequal and the aliasing
+            # was missed entirely. _same_file(up.parent, s.data_dir) still
+            # catches a symlinked upload_dir the way resolve() always did,
+            # and correctly does NOT match a hard-linked upload elsewhere —
+            # where inode identity alone would (wrongly) call it aliased and
+            # leak the upload forever.
+            #
+            # Path.samefile() was rejected because it RAISES when either
+            # side is missing — including on this exact preflight-failure
+            # exit, where data_dir hasn't been created yet. _same_file
+            # answers that case explicitly (False, not None) instead, so
+            # this loop keeps discarding the upload there rather than
+            # needing its own try/except around a raise.
+            #
+            # This runs from run_import's `finally`, so an escape here would
+            # abort the loop mid-batch (every LATER upload leaks) and mask
+            # whatever exception was already propagating out of the daemon
+            # thread. Fail CLOSED on the "unprovable" answer (None, e.g. a
+            # symlink loop — see _same_file's docstring): leaving a stray
+            # upload on disk is strictly better than deleting the dataset on
+            # a wrong guess.
+            same_dir = _same_file(up.parent, s.data_dir)
+            if same_dir is None:
+                log.warning("could not determine whether upload %s's "
+                            "directory is data_dir for job %s — leaving it "
+                            "on disk", up, job_id)
                 continue
-            if aliased:
+            if same_dir:
                 continue
             _unlink_quietly(job_id, "the uploaded copy", up)
 
@@ -831,7 +941,29 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
         staged_targets: set[Path] = set()  # resolved data_target paths seen so far
         for up in upload_paths:
             data_target = s.data_dir / up.name
-            aliased = data_target.resolve() == up.resolve()
+            existed = data_target.exists()
+            # This asks a DIFFERENT question than _discard_uploads above:
+            # "does data_target already hold exactly this content?" — real
+            # filesystem identity (device+inode) is the right test here,
+            # because if it does, skipping the move-aside/copy is correct no
+            # matter how many directory entries point at it — unlike
+            # _discard_uploads' unlink, which only cares whether ONE
+            # specific entry can safely be removed. `existed and`
+            # short-circuits the stat entirely when there's nothing at
+            # data_target yet (a first-time year, where Path.exists() has
+            # already ruled out any alias by reporting False) — a pure
+            # stat-count optimization, since _same_file would answer False
+            # for a missing target anyway. `is True` treats _same_file's
+            # unprovable `None` as NOT aliased, so the loop falls through to
+            # the ordinary move-aside + copy path — safe even if `a`/`b`
+            # really were one file, because the move-aside runs BEFORE the
+            # copy: the rename would happen first and copy2(up, data_target)
+            # would then fail on a now-missing source, propagating up into
+            # run_import's except-Exception handler, with _restore_all()
+            # putting the backup back (see _same_file's docstring for the
+            # full reasoning, including why shutil.copy2's own
+            # SameFileError guard doesn't already cover this).
+            aliased = existed and _same_file(data_target, up) is True
             # In the UPLOAD_DIR == DATA_DIR configuration `up` IS
             # data_target: no staging happens, this job changes NOTHING
             # about the file, and it must never be recorded — recording it
@@ -850,11 +982,44 @@ def run_import(job_id: int, upload_paths: list[Path]) -> None:
             # two apart afterward. Skip it: the first occurrence already staged
             # this target for the batch, and re-staging it can only destroy that
             # record.
+            #
+            # An EXACT repeat of the same filename is caught by the resolved
+            # STRING set below — cheap, and correct regardless of whatever
+            # staging has since done to that literal path. A DIFFERENTLY
+            # -CASED repeat within one batch needs real identity instead:
+            # FILENAME_RE is itself re.IGNORECASE, so a batch containing both
+            # "IPEDS202324.accdb" and "ipeds202324.accdb" passes preflight —
+            # and a prior entry can collide through EITHER of two different
+            # names, depending on the filesystem class, so both must be
+            # checked:
+            #   - a genuinely CASE-INSENSITIVE filesystem has only ONE
+            #     directory entry reachable by both spellings, so after a
+            #     prior iteration's move-aside + copy, that single entry
+            #     holds THAT entry's `.target` (the fresh copy) — a later
+            #     alias's data_target has the SAME inode as the prior
+            #     entry's `.target`, not its `.backup`.
+            #   - a HARD LINK (this file's portable CI proxy, since a
+            #     case-insensitive mount can't be created in CI) is TWO
+            #     independent directory entries for one inode: the
+            #     move-aside only renames ONE of them, so the surviving
+            #     original inode is left under the OTHER entry's name, which
+            #     is now `.backup`, not `.target` — matching `.target`
+            #     instead would miss it.
+            # The committed test drives only the hard-link half (`.backup`);
+            # the single-entry/case-insensitive half (`.target`) cannot be
+            # reproduced on ext4 and is therefore uncovered by CI — do not
+            # "simplify" this back down to one side or the other. An entry
+            # with no backup (existed_before was False, nothing to back up)
+            # only has `.target` to offer either way.
             resolved = data_target.resolve()
-            if resolved in staged_targets:
+            duplicate = resolved in staged_targets or any(
+                _same_file(data_target, e.target) is True
+                or (e.backup is not None and _same_file(data_target, e.backup) is True)
+                for e in staged
+            )
+            if duplicate:
                 continue
             staged_targets.add(resolved)
-            existed = data_target.exists()
             # Record BEFORE mutating anything, so a raise from the
             # move-aside or the copy still leaves a record for _restore_all
             # to replay — that's the fix for the staging-record-after-
