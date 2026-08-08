@@ -80,6 +80,30 @@ export MODEL_ESCALATION=""
 #     the retry's own tests monkeypatch llm.retry_missing_figure, so they don't
 #     depend on this. Prod default is true.
 export FIGURE_RETRY_ENABLED=false
+#   * CRITIC_ENABLED=true — this is config.py's own default, so pinning it here
+#     reproduces CI (no .env) exactly rather than masking anything (the same
+#     "pin to the default" reasoning as APP_PUBLIC_URL above — the trap this file
+#     exists to avoid is pinning a value that DIFFERS from the default). The
+#     critic's llm.py call sites are NOT key-gated, and test_critic.py /
+#     test_agent_loop.py set their own LLM_API_KEY="test-key" at import and
+#     assert on call sequences, so a production .env with CRITIC_ENABLED=false (a
+#     plausible cost saving) would make run_ci_local green while CI (default
+#     true) stayed red.
+export CRITIC_ENABLED=true
+#   * SKILLS_ENABLED=true — also config.py's own default, pinned for the same
+#     reason. skills.retrieve_skills_block and skills.cache_lookup are NOT
+#     key-gated, so a production false both changes behavior in every suite that
+#     streams a turn and silences large parts of skills.py under the per-module
+#     coverage floor — reading as a real regression, not a config difference.
+#     eval_nl2sql.py documents SKILLS_ENABLED=0/1 as the self-learning on/off A/B
+#     switch, so a dev box left at 0 after an A/B run is exactly where this
+#     lingers.
+export SKILLS_ENABLED=true
+#   * GUARD_ENABLED — deliberately NOT pinned. guard.classify short-circuits on a
+#     blank LLM_API_KEY (already exported empty above) before it reads
+#     guard_enabled at all, so the setting's value changes nothing in this
+#     key-free posture either way. Leaving it unset here is a decision, not an
+#     oversight — reproducing CI (no .env → config's true default) exactly.
 #   * CHAT_RATE_MAX_PER_USER — deliberately NOT pinned here, for the same reason as
 #     STRUCTURED_EMISSION_ENABLED below. It DEFAULTS to 30 (limiter ON) in config.py,
 #     and ci_env.sh does NOT run in CI (CI has no .env → config defaults). The test

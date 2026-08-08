@@ -178,11 +178,14 @@ class Settings(BaseSettings):
     # phone-home sets UPDATE_CHECK_ENABLED=false — the check then reports no
     # latest version and no update banner ever shows.
     update_check_enabled: bool = Field(default=True)
-    # Server-side FALLBACK timezone (IANA name) — used only to bucket the admin
-    # usage graph when a request doesn't carry the viewer's own zone. Display is
-    # otherwise the END-USER's browser timezone everywhere (chat stamps + graphs),
-    # so this is rarely hit. Read via `tzinfo()`, which degrades an invalid zone to
-    # America/New_York rather than 500-ing a request.
+    # Server-side FALLBACK timezone (IANA name), read by the module-level
+    # `resolve_tz(tz)` (below) when a request carries no viewer `tz` — an absent
+    # `tz` param, or any non-browser caller. Display is otherwise the END-USER's
+    # browser timezone everywhere (chat stamps + graphs), which the app normally
+    # does send, so this setting is rarely hit — the non-browser and
+    # misconfigured-client case, not the common path. An empty or unknown
+    # configured zone itself degrades further to the hardcoded America/New_York
+    # default rather than 500-ing a request.
     timezone: str = Field(default=_DEFAULT_TZ)
     # Suppresses the chat privacy warning ("don't enter proprietary/confidential
     # info") ONLY. Off by default so the warning always shows unless a deployment
@@ -322,24 +325,25 @@ class Settings(BaseSettings):
         app.db (so a temp APP_DB_PATH in tests keeps logs isolated too)."""
         return self.log_db_path or (self.app_db_path.parent / "logs.db")
 
-    def tzinfo(self) -> ZoneInfo:
-        """The configured fallback timezone, degrading an invalid TIMEZONE to
-        America/New_York (with a warning) so a typo never 500s a request."""
-        return resolve_tz(self.timezone)
-
 
 def resolve_tz(name: str | None) -> ZoneInfo:
-    """An IANA zone name → ZoneInfo, falling back to America/New_York on an empty
-    or unknown zone. Used for both the config default and a request's `tz` param,
-    so a bad value anywhere degrades instead of erroring."""
-    try:
-        if name:
-            return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        # `name` can be the request's `tz` param (user-controlled) — sanitize the
-        # control chars out of it before it reaches any log handler.
-        log.warning("unknown timezone '%s'; falling back to %s",
-                    _log_safe(name), _DEFAULT_TZ)
+    """An IANA zone name → ZoneInfo. `name` is normally a request's `tz` param
+    (the browser's own resolved zone) — an absent/empty/unknown one falls back
+    to the CONFIGURED `Settings.timezone`, and an absent/empty/unknown
+    configured zone in turn falls back to the hardcoded `_DEFAULT_TZ`
+    (America/New_York). Total for any input: a garbled `tz` param or a typo'd
+    TIMEZONE in `.env` degrades that one lookup rather than raising — callers
+    on the request path (admin.usage) must never 500 on a bad zone string."""
+    for value, source in ((name, "tz"), (get_settings().timezone, "TIMEZONE")):
+        if not value:
+            continue
+        try:
+            return ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            # `value` can be the request's `tz` param (user-controlled) —
+            # sanitize control chars out of it before it reaches any log handler.
+            log.warning("unknown timezone '%s' (%s); trying the next fallback",
+                        _log_safe(value), source)
     return ZoneInfo(_DEFAULT_TZ)
 
 
