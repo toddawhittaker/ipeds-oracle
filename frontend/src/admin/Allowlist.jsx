@@ -16,6 +16,8 @@ import { bulkConfirmSummary, bulkResultToast, partitionEligibility, retainedSele
 import { USER_SUBTABS, rememberSubTab, subTabKeyForArrow, pendingBadgeTone } from "../usertabs.js";
 import HelpPopover from "../HelpPopover.jsx";
 import { canonEmailForDisplay, fmtApprovalDate, fmtDateTime } from "./format.js";
+import { loadErrorMessage } from "../authcopy.js";
+import { loadNotice } from "../loadstate.js";
 
 const BULK_ACTION_LABEL = {
   promote: (n) => `Promote ${n} ${n === 1 ? "user" : "users"}`,
@@ -75,7 +77,9 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
   // Roving-focus refs for the sub-tab buttons: keyboard nav focuses the target.
   const tabRefs = useRef({});
   const [rows, setRows] = useState([]);
+  const [rowsError, setRowsError] = useState("");
   const [reqs, setReqs] = useState([]);
+  const [reqsError, setReqsError] = useState("");
   const [denied, setDenied] = useState([]);
   const [deniedError, setDeniedError] = useState("");
   const [email, setEmail] = useState("");
@@ -172,8 +176,25 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
     // Return the allowlist fetch so a caller can sequence focus AFTER the table
     // reload commits (the focus-restore-vs-reload race: restoring focus while a
     // reload re-renders the row drops focus to <body>).
-    const loaded = api.allowlist().then(setRows);
-    api.accessRequests().then(setReqs);
+    //
+    // The two-argument `.then(onOk, onErr)` form -- not `.catch` -- is
+    // deliberate: `.catch` also swallows a throw from the SUCCESS handler
+    // (e.g. a bug in a later `.then`), which would silently look like the
+    // request itself failed. It's also what keeps this promise chain from
+    // ever REJECTING for an ordinary load failure, which is the actual fix:
+    // a bare `.then(setRows)` with no error branch used to reject `loaded`
+    // on a failed fetch, and the plain `useEffect(() => { load(); }, [])`
+    // call below never awaits or catches it -- an unhandled promise
+    // rejection on every failed load, on top of leaving stale/no rows on
+    // screen with nothing said (see error-visibility.spec.js).
+    const loaded = api.allowlist().then(
+      (d) => { setRows(d); setRowsError(""); },
+      (err) => setRowsError(loadErrorMessage("the allowlist", err?.detail)),
+    );
+    api.accessRequests().then(
+      (d) => { setReqs(d); setReqsError(""); },
+      (err) => setReqsError(loadErrorMessage("access requests", err?.detail)),
+    );
     // Unlike the two loaders above -- where an empty rendered result on
     // failure is indistinguishable from "genuinely nothing yet", which is
     // fine -- a silently-swallowed failure HERE (SEC #3, round-4 security
@@ -705,13 +726,20 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
     requestAnimationFrame(() => tabRefs.current[nextKey]?.focus());
   }
   // Per-tab record totals for the count badges — ALL records in each category,
-  // never the DataTable's filtered view. Blocked is null on a load failure so
-  // the badge is suppressed rather than falsely reading "0 blocked".
+  // never the DataTable's filtered view. Every tab is null on a load failure
+  // (not just Blocked) so the badge is suppressed rather than falsely reading
+  // "0 users"/"0 pending" -- the same lie in badge form as an empty table.
   const SUBTAB_COUNT = {
-    current: rows.length,
-    pending: reqs.length,
+    current: rowsError ? null : rows.length,
+    pending: reqsError ? null : reqs.length,
     blocked: deniedError ? null : denied.length,
   };
+  // The two-sided load notice for each table (see loadstate.js): a first
+  // load with no rows yet REPLACES that tab's content with the error; a
+  // refresh failure on an already-populated tab keeps the rows and adds a
+  // stale-data notice above them instead.
+  const rowsNotice = loadNotice({ error: rowsError, hasRows: rows.length > 0 });
+  const reqsNotice = loadNotice({ error: reqsError, hasRows: reqs.length > 0 });
 
   return (
     <div className="panel">
@@ -756,6 +784,17 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
       {/* ---- Current users ---- */}
       <div role="tabpanel" id="userpanel-current" aria-labelledby="usertab-current"
            className="usertab-panel" hidden={sub !== "current"}>
+      {/* A first load with no rows yet REPLACES the panel with the error (an
+          empty table here would read as "nobody can sign in" -- the
+          dangerous lie); a refresh failure on an already-populated table
+          keeps everything below and just adds a stale-data notice. */}
+      {rowsNotice && (
+        <p className={rowsNotice.replace ? "denied-error" : "notice warn small"} role="alert">
+          {rowsNotice.text}
+        </p>
+      )}
+      {!rowsNotice?.replace && (
+      <>
       <form className="row" onSubmit={add}>
         <label htmlFor="allow-email" className="sr-only">Email</label>
         <input id="allow-email" ref={addEmailRef} type="email" placeholder="email" required value={email}
@@ -985,11 +1024,20 @@ jamie@example.com,External reviewer,`}</pre>
           );
         }}
       />
+      </>
+      )}
       </div>
 
       {/* ---- Pending requests ---- */}
       <div role="tabpanel" id="userpanel-pending" aria-labelledby="usertab-pending"
            className="usertab-panel" hidden={sub !== "pending"}>
+        {/* Same replace-vs-stale rule as Current users, above. */}
+        {reqsNotice && (
+          <p className={reqsNotice.replace ? "denied-error" : "notice warn small"} role="alert">
+            {reqsNotice.text}
+          </p>
+        )}
+        {!reqsNotice?.replace && (
         <DataTable
           ref={pendingTableRef}
           rows={reqs}
@@ -1051,6 +1099,7 @@ jamie@example.com,External reviewer,`}</pre>
             </>
           )}
         />
+        )}
       </div>
 
       {/* ---- Blocked users ---- */}

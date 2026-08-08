@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  mockAccessRequests,
+  mockAllowlist,
   mockAttention,
   mockConversations,
+  mockDeniedRequests,
   mockMe,
   mockStreamChatError,
   mockVersion,
@@ -116,5 +119,112 @@ test.describe("admin panels don't report a failure as emptiness", () => {
     await expect(alert).toContainText(/locked/i);
     // And the confident lie is gone.
     await expect(page.getByText("No log records.")).toHaveCount(0);
+  });
+
+  // REGRESSION: Logs.jsx sets `err` on a failed load, but the render only
+  // shows it when `records.length === 0`. Auto-refresh is ON by default and
+  // polls every 4s, so a poll that fails AFTER a successful first load today
+  // renders nothing at all — the stale rows keep displaying as if current,
+  // with no way for the admin to know the server stopped answering.
+  test("a failed Logs REFRESH keeps the already-loaded rows visible AND says "
+    + "they may be stale, instead of silently doing nothing", async ({ page }) => {
+    await mockMe(page, ADMIN);
+    await mockVersion(page);
+    await mockAttention(page);
+    let call = 0;
+    // Single trailing `*`, not `**` — a `**` here also swallows POST
+    // /api/admin/logs/seen (the mount-time "mark logs seen" acknowledge),
+    // which raced this handler and made the first REAL logs GET see the
+    // wrong branch. Matches mockLogs' own glob in mocks.js.
+    await page.route("**/api/admin/logs*", async (route) => {
+      call += 1;
+      if (call === 1) {
+        await route.fulfill({
+          status: 200, contentType: "application/json",
+          body: JSON.stringify({
+            records: [{ ts: 1731000000, level: "INFO", name: "app", msg: "started up" }],
+          }),
+        });
+      } else {
+        await route.fulfill({
+          status: 500, contentType: "application/json",
+          body: JSON.stringify({ detail: "logs.db is locked" }),
+        });
+      }
+    });
+    await page.goto("/admin/logs");
+    await expect(page.getByText("started up")).toBeVisible();
+
+    // Wait for the 4s auto-refresh interval to actually fire a second
+    // request, rather than guessing a timeout — this IS the poll under test.
+    await expect.poll(() => call, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+
+    // THE REGRESSION: the row must still be on screen after the failed poll...
+    await expect(page.getByText("started up")).toBeVisible();
+    // ...and a visible notice must say the refresh failed, not nothing.
+    await expect(page.getByRole("alert")).toBeVisible();
+  });
+});
+
+test.describe("Allowlist load failures don't read as an empty allowlist", () => {
+  // REGRESSION: Allowlist.jsx's load() fires three parallel fetches.
+  // api.deniedRequests() has a .catch -> setDeniedError (the SEC #3
+  // treatment), but api.allowlist() and api.accessRequests() have NO .catch
+  // at all — a failure leaves stale/no rows on screen, says nothing, AND
+  // throws an unhandled promise rejection. This pins all three symptoms at
+  // once: the empty-state lie, the missing notice, and the rejection itself
+  // (via `pageerror`, rather than inferring it from a code read).
+  test("a failed allowlist load shows a visible error, never the empty-state "
+    + "text, and raises no unhandled promise rejection", async ({ page }) => {
+    const pageErrors = [];
+    page.on("pageerror", (e) => pageErrors.push(e));
+
+    await mockMe(page, ADMIN);
+    await mockVersion(page);
+    await mockAttention(page);
+    await mockAllowlist(page, [], { httpStatus: 500, detail: "allowlist table is locked" });
+    await mockAccessRequests(page, []);
+    await mockDeniedRequests(page, []);
+
+    await page.goto("/admin/users/current");
+
+    // A visible error, carrying the server's own sentence...
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(/locked/i);
+    // ...never the confident lie that nobody is allowlisted.
+    await expect(page.getByText("No users yet.")).toHaveCount(0);
+
+    // The Current-users tab's own count badge must not read "0" either — the
+    // same lie in badge form (SUBTAB_COUNT already suppresses Blocked's count
+    // on a load error; this pins that the fix generalizes it to Current).
+    await expect(page.locator("#usertab-current .usertab-badge")).toHaveCount(0);
+
+    // The actual unhandled-rejection symptom, pinned directly rather than
+    // inferred: api.allowlist().then(setRows) with no .catch throws an
+    // uncaught rejection the moment the mocked 500 resolves.
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("a failed access-requests load shows a visible error, never the "
+    + "pending count reading zero, and raises no unhandled promise "
+    + "rejection", async ({ page }) => {
+    const pageErrors = [];
+    page.on("pageerror", (e) => pageErrors.push(e));
+
+    await mockMe(page, ADMIN);
+    await mockVersion(page);
+    await mockAttention(page);
+    await mockAllowlist(page, []);
+    await mockAccessRequests(page, [], { httpStatus: 500, detail: "access_requests table is locked" });
+    await mockDeniedRequests(page, []);
+
+    await page.goto("/admin/users/pending");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(/locked/i);
+    await expect(page.getByText("No access requests are awaiting review.")).toHaveCount(0);
+    await expect(page.locator("#usertab-pending .usertab-badge")).toHaveCount(0);
+
+    expect(pageErrors).toEqual([]);
   });
 });

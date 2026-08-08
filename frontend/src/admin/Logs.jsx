@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { loadErrorMessage } from "../authcopy.js";
+import { loadNotice } from "../loadstate.js";
 
 export default function Logs({ onAttentionChanged }) {
   const [records, setRecords] = useState([]);
@@ -35,6 +36,16 @@ export default function Logs({ onAttentionChanged }) {
       // whether something is wrong -- so they'd conclude the server was fine
       // and stop looking. Clearing on success matters too: the 4s refresh
       // must not pin a stale error.
+      //
+      // A repeated failing poll calls setErr with the SAME string content
+      // every time (loadErrorMessage is a pure function of the same detail),
+      // so React's setState bail-out kicks in: verified directly (a throwaway
+      // jsdom/createRoot harness) that an identical-content setState still
+      // re-invokes the component function but does NOT re-commit its DOM or
+      // re-fire effects -- so the role="alert" text node never actually
+      // changes on screen, and the alert does not re-announce every 4s. Only
+      // a genuinely NEW error string (or clearing back to "") produces a real
+      // announcement.
       .catch((e) => setErr(loadErrorMessage("the logs", e?.detail)));
   }, [level, q, from, to]);
 
@@ -52,6 +63,14 @@ export default function Logs({ onAttentionChanged }) {
   const clearFilters = () => { setQ(""); setFrom(""); setTo(""); setLevel(""); };
   const filtered = level || q.trim() || from || to;
   const fmt = (ts) => new Date(ts * 1000).toLocaleString();
+  // The load-failure notice (see loadstate.js): a FIRST load failure replaces
+  // the panel (no rows to protect), a REFRESH failure on an already-populated
+  // screen keeps the rows and adds a stale-data notice instead. This used to
+  // be gated behind `records.length === 0`, so the 4s auto-refresh poll
+  // failing after a successful first load rendered NOTHING -- the stale rows
+  // kept displaying as current and an admin watching a live problem had no
+  // way to tell the server had stopped answering.
+  const notice = loadNotice({ error: err, hasRows: records.length > 0 });
   return (
     <div className="panel">
       <h2>Server logs</h2>
@@ -97,18 +116,28 @@ export default function Logs({ onAttentionChanged }) {
           only the first screenful of the server log (WCAG 2.1.1, Level A). */}
       <div className="log logbox thin-scroll" tabIndex={0} role="region"
            aria-label="Server log">
-        {records.length === 0
-          ? (err
-              ? <p className="denied-error" role="alert">{err}</p>
-              : <div className="muted">{filtered ? "No matching log records." : "No log records."}</div>)
-          : records.map((r, i) => (
-            <div key={i} className={"logline lvl-" + r.level}>
-              <span className="logts">{fmt(r.ts)}</span>
-              <span className="loglvl">{r.level}</span>
-              <span className="logname">{r.name}</span>
-              <span className="logmsg">{r.msg}</span>
-            </div>
-          ))}
+        {/* Rendered unconditionally now, not gated behind records.length===0 --
+            a poll failure on a populated screen still needs to say so. */}
+        {notice && (
+          <p className={notice.replace ? "denied-error" : "notice warn small"} role="alert">
+            {notice.text}
+          </p>
+        )}
+        {/* The empty state is now `!err && records.length === 0`: a first-load
+            failure (notice.replace) already said everything via the notice
+            above and shows no rows/empty-message underneath it. */}
+        {!notice?.replace && (
+          records.length === 0
+            ? <div className="muted">{filtered ? "No matching log records." : "No log records."}</div>
+            : records.map((r, i) => (
+              <div key={i} className={"logline lvl-" + r.level}>
+                <span className="logts">{fmt(r.ts)}</span>
+                <span className="loglvl">{r.level}</span>
+                <span className="logname">{r.name}</span>
+                <span className="logmsg">{r.msg}</span>
+              </div>
+            ))
+        )}
       </div>
     </div>
   );
