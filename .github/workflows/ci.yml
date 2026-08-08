@@ -288,21 +288,128 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke-test the container (boots + /api/health)
+      # The container now runs as a fixed non-root uid (10001), and the app's
+      # writable paths (ipeds.db/app.db/logs.db/data/uploads/work) default onto
+      # /data — which only exists as a bind-mounted volume in a real deployment.
+      # A no-volume smoke run can't see any of that, so it's replaced with four
+      # checks: the image's declared USER (a static assert — catches a dropped
+      # or typo'd USER even if the app happens to still run), a compose-shaped
+      # happy path (all six /data env vars, a chowned host dir, and a HOST-SIDE
+      # ownership assert on the file the app wrote — the part that actually
+      # proves uid 10001 could write, not just that curl got a 200), and the two
+      # negative cases the startup preflight (backend/app/startup_checks.py)
+      # exists for: an un-chowned upgrade, and a partially-chowned one.
+      - name: "USER: image is configured to run as uid:gid 10001:10001"
         run: |
-          # No ipeds.db/keys — the app lazily opens the query DB and fails open
-          # without an LLM key, so /api/health must answer on a bare boot.
+          user=$(docker image inspect -f '{{.Config.User}}' ipeds-oracle:smoke)
+          echo "Config.User: $user"
+          if [ "$user" != "10001:10001" ]; then
+            echo "::error::expected the image's Config.User to be '10001:10001', got '$user'"
+            exit 1
+          fi
+
+      - name: "Smoke-test: happy path (compose-shaped /data volume, chowned)"
+        run: |
+          mkdir -p srv-data
+          sudo chown -R 10001:10001 srv-data
+          # The same six env vars compose.yaml sets on services.app, exactly —
+          # this is the shape a real self-hosted deployment actually runs.
           docker run -d --name smoke -p 8000:8000 \
             -e COOKIE_SECURE=false -e LLM_API_KEY= -e RESEND_API_KEY= \
+            -e IPEDS_DB_PATH=/data/ipeds.db \
+            -e APP_DB_PATH=/data/app.db \
+            -e LOG_DB_PATH=/data/logs.db \
+            -e DATA_DIR=/data/accdb \
+            -e UPLOAD_DIR=/data/uploads \
+            -e NCES_WORK_DIR=/data/work \
+            -v "$PWD/srv-data:/data" \
             ipeds-oracle:smoke
+
+          healthy=""
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/api/health | grep -q '"ok":true'; then
-              echo "health OK"; docker rm -f smoke; exit 0
+              healthy=1; break
             fi
             sleep 1
           done
-          echo "::error::container did not become healthy"; docker logs smoke; \
+          if [ -z "$healthy" ]; then
+            echo "::error::container did not become healthy"; docker logs smoke
             docker rm -f smoke; exit 1
+          fi
+          echo "health OK"
+
+          uid=$(docker exec smoke id -u)
+          echo "container uid: $uid"
+          if [ "$uid" != "10001" ]; then
+            echo "::error::expected the running container's uid to be 10001, got $uid"
+            docker logs smoke; docker rm -f smoke; exit 1
+          fi
+
+          docker rm -f smoke
+
+          # The assert that actually matters: the app process could WRITE
+          # /data as uid 10001, not just that curl got a 200.
+          owner=$(stat -c '%u' srv-data/app.db)
+          echo "srv-data/app.db owner uid: $owner"
+          if [ "$owner" != "10001" ]; then
+            echo "::error::srv-data/app.db is not owned by uid 10001 (got $owner) -- the app could not actually write the bind-mounted /data volume"
+            exit 1
+          fi
+
+      - name: "Smoke-test: un-chowned /data refuses to boot (negative)"
+        run: |
+          mkdir -p root-data
+          sudo chown -R root:root root-data
+          set +e
+          out=$(docker run --rm \
+            -e COOKIE_SECURE=false -e LLM_API_KEY= -e RESEND_API_KEY= \
+            -e IPEDS_DB_PATH=/data/ipeds.db \
+            -e APP_DB_PATH=/data/app.db \
+            -e LOG_DB_PATH=/data/logs.db \
+            -e DATA_DIR=/data/accdb \
+            -e UPLOAD_DIR=/data/uploads \
+            -e NCES_WORK_DIR=/data/work \
+            -v "$PWD/root-data:/data" \
+            ipeds-oracle:smoke 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::expected a non-zero exit against a root-owned /data, got 0"
+            exit 1
+          fi
+          echo "$out" | grep -q "chown" || { echo "::error::preflight output did not name the chown fix"; exit 1; }
+          echo "$out" | grep -q "/data" || { echo "::error::preflight output did not name /data"; exit 1; }
+          if echo "$out" | grep -q "Traceback"; then
+            echo "::error::preflight leaked a raw traceback instead of the readable message"
+            exit 1
+          fi
+
+      - name: "Smoke-test: partial chown (dir owned, app.db not) is still caught (negative)"
+        run: |
+          mkdir -p partial-data
+          sudo chown -R 10001:10001 partial-data
+          sudo touch partial-data/app.db
+          sudo chown root:root partial-data/app.db
+          set +e
+          out=$(docker run --rm \
+            -e COOKIE_SECURE=false -e LLM_API_KEY= -e RESEND_API_KEY= \
+            -e IPEDS_DB_PATH=/data/ipeds.db \
+            -e APP_DB_PATH=/data/app.db \
+            -e LOG_DB_PATH=/data/logs.db \
+            -e DATA_DIR=/data/accdb \
+            -e UPLOAD_DIR=/data/uploads \
+            -e NCES_WORK_DIR=/data/work \
+            -v "$PWD/partial-data:/data" \
+            ipeds-oracle:smoke 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::expected a non-zero exit against a root-owned app.db, got 0"
+            exit 1
+          fi
+          echo "$out" | grep -q "app.db" || { echo "::error::preflight output did not name app.db"; exit 1; }
 
       # We publish ONLY release images: a v* tag -> :X.Y.Z + :X.Y + :latest
       # (metadata-action strips the leading `v`). Every PR and every main push
