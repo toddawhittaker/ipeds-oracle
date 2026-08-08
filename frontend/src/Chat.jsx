@@ -10,7 +10,7 @@ import Suggestions from "./Suggestions.jsx";
 import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import CopyMenu from "./CopyMenu.jsx";
-import { DELETE_FAILED, deleteAnnouncement } from "./announce.js";
+import { COPY_FAILED, DELETE_FAILED, deleteAnnouncement } from "./announce.js";
 import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
@@ -545,7 +545,13 @@ export default function Chat({ me }) {
     const ok = kind === "html"
       ? await copyHtml(mdRefs.current[i], text)
       : await copyText(text);
+    // Both helpers SWALLOW their errors and return false, so without this a
+    // denied clipboard (or an insecure context, or the execCommand fallback
+    // refusing) was indistinguishable from success: no toast, no state change,
+    // the trigger still reading "Copy". The user believes they have the answer
+    // on the clipboard and pastes something else.
     if (ok) { setCopied(`${i}:${kind}`); setTimeout(() => setCopied(null), 1400); }
+    else toast(COPY_FAILED, "error");
   }
 
   // Toggle a message's Thinking/SQL panel; opening either closes any other
@@ -1365,9 +1371,10 @@ export default function Chat({ me }) {
                       <div className="trace-panel" id={`trace-${i}`}>
                         <button className="link sql-copy"
                                 onClick={async () => {
+                                  // Same silent-failure shape as doCopy above.
                                   if (await copyText(m.sql_log.join(";\n\n"))) {
                                     setCopied(`${i}:sql`); setTimeout(() => setCopied(null), 1400);
-                                  }
+                                  } else toast(COPY_FAILED, "error");
                                 }}>
                           {copied === `${i}:sql` ? "Copied!" : "Copy SQL"}
                         </button>
