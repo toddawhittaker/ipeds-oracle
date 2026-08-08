@@ -672,7 +672,6 @@ export default function Chat({ me }) {
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
-    nearBottom.current = true; // your own question always scrolls into view
     submit(q);
   }
 
@@ -829,6 +828,14 @@ export default function Chat({ me }) {
   async function submit(q, { editMessageId = null } = {}) {
     q = (q || "").trim();
     if (!q || busy) return;
+    // Your own question always scrolls into view. This lives HERE rather than
+    // in send() because the invariant belongs to asking, and submit() has four
+    // callers: send, a suggestion/clarify chip, Rerun and Save-edit. Only send
+    // re-pinned, so from a scrolled-up thread a chip appended its new turn
+    // off-screen and merely changed the "Latest" pill — the click read as doing
+    // nothing. Putting it at the one place they all pass through means the next
+    // caller inherits it instead of having to remember.
+    nearBottom.current = true;
     const myTurn = turnToken.current; // see the `conversation` SSE handler below
     // True only while this is still the turn the user is looking at. Stale
     // (abandoned) turns must keep draining the stream to completion -- see
