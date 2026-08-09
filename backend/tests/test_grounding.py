@@ -802,6 +802,33 @@ def test_adjacent_years_do_not_tie_the_anchor():
         f"adjacent years must not make the anchor ambiguous, got {got}"
 
 
+def test_a_repeated_value_does_not_evict_an_entity_from_the_anchor_group():
+    """THE REGRESSION (live, conversation 17): `_anchor_rows` counted numeric
+    matches from a LIST, so a value appearing twice in one table row scored
+    twice for whichever result rows hold it — and the tie-only grouping then
+    dropped every lower-scoring entity.
+
+    On `| IN | 2,475 | MT | 67 | AK | 67 |` the two 67s give Montana and Alaska
+    `(1 label, 2 numbers)` while Indiana scores `(1, 1)` and is EVICTED, so a
+    correct 2,475 is graded against Montana's and Alaska's rows and cannot
+    ground: `partial 2/3`, a ⚠ on a table whose every number was right.
+
+    Counting the same value twice is double-counting EVIDENCE, not stronger
+    evidence — one table row saying "67" twice tells you nothing more about
+    Montana than saying it once. Scoring distinct values makes all three tie at
+    `(1, 1)` and the group holds all three.
+
+    #331 stopped the model emitting multi-entity rows, so this is defence in
+    depth rather than a live fault; the kernel weakness is real either way."""
+    states = QueryResult(columns=["state", "masters"],
+                         rows=[("IN", 2475), ("MT", 67), ("AK", 67)], row_count=3)
+    md = ("| State | Master's | State | Master's | State | Master's |\n"
+          "| --- | --- | --- | --- | --- | --- |\n"
+          "| IN | 2,475 | MT | 67 | AK | 67 |\n")
+    got = grounding.check_table(md, [states])
+    assert (got.cells_matched, got.cells_checked) == (3, 3), got
+
+
 def test_a_merged_table_anchors_in_every_result_it_draws_from():
     """The msg82 shape, which is what surfaced the tie bug: the model builds ONE
     table from several queries. The row must anchor independently per result, or
@@ -1983,6 +2010,8 @@ def run():
           test_grouping_still_refuses_another_rows_value)
     check("adjacent years do not tie the anchor (live false negative)",
           test_adjacent_years_do_not_tie_the_anchor)
+    check("a repeated value does not evict an entity from the anchor group",
+          test_a_repeated_value_does_not_evict_an_entity_from_the_anchor_group)
     check("a merged table anchors in every result it draws from",
           test_a_merged_table_anchors_in_every_result_it_draws_from)
     check("an unanchorable summary row falls back to the column search",
