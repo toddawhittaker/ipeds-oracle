@@ -37,7 +37,12 @@ async function adminA11yMocks(page) {
     { id: 1, email: "new@example.edu", canon_email: "new@example.edu", created_at: 1, status: "pending" },
   ]);
   await mockDeniedRequests(page, [
-    { id: 2, email: "no@example.edu", canon_email: "no@example.edu", created_at: 1, denied_at: 2 },
+    // `emails` is REQUIRED by the Blocked table's Email renderer. Omitting it
+    // threw, the error boundary swallowed the whole route, and all three
+    // Users paths x both themes -- 6 of the 19 scans -- silently scanned a
+    // three-element crash card and reported clean.
+    { id: 2, email: "no@example.edu", canon_email: "no@example.edu",
+      emails: ["no@example.edu", "no+tag@example.edu"], created_at: 1, denied_at: 2 },
   ]);
   await mockSkills(page, [
     { id: 1, headline: "Match an exact 6-digit CIP", description: "…", sql_example: "SELECT 1",
@@ -488,6 +493,14 @@ test.describe("axe smoke scan", () => {
         // visibility wait would hang on the one page whose heading is invisible
         // BY DESIGN.
         await expect(page.getByRole("heading", { name: ready }).first()).toBeAttached();
+        // The heading check is NOT proof the page rendered. A throw in any
+        // panel is swallowed by the error boundary, which replaces the whole
+        // route with a three-element card that axe then scans clean — and that
+        // is not hypothetical: a denied-requests fixture missing its `emails`
+        // array crashed all three Users paths in both themes, so 6 of these 19
+        // scans measured the crash card for months while reporting green.
+        // Assert we are looking at the page before believing the result.
+        await expect(page.locator(".errbound")).toHaveCount(0);
 
         const found = gatedViolations(await new AxeBuilder({ page }).analyze());
         expect(found, JSON.stringify(found, null, 2)).toEqual([]);

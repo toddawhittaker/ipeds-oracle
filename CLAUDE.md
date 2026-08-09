@@ -1219,7 +1219,10 @@ The three guards:
   lesson vanishes with no trace and nobody can learn the feature over-reaches.
   Admin → Logs is already substring-searchable, so this needed no new UI.
   Admin → Skills gains a category pill, "Reject & mute", and collapsed
-  "Rejected (N)" / "Muted categories (N)" sections with Undo/Unmute; a
+  "Rejected (N)" / "Muted categories (N)" sections with Allow-again/Unmute
+  (**"Allow again", not "Undo"** — the endpoint deletes the tombstone and does
+  NOT restore the lesson, and the visible text has to be a contiguous substring
+  of the accessible name for WCAG 2.5.3); a
   rejections **load failure renders an error, never "Rejected (0)"** (the
   `deniedError` precedent). Pure logic in `admin/lessoncats.js` (vitest) —
   `categoryLabel` returns `""` for a NULL category, which is what stops a

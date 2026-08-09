@@ -1176,7 +1176,12 @@ jamie@example.com,External reviewer,`}</pre>
                   { key: "email", label: "Email", sortable: true, colClass: "col-blocked-email",
                     cellClass: "blocked-email", cellTitle: (r) => r.canon_email,
                     render: (r) => {
-                      const others = r.emails.filter((e) => e !== r.canon_email);
+                      // `|| []` is not defensive noise: a response that omits
+                      // `emails` took the WHOLE admin route down through the
+                      // error boundary, and the a11y fixture omitted it for
+                      // months — so six of the nineteen axe scans were
+                      // measuring the crash card instead of this page.
+                      const others = (r.emails || []).filter((e) => e !== r.canon_email);
                       return (
                         <>
                           <span className="denied-primary">{r.canon_email}</span>

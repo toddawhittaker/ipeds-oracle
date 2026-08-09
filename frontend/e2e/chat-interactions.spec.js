@@ -263,7 +263,7 @@ test.describe("stop generating", () => {
       await page.getByRole("button", { name: "Send" }).click();
       await page.getByRole("button", { name: "Stop generating" }).click();
 
-      await expect(page.getByText(/connection dropped before the answer was saved/))
+      await expect(page.getByText(/The request failed, so the answer may not have been saved/))
         .toBeVisible();
       await expect(page.getByText(/has been saved to this chat/)).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Check now" })).toHaveCount(0);

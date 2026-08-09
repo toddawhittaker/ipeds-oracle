@@ -679,13 +679,30 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
     # remediable only by another hand-edit of the same row. Failing open is
     # also the safe direction here: an empty `applied` against an ESTABLISHED
     # allowlist takes the record-only branch, so nothing is re-granted.
-    try:
-        applied = set(json.loads(raw or "[]"))
-        marker_ok = True
-    except (ValueError, TypeError):
-        log.warning("unreadable %s marker; treating it as absent",
-                    _BOOTSTRAP_APPLIED_KEY)
-        applied, marker_ok = set(), False
+    # A marker counts only if it is PRESENT, NON-BLANK, and a JSON list of
+    # strings. Each clause is load-bearing, and the first version of this guard
+    # had only the parse: `json.loads` succeeding is not the same as the marker
+    # being usable, and three shapes that parse fine re-granted an offboarded
+    # admin (measured) --
+    #   ''    -> `raw or "[]"` made it a legitimate empty list
+    #   "{}"  -> an empty set, so nothing reads as applied
+    #   '"a@b"' -> a JSON STRING, whose set() is its CHARACTERS
+    # ...because `marked` was true while `applied` did not contain the address,
+    # selecting the "grant anything not yet applied" branch. The blank one is
+    # the plausible one: clearing the cell in a SQLite browser produces exactly
+    # it, and the warning below is what sends an operator into this row.
+    applied: set[str] = set()
+    marked = False
+    if raw is not None and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+                raise ValueError("bootstrap marker is not a JSON list")
+            applied = {e for e in parsed if isinstance(e, str)}
+            marked = True
+        except (ValueError, TypeError):
+            log.warning("unreadable %s marker; treating it as absent",
+                        _BOOTSTRAP_APPLIED_KEY)
     fresh = con.execute("SELECT COUNT(*) AS n FROM allowlist").fetchone()["n"] == 0
     now = time.time()
 
@@ -696,14 +713,6 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
     #       already removed -- reproducing the bug once on the way to fixing it.
     #   established, marker present          -> grant anything NOT yet applied,
     #       so an address the operator ADDS to ADMIN_EMAILS later still works.
-    # A CORRUPT marker counts as ABSENT, not present. `marked` selects the
-    # "grant anything not yet applied" branch, and with `applied` emptied by
-    # the parse failure that would grant EVERYTHING -- re-promoting exactly the
-    # admin someone had offboarded, which is the bug this whole function exists
-    # to fix. Reading it as absent takes the conservative record-only hop
-    # instead. (Caught by the test, not by review: failing open is right, but
-    # only in one of the two places it has to be applied.)
-    marked = raw is not None and marker_ok
     for email in emails:
         if email in applied:
             continue

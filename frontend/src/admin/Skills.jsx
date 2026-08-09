@@ -409,8 +409,14 @@ export default function Skills({ onAttentionChanged }) {
                   <div key={r.id} className="skill">
                     <div className="skill-head">
                       <span className="lesson-rule">{rHeadline}</span>
+                      {/* The visible text must be a CONTIGUOUS substring of the
+                          accessible name (WCAG 2.5.3), or a speech-input user
+                          saying "click Allow again" gets no match. "Allow this
+                          lesson to be proposed again" contains the words but
+                          not the phrase — the old "Undo" / "Undo rejection: …"
+                          pair satisfied the rule, and the relabel broke it. */}
                       <button className="link"
-                              aria-label={`Allow this lesson to be proposed again: ${rHeadline}`}
+                              aria-label={`Allow again: ${rHeadline}`}
                               onClick={() => undoRejection(r)}>Allow again</button>
                     </div>
                     {rDescription && <p className="muted small">{rDescription}</p>}
