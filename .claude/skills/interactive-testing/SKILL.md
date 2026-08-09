@@ -23,6 +23,14 @@ testing; use it instead of hand-rolling a uvicorn invocation.
 Reachable at `http://localhost:8000` and on the LAN at `http://<lan-ip>:8000`
 (bound to `0.0.0.0`). `up`/`full` rebuild the SPA first, so frontend edits show up.
 
+**If the port is already taken, use another one: `make up PORT=8100`.** Every
+target honours `PORT`, and `APP_PUBLIC_URL` follows it, so sign-in links stay
+correct. `up`/`full` now **poll `/api/health` and fail with the log tail** if the
+server did not come up — they used to print a URL regardless, because a detached
+`nohup … &` "succeeds" even when uvicorn exits a moment later on a bound port.
+Note `make down` cannot free a **Docker-published** port (that belongs to the
+proxy, not a local process); it says so rather than reporting success.
+
 ## Signing in (no-email `up` mode)
 
 `make up` runs without a Resend key, so the mailer writes the sign-in link to the
@@ -32,11 +40,18 @@ one of `ADMIN_EMAILS` in `.env`), then read it from `server.log`:
 ```bash
 curl -sS -XPOST localhost:8000/api/auth/request \
   -H 'Content-Type: application/json' -d '{"email":"you@your-institution.edu"}'
-grep -Eo 'http://localhost:8000/verify\?token=[^ ]+' server.log | tail -1
+grep -oE 'http://localhost:8000/verify#token=[A-Za-z0-9._-]+' server.log | tail -1
 ```
 
-Open that URL to complete sign-in. An admin (`ADMIN_EMAILS` in `.env`, or an
-allowlisted admin already in `app.db`) lands in `/admin`.
+**The token is in the URL FRAGMENT (`/verify#token=…`), not a query string** —
+that is a security property, not a style choice: a fragment is never sent to the
+server, so it cannot land in an access log. A `?token=` grep finds nothing.
+
+Opening that URL does **not** sign you in by itself: `/verify` shows a
+confirmation ("Sign in to IPEDS Oracle as you@…?") with a **Sign in** button,
+so an email scanner following the link cannot burn the one-time token. Click it.
+An admin (`ADMIN_EMAILS` in `.env`, or an allowlisted admin already in `app.db`)
+then has **Admin** in the account menu.
 
 ## Notes / caveats
 
