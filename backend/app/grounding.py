@@ -1074,7 +1074,15 @@ def _anchor_rows(table_row: list[str], prep: _Prepared) -> list[int]:
     """
     labels = {lbl for cell in table_row
               if parse_number(cell) is None and (lbl := _norm_label(cell))}
-    numbers = [v for cell in table_row if (v := parse_number(cell)) is not None]
+    # DISTINCT values, not a list. Counting a repeated value twice is
+    # double-counting EVIDENCE, not stronger evidence — a table row saying "67"
+    # twice tells you nothing more about Montana than saying it once — and with
+    # the tie-only grouping below it actively evicts other entities. Observed
+    # live on `| IN | 2,475 | MT | 67 | AK | 67 |`: the two 67s scored Montana
+    # and Alaska at (1 label, 2 numbers) while Indiana scored (1, 1) and was
+    # dropped, so a correct 2,475 was graded against the wrong rows and the
+    # table read `partial 2/3` — a ⚠ on numbers that were all right.
+    numbers = {v for cell in table_row if (v := parse_number(cell)) is not None}
     best_score, best_rows = (0, 0), []
     for i, row_labels in enumerate(prep.row_labels):
         t = sum(1 for lbl in labels if lbl in row_labels)
