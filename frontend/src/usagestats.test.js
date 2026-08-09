@@ -92,6 +92,31 @@ describe("groundedFigureLabel (the stat's sample size)", () => {
       .toBe("7/10 Grounded figures");
   });
 
+  it("appends the suppressed count, and only when there is one", () => {
+    // A retry-suppressed turn ships NO figure, so it is rightly outside the
+    // rate — but it used to be scored as an ungrounded figure (10 of the 25
+    // ungrounded turns in the real log), reading 88.2% against a true 92.5%.
+    // Correcting the rate must not make the signal vanish with it.
+    expect(groundedFigureLabel({ figures_checked: 10, figures_ungrounded: 1,
+                                 figures_suppressed: 4 }))
+      .toBe("9/10 Grounded figures · 4 suppressed");
+    // Zero suppressions leaves the ordinary label untouched.
+    expect(groundedFigureLabel({ figures_checked: 10, figures_ungrounded: 1,
+                                 figures_suppressed: 0 }))
+      .toBe("9/10 Grounded figures");
+    // An older backend sends no such key at all — never invent the claim.
+    expect(groundedFigureLabel({ figures_checked: 10, figures_ungrounded: 1 }))
+      .toBe("9/10 Grounded figures");
+  });
+
+  it("shows suppressions even when nothing else was measured", () => {
+    // The window where it matters most: every figure the model tried was forced
+    // and withheld, so `checked` is 0 and the rate is "—". Dropping the tail
+    // here would render that identically to a clean empty window.
+    expect(groundedFigureLabel({ figures_checked: 0, figures_suppressed: 3 }))
+      .toBe("Grounded figures · 3 suppressed");
+  });
+
   it("drops the counts when nothing was measured", () => {
     // "0/0 Grounded figures" reads like a failure; an empty window is not one
     // (the rate itself already shows "—").

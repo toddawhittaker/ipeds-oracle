@@ -95,11 +95,21 @@ export function groundedFigureRate(totals) {
 // With nothing measured yet the counts are dropped rather than shown as "0/0",
 // which reads like a failure instead of an empty window (the rate itself
 // already shows "—" there).
+// A `· N suppressed` tail counts turns where the retry FORCED a figure, found it
+// grounded against nothing, and withheld it (grounding.SUPPRESSED). Those turns
+// shipped no figure, so they are correctly outside the rate above — but they used
+// to be scored as ungrounded figures, which is how the tile read 88.2% against a
+// true 92.5%. Showing the count keeps the signal that correcting the rate would
+// otherwise have deleted: a rising number means the model is repeatedly being
+// pushed into figures the data cannot support. Omitted entirely at zero, so the
+// ordinary case stays a clean "7/7 Grounded figures".
 export function groundedFigureLabel(totals) {
   const t = totals || {};
   const checked = num(t.figures_checked);
-  if (checked <= 0) return "Grounded figures";
-  return `${checked - num(t.figures_ungrounded)}/${checked} Grounded figures`;
+  const suppressed = num(t.figures_suppressed);
+  const tail = suppressed > 0 ? ` · ${suppressed} suppressed` : "";
+  if (checked <= 0) return `Grounded figures${tail}`;
+  return `${checked - num(t.figures_ungrounded)}/${checked} Grounded figures${tail}`;
 }
 
 // TABLE grounding: the cell-level companion to the figure rate. The results table

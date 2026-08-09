@@ -36,7 +36,7 @@ os.environ["MODEL_ESCALATION"] = "test-vendor/test-model-strong"
 
 import httpx  # noqa: E402
 
-from app import critic, llm  # noqa: E402
+from app import critic, grounding, llm  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.critic import Critique  # noqa: E402
 from app.tools import registry  # noqa: E402
@@ -1416,8 +1416,29 @@ def test_retry_figure_that_cannot_be_grounded_is_suppressed():
     finally:
         llm.retry_missing_figure = orig
     assert res.figure is None, "a forced, ungrounded figure must be suppressed"
-    assert res.figure_grounding == "ungrounded", res.figure_grounding
+    # Its OWN status, not `ungrounded`. A suppressed turn ships no figure at all,
+    # so recording it as an ungrounded FIGURE put it in the Grounded-figures
+    # denominator as a miss — see
+    # test_a_suppressed_retry_is_not_counted_as_an_ungrounded_figure.
+    assert res.figure_grounding == grounding.SUPPRESSED, res.figure_grounding
     assert res.figure_derivation == "retry:suppressed", res.figure_derivation
+
+
+def test_a_suppressed_retry_still_degrades_a_fabricated_S5_answer():
+    """BEHAVIOUR-NEUTRALITY for the status split. `_s5_fabricated` degrades a
+    tool-exhausted answer whose numbers ground against nothing, and it used to
+    read `figure_grounding == ungrounded` — which a suppressed retry satisfied.
+    Giving suppression its own status must not quietly switch that off, so the
+    predicate tests BOTH. Checked directly rather than through a full S5 run:
+    the point is the predicate, and the run is pinned elsewhere."""
+    res = llm.AgentResult(answer="x")
+    res.table_grounding = grounding.NO_TABLE
+    for status in (grounding.UNGROUNDED, grounding.SUPPRESSED):
+        res.figure_grounding = status
+        assert llm._s5_fabricated(res) is True, status
+    # ...and a status that is not evidence of fabrication still must not degrade.
+    res.figure_grounding = grounding.EXACT
+    assert llm._s5_fabricated(res) is False
 
 
 def test_retry_does_not_fire_when_the_answer_has_no_number():
@@ -2130,6 +2151,8 @@ def run():
           test_retry_recovers_a_grounded_figure)
     check("a retry figure that can't be grounded is suppressed",
           test_retry_figure_that_cannot_be_grounded_is_suppressed)
+    check("a suppressed retry still degrades a fabricated S5 answer",
+          test_a_suppressed_retry_still_degrades_a_fabricated_S5_answer)
     check("retry does not fire when the answer has no number",
           test_retry_does_not_fire_when_the_answer_has_no_number)
     check("a first-pass ungrounded figure still ships; retry not invoked",

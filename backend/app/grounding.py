@@ -97,6 +97,13 @@ EXACT = "exact"              # the value appears verbatim as a cell in a result
 ROUNDED = "rounded"          # matches a cell at the figure's own displayed precision
 DERIVED = "derived"          # matches a computed derivation over a result column
 UNGROUNDED = "ungrounded"    # no cell and no derivation produced this number
+# A figure the RETRY forced, found ungrounded, and therefore withheld — the turn
+# shipped no figure at all. Its own status because `ungrounded` put it in the
+# Grounded-figures denominator as a miss, against that stat's definition ("turns
+# that led with a hero figure"): 10 of the 25 ungrounded turns in the real
+# usage_log were suppressions, reading 88.2% where the truth was 92.5%. Set only
+# by llm._maybe_retry_figure; check_figure never returns it.
+SUPPRESSED = "retry_suppressed"
 
 # Ops, matching prompt step 6(ii)'s menu. `share` is a percentage of a column
 # total; `pct_change` is the net change across a column in row order, and `diff`

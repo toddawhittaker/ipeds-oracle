@@ -310,8 +310,11 @@ async def _maybe_retry_figure(res: AgentResult, question: str, answer: str) -> N
         res.figure_derivation = _derivation_label(check, n_current, retried=True)
     else:
         # Forced but unverifiable → suppress, but record that it happened.
+        # SUPPRESSED, not UNGROUNDED: this turn ships no figure, so calling it an
+        # ungrounded FIGURE put it in the Grounded-figures denominator as a miss
+        # (10 of 25 ungrounded turns in the real usage_log were these).
         res.figure = None
-        res.figure_grounding = grounding.UNGROUNDED
+        res.figure_grounding = grounding.SUPPRESSED
         res.figure_derivation = "retry:suppressed"
 
 
@@ -909,7 +912,11 @@ def _s5_fabricated(res: AgentResult) -> bool:
     tbl = res.table_grounding
     if tbl == grounding.TABLE_UNMATCHED:
         return True
-    if (res.figure_grounding == grounding.UNGROUNDED
+    # SUPPRESSED is UNGROUNDED that we also withheld — the same evidence about
+    # the answer's numbers, so it must count here too. Listing both is what keeps
+    # giving suppression its own status behaviour-neutral for the S5 gate; a
+    # bare `== UNGROUNDED` would have silently stopped degrading these.
+    if (res.figure_grounding in (grounding.UNGROUNDED, grounding.SUPPRESSED)
             and tbl not in (grounding.TABLE_MATCHED, grounding.TABLE_PARTIAL)):
         return True
     return False

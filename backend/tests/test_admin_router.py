@@ -1561,6 +1561,32 @@ def test_usage_totals_count_figure_grounding_excluding_non_evidence():
         assert totals["figures_ungrounded"] == 2, totals
 
 
+def test_a_suppressed_retry_is_not_counted_as_an_ungrounded_figure():
+    """THE REGRESSION: `_maybe_retry_figure` forces a figure, finds it grounds
+    against nothing, and correctly SUPPRESSES it — the turn ships no figure at
+    all. It recorded that as figure_grounding='ungrounded', which put it in the
+    Grounded-figures denominator as a miss, against the stat's own definition
+    ("turns that led with a hero figure"). Measured on the real usage_log: 10 of
+    the 25 ungrounded turns in all history were suppressions, so the tile read
+    88.2% where the truth was 92.5%.
+
+    Suppressions are still surfaced — as their own count, not as failures of a
+    figure that was never shown."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        for status in ("exact", "ungrounded",
+                       "retry_suppressed", "retry_suppressed", "retry_suppressed"):
+            _seed_usage_log("supp@x.edu", "q", created_at=now - 50,
+                            figure_grounding=status)
+        totals = c.get("/api/admin/usage",
+                       params={"since": now - 200, "until": now}).json()["totals"]
+        assert totals["figures_checked"] == 2, totals
+        assert totals["figures_ungrounded"] == 1, totals
+        assert totals["figures_suppressed"] == 3, totals
+
+
 def test_usage_totals_sum_table_grounding_cells_excluding_non_evidence():
     """The grounded-table (cell-level) stat sums matched/checked NUMERIC cells,
     and no_table/unchecked turns must contribute NOTHING to either sum.
@@ -4074,6 +4100,8 @@ def run():
           test_usage_totals_count_a_guard_refusal_as_real_spend)
     check("usage totals count figure grounding, excluding non-evidence turns",
           test_usage_totals_count_figure_grounding_excluding_non_evidence)
+    check("a suppressed retry is not counted as an ungrounded figure",
+          test_a_suppressed_retry_is_not_counted_as_an_ungrounded_figure)
     check("usage totals sum table-grounding cells, excluding non-evidence turns",
           test_usage_totals_sum_table_grounding_cells_excluding_non_evidence)
     check("usage totals count emit_mode + leaks (structured-emission telemetry)",
