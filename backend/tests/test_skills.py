@@ -39,7 +39,7 @@ import numpy as np  # noqa: E402
 
 from app import skills  # noqa: E402
 from app.config import get_settings  # noqa: E402
-from app.db import connect, get_meta, init_db  # noqa: E402
+from app.db import connect, get_meta, init_db, set_meta  # noqa: E402
 from app.seeds import SEED_EXAMPLES, SEED_LESSON_REWRITES, SEED_LESSON_UPGRADES  # noqa: E402
 
 get_settings.cache_clear()
@@ -867,6 +867,113 @@ def test_cache_is_scoped_to_the_user_who_asked():
         "another user was served this user's cached answer text"
 
 
+def _with_app_version(version):
+    """Swap skills.get_settings for one reporting `version`, returning the
+    original so the caller can restore it."""
+    orig = skills.get_settings
+    skills.get_settings = lambda: type("S", (), {"app_version": version})()
+    return orig
+
+
+def _seed_one_cache_row(con):
+    con.execute(
+        "INSERT INTO query_cache(question, final_sql, answer_md, data_version, "
+        "created_at, user_id) VALUES ('q','SELECT 1','stale answer',1,0,1)")
+    con.commit()
+
+
+def test_an_upgrade_wipes_the_answer_cache():
+    """THE REGRESSION (found while VERIFYING #326, which is the point): the
+    answer cache outlives the code that justified it. `invalidate_cache()` had
+    exactly one caller — importer.py, after a data import — so nothing cleared
+    the cache when the APP changed. #326 corrected a false award-level rule in
+    SCHEMA.md that had produced a wrong total; on a deployment that pulls the
+    fix, anyone who asked that question within cache_retention_days (30) and
+    0.93 cosine keeps being served the OLD wrong answer verbatim, and the fix
+    never reaches them.
+
+    Observed exactly that during verification: the re-asked question replayed
+    10,592 with model_used='cache' and no SQL events."""
+    con = skills.connect()
+    try:
+        con.execute("DELETE FROM query_cache")
+        set_meta(con, skills._CACHE_VERSION_KEY, "0.3.0")
+        con.commit()
+        _seed_one_cache_row(con)
+        assert _cache_row_count(con) == 1
+    finally:
+        con.close()
+
+    orig = _with_app_version("0.4.0")
+    try:
+        n = skills.invalidate_cache_if_version_changed()
+    finally:
+        skills.get_settings = orig
+    assert n == 1, n
+
+    con = skills.connect()
+    try:
+        assert _cache_row_count(con) == 0, "the stale answer survived the upgrade"
+        assert get_meta(con, skills._CACHE_VERSION_KEY) == "0.4.0"
+    finally:
+        con.close()
+
+
+def test_the_SAME_version_leaves_the_cache_alone():
+    """A restart is not an upgrade. Without this the fix is satisfiable by
+    wiping on every boot, which would throw away the cache's whole purpose."""
+    con = skills.connect()
+    try:
+        con.execute("DELETE FROM query_cache")
+        set_meta(con, skills._CACHE_VERSION_KEY, "0.4.0")
+        con.commit()
+        _seed_one_cache_row(con)
+    finally:
+        con.close()
+
+    orig = _with_app_version("0.4.0")
+    try:
+        assert skills.invalidate_cache_if_version_changed() == 0
+    finally:
+        skills.get_settings = orig
+
+    con = skills.connect()
+    try:
+        assert _cache_row_count(con) == 1, "an ordinary restart discarded the cache"
+    finally:
+        con.close()
+
+
+def test_a_database_with_no_marker_is_treated_as_an_upgrade():
+    """The load-bearing case, and the one easy to get backwards. Every existing
+    deployment reaches this release with NO marker and a populated cache — that
+    is precisely the situation the feature exists for. Reading a missing marker
+    as 'already current' would make the feature miss its own first release,
+    which is the bug seed_from_schema_examples shipped (it bailed whenever the
+    table held any row, so new seeds reached fresh installs only)."""
+    con = skills.connect()
+    try:
+        con.execute("DELETE FROM query_cache")
+        con.execute("DELETE FROM meta WHERE key=?", (skills._CACHE_VERSION_KEY,))
+        con.commit()
+        _seed_one_cache_row(con)
+    finally:
+        con.close()
+
+    orig = _with_app_version("0.4.0")
+    try:
+        assert skills.invalidate_cache_if_version_changed() == 1
+    finally:
+        skills.get_settings = orig
+
+    con = skills.connect()
+    try:
+        assert _cache_row_count(con) == 0
+        assert get_meta(con, skills._CACHE_VERSION_KEY) == "0.4.0"
+    finally:
+        con.close()
+
+
 def test_cache_round_trips_the_result_rows_that_back_the_answer():
     """THE REGRESSION: query_cache stored the answer but not its RESULTS, so a
     cache hit persisted messages.results=NULL and every LATER turn in that
@@ -1518,6 +1625,12 @@ def run():
                   test_muted_categories_corrupt_json_fails_open)
     check_pending("a muted-category suppression logs the reason",
                   test_muted_category_suppression_logs_the_reason)
+    check("an upgrade wipes the answer cache",
+          test_an_upgrade_wipes_the_answer_cache)
+    check("the same version leaves the cache alone",
+          test_the_SAME_version_leaves_the_cache_alone)
+    check("a database with no marker is treated as an upgrade",
+          test_a_database_with_no_marker_is_treated_as_an_upgrade)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} lesson test(s) FAILED: {FAILURES}")
