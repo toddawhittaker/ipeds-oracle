@@ -217,7 +217,56 @@ def test_aggregation_check_instruction_covers_truncation():
         "step 3 must name the truncated/incomplete case for the ⚠ marker")
 
 
+def test_step4_pins_the_three_answer_prose_contracts():
+    """Three defects observed in one live pass, all in step 4's territory and
+    all invisible to every checker the app has — grounding grades NUMBERS, and
+    each of these is about the SHAPE of the prose around them.
+
+    1. ONE ENTITY PER ROW. A 54-state answer came back as a three-pair
+       newspaper grid (`| TX | 7,566 | CA | 7,460 | MA | 5,129 |`) with repeated
+       headers. Every value was correct, but column sorting, the CSV export and
+       compare-mode row selection all read one row as one entity, so the grid
+       silently breaks all three — and it is what triggers the anchor-group
+       false ⚠ in grounding.
+    2. DON'T PROMISE A FULLER DOWNLOAD YOU DIDN'T PRODUCE. An answer said 53
+       institutions existed, showed 20 under its own `LIMIT 20`, and pointed at
+       the download "for the full list". The CSV re-runs that same query and
+       returns the same 20 rows.
+    3. NO THINKING OUT LOUD. An answer shipped "…the only school where women are
+       a majority... wait, no — it's actually 23.9% there." Note the FALSE claim
+       precedes the marker, which is why this is prevented in the prompt rather
+       than scrubbed server-side: deleting the marker and what follows would
+       leave the wrong statement standing.
+
+    Nothing in code enforces any of the three, so this wording is the only thing
+    holding them — the same reasoning as the step-6 figure test above."""
+    step4 = prompt.INSTRUCTIONS.split("\n4.", 1)[1].split("\n5.", 1)[0]
+    # Collapse the prompt's hard wrapping: these phrases are contiguous to a
+    # reader but land either side of a newline in the source, and a test that
+    # depends on where the text happens to wrap fails on a reflow.
+    low = " ".join(step4.split()).lower()
+
+    assert "one entity per row" in low, "step 4 must forbid multi-entity rows"
+    assert "sort" in low and "csv" in low, (
+        "say WHY one-entity-per-row matters (sorting/CSV/compare read a row as "
+        "an entity) — a bare rule with no reason is the first thing dropped")
+
+    # Keyed on the DISTINCTION, not on "limit"/"truncat" — step 4 already
+    # contained both words before this rule existed, so those alone pass with the
+    # rule deleted (caught by mutating it out; the assertion was vacuous).
+    assert "if you wrote the" in low and "already showed" in low, (
+        "step 4 must say that a download re-running the model's OWN LIMIT "
+        "returns the same rows, so a 'full list below' promise is false")
+
+    assert "wait, no" in low, (
+        "step 4 must name the self-correction pattern concretely; an abstract "
+        "'be concise' does not stop it")
+    assert "final answer" in low or "not a scratchpad" in low, step4
+
+
 def run():
+    check("step 4 pins the three answer-prose contracts (grid / download / no thinking aloud)",
+          test_step4_pins_the_three_answer_prose_contracts)
     check("_years_fact() names the actual installed years/count/most-recent",
           test_years_fact_names_actual_years)
     check("_years_fact() gives a 'no dataset loaded' message on an empty probe",
