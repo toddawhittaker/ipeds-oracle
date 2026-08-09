@@ -20,20 +20,24 @@ import { mockMe, mockConversations, mockConversation } from "./mocks.js";
 // lands below the fold, and the box becomes scrollable overflow on `.app`.
 // Measured at y=923 in a 900px viewport.
 //
-// Two independent fixes. Only the first is pinned here, deliberately:
+// Two independent fixes, both pinned below:
 //   - `.sr-only` is pinned to `top/left: 0`, so it can never sit past content.
-//     That is the root cause, and the tests below fail without it.
+//     That is the root cause.
 //   - `.app` is `overflow: clip` rather than `hidden`, so the NEXT such mistake
-//     can only clip a pixel instead of stealing the header. That one has NO
-//     test, on purpose: two attempts at one both turned out to be unfailable.
-//     A flex-child spacer is absorbed by `.chat { flex: 1 }` so nothing ever
-//     overflows; an absolutely-positioned probe with an explicit `top` is not
-//     in `.app`'s containing-block chain and so adds no scrollable overflow to
-//     it (only a STATICALLY positioned one does, which is why the real bug
-//     behaved that way); and asserting `scrollHeight > clientHeight` as the
-//     premise is unsatisfiable, because a `clip` box reports no scrollable
-//     overflow by definition. A test that cannot fail is worse than no test,
-//     so there is none — the hardening rests on the comment in styles.css.
+//     can only clip a pixel instead of stealing the header.
+//
+// CORRECTION, recorded because the wrong version was written here first and
+// would have stopped the next reader trying the thing that works: this file
+// used to claim the `clip` half could not be tested, "because a clip box
+// reports no scrollable overflow by definition." That is false. Measured in
+// this repo's own Chromium on the shell's exact CSS, with a 1000px in-flow
+// child in a 600px box:
+//     overflow:hidden  -> {scrollHeight:1018, clientHeight:600, scrollTop:418}
+//     overflow:clip    -> {scrollHeight:1018, clientHeight:600, scrollTop:0}
+// `clip` suppresses scrollTop, NOT scrollHeight. The earlier attempts failed
+// for a different and duller reason: a 200px spacer is absorbed by
+// `.chat { flex: 1 }`, which shrinks to fit, so nothing ever overflowed. The
+// spacer just has to be taller than `.chat` can give up.
 
 const USER = { email: "user@example.edu", is_admin: false };
 
@@ -107,5 +111,32 @@ test.describe("the app shell never scrolls the top bar away", () => {
       const g = await shell(page);
       expect(g.topbarY, "the top bar was scrolled out of view").toBe(0);
       expect(g.appTop).toBe(0);
+    });
+
+  test("the shell cannot be scrolled even when something overflows it",
+    async ({ page }) => {
+      // The `clip` half. The spacer must be taller than `.chat` can shrink by
+      // (`.chat { flex: 1; min-height: 0 }` will give up everything it has), or
+      // flex absorbs it and there is nothing to scroll — which is exactly how
+      // the first two versions of this test came to pass against `hidden`.
+      await open(page);
+      const after = await page.evaluate(() => {
+        const app = globalThis.document.querySelector(".app");
+        const spacer = globalThis.document.createElement("div");
+        spacer.style.cssText = "height:2000px;flex:none";
+        app.appendChild(spacer);
+        const grew = app.scrollHeight > app.clientHeight;
+        app.scrollTop = 500;            // what focus()/scrollIntoView() does
+        return {
+          grew, top: app.scrollTop,
+          y: Math.round(globalThis.document
+            .querySelector(".topbar").getBoundingClientRect().y),
+        };
+      });
+      // The premise: the shell really is overflowing now. Without this the two
+      // assertions below are satisfiable by there being nothing to scroll.
+      expect(after.grew, "the spacer failed to overflow the shell").toBe(true);
+      expect(after.top, "the shell scrolled — it must not be scrollable").toBe(0);
+      expect(after.y, "the top bar moved").toBe(0);
     });
 });

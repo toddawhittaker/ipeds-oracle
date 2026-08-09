@@ -193,20 +193,34 @@ export default function Skills({ onAttentionChanged }) {
   const undoRejection = (r) =>
     api.deleteSkillRejection(r.id)
       .then(() => {
-        announce("Rejection cleared.", "ok");
+        announce("That lesson can be proposed again.", "ok");
         setRejections((rs) => rs.filter((x) => x.id !== r.id));
         requestAnimationFrame(() => rejectedSummaryRef.current?.focus?.());
       })
       .catch(() => announce("Couldn't clear that rejection.", "error"));
 
-  const clearRejections = () =>
-    api.clearSkillRejections()
-      .then(() => {
-        announce("Cleared every rejected-lesson record.", "ok");
+  // The friction ladder was INVERTED: rejecting one verified lesson opens a
+  // danger modal, while this — which makes every previously rejected idea
+  // re-proposable and cannot be undone without waiting for each to recur and
+  // rejecting it again — was a bare link. Name the count, like every other
+  // bulk confirmation in the app.
+  const clearRejections = () => {
+    const n = rejections.length;
+    confirm({
+      variant: "danger",
+      title: `Clear all ${n} rejection record${n === 1 ? "" : "s"}?`,
+      body: "The assistant may start proposing these ideas again. The lessons "
+        + "themselves are already deleted; this can't be undone.",
+      confirmLabel: `Clear ${n} record${n === 1 ? "" : "s"}`,
+      onConfirm: () => api.clearSkillRejections(),
+      successToast: "Cleared every rejected-lesson record.",
+      errorToast: "Couldn't clear the rejected-lesson list.",
+      onSuccess: () => {
         setRejections([]);
         requestAnimationFrame(() => rejectedSummaryRef.current?.focus?.());
-      })
-      .catch(() => announce("Couldn't clear the rejected-lesson list.", "error"));
+      },
+    });
+  };
 
   const mutedCategories = categories.filter((c) => c.muted);
 
@@ -395,8 +409,9 @@ export default function Skills({ onAttentionChanged }) {
                   <div key={r.id} className="skill">
                     <div className="skill-head">
                       <span className="lesson-rule">{rHeadline}</span>
-                      <button className="link" aria-label={`Undo rejection: ${rHeadline}`}
-                              onClick={() => undoRejection(r)}>Undo</button>
+                      <button className="link"
+                              aria-label={`Allow this lesson to be proposed again: ${rHeadline}`}
+                              onClick={() => undoRejection(r)}>Allow again</button>
                     </div>
                     {rDescription && <p className="muted small">{rDescription}</p>}
                   </div>
