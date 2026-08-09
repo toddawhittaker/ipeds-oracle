@@ -1291,6 +1291,24 @@ The three guards:
   `cache_max_rows`, non-positive disables, OFFSET-based row cap, incremental-vacuum
   reclaim) and runs opportunistically on the **write** path only — a read must
   stay cheap. Pinned in `test_skills.py`.
+  **An APP UPGRADE also wipes it**, which nothing did before: a cached answer is
+  a verbatim replay of prose an older build produced under an older
+  `SCHEMA.md`/system prompt, so a code change can leave stored answers that are
+  simply WRONG. Found while *verifying* #326 — that PR fixed a false award-level
+  rule, and re-asking the question returned the pre-fix total from cache
+  (`model_used='cache'`, no SQL events); at 30-day retention and 0.93 similarity
+  the fix would have reached nobody who had already asked.
+  `invalidate_cache_if_version_changed` (called from `lifespan`) compares
+  `config.app_version` to the `meta` key `cache_app_version`. **A MISSING marker
+  counts as changed** — every deployment upgrading INTO the release that adds
+  this has no marker and a full cache, so reading "no marker" as "current" would
+  make the feature miss its own first release, the exact bug
+  `seed_from_schema_examples` shipped. Version-keyed, not content-keyed, on
+  purpose: it wipes once per upgrade even when nothing relevant moved (one cache
+  miss per question), because a needless miss costs a query while a stale hit
+  ships a wrong answer. Fingerprinting `SCHEMA.md` + the prompt per row is the
+  better design and is backlog. `app_version` is `"dev"` locally, so dev wipes
+  at most once.
   **A cache hit carries its own evidence** (`query_cache.results` +
   `results_truncated`, migration 31). It used to store the answer but not the ROWS
   behind it, so the cached branch persisted `messages.results=NULL` and every

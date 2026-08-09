@@ -114,6 +114,18 @@ async def lifespan(app: FastAPI):
             log.warning("marked %d interrupted import job(s) as failed", n)
     except Exception as e:  # noqa: BLE001 -- housekeeping must never block boot
         log.warning("import job reconciliation skipped: %s", e)
+    # A cached answer is a verbatim replay of prose an OLDER build produced under
+    # an older SCHEMA.md/system prompt, so a code upgrade can leave stored
+    # answers that are simply wrong — #326 fixed a false award-level rule and the
+    # pre-fix total kept being served from cache. Runs before anything can be
+    # answered; non-fatal like the rest of this housekeeping.
+    try:
+        from app.skills import invalidate_cache_if_version_changed
+        n = invalidate_cache_if_version_changed()
+        if n:
+            log.info("app version changed — cleared %d cached answer(s)", n)
+    except Exception as e:  # noqa: BLE001
+        log.warning("answer-cache version check skipped: %s", e)
     # Upgrade BEFORE seeding, so the seed backfill
     # (skills._backfill_applied_seed_keys) sees rows already normalized to the
     # current headline text. NOT load-bearing — that backfill also matches on

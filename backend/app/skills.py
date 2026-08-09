@@ -49,6 +49,10 @@ _EMBED_SOURCE_VERSION = "2"
 # — including ones added in a release the deployment upgraded INTO.
 _SEED_APPLIED_KEY = "seed_lessons_applied"
 
+# `meta` key holding the app version whose code produced the CURRENT contents of
+# query_cache. See invalidate_cache_if_version_changed.
+_CACHE_VERSION_KEY = "cache_app_version"
+
 # `meta` key holding the JSON list of app.lessoncats tokens an admin has muted
 # (A2: lesson-rejection memory) — state, not config, so it lives beside
 # _SEED_APPLIED_KEY rather than in a table: at most a handful of elements,
@@ -660,6 +664,56 @@ def invalidate_cache() -> None:
     try:
         con.execute("DELETE FROM query_cache")
         con.commit()
+    finally:
+        con.close()
+
+
+def invalidate_cache_if_version_changed() -> int:
+    """Wipe the answer cache when the APP has changed since it was written.
+    Returns how many rows were dropped (0 = same version, nothing to do).
+
+    A cached answer is a verbatim replay of prose produced by a particular
+    build, under a particular system prompt and a particular SCHEMA.md. When
+    those change the stored answer can become simply WRONG, and until now
+    nothing noticed: `invalidate_cache` had exactly one caller — importer.py,
+    after a data import — so an app upgrade left every row in place.
+
+    Found while verifying #326, which is the part worth remembering. That PR
+    corrected a false award-level rule in SCHEMA.md that had made the agent
+    double-count short certificates. Re-asking the question on the fixed build
+    replayed the OLD wrong total from cache (`model_used='cache'`, no SQL
+    events) and the fix reached nobody who had already asked. With
+    `cache_retention_days` at 30 and a 0.93 similarity threshold, that is a
+    wide door.
+
+    **A MISSING marker counts as changed, and that is the load-bearing case.**
+    Every deployment upgrading INTO the release that adds this arrives with no
+    marker and a populated cache — exactly the situation this exists for.
+    Reading "no marker" as "already current" would make the feature miss its own
+    first release, which is the bug `seed_from_schema_examples` shipped (it
+    bailed whenever the table held any row, so lessons added in a later release
+    reached fresh installs only). A fresh database simply has nothing to delete
+    and records the marker on the way past.
+
+    Version-keyed rather than content-keyed on purpose: this wipes once per
+    upgrade even when nothing relevant moved, costing one cache miss per
+    question. Keying on a fingerprint of SCHEMA.md + the prompt would invalidate
+    precisely when the thing that determines the answer changes, which is the
+    better design and a bigger one (it needs the hash stored per row). The
+    conservative direction is the safe one here: a needless miss costs a query,
+    a stale hit ships a wrong answer.
+
+    `app_version` is "dev" outside Docker, so local development wipes at most
+    once and then never again."""
+    version = get_settings().app_version
+    con = connect()
+    try:
+        if get_meta(con, _CACHE_VERSION_KEY) == version:
+            return 0
+        n = con.execute("DELETE FROM query_cache").rowcount or 0
+        set_meta(con, _CACHE_VERSION_KEY, version)
+        con.commit()
+        return n
     finally:
         con.close()
 
