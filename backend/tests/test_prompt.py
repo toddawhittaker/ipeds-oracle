@@ -264,9 +264,35 @@ def test_step4_pins_the_three_answer_prose_contracts():
     assert "final answer" in low or "not a scratchpad" in low, step4
 
 
+def test_step4_forbids_estimating_a_number_in_prose():
+    """The fourth prose contract, and the only mitigation for a defect the
+    grounding kernel deliberately does NOT cover (see grounding.py's docstring:
+    three prose-checking scopings were measured and none is usable).
+
+    Both live instances were sentences, not tables: a fabricated "~31,000 total
+    national Mechanical Engineering bachelor's" against a true 33,126, and
+    "about 165,000 degrees ... roughly 32 per 100" over a column that sums to
+    155,693 (30.0). Every table cell in both answers was exact.
+
+    Keyed on the ACTIONABLE half — "run the query" — rather than on "total" or
+    "query", both of which step 4 already contained before this rule existed.
+    That is the vacuous-assertion trap this same test hit once already."""
+    step4 = prompt.INSTRUCTIONS.split("\n4.", 1)[1].split("\n5.", 1)[0]
+    low = " ".join(step4.split()).lower()
+    assert "must come from a query" in low, (
+        "step 4 must require prose numbers to come from a query, like table cells")
+    assert "in your head" in low, (
+        "name the actual behaviour being forbidden — estimating — not just "
+        "'be accurate'")
+    assert "run the" in low and "select" in low, (
+        "give the remedy: run one more SELECT rather than drop the sentence")
+
+
 def run():
     check("step 4 pins the three answer-prose contracts (grid / download / no thinking aloud)",
           test_step4_pins_the_three_answer_prose_contracts)
+    check("step 4 forbids estimating a number in prose",
+          test_step4_forbids_estimating_a_number_in_prose)
     check("_years_fact() names the actual installed years/count/most-recent",
           test_years_fact_names_actual_years)
     check("_years_fact() gives a 'no dataset loaded' message on an empty probe",
