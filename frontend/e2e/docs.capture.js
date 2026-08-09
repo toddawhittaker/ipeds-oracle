@@ -27,7 +27,8 @@ import { test, expect } from "@playwright/test";
 import {
   mockMe, mockAuthConfig, mockVersion, mockAttention, mockConversations,
   mockConversation, mockAllowlist, mockAccessRequests, mockDeniedRequests,
-  mockSkills, mockLogs, mockMarkLogsSeen, mockImportJobs, mockImportCatalog,
+  mockSkills, mockSkillCategories, mockSkillRejections,
+  mockLogs, mockMarkLogsSeen, mockImportJobs, mockImportCatalog,
   mockUsage, gotoAdmin,
 } from "./mocks.js";
 
@@ -174,7 +175,24 @@ async function adminMocks(page) {
       sql_example: "-- one program:\nWHERE cipcode = '51.3801'\n-- a whole family: use the 2-digit rollup row, not LIKE\nWHERE cipcode = '51'",
       canonical_sql: "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='51.3801';",
       verified: 0, created_by: "user-feedback", created_at: 1_759_500_000,
-      upvotes: 2, downvotes: 0, hits: 7 },
+      upvotes: 2, downvotes: 0, hits: 7, category: "CIP_ROLLUP" },
+  ]);
+  // Without these two the Skills shot loses its category pill and "Reject &
+  // mute" (both fail CLOSED on a missing category list) AND renders a red
+  // "couldn't load rejected lessons" box — a published screenshot of an error
+  // state. Tokens and labels are the real ones from backend/app/lessoncats.py.
+  await mockSkillCategories(page, [
+    { token: "CIP_ROLLUP", label: "CIP rollup double-count", learnable: true,
+      muted: false, pending: 1 },
+    { token: "SECOND_MAJOR", label: "Second-major double-count", learnable: true,
+      muted: false, pending: 0 },
+    { token: "MAGNITUDE", label: "Implausible magnitude", learnable: true,
+      muted: true, pending: 0 },
+  ]);
+  await mockSkillRejections(page, [
+    { id: 4, headline: "Always state the award level in the answer.",
+      description: "Proposed three times and declined each time — the method line already carries it.",
+      category: "QUESTION_MISMATCH", created_by: "critic", created_at: 1_759_000_000 },
   ]);
   await mockLogs(page, [
     { ts: 1_759_990_000, level: "INFO", name: "ipeds.app", msg: "Answered question in 8.4s (cache miss, 2 tool calls)" },

@@ -11,6 +11,150 @@ detail.
 
 ---
 
+## v0.4.0
+
+The hardening release. Nothing here changes what the app is for — it is 48
+commits of closing holes, most of them found by reading the code rather than by
+anything going wrong in production. The container no longer runs as root, four
+importer paths that could report the wrong outcome now report the right one, a
+single SQL query can no longer exhaust the container's memory, and the two
+"grounded" figures on Admin → Usage stopped crediting numbers they could not
+actually verify.
+
+### Read this before upgrading
+
+- **Run `sudo chown -R 10001:10001 ./srv-data` before you pull.** The container
+  now runs as the numeric uid/gid **10001**, and Docker never chowns a bind
+  mount for you. Skip this and the app **exits on first boot** rather than
+  starting — printing the exact command and the uid it is running as. That is a
+  startup check doing its job, not a broken release. If your host files must
+  keep another owner, set `IPEDS_UID`/`IPEDS_GID` in `.env` instead.
+- **`BIND_ADDR` now defaults to loopback.** `compose.yaml` publishes :8000 on
+  `127.0.0.1` instead of `0.0.0.0`, because Docker inserts published ports into
+  its own iptables chain that a host `ufw`/`firewalld` policy does **not**
+  filter — so the old default was reachable from the network however the host
+  firewall was set. If you reach the app directly by LAN address rather than
+  through a proxy or tunnel, set `BIND_ADDR=0.0.0.0` explicitly.
+- **Rolling back to v0.3.0 refuses to start.** `app.db` goes from schema 33 to
+  35 in this release. To actually go back, restore the `app.db.pre-v33` snapshot
+  the upgrade takes automatically, alongside the older image.
+- **Running the backup script inside the container needs `BACKUP_DIR`.** Its
+  `--out-dir` defaults to a relative `backups/`, which uid 10001 cannot create.
+  Set `BACKUP_DIR=/data/backups`. Running it on the host against the bind mount
+  is unaffected. Likewise, if you override `EMBED_MODEL`, set
+  `FASTEMBED_CACHE_PATH=/data/models` — the baked model cache is read-only.
+
+### Numbers on Admin → Usage will move
+
+Both of these are the meter getting more honest, not a regression.
+
+- **Spend goes up, and may now show a `~`.** Every LLM call a turn causes is
+  billed, not just the agent's — the topical guard (which runs on *every*
+  question, including one the answer cache serves), the title call, and the
+  feedback distiller were all invisible before. Pulling the other way,
+  cached-prompt tokens are now priced at their own much lower rate, which took a
+  measured estimate from 5.0× over the provider's real bill to about 1.5×. A
+  tile whose window contains any estimated row is marked `~` and says how many.
+- **Grounded figures steps down and Grounded cells with it.** A total computed
+  over a truncated page can no longer ground itself against those same partial
+  rows. The kernel was corroborating the exact error it exists to catch.
+
+### Security
+
+- **The container runs as a non-root user** (uid/gid 10001) with
+  `no-new-privileges` and all Linux capabilities dropped.
+- **A startup preflight explains itself.** An unwritable data directory used to
+  surface as a `sqlite3.OperationalError` traceback from inside uvicorn's app
+  import, mentioning neither ownership, nor the uid, nor the fix. It now exits
+  with a plain instruction naming every failing path.
+- **HSTS**, sent only from a deployment whose `APP_PUBLIC_URL` is actually
+  https, with no `includeSubDomains` and no `preload` — a blanket policy would
+  force https on anything else the host serves.
+- **CSV exports can't smuggle a formula.** A cell (or a column header, which
+  comes from SQL aliases the model wrote) beginning `=`, `+`, `-`, `@`, tab or
+  carriage return is prefixed so Excel treats it as text.
+- **One SQL query can no longer exhaust the container.** Three bounds, each
+  added after the previous was defeated: one value, one row, and the whole
+  result. Measured worst case went from 5,046 MB to 35 MB, with an ordinary
+  100k-row export unchanged at 0.18s.
+- **A restart no longer re-grants a removed admin.** An address in
+  `ADMIN_EMAILS` was re-promoted on every boot, so demoting someone lasted until
+  the next restart.
+
+### Data safety
+
+- **Four importer paths reported the wrong outcome.** A failure *after* the
+  atomic swap wrote `status='failed'` over a dataset that was already live, and
+  the tab toasted "the live database was not changed" — the opposite of the
+  truth. The NCES integrate path and year-removal had the same bug.
+- **Staging records what it is about to change, before it changes it.** A
+  disk-full mid-batch could strand a previous year's file as `<name>.accdb.bak`,
+  which the year-drop guard then refused to see — blocking every later import.
+- **A manual import stops leaving 1–3 GB of Access files on disk forever**, and
+  "is this the same file?" is now decided by device+inode identity rather than
+  by comparing path strings, which also catches a hard link.
+- **Migrations are atomic**, so a part-way failure no longer bricks every later
+  boot on "duplicate column name".
+
+### Answers
+
+- **A truncated result may not supply the total the model claimed.** See above.
+- **The reviewer's findings are gated before they become lessons.** Only the
+  five data-modeling categories can be learned; the prompt no longer reveals
+  which, so relabeling cannot route around the gate. The revision round still
+  fires for every category.
+- **A rejected lesson is remembered.** Rejecting used to delete the only
+  evidence that would have suppressed the next identical proposal, so the same
+  lesson came back forever. Admin → Skills gains a category pill, a
+  **Reject & mute** action, and collapsed **Rejected (N)** / **Muted
+  categories (N)** sections with Undo and Unmute.
+- **A provider's non-JSON 200 no longer kills the stream** and loses the turn.
+- **Tool calls run off the event loop.** One 25-second query used to stall every
+  other user's stream, the admin console, and `/api/health`.
+
+### Chat and admin
+
+- **A stopped turn's note is true now.** It said "reopen it in a moment to
+  check" and nothing in the app could do that. It now says whether the answer is
+  still being written or has been saved, and offers a **Check now** that works.
+- **Edit, Rerun and a suggestion chip scroll your new question into view**, the
+  way Send always has.
+- **A copy that failed says so** instead of looking like it worked.
+- **A failed admin refresh says so** instead of leaving stale rows looking
+  current, and an empty table no longer means "nobody can sign in" when the
+  truth is the list could not be fetched.
+- **Integrate confirms first** and says what the rebuild will actually do; a
+  rebuild started by another session locks the tab and says who started it.
+- **The row cap in a truncated-table caption comes from the server**, not a
+  hardcoded 200.
+- **A crash leaves a way out.** A throw in one route no longer takes the account
+  menu with it, and the offered "Reload" no longer recommends the one action
+  that discards an answer still being written.
+
+### Accessibility
+
+- **Every admin table scrolls inside its own region** (WCAG 1.4.10) instead of
+  making the whole page scroll in two directions.
+- **A touch tap opens the help popover** instead of opening and immediately
+  closing it — while the Usage tab was telling admins to "hover or tap the ⓘ".
+- **The axe gate scans below the fold**, in a tall viewport. It only
+  contrast-checks text inside the viewport, so a third of `/admin/logs` was
+  going unmeasured; widening it found four real fixes.
+- Two AA contrast fixes, and the help popover is keyboard-reachable.
+
+### For developers
+
+- The persisted-answer field list, the `done` event's fields, and the browser
+  side of both are all **derived** now rather than hand-maintained in ten
+  places — a miss used to render correctly after a refresh and wrongly only on
+  the turn that produced it.
+- CI: every job has a timeout; `ci_env.sh` pins the two settings that bleed from
+  a developer's `.env`; the CodeQL action is pinned to an exact patch.
+- Dependencies swept, including three advisories `npm audit` was never run to
+  find.
+
+---
+
 ## v0.3.0
 
 A small release with one consequential change: **the app no longer ships a
