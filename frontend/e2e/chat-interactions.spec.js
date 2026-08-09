@@ -198,6 +198,77 @@ test.describe("stop generating", () => {
       expect(calls[2].edit_message_id).toBe(51);
     });
 
+  test("Rerun is blocked until a stopped turn's ids arrive, so it cannot append a duplicate",
+    async ({ page }) => {
+      // THE WINDOW THE EXISTING TESTS STEP OVER. Stop clears `busy` at once,
+      // but the server ids land only when the drained stream settles. Rerun in
+      // between sends edit_message_id: null, so _persist skips its DELETE and
+      // APPENDS — a silent duplicate of the question being replaced, with no
+      // confirmation because a stopped turn is the last one.
+      //
+      // The sibling test above deliberately waits the drain out first ("that is
+      // when the done event (and so the ids) actually arrives"), which is
+      // exactly why it never saw this.
+      await mockMe(page, USER);
+      await mockConversations(page, []);
+      const stream = await mockStreamChat(page, {
+        conversationId: 7, delayMs: 1500, answer: "The eventual answer.",
+        messageId: 42, userMessageId: 41,
+      });
+      await page.goto("/");
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+      await expect(page.getByText(/^Stopped\./)).toBeVisible();
+
+      // Mid-drain: Rerun is offered but inert, and says why. Asserted
+      // SYNCHRONOUSLY — an auto-retrying matcher would wait the 1.5s stream out
+      // and check the state after the ids have landed.
+      const rerun = page.getByRole("button", { name: "Rerun" });
+      expect(await rerun.getAttribute("aria-disabled")).toBe("true");
+      // force: Playwright's actionability check treats aria-disabled as
+      // disabled and would WAIT for the drain, then click legitimately — which
+      // is precisely the window this test exists to cover. A real user's mouse
+      // has no such courtesy: the button is still clickable, and only the
+      // handler's early return stops it.
+      await rerun.click({ force: true });
+      expect(stream.calls.length, "a second turn was started before the ids arrived")
+        .toBe(1);
+
+      // Once the drained stream settles the ids exist, so Rerun works and
+      // carries the id — i.e. the gate opens rather than being a dead control.
+      await expect(rerun).not.toHaveAttribute("aria-disabled", "true");
+      await rerun.click();
+      await expect.poll(() => stream.calls.length).toBe(2);
+      expect(stream.calls[1].edit_message_id).toBe(41);
+    });
+
+  test("a stopped turn whose stream FAILED does not claim the answer was saved",
+    async ({ page }) => {
+      // settleTurn deliberately does not key on `failed` — a drop between
+      // _persist and `done` leaves the answer on disk. But an error BEFORE
+      // _persist saved nothing, and the note asserted "saved" for those too,
+      // with a Check now that would replace the reader's own question with the
+      // thread as it stood before they asked.
+      await mockMe(page, USER);
+      await mockConversations(page, []);
+      await page.route("**/api/chat/stream", async (route) => {
+        await new Promise((r) => setTimeout(r, 600));
+        await route.abort("connectionreset");
+      });
+      await page.goto("/");
+
+      await page.getByPlaceholder("Ask about IPEDS data…").fill("slow question");
+      await page.getByRole("button", { name: "Send" }).click();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+
+      await expect(page.getByText(/connection dropped before the answer was saved/))
+        .toBeVisible();
+      await expect(page.getByText(/has been saved to this chat/)).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Check now" })).toHaveCount(0);
+    });
+
   test("the stopped note waits for the answer, then offers a check that works",
     async ({ page }) => {
       // The note used to say "reopen it in a moment to check", and there was no

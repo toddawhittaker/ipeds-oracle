@@ -268,6 +268,37 @@ def validate_sql(sql: str) -> str:
     return cleaned
 
 
+# KNOWN, UNFIXED: an ORDER BY with no LIMIT spills gigabytes of SQLite temp
+# files, and none of the three bounds above can see it.
+#
+# All three measure Python-side rows AFTER they are produced. SQLite's external
+# sorter never produces one: it materializes the whole input into anonymous
+# temp files first, and with no `temp_store` set those land in /var/tmp on the
+# container's writable layer. `run_sql` deliberately does not rewrite the query
+# to add a LIMIT (see its docstring), so the row cap cannot help either.
+# Measured on the real dataset: `SELECT * FROM c_a ORDER BY ctotalt DESC`
+# returned 200 rows in 7.3 s having spilled 0.71 GB. Reachable by ACCIDENT —
+# that is just "which programs award the most degrees?" without a LIMIT.
+#
+# Three remediations were measured and all three are worse than the disease.
+# Recorded so nobody re-derives them:
+#   1. `PRAGMA temp_store=MEMORY` alone routes the sort into RAM: the same
+#      query then costs 701 MB RSS for an ORDINARY top-50-institutions
+#      question (join + GROUP BY + ORDER BY), i.e. it converts bounded disk
+#      into unbounded memory, which is strictly worse under concurrency.
+#   2. temp_store=MEMORY + `PRAGMA hard_heap_limit` bounds it, but the limit is
+#      process-GLOBAL and that same legitimate top-50 query fails with
+#      MemoryError at every value tried from 256 MB to 1536 MB.
+#   3. A `sqllint` rule for "ORDER BY with no LIMIT" would fire on 60.3% of the
+#      239 real queries in a production app.db (16.7% even when narrowed to
+#      ungrouped, non-window sorts), overwhelmingly on cheap ones like
+#      `SELECT DISTINCT year FROM c_a ORDER BY year`. A lint that wrong that
+#      often teaches the model to ignore lints.
+# What is left is a deployment-level bound (a size-capped tmpfs at
+# SQLITE_TMPDIR), which belongs in compose.yaml and needs its own sizing
+# measurement — the spill is transient (the file is unlinked when the query
+# ends) and the 25 s watchdog caps a single query, so this is a disk spike
+# rather than a permanent fill.
 def _connect_ro(db_path: Path) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode=ro&immutable=1"
     con = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=1.0)
