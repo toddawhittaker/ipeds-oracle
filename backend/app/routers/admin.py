@@ -1142,6 +1142,14 @@ def usage(since: float | None = None, until: float | None = None,
             "AS figures_checked, "
             "COALESCE(SUM(CASE WHEN figure_grounding='ungrounded' THEN 1 ELSE 0 END),0) "
             "AS figures_ungrounded, "
+            # A figure the retry FORCED, found ungrounded and therefore withheld.
+            # Deliberately outside both counts above: the turn led with no figure,
+            # so scoring it as a miss contradicts this stat's own definition — it
+            # read 88.2% against a true 92.5% on the real log. Surfaced as its own
+            # number instead, so the suppression rate stays visible rather than
+            # disappearing along with the miscount.
+            "COALESCE(SUM(CASE WHEN figure_grounding='retry_suppressed' THEN 1 ELSE 0 END),0) "
+            "AS figures_suppressed, "
             # Structured-emission telemetry (PR-1): of the real agent turns (an
             # emit_mode was recorded — excludes cache hits/refusals/NULL), how
             # many used the structured tool, and how many LEAKED residual debris
