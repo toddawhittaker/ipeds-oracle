@@ -211,7 +211,22 @@ function TableTrust({ status, cellsChecked, cellsMatched, hasSql }) {
 // `conversation` event) and a view that is busy streaming a LATER turn, whose
 // finalize writes positionally into `messages` and would land on the refetched
 // rows.
-function StoppedNote({ live, canCheck, onCheck }) {
+function StoppedNote({ live, failed, canCheck, onCheck }) {
+  // THREE states, not two. `failed` is the one added after review: the stream
+  // is over, but it ENDED BADLY, so nothing was necessarily persisted — the
+  // generator may have unwound before _persist, and _delete_if_empty may have
+  // removed a new chat's row. Claiming "saved" there is a promise the app
+  // cannot keep, and the Check-now refetch would then replace the reader's own
+  // question with the thread as it stood before they asked — the exact outcome
+  // the `live` gate exists to prevent, reached through the other door.
+  if (failed) {
+    return (
+      <p className="stopped-note">
+        Stopped. The connection dropped before the answer was saved, so this
+        one may not be in the chat. Ask again to be sure.
+      </p>
+    );
+  }
   return (
     <p className="stopped-note">
       {live
@@ -396,6 +411,9 @@ export default function Chat({ me }) {
   // carry no `_turn`, and edit/rerun slices them off. Same self-scoping argument
   // as the abandoned-turn id lookup in submit().
   const localTurnKeys = new Set(messages.map((m) => m._turn).filter(Boolean));
+  // Has this message's turn not yet had its server ids applied? True only
+  // between Stop and the drained stream settling — see the Edit/Rerun gate.
+  const turnIdsPending = (m) => inflight.isTurnLive(m._turn, inflightSnap);
   const pendingTurns = inflight.pendingFor(convId, inflightSnap)
     .filter((t) => !localTurnKeys.has(t.key));
 
@@ -1090,6 +1108,16 @@ export default function Chat({ me }) {
         const c = [...m];
         if (ai >= 0 && msgId) c[ai] = { ...c[ai], id: msgId };
         if (ui >= 0 && userMsgId) c[ui] = { ...c[ui], id: userMsgId };
+        // ...and, when the stream THREW, one more identity-shaped fact: that
+        // it did. Not content — the stopped note reads it to stop claiming
+        // the answer was saved. `settleTurn` runs on both branches and
+        // deliberately does not key on `failed` (see its call site: a drop
+        // between _persist and `done` leaves the answer ON disk, so reloading
+        // and letting the server say what exists is the only reading that
+        // can't be wrong). But an error BEFORE _persist — a 429, an expired
+        // session, an early transport failure — persisted nothing, and the
+        // note was asserting "saved" for those too.
+        if (failed && ai >= 0) c[ai] = { ...c[ai], stoppedFailed: true };
         return c;
       });
     }
@@ -1303,6 +1331,7 @@ export default function Chat({ me }) {
                       </div>
                     ) : m.stopped ? (
                       <StoppedNote live={inflight.isTurnLive(m._turn, inflightSnap)}
+                                   failed={!!m.stoppedFailed}
                                    canCheck={convId != null && !busy}
                                    onCheck={checkStoppedTurn} />
                     ) : (
@@ -1355,11 +1384,34 @@ export default function Chat({ me }) {
                 ) : (
                   <>
                     <Markdown>{m.content || ""}</Markdown>
+                    {/* Edit and Rerun are BLOCKED while this turn's stream is
+                        still draining. Stop clears `busy` immediately, but the
+                        server ids are only applied when the drained turn
+                        settles — so in that window `m.id` is undefined, the
+                        request carries edit_message_id: null, `_persist` skips
+                        its DELETE and APPENDS, and the database silently grows
+                        a duplicate of the question being replaced. A stopped
+                        turn is the last one, so laterTurnsLost() is 0 and no
+                        confirmation fires either. The existing regression test
+                        waits the drain out before rerunning, which is exactly
+                        why this window survived it.
+                        aria-disabled, not `disabled`: a natively disabled
+                        button is unfocusable, so the title explaining WHY
+                        could never be read. The handlers early-return. */}
                     <div className="msg-actions user-actions">
-                      <button className="link ico" onClick={(e) => startEdit(i, m.content, e.currentTarget)}
-                              title="Edit this prompt"><IconEdit />Edit</button>
-                      <button className="link ico" onClick={() => rerun(i)} disabled={busy}
-                              title="Run this prompt again"><IconRerun />Rerun</button>
+                      <button className="link ico"
+                              aria-disabled={turnIdsPending(m) || undefined}
+                              onClick={(e) => { if (turnIdsPending(m)) return;
+                                startEdit(i, m.content, e.currentTarget); }}
+                              title={turnIdsPending(m)
+                                ? "Available once the stopped answer finishes saving"
+                                : "Edit this prompt"}><IconEdit />Edit</button>
+                      <button className="link ico" disabled={busy}
+                              aria-disabled={turnIdsPending(m) || undefined}
+                              onClick={() => { if (turnIdsPending(m)) return; rerun(i); }}
+                              title={turnIdsPending(m)
+                                ? "Available once the stopped answer finishes saving"
+                                : "Run this prompt again"}><IconRerun />Rerun</button>
                       {formatStamp(m.created_at) && (
                         <span className="msg-time" title="When you asked"
                               aria-label={`Asked at ${formatStamp(m.created_at)}`}>
