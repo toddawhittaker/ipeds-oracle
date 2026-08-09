@@ -222,8 +222,8 @@ function StoppedNote({ live, failed, canCheck, onCheck }) {
   if (failed) {
     return (
       <p className="stopped-note">
-        Stopped. The connection dropped before the answer was saved, so this
-        one may not be in the chat. Ask again to be sure.
+        Stopped. The request failed, so the answer may not have been saved.
+        Ask again to be sure.
       </p>
     );
   }
@@ -411,9 +411,37 @@ export default function Chat({ me }) {
   // carry no `_turn`, and edit/rerun slices them off. Same self-scoping argument
   // as the abandoned-turn id lookup in submit().
   const localTurnKeys = new Set(messages.map((m) => m._turn).filter(Boolean));
-  // Has this message's turn not yet had its server ids applied? True only
-  // between Stop and the drained stream settling — see the Edit/Rerun gate.
-  const turnIdsPending = (m) => inflight.isTurnLive(m._turn, inflightSnap);
+  // Can this user message be edited or re-run without APPENDING a duplicate?
+  //
+  // It cannot if it has no server `id`: the request then carries
+  // edit_message_id: null, `_persist` skips its `DELETE ... id>=?` and appends,
+  // while the client has already sliced its own copy away. A stopped turn is
+  // one way to be in that state; it is not the only one, and keying on
+  // `inflight.isTurnLive` covered only that one. A turn whose stream THREW
+  // settles with rendered:true, so the entry is deleted and the turn reads as
+  // finished — but `done` never arrived, so there is still no id, and the
+  // assistant-side "Try again" points straight at it. Asking whether the id is
+  // actually there covers every route by construction.
+  //
+  // `!busy` keeps an ordinary streaming turn out of it: its id has not arrived
+  // either, but nothing can be submitted mid-stream anyway (Rerun and the
+  // editor's Send are both `disabled={busy}`), and gating on it alone made
+  // every normal turn render Edit as inert with a tooltip about a stop that
+  // never happened.
+  //
+  // `isTurnLive` scopes it to a turn that is STILL DRAINING — i.e. a stop,
+  // where the note promises the answer is being saved and the ids are
+  // genuinely on their way. A turn that FAILED also has no id, and gating on
+  // `m.id == null` alone therefore blocked "Try again" on every failed turn,
+  // which is that button's entire purpose (caught by the inline-error-retry
+  // test). Accepted limitation: if a request drops AFTER `_persist` committed
+  // but before `done`, retrying appends rather than replaces. The client
+  // cannot tell that apart from the ordinary case where nothing was persisted
+  // and appending is exactly right — the same ambiguity `settleTurn` documents
+  // — and blocking recovery on every real failure to prevent the rare
+  // duplicate is the worse trade.
+  const turnIdsPending = (m) =>
+    !busy && m != null && m.id == null && inflight.isTurnLive(m._turn, inflightSnap);
   const pendingTurns = inflight.pendingFor(convId, inflightSnap)
     .filter((t) => !localTurnKeys.has(t.key));
 
@@ -944,6 +972,11 @@ export default function Chat({ me }) {
     let suggestions = null; // drill-down "you might also ask" questions
     let clarify = null; // disambiguation {question, options[]}, when the model asked instead of answering
     let failed = false; // drives the finalized message's inline "Try again"
+    // ...and, separately, whether the request itself THREW. `failed` is also
+    // set by a server-emitted {"type":"error"} event, and that turn IS on disk:
+    // chat.py persists `answer or (result.error or "")` with ok=False and then
+    // yields `done`. Only the catch below means nothing was written.
+    let threw = false;
     try {
       await streamChat({ question: q, conversationId: convId, editMessageId }, (ev) => {
         if (ev.type === "conversation") {
@@ -1043,6 +1076,7 @@ export default function Chat({ me }) {
       // the expected failures read as conditions, not as breakage.
       answer = turnErrorMessage(err?.status, err?.detail);
       failed = true;
+      threw = true;
     }
     // The stream is done (or threw). One call, one join point, both paths.
     //
@@ -1117,7 +1151,7 @@ export default function Chat({ me }) {
         // can't be wrong). But an error BEFORE _persist — a 429, an expired
         // session, an early transport failure — persisted nothing, and the
         // note was asserting "saved" for those too.
-        if (failed && ai >= 0) c[ai] = { ...c[ai], stoppedFailed: true };
+        if (threw && ai >= 0) c[ai] = { ...c[ai], stoppedFailed: true };
         return c;
       });
     }
@@ -1394,7 +1428,11 @@ export default function Chat({ me }) {
                         turn is the last one, so laterTurnsLost() is 0 and no
                         confirmation fires either. The existing regression test
                         waits the drain out before rerunning, which is exactly
-                        why this window survived it.
+                        why this window survived it. A turn whose stream THREW
+                        is the same state by a different route — settleTurn
+                        deletes its entry, so it READS as finished, but `done`
+                        never arrived and the id never landed. Asking whether
+                        the id is there covers both.
                         aria-disabled, not `disabled`: a natively disabled
                         button is unfocusable, so the title explaining WHY
                         could never be read. The handlers early-return. */}
@@ -1404,13 +1442,13 @@ export default function Chat({ me }) {
                               onClick={(e) => { if (turnIdsPending(m)) return;
                                 startEdit(i, m.content, e.currentTarget); }}
                               title={turnIdsPending(m)
-                                ? "Available once the stopped answer finishes saving"
+                                ? "Unavailable until this question is saved to the chat"
                                 : "Edit this prompt"}><IconEdit />Edit</button>
                       <button className="link ico" disabled={busy}
                               aria-disabled={turnIdsPending(m) || undefined}
                               onClick={() => { if (turnIdsPending(m)) return; rerun(i); }}
                               title={turnIdsPending(m)
-                                ? "Available once the stopped answer finishes saving"
+                                ? "Unavailable until this question is saved to the chat"
                                 : "Run this prompt again"}><IconRerun />Rerun</button>
                       {formatStamp(m.created_at) && (
                         <span className="msg-time" title="When you asked"

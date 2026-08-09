@@ -2018,15 +2018,39 @@ def test_a_corrupt_bootstrap_marker_does_not_brick_startup():
                 ("colleague@example.edu", "admin", 0))
     con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,0,?)",
                 ("departed@example.edu", 0))
-    set_meta(con, _BOOTSTRAP_APPLIED_KEY, '["departed@example.edu",]')  # trailing comma
-    con.commit()
+    # Every shape an operator can leave behind. Three of these PARSE fine, and
+    # that is the point -- a successful json.loads is not a usable marker:
+    #   ''      -> `raw or "[]"` made it a legitimate empty list
+    #   '{}'    -> an empty set, so nothing reads as applied
+    #   '"a@b"' -> a JSON string, whose set() is its CHARACTERS
+    # each leaving `marked` true with `applied` missing the address, which
+    # selects the grant branch. Only the trailing-comma shape raises, and a
+    # guard that catches only the raise (the first version of this fix) let the
+    # other three through.
+    for raw in ('["departed@example.edu",]',      # raises
+                '',                                # blank
+                '   ',                             # whitespace
+                '{}',                              # not a list
+                '"departed@example.edu"',          # a string, not a list
+                '5'):                              # not a list
+        con.execute("UPDATE users SET is_admin=0 WHERE email=?",
+                    ("departed@example.edu",))
+        con.execute("DELETE FROM allowlist WHERE email=?", ("departed@example.edu",))
+        set_meta(con, _BOOTSTRAP_APPLIED_KEY, raw)
+        con.commit()
 
-    _bootstrap_admins(con, ["departed@example.edu"])          # must not raise
+        _bootstrap_admins(con, ["departed@example.edu"])       # must not raise
 
-    assert not _is_admin(con, "departed@example.edu"), \
-        "a corrupt marker must not re-grant an admin who was removed"
-    assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is not None, \
-        "the marker should be rewritten, not left corrupt"
+        assert not _is_admin(con, "departed@example.edu"), \
+            f"marker {raw!r} re-granted an admin who was removed"
+        assert not _allowlisted(con, "departed@example.edu"), \
+            f"marker {raw!r} restored the allowlist row of a removed admin"
+        # `is not None` would pass on the corrupt string itself, which is
+        # exactly what this needs to rule out: the marker must be REWRITTEN as
+        # a usable JSON list, or the next boot re-enters the same branch.
+        rewritten = get_meta(con, _BOOTSTRAP_APPLIED_KEY)
+        assert isinstance(json.loads(rewritten), list), \
+            f"marker {raw!r} was left unusable: {rewritten!r}"
     con.close()
 
 

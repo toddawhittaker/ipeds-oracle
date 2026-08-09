@@ -337,10 +337,11 @@ Two collapsed sections at the bottom of the tab keep that reversible:
 - **Muted categories (N)** — every category currently suppressed, each with an
   **Unmute** control. Always shown, even at zero, so the count is a live status
   rather than something that only appears once you've muted something.
-- **Rejected (N)** — the lessons you've turned down. Each has an **Undo** that
-  puts it back in play, and there's a **Clear all**. This list is what stops a
-  rejected lesson being re-proposed forever, so an empty one means the assistant
-  is free to suggest anything again.
+- **Rejected (N)** — the lessons you've turned down. **Allow again** lets the
+  assistant propose that idea afresh; it does **not** bring the lesson back
+  (rejecting deleted it). **Clear all** does the same for every record at once
+  and asks first. This list is what stops a rejected lesson being re-proposed
+  forever, so an empty one means the assistant is free to suggest anything again.
 
 Two things worth knowing. **Rejecting is remembered, deleting a verified rule is
 too** — retiring a lesson you'd previously verified also means "don't suggest

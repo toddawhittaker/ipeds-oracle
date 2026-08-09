@@ -179,6 +179,30 @@ def test_all_headers_present_still_holds_under_https_posture():
         test_all_headers_present_on_api_response()
 
 
+def test_the_openapi_schema_and_docs_are_not_served():
+    """FastAPI serves /docs, /redoc and /openapi.json UNAUTHENTICATED by
+    default. On a private, allowlisted app that handed any caller the complete
+    schema of all 31 admin endpoints plus every request body model -- measured
+    at 41,893 bytes with no session. Not an authz bypass (every admin route is
+    gated), but it is the whole attack surface, for free.
+
+    Pinned because the fix is three kwargs on the FastAPI() constructor:
+    re-adding a bare `FastAPI(title=..., lifespan=...)` silently restores the
+    leak, and nothing else in the suite would notice. The SPA catch-all serves
+    index.html for unknown non-/api paths, so the assertion is that the JSON
+    schema is GONE, not that the path 404s."""
+    with TestClient(app) as c:
+        for path in ("/openapi.json", "/api/openapi.json"):
+            r = c.get(path)
+            body = r.text
+            assert '"openapi"' not in body and '"paths"' not in body, \
+                f"{path} still serves the OpenAPI schema ({len(body)} bytes)"
+        for path in ("/docs", "/redoc"):
+            body = c.get(path).text.lower()
+            assert "swagger" not in body and "redoc" not in body, \
+                f"{path} still serves API documentation"
+
+
 def run():
     print("Security-headers contract:")
     check("all security headers present on an API response",
@@ -192,6 +216,8 @@ def run():
           test_hsts_present_under_https_posture)
     check("Strict-Transport-Security absent under the default http posture",
           test_hsts_absent_under_http_posture)
+    check("the OpenAPI schema and docs UIs are not served",
+          test_the_openapi_schema_and_docs_are_not_served)
     check("Strict-Transport-Security carries no includeSubDomains/preload",
           test_hsts_has_no_subdomains_or_preload)
     check("all-headers-present check still holds under an https posture too",

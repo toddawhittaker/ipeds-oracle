@@ -1,5 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { filterRows, viewRows } from "./datatable.js";
+import { needsScrollRegion } from "./datatable-region.js";
 import { pageHeaderState } from "./selection.js";
 import { IconClose } from "./icons.jsx";
 
@@ -140,7 +141,7 @@ const DataTable = forwardRef(function DataTable({
   const hasActions = typeof renderActions === "function";
   // See the wrapper below: a scroll region needs a focusable child, or
   // it must become focusable itself.
-  const needsRegion = !hasActions || columns.some((c) => !c.sortable);
+  const needsRegion = needsScrollRegion(hasActions, columns);
   const colCount = columns.length + (hasActions ? 1 : 0) + (selectable ? 1 : 0);
   // Pad short pages up to a full page's height with structurally-identical
   // spacer rows (only when there's more than one page) so the pager below never

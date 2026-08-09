@@ -361,7 +361,21 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
 
       <div className="chart-graphic" role="img" aria-label={alt}>
         <ResponsiveContainer width="100%" height={chartH}>
-          <VisChart data={chartData} margin={margin}>
+          {/* accessibilityLayer={false}: recharts >=3 defaults it TRUE, which
+              puts tabIndex=0 AND role="application" on the chart <svg> with no
+              accessible name. ARIA's presentational-children rule exempts
+              focusable descendants, so the wrapper's role="img" does not hide
+              it — measured in Chrome's AX tree as a focusable, nameless
+              `application` node inside the named image (WCAG 4.1.2), and a real
+              Tab walk lands on it once per chart. Worse than the empty name:
+              entering an `application` region switches NVDA/JAWS out of browse
+              mode silently, so the reading keys stop working on a page whose
+              only job is reading. Nothing is lost by turning it off — the
+              layer's arrow-key data navigation never announced anything, and
+              .chart-graphic[role="img"] already carries the full alt. Do NOT
+              instead move role="img" onto the surface: that reopens the
+              presentational-children trap that once hid the whole toolbar. */}
+          <VisChart data={chartData} margin={margin} accessibilityLayer={false}>
             {chartChildren({ colors: c, isBar, keys, spec, showLabels, forExport: false, trendKey, longLabels })}
           </VisChart>
         </ResponsiveContainer>
@@ -376,7 +390,8 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
           a11y tree; inert takes it out of the focus order. Same device the
           modals use on the background. */}
       <div className="chart-export-src" aria-hidden="true" inert ref={exportRef}>
-        <VisChart width={EXPORT_W} height={longLabels ? 380 : EXPORT_H} data={chartData} margin={margin}>
+        <VisChart width={EXPORT_W} height={longLabels ? 380 : EXPORT_H} data={chartData}
+                  margin={margin} accessibilityLayer={false}>
           {chartChildren({ colors: LIGHT, isBar, keys, spec, showLabels, forExport: true, trendKey, longLabels })}
         </VisChart>
       </div>

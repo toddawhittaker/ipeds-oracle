@@ -229,6 +229,23 @@ def _find_duplicate(con, qvec: np.ndarray | None, question: str,
     # Exact-match fallback: embeddings are unavailable system-wide (fastembed
     # not installed), so cosine matching isn't possible at all — fall back to a
     # verbatim (question, SQL) match from the same source.
+    #
+    # Deliberately still an `else`, unlike _check_tombstone's and
+    # _find_suppressor's. Those two key on the LESSON's own identity
+    # (headline+description), so an exact match there IS the same lesson and
+    # the arm is safe to run whenever the vector arm misses. This one keys on
+    # (question, canonical_sql), which is coarser than the thing being deduped
+    # — two genuinely distinct rules can share a question and its SQL. Making
+    # it additional collapsed them, caught by
+    # `a distinct rule on the same (question, SQL) is NOT deduped`.
+    #
+    # KNOWN, ACCEPTED: a row saved with embedding = NULL (fastembed down at the
+    # time) therefore stays invisible to dedup once embeddings recover, so a
+    # repeat of it inserts a second pending row instead of upvoting the first.
+    # Mild — an admin sees two similar rows in the review queue — where the
+    # same shape in _check_tombstone meant a REJECTED lesson was re-proposed
+    # forever. Fixing it needs a second arm keyed on headline+description, not
+    # a reshuffle of this one.
     row = con.execute(
         "SELECT id FROM skills WHERE verified=0 AND created_by=? "
         "AND question=? AND canonical_sql=?",
@@ -287,10 +304,13 @@ def _find_suppressor(con, qvec: np.ndarray | None, headline: str,
             sim = float(vec @ qvec)
             if sim >= best_sim:
                 best_id, best_sim = r["id"], sim
-        return best_id
-    # Exact-match fallback, mirroring _find_duplicate's: embeddings are
-    # unavailable system-wide, so fall back to a verbatim headline+description
-    # match over the same (arm-dependent) scope.
+        if best_id is not None:
+            return best_id
+    # Exact-match arm — ADDITIONAL, not an `else`, mirroring _find_duplicate
+    # and _check_tombstone. A VERIFIED lesson stored with embedding = NULL
+    # (fastembed down at the time) would otherwise stop suppressing restatements
+    # of itself once embeddings recovered, even though it is already live
+    # guidance in the prompt.
     row = con.execute(
         f"SELECT id FROM skills WHERE headline=? AND lesson=? AND {predicate}",
         (headline, description, *params)).fetchone()

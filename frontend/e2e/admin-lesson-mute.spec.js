@@ -136,7 +136,7 @@ test("Rejected (N): collapsed by default, expands, per-row undo removes the row 
   await rejectedHeading.click();
   await expect(page.getByText("Rejected headline one.")).toBeVisible();
 
-  await page.getByRole("button", { name: /Allow this lesson.*Rejected headline one\./i }).click();
+  await page.getByRole("button", { name: /Allow again: Rejected headline one\./i }).click();
   await expect.poll(() => del.calls).toEqual([101]);
   await expect(page.getByText("Rejected headline one.")).toHaveCount(0);
 
