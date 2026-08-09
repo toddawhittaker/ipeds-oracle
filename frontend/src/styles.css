@@ -1513,6 +1513,18 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    them to each page's content, which made them jump as you paged). The three
    short columns get explicit widths; Email + Note split the rest and truncate. */
 .grid.data { table-layout: fixed; }
+/* The reflow scroll region (DataTable.jsx). `width: 100%` still wins above the
+   min-width, so every desktop geometry is byte-identical — the 210px timestamp
+   columns, the 96px actions column, the 49px row floor and the
+   full-vs-short-page height identity all measured unchanged at 1280.
+   720px is the floor the three tables actually need: Blocked is the widest at
+   556px of fixed columns (select 40 + two 210px stamps + actions 96) before its
+   Email column gets anything, and 720 leaves that 164px.
+   This wrapper is ONLY safe because the Actions tooltip no longer hangs outside
+   the table — a scroll container turns any overflow into a scrollbar, and the
+   18px it used to add would have put a permanent one under all three tables. */
+.table-scroll { overflow-x: auto; }
+.grid.data { min-width: 720px; }
 .grid.data .col-admin { width: 132px; }
 /* Last active carries a date AND a time ("12/31/2023, 11:59:59 PM"), which the
    116px the date alone needed cannot hold. Measured: the widest en-US rendering

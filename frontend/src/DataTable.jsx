@@ -206,6 +206,21 @@ const DataTable = forwardRef(function DataTable({
       {selectable && typeof renderSelectionBar === "function"
         && renderSelectionBar({ pageEligibleRows, filteredEligibleRows, query: q })}
 
+      {/* WCAG 1.4.10 Reflow. The fixed columns come to 478px before Email/Note
+          get any width at all, `html, body { overflow: hidden }` means the page
+          cannot scroll sideways, and the nearest scroller was the whole `.admin`
+          column — so at 320px the only way to reach the Actions button was to
+          scroll the entire page in two directions. This wrapper gives the table
+          a scroll region of its own; `min-width` on `.grid.data` is what it
+          scrolls.
+          Deliberately NOT `tabIndex={0} role="region"`: the Markdown.jsx
+          precedent for that is justified by "its rows hold no focusable
+          children", and these rows hold a sort button in every header and
+          action buttons in every row, so both horizontal extremes are already
+          keyboard-reachable and focusing one scrolls it into view. A tab stop
+          before each table would be noise, and a region sharing the table's own
+          aria-label makes a screen reader announce the name twice. */}
+      <div className="table-scroll">
       <table className={tableClass} aria-label={ariaLabel}>
         <colgroup>
           {selectable && <col className="col-select" />}
@@ -306,6 +321,7 @@ const DataTable = forwardRef(function DataTable({
           ))}
         </tbody>
       </table>
+      </div>
 
       <div className="pager">
         <span className="pager-range">{view.label}</span>

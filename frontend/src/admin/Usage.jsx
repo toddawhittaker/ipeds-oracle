@@ -157,6 +157,13 @@ export default function Usage() {
           {spec ? <Chart spec={spec} /> : <div className="muted">No activity in this range.</div>}
 
           <h3>Top users</h3>
+          {/* The same reflow scroll region DataTable.jsx uses (WCAG 1.4.10).
+              This table sets no column widths, but an email address is one
+              unbreakable token — measured at 526px for an ordinary long
+              address, which made the whole `.admin` column scroll sideways at
+              320px. No `min-width` here: the table is otherwise fluid, so it
+              only scrolls when its own content is genuinely too wide. */}
+          <div className="table-scroll">
           <table className="grid" aria-label="Top users">
             <thead><tr>
               <th scope="col">User</th><th scope="col">Queries</th>
@@ -169,6 +176,7 @@ export default function Usage() {
               </tr>
             ))}</tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

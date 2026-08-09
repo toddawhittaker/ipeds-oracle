@@ -194,8 +194,37 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   pin the MECHANISM (computed `white-space`; `scrollWidth` vs `clientWidth`),
   **not row height** the way the Current-users test does: Blocked's Email cell
   wraps deliberately (`.blocked-email`), so its rows are legitimately multi-line.
-  Costs the Blocked table 84px of minimum width, slightly worsening the deferred
-  `DataTable` 320px reflow issue — fix that once in `DataTable.jsx`, not here.
+  Costs the Blocked table 84px of minimum width, which is why Blocked is the
+  widest of the three and sets the `min-width` floor in the reflow rule below.
+  **Every admin table has a scroll region of its own** (WCAG 1.4.10 Reflow).
+  `html, body { overflow: hidden }`, so the page cannot scroll sideways and the
+  nearest scroller was the whole `.admin` column — at 320px the only way to
+  reach an Actions button was to scroll the entire page in two directions,
+  taking the heading and section nav with it. `DataTable.jsx` wraps its
+  `<table>` in **`.table-scroll` (`overflow-x: auto`)** and `.grid.data` carries
+  **`min-width: 720px`** — the floor Blocked actually needs (556px of fixed
+  columns before its Email gets anything). `width: 100%` still wins above that,
+  so every desktop geometry above is byte-identical at 1280. Admin → Usage's
+  **Top users** is not a `DataTable` and sets no column widths, but an email
+  address is one unbreakable token (measured 526px), so it gets the same wrapper
+  and no `min-width`. Deliberately **NOT `tabIndex={0} role="region"`**: the
+  `Markdown.jsx` precedent for that is justified by "its rows hold no focusable
+  children", and these rows have a sort button in every header and action
+  buttons in every row, so both extremes are already keyboard-reachable and
+  focusing one scrolls it into view — a tab stop before each table would be
+  noise, and a region sharing the table's `aria-label` announces the name twice.
+  **This was only shippable once the Actions tooltip stopped hanging outside the
+  table**: `.tip::after` is absolutely positioned and centred on its button, and
+  an abspos descendant counts toward an ancestor's scrollable overflow, so the
+  Users table reported `scrollWidth` 976 against a rendered 958 — an
+  `overflow-x: auto` wrapper would have put a permanent 18px scrollbar under
+  every admin table. The tip is now anchored to its button's **right** edge
+  (left overflow does not enter `scrollWidth` in LTR). Note `src/DataTable.jsx`
+  is used by exactly the three `Allowlist.jsx` tables — `Markdown.jsx` has a
+  same-named LOCAL component that is a different thing entirely. Pinned in
+  `frontend/e2e/admin-table-reflow.spec.js` + the Actions-column describe in
+  `admin-users-tabs.spec.js`, both viewports load-bearing (at 320 the region
+  must scroll; at 1280 it must not).
   The Current-users table's **"Last active"** column is **DERIVED read-side** in
   `admin.list_allowlist`, not stored: the latest of `users.last_login`, the
   user's newest `conversations.updated_at`, and their newest
