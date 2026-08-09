@@ -102,6 +102,82 @@ def test_majornum_present_not_flagged():
     assert "majornum-missing" not in codes, codes
 
 
+# --- award-level nesting -------------------------------------------------------
+# Unlike the CIP checks these test an arithmetic IDENTITY, not a heuristic:
+# awlevel 20+21 == 1 exactly, and 12/13/14/15 are rollups over the real levels.
+# So they can be strict. Both were found live: SCHEMA.md used to call 1-8 & 17-21
+# mutually exclusive, the agent wrote exactly that list, and shipped 10,592 for
+# Ohio's all-level nursing awards against a true 10,574 — with a ✓ verified mark,
+# because grounding attests reproduction from the result, not that the SQL was right.
+
+def test_awlevel_1_with_21_is_a_certificate_double_count():
+    # The live failure. 21 (12wks-1yr) is PART of 1 (<1yr), so this counts
+    # Vantage Career Center's 18 certificates twice.
+    assert "awlevel-cert-double-count" in _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='51.3801' AND majornum=1 "
+        "AND awlevel IN (1,2,3,4,5,6,7,8,17,18,19,20,21)")
+
+
+def test_awlevel_1_with_20_is_a_certificate_double_count():
+    assert "awlevel-cert-double-count" in _codes(
+        "SELECT SUM(c.ctotalt) FROM c_a c WHERE c.cipcode='99' AND c.majornum=1 "
+        "AND c.awlevel IN (1, 20)")
+
+
+def test_the_exclusive_real_levels_are_not_flagged():
+    # The CORRECT all-levels list: 20/21 omitted, no rollup. Must stay clean, or
+    # the rule teaches the model to ignore it.
+    codes = _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='99' AND majornum=1 "
+        "AND awlevel IN (1,2,3,4,5,6,7,8,17,18,19)")
+    assert codes == set(), codes
+
+
+def test_short_certificates_without_their_parent_are_not_flagged():
+    # 20+21 with no 1 is a legitimate "short certificates only" split.
+    codes = _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='99' AND majornum=1 "
+        "AND awlevel IN (20,21)")
+    assert codes == set(), codes
+
+
+def test_a_sub_baccalaureate_certificate_sum_is_not_flagged():
+    # 1+2+4 is exactly rollup 13, hand-written — legitimate, no double count.
+    codes = _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='99' AND majornum=1 "
+        "AND awlevel IN (1,2,4)")
+    assert codes == set(), codes
+
+
+def test_awlevel_rollup_mixed_with_a_real_level_is_flagged():
+    # 15 already CONTAINS 5; adding them is a double count SCHEMA.md documents
+    # and nothing enforced until now.
+    assert "awlevel-rollup-mix" in _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='99' AND majornum=1 "
+        "AND awlevel IN (5, 15)")
+
+
+def test_a_rollup_on_its_own_is_not_flagged():
+    # awlevel=15 alone is the RECOMMENDED all-levels form — never flag it.
+    codes = _codes(
+        "SELECT SUM(ctotalt) FROM c_a WHERE cipcode='99' AND majornum=1 "
+        "AND awlevel=15")
+    assert codes == set(), codes
+
+
+def test_group_by_awlevel_suppresses_the_award_level_checks():
+    # Each output row is a single level, so nothing is summed across levels —
+    # the same reasoning as GROUP BY cipcode suppressing the rollup check.
+    codes = _codes(
+        "SELECT awlevel, SUM(ctotalt) FROM c_a WHERE cipcode='51.3801' "
+        "AND majornum=1 AND awlevel IN (1,20,21,15) GROUP BY awlevel")
+    assert codes == set(), codes
+
+
+def test_award_level_checks_ignore_a_non_c_a_query():
+    assert lint_sql("SELECT SUM(grtotlt) FROM gr WHERE awlevel IN (1,21)") == []
+
+
 # --- DISTINCT-year join hang ---------------------------------------------------
 
 def test_distinct_year_join_flagged():
@@ -189,6 +265,23 @@ def run():
     check("cipcode IN (...) guard is clean", test_cip_in_list_guard_not_flagged)
     check("missing majornum is flagged", test_missing_majornum_flagged)
     check("majornum=1 present is clean", test_majornum_present_not_flagged)
+    check("awlevel 1 alongside 21 is a certificate double count",
+          test_awlevel_1_with_21_is_a_certificate_double_count)
+    check("awlevel 1 alongside 20 is a certificate double count",
+          test_awlevel_1_with_20_is_a_certificate_double_count)
+    check("the exclusive real levels stay clean",
+          test_the_exclusive_real_levels_are_not_flagged)
+    check("20+21 without their parent stays clean",
+          test_short_certificates_without_their_parent_are_not_flagged)
+    check("a sub-baccalaureate 1+2+4 sum stays clean",
+          test_a_sub_baccalaureate_certificate_sum_is_not_flagged)
+    check("a rollup mixed with a real level is flagged",
+          test_awlevel_rollup_mixed_with_a_real_level_is_flagged)
+    check("a rollup on its own stays clean", test_a_rollup_on_its_own_is_not_flagged)
+    check("GROUP BY awlevel suppresses the award-level checks",
+          test_group_by_awlevel_suppresses_the_award_level_checks)
+    check("award-level checks ignore a non-c_a query",
+          test_award_level_checks_ignore_a_non_c_a_query)
     check("DISTINCT-year JOIN is flagged", test_distinct_year_join_flagged)
     check("DISTINCT-year IN (...) is flagged", test_distinct_year_in_flagged)
     check("constant year bound is clean", test_constant_year_bound_not_flagged)

@@ -115,6 +115,19 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   exists at 2-/4-/6-digit + a `'99'` grand-total row, each summing to the same
   total. Match an exact 6-digit code, or use `'99'`/`length(cipcode)=7` for
   totals — never `LIKE '51.%'`.
+  **`awlevel` nests the same way, and SCHEMA.md used to say it didn't.** The
+  mutually-exclusive real levels are `1,2,3,4,5,6,7,8,17,18,19` — **`20` and `21`
+  are SUBDIVISIONS of `1`** (`20`+`21` = `1`, exactly), and `12`–`15` are rollups
+  (`13`=`1`+`2`+`4`, `14`=`6`+`8`, `12`=`3`+`5`+`7`+`17`+`18`+`19`,
+  `15`=`12`+`13`+`14`). SCHEMA.md claimed "1–8, 17–21 are mutually exclusive",
+  the agent wrote exactly that list, and shipped a 12.8%-overcounted total that
+  `grounding.py` graded `exact` and marked ✓ **verified** — grounding attests
+  reproduction from the query result, never that the query was right, so a false
+  invariant in the prompt is upstream of every guard. Prefer the rollup
+  (`awlevel=15`/`12`) for an all-levels total over a hand-written list.
+  `sqllint`'s `awlevel-cert-double-count` / `awlevel-rollup-mix` now catch both,
+  and unlike the CIP heuristics they test an arithmetic identity, so they can be
+  strict.
 - Text code columns keep leading zeros (`cipcode='01.0000'`, `stabbr='CA'`);
   numeric codes are numeric (`awlevel=3`, `control=1`).
 - Use the `institutions_current` view for clean current institution names.

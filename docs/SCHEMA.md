@@ -93,9 +93,22 @@ institution/award level:
 `majornum`: `1` = first major (the usual filter for "graduates in a program"),
 `2` = second major. Summing both counts double-majors twice.
 
-The same "pick one level" rule applies to **`awlevel`**: codes 1–8 & 17–21 are
-real, mutually-exclusive levels; 12–15 are rollup totals — never sum a real level
-together with a rollup.
+The same "pick one level" rule applies to **`awlevel`**, and it nests **twice**:
+
+- **Mutually exclusive real levels: `1,2,3,4,5,6,7,8,17,18,19`.** That set — and
+  only that set — sums to the true all-levels total.
+- **`20` and `21` are SUBDIVISIONS of `1`**, not siblings of it. `20` (certificate
+  < 12 weeks) + `21` (certificate 12 weeks–1 year) = `1` (certificate < 1 year),
+  exactly. Adding them to the list above double-counts every short certificate:
+  measured nationally for 2025, `awlevel IN (1,…,8,17,…,21)` returns 6,157,609
+  against a true 5,459,862, a **12.8% overcount**.
+- **`12`–`15` are rollup totals**, and they nest too: `13` = `1`+`2`+`4`,
+  `14` = `6`+`8`, `12` = `3`+`5`+`7`+`17`+`18`+`19`, and `15` = `12`+`13`+`14`.
+  Never sum a real level together with a rollup.
+
+For an all-award-levels total, the safest form is the rollup itself —
+`awlevel=15` (degrees + certificates) or `awlevel=12` (degrees only) — not a
+hand-written list of real levels.
 
 ### ⚠️ Nested totals / rollups beyond completions (same trap, other surveys)
 The completions "pick ONE level, never sum a rollup together with its parts" rule
@@ -246,18 +259,20 @@ below + the 30 race/gender count columns from §2.
 
 ### Award levels (`awlevel`)
 ```
-1  Certificate < 1 year            12  Degrees total
-2  Certificate 1–2 years           13  Certificates below baccalaureate total
-3  Associate's degree              14  Certificates above baccalaureate total
-4  Certificate 2–4 years           15  Degrees/certificates total
+1  Certificate < 1 year            12  Degrees total            [= 3+5+7+17+18+19]
+2  Certificate 1–2 years           13  Certs below bacc. total  [= 1+2+4]
+3  Associate's degree              14  Certs above bacc. total  [= 6+8]
+4  Certificate 2–4 years           15  Degrees/certs total      [= 12+13+14]
 5  Bachelor's degree               17  Doctor's – research/scholarship
 6  Postbaccalaureate certificate   18  Doctor's – professional practice
 7  Master's degree                 19  Doctor's – other
-8  Post-master's certificate       20  Certificate < 12 weeks
-                                    21  Certificate 12 weeks–1 year
+8  Post-master's certificate       20  Certificate < 12 weeks       ⚠ part of 1
+                                    21  Certificate 12 wks–1 year    ⚠ part of 1
 ```
-(1–8, 17–21 are mutually exclusive real levels; 12–15 are rollup totals — don't
-sum a real level with a rollup.)
+**Mutually exclusive real levels: `1,2,3,4,5,6,7,8,17,18,19` — that set only.**
+`20`+`21` = `1` exactly, so including them alongside `1` double-counts short
+certificates (12.8% national overcount). `12`–`15` are rollups; never sum one
+with a real level. See §5 for the full nesting and the safe all-levels form.
 
 ---
 
