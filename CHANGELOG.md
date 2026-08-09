@@ -13,13 +13,23 @@ detail.
 
 ## v0.4.0
 
-The hardening release. Nothing here changes what the app is for — it is 48
+The hardening release. Nothing here changes what the app is for — it is 68
 commits of closing holes, most of them found by reading the code rather than by
 anything going wrong in production. The container no longer runs as root, four
 importer paths that could report the wrong outcome now report the right one, a
 single SQL query can no longer exhaust the container's memory, and the two
 "grounded" figures on Admin → Usage stopped crediting numbers they could not
 actually verify.
+
+The last stretch came from the other direction: sitting down and asking the app
+twenty-nine real questions. **Its answers were right — every hero figure and
+table cell checked against the database matched, on twenty-one of twenty-two
+data answers.** The exception was the one that mattered most, because the
+schema guide the app hands the model on every question stated a rule about IPEDS
+award levels that is false, so the model wrote exactly the query it was told was
+safe, double-counted, and shipped a wrong total wearing the ✓ verified mark. The
+same pass turned up four cases where the verifier withheld its tick from a
+number that was perfectly correct.
 
 ### Read this before upgrading
 
@@ -36,8 +46,16 @@ actually verify.
   firewall was set. If you reach the app directly by LAN address rather than
   through a proxy or tunnel, set `BIND_ADDR=0.0.0.0` explicitly.
 - **Rolling back to v0.3.0 refuses to start.** `app.db` goes from schema 33 to
-  35 in this release. To actually go back, restore the `app.db.pre-v33` snapshot
+  36 in this release. To actually go back, restore the `app.db.pre-v33` snapshot
   the upgrade takes automatically, alongside the older image.
+- **The first boot after upgrading clears the cached answers**, and logs how
+  many it dropped. The app reuses a stored answer when someone asks a
+  near-identical question again — but a cached answer is prose an *older* build
+  wrote under an older schema guide, which this release proves can be wrong: the
+  award-level fix below would otherwise never have reached anyone who had
+  already asked. Nothing to do; the only effect is that the first person to ask
+  each question after an upgrade waits for a full answer instead of an instant
+  one.
 - **Running the backup script inside the container needs `BACKUP_DIR`.** Its
   `--out-dir` defaults to a relative `backups/`, which uid 10001 cannot create.
   Set `BACKUP_DIR=/data/backups`. Running it on the host against the bind mount
@@ -55,9 +73,18 @@ Both of these are the meter getting more honest, not a regression.
   cached-prompt tokens are now priced at their own much lower rate, which took a
   measured estimate from 5.0× over the provider's real bill to about 1.5×. A
   tile whose window contains any estimated row is marked `~` and says how many.
-- **Grounded figures steps down and Grounded cells with it.** A total computed
-  over a truncated page can no longer ground itself against those same partial
-  rows. The kernel was corroborating the exact error it exists to catch.
+- **Grounded figures and Grounded cells move in BOTH directions**, so a number
+  either side of this upgrade is not comparable with the one before it. Down:
+  a total computed over a truncated page can no longer ground itself against
+  those same partial rows — the kernel was corroborating the exact error it
+  exists to catch. Up: three separate fixes stopped the verifier withholding its
+  tick from correct numbers (see *Answers* below), and a figure the app forced,
+  could not verify, and then **withheld** no longer counts as a figure it got
+  wrong — those turns showed nobody a number, so scoring them as misses was
+  simply the wrong question. On the development database that correction alone
+  moved the real rate from 88.2% to 92.2%, and the ten historical rows are
+  relabelled by a migration so the past reads correctly too. Where suppressions
+  occur, the tile now says so: `· N suppressed`.
 
 ### Security
 
@@ -98,6 +125,44 @@ Both of these are the meter getting more honest, not a regression.
 
 ### Answers
 
+- **"All award levels" was double-counting short certificates.** The schema
+  guide the app gives the model on every question said IPEDS award-level codes
+  1–8 and 17–21 are mutually exclusive. They are not: 20 and 21 are
+  *subdivisions* of 1. So the model wrote precisely the query it was told was
+  safe and returned 10,592 Ohio nursing awards where the truth is 10,574 —
+  nationally the same mistake overstates an all-levels total by 12.8%. It then
+  noticed the discrepancy against IPEDS's own rollup and explained it away, and
+  the verifier marked the answer ✓ because the number *was* faithfully copied
+  out of the query result. Grounding attests that a number came from the data,
+  never that the question put to the data was right, which is why a false
+  statement in the guide sits upstream of every check the app has. The guide is
+  corrected, and the pre-flight SQL linter now catches both nestings — strictly,
+  because these are exact arithmetic identities rather than heuristics.
+- **Three fixes stop the verifier doubting correct numbers.** A percentage under
+  1.0 was held to a tolerance tighter than its own rounding, so a correct
+  "+0.4%" was marked unverified and a correct table raised the ⚠ "check these
+  values" line. A repeated value in one table row could push a legitimate entity
+  out of the row it belonged to, so its correct number could not be matched.
+  And the cross-query route that reproduces "all others" totals switched itself
+  off entirely on any answer built from more than eight columns of results —
+  about a fifth of them.
+- **The app stops inventing numbers in sentences.** Two answers stated a total
+  the app never queried — one an estimated national denominator, one an
+  approximate sum of the answer's own table. Everything in a table or a hero
+  figure is checked; a number in a sentence was checked by nothing. The model is
+  now told that a prose number must be a value a query returned or exact
+  arithmetic over rows it is showing, and to run one more query rather than
+  estimate.
+- **Answers stop leaking their own drafting.** One shipped a mid-sentence
+  self-correction ("…wait, no — it's actually 23.9% there"), and a long list of
+  states came back as a newspaper-style grid that quietly broke column sorting,
+  CSV export and compare mode. Also: the app no longer offers a "full list"
+  download that returns exactly the rows already on screen.
+- **A question about student loans is no longer refused as off-topic.** The
+  topical gate's subject list omitted student financial aid, so asking about
+  loan burden was turned away while the refusal itself claimed institutional
+  finances were in scope. IPEDS has no cohort default rate — that is a Federal
+  Student Aid measure — but saying so is an answer, not a refusal.
 - **A truncated result may not supply the total the model claimed.** See above.
 - **The reviewer's findings are gated before they become lessons.** Only the
   five data-modeling categories can be learned; the prompt no longer reveals
@@ -107,7 +172,9 @@ Both of these are the meter getting more honest, not a regression.
   evidence that would have suppressed the next identical proposal, so the same
   lesson came back forever. Admin → Skills gains a category pill, a
   **Reject & mute** action, and collapsed **Rejected (N)** / **Muted
-  categories (N)** sections with Undo and Unmute.
+  categories (N)** sections with **Allow again** and **Unmute**. (Allow again,
+  not Undo: it stops the suggestion being suppressed, it does not bring the
+  lesson back.)
 - **A provider's non-JSON 200 no longer kills the stream** and loses the turn.
 - **Tool calls run off the event loop.** One 25-second query used to stall every
   other user's stream, the admin console, and `/api/health`.
@@ -152,6 +219,22 @@ Both of these are the meter getting more honest, not a regression.
   a developer's `.env`; the CodeQL action is pinned to an exact patch.
 - Dependencies swept, including three advisories `npm audit` was never run to
   find.
+- **The accessibility gate was scanning a 404 page.** Admin → Usage had no
+  fixture, so both of its scans measured a load-failure screen and reported
+  clean — twelve stat tiles, the chart and the Top-users region were never
+  checked. Admin → Skills had the same gap for two of its three endpoints. The
+  scan loop now asserts something that only exists once the page's data
+  rendered, because the existing crash check cannot see a panel that catches its
+  own failure instead of throwing.
+- **A denial-of-service in the new SQL linter, caught in review before release.**
+  One regex could be made to spend 26 seconds of CPU on a query the sandbox
+  happily accepts, in the one window where neither the query watchdog nor the
+  export timeout applies. Now 0.4 milliseconds.
+- Two prose measurements are recorded in the code as decisions *not* to build:
+  a checker for numbers in sentences, and a verification route for
+  period-over-period figures. Both were measured, both would have done more harm
+  than good, and both are the kind of idea that looks obviously right until
+  someone tries it.
 
 ---
 
