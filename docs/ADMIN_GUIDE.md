@@ -254,6 +254,13 @@ The dashboard shows **three** cache figures — don't confuse them:
   share of the total). Answers with no hero figure — and answers whose figure
   isn't a number, like a leading institution's *name* — aren't counted either
   way, so a quiet range reads "—" rather than a falsely perfect 100%.
+  You may also see a **"· N suppressed"** note beside this stat. Those are answers
+  where the app asked the model for a missing headline figure, could not reproduce
+  the number it came back with, and **withheld it** — nobody was shown that figure.
+  They sit outside the percentage on purpose (there was no figure to get right or
+  wrong), but the count is worth watching: a rising number means the app is
+  repeatedly prompting for a headline the data cannot support, which usually points
+  at a question shape that has no single summarizing number.
 
 > **A rate below 100% means figures reached people that the app could not
 > reproduce from its own data.** The underlying number is written by the language

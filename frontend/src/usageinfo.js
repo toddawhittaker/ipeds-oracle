@@ -78,7 +78,10 @@ export const STAT_INFO = {
       "headline number actually in the data? — not a cost metric.",
     direction: "up",
     note: "Below 100% means a headline number reached someone that we could not " +
-      "reproduce from the query rows.",
+      "reproduce from the query rows. A “· N suppressed” tail counts something " +
+      "different: answers where we asked for a missing headline figure, could " +
+      "not reproduce what came back, and withheld it — nobody saw those, so " +
+      "they sit outside the percentage.",
   },
   groundedCells: {
     name: "Grounded cells",

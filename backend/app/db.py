@@ -498,6 +498,20 @@ MIGRATIONS: list[tuple[int, str]] = [
          ");\n"
          "CREATE INDEX ix_lesson_rejections_created "
          "ON lesson_rejections(created_at DESC);"),
+    # A figure the retry forced, found ungrounded and WITHHELD used to be
+    # recorded as a plain `ungrounded` figure, which put it in the
+    # Grounded-figures denominator as a miss even though the turn shipped no
+    # figure at all. `grounding.SUPPRESSED` fixed that going forward — but only
+    # going forward, and the historical rows are exactly identifiable, because
+    # `figure_derivation` has recorded `retry:suppressed` all along. Without
+    # this, an admin looking at any window covering pre-upgrade history still
+    # reads the wrong rate while `figures_suppressed` reads 0 for that same
+    # period, i.e. the new "· N suppressed" tail is absent on precisely the data
+    # that motivated it. Measured on a real app.db: 10 rows, which is the whole
+    # of the evidence the fix was argued from.
+    (36, "UPDATE usage_log SET figure_grounding='retry_suppressed' "
+         "WHERE figure_grounding='ungrounded' "
+         "AND figure_derivation='retry:suppressed';"),
 ]
 
 

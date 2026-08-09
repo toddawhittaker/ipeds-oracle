@@ -109,11 +109,13 @@ The gate is therefore keyed on the (result, axis) pair at each call site, not
 inside `compute()` itself, since `compute()` has no way to know which axis its
 caller is using a column on.
 
-No new STATUS is introduced by any of this — a refused figure still records
-the existing UNGROUNDED, and a refused table cell simply isn't counted toward
-cells_matched — but that does NOT make the gate inert. UNGROUNDED already
+No new STATUS is introduced by THE TRUNCATION GATE — a refused figure still
+records the existing UNGROUNDED, and a refused table cell simply isn't counted
+toward cells_matched — but that does NOT make the gate inert. UNGROUNDED already
 drives real behaviour downstream: llm._maybe_retry_figure SUPPRESSES a
-retry-recovered figure that grades ungrounded, and llm._s5_fabricated can
+retry-recovered figure that grades ungrounded (recording it as the separate
+SUPPRESSED status, so it leaves the Grounded-figures rate — see that constant),
+and llm._s5_fabricated can
 degrade a tool-budget-exhausted answer when an ungrounded figure pairs with no
 grounded table. So a truncated turn that used to verify (wrongly) now trips
 both of those, and Admin -> Usage's grounding rates move down on truncated
@@ -386,7 +388,8 @@ def _displayed_precision_tol(raw, target: float) -> float:
       * an EXPLICIT DECIMAL states its precision outright — "0.4" means one
         decimal place, +/-0.05, and there is nothing to second-guess. The window
         it yields also shrinks with every decimal written, so it is
-        self-limiting (never wider than +/-0.5);
+        self-limiting — with at least one decimal digit written, the widest it
+        can ever be is +/-0.05;
       * an INTEGER has to be read from trailing zeros, which is a guess, so that
         branch is additionally capped by _MAX_ROUNDING_SHARE.
 

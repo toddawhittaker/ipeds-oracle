@@ -66,21 +66,59 @@ _MAJORNUM_RE = re.compile(r"\bmajornum\b")
 # query was right — which is exactly why this belongs in a deterministic lint.
 _AWLEVEL_ROLLUPS = frozenset({12, 13, 14, 15})
 _AWLEVEL_REAL = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 20, 21})
-# A bare code list only — `awlevel IN (SELECT ...)` must not be mined for digits.
-_AWLEVEL_IN_RE = re.compile(r"\bawlevel\b\s*in\s*\(\s*([\d\s,]+?)\s*\)")
-_AWLEVEL_EQ_RE = re.compile(r"\bawlevel\b\s*=\s*(\d+)")
+# `[^)]*` is LINEAR and cannot backtrack; the captured text is validated as a
+# bare code list afterwards, which also skips `awlevel IN (SELECT ...)`.
+#
+# The first version was `\s*([\d\s,]+?)\s*\)` — three quantifiers over classes
+# that all match whitespace, adjacent. A long space run that never reaches a `)`
+# made the engine enumerate the ways to split it: 0.055s at 500 spaces, 0.45s at
+# 1,000, 3.4s at 2,000, ~26s at 4,000. That cost lands INSIDE `run_sql` but
+# OUTSIDE every budget it sets — `lint_sql` runs before the interrupt watchdog is
+# armed and before the 3s CSV probe timeout applies — and `validate_sql` accepts
+# the query, since it is one read-only SELECT. It also persists into `sql_log`,
+# so a CSV export replays it. Pinned by a timing test.
+_AWLEVEL_IN_RE = re.compile(r"\bawlevel\b\s*in\s*\(([^)]*)\)")
+_AWLEVEL_CODE_LIST_RE = re.compile(r"\A[\d\s,]+\Z")
+# 2 digits is every real awlevel; the bound also keeps `int()` away from its
+# 4,300-digit conversion limit, which raised ValueError out of an ADVISORY
+# linter and let it veto a query the sandbox would have run.
+_AWLEVEL_CODE_RE = re.compile(r"\d{1,2}\b")
+_AWLEVEL_EQ_RE = re.compile(r"\bawlevel\b\s*=\s*(\d{1,2})\b")
 # GROUP BY awlevel makes each output row a single level → nothing sums across
 # levels, the same reasoning that lets GROUP BY cipcode suppress the rollup check.
 _GROUP_AWLEVEL_RE = re.compile(r"\bgroup\s+by\b.*\bawlevel\b", re.DOTALL)
 
 
-def _awlevel_codes(scan: str) -> set[int]:
-    """Every award-level code the query pins itself to, across all its
-    `awlevel = N` and `awlevel IN (...)` predicates. Empty when it names none."""
-    codes = {int(n) for n in _AWLEVEL_EQ_RE.findall(scan)}
+def _awlevel_code_lists(scan: str) -> list[set[int]]:
+    """One code set PER `awlevel IN (...)` list — never a union across the
+    statement.
+
+    The union was the first draft, and it flagged correct SQL. The defect being
+    detected is codes meeting inside ONE aggregate, and a statement naming 1 and
+    21 in SEPARATE predicates is ordinary and right: two `SUM(CASE WHEN awlevel
+    IN (...))` columns splitting real levels from short certificates, a share of
+    a rollup written as two scalar subqueries, a per-year pivot with an
+    `all_levels` column beside a `bachelors` one. The union flagged all three —
+    including `_OHIO_RN_AWARDS` in `eval_nl2sql.py`, the reference query added in
+    the same PR as the rules, which is as clear a signal as a false positive gets.
+
+    A lint that fires on correct SQL is worse than no lint: prompt step 3 tells
+    the model to treat the ⚠ as blocking and re-run, so the cost is a wasted
+    iteration or a dropped breakdown column. This module's stated bias is toward
+    fewer warnings, and per-list evaluation keeps the live defect
+    (`awlevel IN (1,...,20,21)`) while dropping every case above.
+
+    Bare `awlevel = N` equalities are deliberately NOT collected: a single
+    equality cannot conflict with itself, and pairing equalities across a
+    statement is exactly the union that was wrong."""
+    out: list[set[int]] = []
     for group in _AWLEVEL_IN_RE.findall(scan):
-        codes.update(int(n) for n in re.findall(r"\d+", group))
-    return codes
+        if not _AWLEVEL_CODE_LIST_RE.match(group):
+            continue                      # a subquery or an expression, not codes
+        codes = {int(n) for n in _AWLEVEL_CODE_RE.findall(group)}
+        if codes:
+            out.append(codes)
+    return out
 
 
 def _scan(sql: str) -> str:
@@ -131,7 +169,10 @@ def lint_sql(sql: str) -> list[LintFinding]:
                 "double-majors. Add majornum=1 for a primary-major headcount."))
 
         if not _GROUP_AWLEVEL_RE.search(scan):
-            levels = _awlevel_codes(scan)
+            lists = _awlevel_code_lists(scan)
+            levels = next((s for s in lists if 1 in s and s & {20, 21}),
+                          next((s for s in lists
+                                if s & _AWLEVEL_ROLLUPS and s & _AWLEVEL_REAL), set()))
             if 1 in levels and levels & {20, 21}:
                 findings.append(LintFinding(
                     "awlevel-cert-double-count",

@@ -20,8 +20,15 @@ const FIGURE_KEYS = ["value", "unit", "label", "source"];
 // The statuses are grounding.py's, and this field carries the BARE status only:
 // exact | rounded | derived reproduced the value; ungrounded did not;
 // no_figure/malformed/unchecked mean the check never reached a verdict (no
-// figure, an unparseable one, or no retained results). An absent value means a
+// figure, an unparseable one, or no retained results); retry_suppressed means a
+// forced figure was withheld, so the turn carries none. An absent value means a
 // message written before the column existed.
+//
+// Only the first three verify, and this matches whole-string against that set,
+// so an unknown or future status is treated as "not verified" and renders no
+// mark — the safe direction, and why adding retry_suppressed needed no code
+// change here. The enumeration is kept current anyway: an out-of-date list of
+// the possible values is how the next reader forms a wrong model of the field.
 //
 // Note the neighbouring field it is easy to confuse this with: llm.py also
 // records `figure_derivation` — the composed provenance string like

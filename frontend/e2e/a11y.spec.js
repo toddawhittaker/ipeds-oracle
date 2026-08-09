@@ -19,6 +19,9 @@ import {
   mockMarkLogsSeen,
   mockImportCatalog,
   mockVersion,
+  mockUsage,
+  mockSkillCategories,
+  mockSkillRejections,
 } from "./mocks.js";
 
 // Everything the five admin sections fetch on mount, with CONTENT rather than
@@ -46,11 +49,47 @@ async function adminA11yMocks(page) {
   ]);
   await mockSkills(page, [
     { id: 1, headline: "Match an exact 6-digit CIP", description: "…", sql_example: "SELECT 1",
-      verified: 0, created_by: "critic", created_at: 1,
+      verified: 0, created_by: "critic", created_at: 1, category: "CIP_ROLLUP",
       // Real counts: without them the row renders "undefined upvotes", which is
       // a fixture defect that would read as a product one.
       upvotes: 3, downvotes: 1, hits: 12 },
   ]);
+  // Skills fetches THREE endpoints, not one. Without these two the categories
+  // and rejections calls 404, so the page renders "Muted categories (0)" and a
+  // bare "Not Found" where the rejected-lesson list belongs — putting the
+  // category pill, "Reject & mute", the Rejected rows and Allow-again/Unmute
+  // outside the gate in both themes. Same shape as the mockUsage omission below.
+  await mockSkillCategories(page, [
+    { token: "CIP_ROLLUP", label: "CIP rollup", muted: false },
+  ]);
+  await mockSkillRejections(page, [
+    { id: 5, headline: "Verify figures against the result", description: "…",
+      category: "UNGROUNDED_NUMBER", was_verified: 0, hits: 2, created_at: 1 },
+  ]);
+  // THE USAGE PAGE WAS NEVER ACTUALLY SCANNED. `mockUsage` was simply absent, so
+  // /api/admin/usage 404'd and both Usage scans (2 of the 19) measured the
+  // load-FAILURE state: measured 0 `.stat` tiles, 0 `.errbound`, panel text
+  // ending "Not Found". Neither existing guard caught it — the readiness wait
+  // matches an unconditional `<h2 class="sr-only">Usage</h2>`, and `.errbound`
+  // is 0 because Usage CATCHES its fetch rejection rather than throwing. That
+  // left 12 stat tiles, 12 HelpPopover triggers, the metric toolbar, the chart
+  // and the Top-users scroll region unscanned in both themes. `figures_suppressed`
+  // is present so the "· N suppressed" label form is covered too.
+  await mockUsage(page, {
+    bucket: "day",
+    series: [{ t: "2026-01-01", queries: 12, tokens: 900, spend: 0.4 }],
+    top_users: [{ email: "someone.with.a.long.address@example.edu", queries: 42,
+                  tokens: 900, spend: 0.5 }],
+    totals: { queries: 120, tokens: 8400, spend: 1.23, cache_hits: 9,
+              escalations: 2, failures: 1, prompt_tokens: 8400,
+              cached_prompt_tokens: 4200, first_call_prompt_tokens: 5000,
+              first_call_cached_prompt_tokens: 2500,
+              figures_checked: 10, figures_ungrounded: 1, figures_suppressed: 4,
+              table_cells_checked: 318, table_cells_matched: 312,
+              emit_turns: 50, structured_turns: 50, leaked_turns: 1,
+              exhausted_turns: 3, degraded_turns: 1,
+              priceable_turns: 40, estimated_turns: 12, cost_warning: false },
+  });
   await mockLogs(page, [
     { ts: 1700000000, level: "INFO", name: "ipeds.app", msg: "started" },
     { ts: 1700000100, level: "WARNING", name: "ipeds.app", msg: "something looks off" },
@@ -470,14 +509,17 @@ test.describe("axe smoke scan", () => {
     expect(found, JSON.stringify(found, null, 2)).toEqual([]);
   });
 
-  for (const [path, ready] of [
-    ["/admin/users/current", /Users/i],
-    ["/admin/users/pending", /Users/i],
-    ["/admin/users/blocked", /Users/i],
-    ["/admin/imports", /Load IPEDS years/i],
-    ["/admin/usage", /Usage/i],
-    ["/admin/skills", /Learned lessons/i],
-    ["/admin/logs", /Server logs/i],
+  for (const [path, ready, content] of [
+    ["/admin/users/current", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
+    ["/admin/users/pending", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
+    // Third entry: a selector that only exists once the page's DATA rendered.
+    // The heading and `.errbound` checks below are both necessary and both
+    // insufficient — see the comment at the assertion.
+    ["/admin/users/blocked", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
+    ["/admin/imports", /Load IPEDS years/i, ".year-card-wrap"],
+    ["/admin/usage", /Usage/i, ".stat"],
+    ["/admin/skills", /Learned lessons/i, ".skill"],
+    ["/admin/logs", /Server logs/i, ".logmsg"],
   ]) {
     for (const theme of ["light", "dark"]) {
       test(`${path} has no critical or serious violations (${theme})`, async ({ page }) => {
@@ -501,6 +543,14 @@ test.describe("axe smoke scan", () => {
         // scans measured the crash card for months while reporting green.
         // Assert we are looking at the page before believing the result.
         await expect(page.locator(".errbound")).toHaveCount(0);
+        // ...and `.errbound` is not sufficient either. A panel that CATCHES its
+        // own fetch rejection never throws, so the boundary never fires and the
+        // page renders its error state — which axe scans perfectly clean. That
+        // is how /admin/usage went unscanned entirely: `mockUsage` was simply
+        // missing from the fixture, the request 404'd, and both Usage scans
+        // measured 0 stat tiles and the words "Not Found" while reporting green.
+        // So assert something that only exists once the DATA rendered.
+        await expect(page.locator(content).first()).toBeVisible();
 
         const found = gatedViolations(await new AxeBuilder({ page }).analyze());
         expect(found, JSON.stringify(found, null, 2)).toEqual([]);
