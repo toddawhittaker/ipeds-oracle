@@ -147,7 +147,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan)
+# docs_url/redoc_url/openapi_url are OFF. This is a private, allowlisted app,
+# and FastAPI serves all three UNAUTHENTICATED by default: `GET /openapi.json`
+# returned 200 with 41,893 bytes -- the complete schema of all 31 admin
+# endpoints and every request body model -- to a caller with no session. Not an
+# authz bypass (every admin route is gated), but it hands an unauthenticated
+# scanner the whole attack surface. Costs nothing to remove: the CSP
+# (`script-src 'self'`) already blocks Swagger UI's CDN bundle, so /docs
+# rendered blank in a browser anyway.
+app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 # Three pure-ASGI layers, none of which buffers the chat SSE stream. Starlette
 # builds the stack so the LAST added is OUTERMOST, so a request travels:
 #   SecurityHeaders -> CSRF -> BodyLimit -> router
