@@ -116,14 +116,31 @@ Each year is a card:
   want.
 - Unavailable years are shown but not selectable.
 
-Select the years you want and **Integrate** them. Behind the scenes the app
-downloads the source files, builds a **fresh copy** of the whole database in
-staging, runs integrity and magnitude checks, and **atomically swaps** it in only
-if the checks pass — so the live data is never disturbed mid-import, and a bad
-import can't corrupt what's already there. A progress bar tracks the rebuild.
+Select the years you want and **Integrate** them. A confirmation appears first,
+because this is a bigger operation than "add a year" sounds: **every import is a
+full rebuild from all the years you have**, not an incremental merge. The dialog
+tells you the real shape of the job — how many years in total, how many are
+already loaded, how many are new, and roughly how much will be downloaded — and
+reminds you that the live database keeps answering questions until the new one
+passes every check.
+
+Behind the scenes the app downloads the source files, builds a **fresh copy** of
+the whole database in staging, runs integrity and magnitude checks, and
+**atomically swaps** it in only if the checks pass — so the live data is never
+disturbed mid-import, and a bad import can't corrupt what's already there. A
+progress bar tracks the rebuild.
+
+While a rebuild is running the tab **locks**: the year cards, the Integrate
+button, the trashcan controls and the manual upload all stop responding, and a
+notice says so. This holds for a job **another admin started**, or one that was
+already running when you opened the tab — in that case the notice says so
+explicitly ("An import started by another session is running…"), so a locked
+screen never looks like a broken one. The lock clears itself when the job
+finishes.
 
 - **Remove a year** with its trashcan control — the same safe staging-and-swap
-  process runs in reverse, fully offline.
+  process runs in reverse, fully offline. It confirms first too, and it cannot
+  be undone without re-integrating the year.
 - **Manual upload** — if you'd rather provide the source `.accdb` file yourself
   (for a year not in the catalog, or an air-gapped setup), expand **Manual
   upload** and drop the file in. It runs through the same checks.
@@ -297,10 +314,40 @@ lesson's "from …" tag shows which. Your job is to curate them:
 - **Verify** a lesson you trust, so it's used with confidence.
 - **Edit** a headline or description to sharpen it.
 - **Delete** anything wrong or unhelpful.
+- **Reject & mute** the *kind* of lesson you never want again (below).
 
 Each lesson shows its headline, the fuller description (expandable), and a
 commented SQL example, formatted and syntax-highlighted. Good, verified lessons
 make future answers faster and more accurate.
+
+### Category pills, and rejecting a whole kind of lesson
+
+A lesson proposed by the reviewer carries a **category pill** naming the kind of
+mistake it came from. Alongside the ordinary **Delete**, such a lesson offers
+**Reject & mute** — one action that discards this lesson *and* stops the
+assistant proposing any future lesson in the same category, until you unmute it.
+Use it when the problem isn't the wording but the whole idea: a category that
+keeps coming back and that you keep declining.
+
+It confirms first, and says plainly that it changes future behaviour rather than
+just this row.
+
+Two collapsed sections at the bottom of the tab keep that reversible:
+
+- **Muted categories (N)** — every category currently suppressed, each with an
+  **Unmute** control. Always shown, even at zero, so the count is a live status
+  rather than something that only appears once you've muted something.
+- **Rejected (N)** — the lessons you've turned down. Each has an **Undo** that
+  puts it back in play, and there's a **Clear all**. This list is what stops a
+  rejected lesson being re-proposed forever, so an empty one means the assistant
+  is free to suggest anything again.
+
+Two things worth knowing. **Rejecting is remembered, deleting a verified rule is
+too** — retiring a lesson you'd previously verified also means "don't suggest
+this again", so it lands in Rejected as well. And lessons that were already in
+the queue before this feature shipped have **no category**, so they show no pill
+and offer no **Reject & mute**; ordinary Delete still works, and the backlog
+clears itself as you work through it.
 
 ---
 

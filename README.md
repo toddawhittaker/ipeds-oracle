@@ -175,12 +175,42 @@ git clone https://github.com/toddawhittaker/ipeds-oracle && cd ipeds-oracle
 cp .env.example .env && $EDITOR .env    # LLM_API_KEY, MODEL_DEFAULT, RESEND_API_KEY, ADMIN_EMAILS, APP_PUBLIC_URL, …
 mkdir -p srv-data/accdb                  # the /data volume (holds the DBs + import sources)
 cp /path/to/ipeds.db srv-data/ipeds.db   # the built database (see "Data" below)
+sudo chown -R 10001:10001 srv-data       # the container runs as uid 10001 — see below
 docker compose up -d --build             # --build until you pull a published image
 ```
 
 Open the app, sign in with an address in `ADMIN_EMAILS` (auto‑allowlisted + admin
 on first boot), and add colleagues under **Admin → Users**. Update later with
 `docker compose pull && docker compose up -d` (pin a release via `IPEDS_TAG`).
+
+#### The container runs as a non‑root user
+
+It runs as the numeric uid/gid **10001:10001**, with `no-new-privileges` and all
+Linux capabilities dropped. Nothing at runtime needs root — port 8000 is above
+1024, package installs happen at build time, and certificates are generated on
+the host and mounted read‑only.
+
+**Docker never chowns a bind mount for you**, so the `/data` directory on the
+host has to be owned by that uid or the app cannot write `app.db`. Rather than
+fail with a stack trace about an unopenable database, a startup check runs first
+and **exits with the exact `chown` command and the uid it is actually running
+as**. If your host files must keep another owner, set `IPEDS_UID`/`IPEDS_GID` in
+`.env` instead — they must match the ownership on disk.
+
+Two consequences worth knowing:
+
+- `scripts/backup_app_db.py` writes to a *relative* `backups/` by default, which
+  a non‑root container cannot create. For an in‑container run set
+  **`BACKUP_DIR=/data/backups`** (or pass `--out-dir`). Running it on the host
+  against the bind mount needs neither.
+- The embedding model is baked into the image at `/srv/models`, which is
+  read‑only to the app. That is fine for the shipped model; if you override
+  **`EMBED_MODEL`**, also set **`FASTEMBED_CACHE_PATH=/data/models`** so the new
+  model has somewhere writable to download to.
+
+> **Upgrading from v0.3.0 or earlier:** do the `chown` above *before* pulling.
+> The first boot on the new image will otherwise stop with instructions rather
+> than start — that is the startup check doing its job, not a broken release.
 
 ### Data
 

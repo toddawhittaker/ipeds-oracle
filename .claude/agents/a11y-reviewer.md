@@ -58,13 +58,26 @@ Allowlist/Imports/Usage/Skills/Logs), `Markdown.jsx`
 - **Treat a green axe gate as weak evidence, and treat "pinned by e2e" as weak
   evidence for a11y semantics specifically.** `frontend/e2e/a11y.spec.js` fails on
   `critical` + `serious` across 19 scans (a full answer, a mid-stream answer, all
-  seven admin paths, both themes), but three known blind spots survive it: axe
+  seven admin paths, both themes), but five known blind spots survive it: axe
   files a **one-character element** as `incomplete` rather than a violation (a
   2.43:1 count badge was invisible to it — contrast on those needs a direct
   computed-style assertion); sampling **mid-animation** measures a blended colour,
-  not the resting one; and **Playwright's role engine does not prune
+  not the resting one; **Playwright's role engine does not prune
   presentational children**, so `getByRole` finds controls that ARIA has stripped
-  from the a11y tree — assert containment instead.
+  from the a11y tree — assert containment instead; **`aria-prohibited-attr`
+  returns `incomplete`, not a violation, whenever the element has text
+  content**, and `getByLabel` computes a name WITHOUT applying the role
+  prohibition, so an `aria-label` on a roleless `<span>` passes an e2e assertion
+  while screen readers ignore it outright (use `.sr-only` text); and **axe only
+  contrast-checks text INSIDE the viewport** — `colorContrastEvaluate` returns a
+  PASS for anything off-screen, so a scan needs a tall viewport (the gate uses
+  1280×2600) or everything below the fold goes unmeasured.
+- **Reflow (1.4.10) is not something axe measures.** The admin tables each have
+  their own `.table-scroll` region with `min-width` on the table; the deliberate
+  decision NOT to make those `tabIndex={0} role="region"` is recorded in
+  `CLAUDE.md` with its reasoning, so overrule it knowingly rather than as a
+  fresh finding — and if you do, it needs a distinct accessible name and a case
+  in `frontend/e2e/admin-table-reflow.spec.js`.
 - For each finding: the component + `file:line`, the WCAG criterion it violates,
   who it affects and how, severity, and a one-line remediation direction.
 - Rank most-severe first (blocks a user vs. minor polish). Note quick wins.

@@ -520,11 +520,16 @@ aggregation, derive an eval's expected answer, or debug the agent's SQL.
   (`_snapshot_before_migrating` → `app.db.pre-v<N>`, sqlite's online backup API,
   never fatal) so an upgrade is reversible — several shipped migrations are
   multi-statement `executescript` blocks that are not atomic, and a part-way
-  failure otherwise bricks every later boot on "duplicate column name". **The
-  RECURRING backup gap is still open:** `scripts/backup_app_db.py` is tested and
-  nothing calls it, so a self-hoster following `compose.yaml` gets no scheduled
-  backups; that needs the first background task in `lifespan` (every step there
-  is one-shot today).
+  failure otherwise bricks every later boot on "duplicate column name".
+  **Scheduled backups are NOT a gap — they are a settled policy.** This
+  paragraph used to call `scripts/backup_app_db.py` going uncalled a "recurring
+  backup gap" needing the first background task in `lifespan`; that was the
+  error. The README is the policy: the operator snapshots the bind-mounted
+  volume or crons the script, and the app schedules nothing. The pre-migration
+  snapshot above is an upgrade safety net, not a backup. One wrinkle the
+  non-root container adds: the script's `--out-dir` defaults to a RELATIVE
+  `backups`, which uid 10001 cannot create inside the container, so an
+  in-container run needs `BACKUP_DIR=/data/backups`.
 
 ### The agent loop
 LLM = **any OpenAI-compatible provider** (`LLM_BASE_URL`, **OpenRouter** by default,
@@ -1611,7 +1616,28 @@ The three guards:
   `SNAPSHOTS_KEPT` (2). **Scheduled backups are deliberately NOT the app's job**
   — the operator snapshots the bind-mounted volume or crons
   `scripts/backup_app_db.py`; the pre-migration snapshot is an upgrade safety
-  net, not a backup.
+  net, not a backup, and an in-container run of that script needs
+  `BACKUP_DIR=/data/backups` (uid 10001 cannot create its relative default).
+- **A manual upload's own files are discarded too**, and `run_import` owns their
+  whole lifetime from a `finally` — success or failure, mirroring
+  `run_integrate`'s work dir. Previously only the router's `except` unlinked the
+  streamed `UPLOAD_DIR` copy, so a SUCCESSFUL import leaked two full 1–3 GB
+  Access files: that one, and the `<name>.accdb.bak` a same-year re-upload moves
+  aside in `DATA_DIR`. The `DATA_DIR` copy itself stays — it is the loader's
+  source and the superset guard reads it. Two guards, both mutation-verified.
+  **`UPLOAD_DIR` and `DATA_DIR` are free-form settings that can name the same
+  directory**, where the "upload" IS the loader's source, so `_discard_uploads`
+  skips an alias — and skips anything it cannot PROVE, since a stray file beats
+  deleting the dataset on a wrong guess. Aliasing is decided by
+  `_same_file` (device+inode via `os.path.samestat`, which also catches a hard
+  link no path normalisation would), whose three-valued answer is load-bearing:
+  a MISSING path must answer **False, not None**, or the preflight-failure exit
+  — where `data_dir` does not exist yet — would skip the delete and leak every
+  upload. And the swap flag is set from **inside `_activate_staging` the instant
+  the rename completes**, not from `build_check_swap`'s return: a clean return
+  only proves the whole swap TAIL succeeded, and a raise in that tail left the
+  flag False, so `_restore_all()` rolled the old `.accdb` back under a live
+  database built from the new one.
 - A rebuild (manual upload or NCES integrate) streams `scripts/build_ipeds_db.py`'s
   `##PROGRESS##` markers into a determinate rebuild-progress bar on the Imports tab.
 
@@ -2057,6 +2083,23 @@ artifacts kept). Self-hosters run the published image
 operator's own reverse proxy/tunnel or an optional self-signed cert
 (`scripts/gen-selfsigned-cert.sh` + `SSL_CERTFILE`/`SSL_KEYFILE`, served by
 `scripts/docker-entrypoint.sh`). Details in the README's **Self-hosting** section.
+
+Two operator-visible defaults that read as breakage if you forget they are
+deliberate. **`compose.yaml` publishes :8000 on LOOPBACK** (`BIND_ADDR`, default
+`127.0.0.1`), which is a security control rather than a convenience: Docker
+inserts published ports into its own iptables chain, which a host
+`ufw`/`firewalld` policy does **not** filter, so `0.0.0.0` is reachable from the
+network however the host firewall is set. A deployment reached by LAN address
+therefore stops working after an upgrade until it sets `BIND_ADDR` explicitly.
+And **the container runs as the numeric uid/gid 10001** with
+`no-new-privileges` + `cap_drop: ALL`; Docker never chowns a bind mount, so
+`/data` must be owned by it (`sudo chown -R 10001:10001 ./srv-data`, or override
+`IPEDS_UID`/`IPEDS_GID`). `python -m app.startup_checks` runs from the
+entrypoint BEFORE `exec uvicorn` and exits 1 with the exact command and the live
+uid — it has to be a separate process, because `app/main.py` calls
+`_install_logbuffer()` at IMPORT time and an unwritable data directory would
+otherwise surface as `sqlite3.OperationalError` inside uvicorn's app import,
+a traceback that never mentions ownership.
 
 **Test-env gotcha.** A production `.env` (`COOKIE_SECURE=true`, real keys,
 `EMAIL_DOMAIN=…`) bleeds into tests — run auth suites with `COOKIE_SECURE=false`,
