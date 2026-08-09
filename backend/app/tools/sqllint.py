@@ -53,6 +53,35 @@ _DISTINCT_YEAR_JOIN_RE = re.compile(
     r"\b(?:join|in)\s*\(\s*select\s+distinct\s+year\b")
 _MAJORNUM_RE = re.compile(r"\bmajornum\b")
 
+# --- award-level nesting (see SCHEMA.md §5) ------------------------------------
+# `awlevel` nests TWICE, and both traps are arithmetic identities rather than
+# heuristics, so these two checks can be strict where the CIP ones are cautious:
+#   * 20 (cert < 12 wks) + 21 (cert 12 wks-1 yr) == 1 (cert < 1 yr), EXACTLY;
+#   * 13 == 1+2+4, 14 == 6+8, 12 == 3+5+7+17+18+19, and 15 == 12+13+14.
+# SCHEMA.md used to call "1-8, 17-21" mutually exclusive. It is not, and the
+# agent wrote precisely that list live: Ohio's all-level nursing awards came back
+# as 10,592 against a true 10,574, counting one school's 18 short certificates
+# under both 1 and 21. Grounding graded it `exact` and the reader saw the ✓ mark,
+# because grounding attests reproduction from the query result and never that the
+# query was right — which is exactly why this belongs in a deterministic lint.
+_AWLEVEL_ROLLUPS = frozenset({12, 13, 14, 15})
+_AWLEVEL_REAL = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 20, 21})
+# A bare code list only — `awlevel IN (SELECT ...)` must not be mined for digits.
+_AWLEVEL_IN_RE = re.compile(r"\bawlevel\b\s*in\s*\(\s*([\d\s,]+?)\s*\)")
+_AWLEVEL_EQ_RE = re.compile(r"\bawlevel\b\s*=\s*(\d+)")
+# GROUP BY awlevel makes each output row a single level → nothing sums across
+# levels, the same reasoning that lets GROUP BY cipcode suppress the rollup check.
+_GROUP_AWLEVEL_RE = re.compile(r"\bgroup\s+by\b.*\bawlevel\b", re.DOTALL)
+
+
+def _awlevel_codes(scan: str) -> set[int]:
+    """Every award-level code the query pins itself to, across all its
+    `awlevel = N` and `awlevel IN (...)` predicates. Empty when it names none."""
+    codes = {int(n) for n in _AWLEVEL_EQ_RE.findall(scan)}
+    for group in _AWLEVEL_IN_RE.findall(scan):
+        codes.update(int(n) for n in re.findall(r"\d+", group))
+    return codes
+
 
 def _scan(sql: str) -> str:
     """Normalize SQL for pattern matching: strip comments + a trailing ';',
@@ -100,5 +129,24 @@ def lint_sql(sql: str) -> list[LintFinding]:
                 "c_a has first-major (majornum=1) and second-major (majornum=2) "
                 "rows; summing without a majornum filter double-counts "
                 "double-majors. Add majornum=1 for a primary-major headcount."))
+
+        if not _GROUP_AWLEVEL_RE.search(scan):
+            levels = _awlevel_codes(scan)
+            if 1 in levels and levels & {20, 21}:
+                findings.append(LintFinding(
+                    "awlevel-cert-double-count",
+                    "awlevel 20 and 21 are SUBDIVISIONS of awlevel 1 "
+                    "(20+21 = 1, exactly), so listing them alongside 1 counts "
+                    "every short certificate twice. Drop 20 and 21: the "
+                    "mutually-exclusive real levels are 1,2,3,4,5,6,7,8,17,18,19. "
+                    "For an all-levels total prefer the rollup awlevel=15 "
+                    "(degrees + certificates) or awlevel=12 (degrees only)."))
+            if levels & _AWLEVEL_ROLLUPS and levels & _AWLEVEL_REAL:
+                findings.append(LintFinding(
+                    "awlevel-rollup-mix",
+                    "awlevel 12-15 are rollup totals over the real levels "
+                    "(13=1+2+4, 14=6+8, 12=3+5+7+17+18+19, 15=12+13+14), so "
+                    "summing a rollup together with a real level double-counts. "
+                    "Pick one: a rollup on its own, or a list of real levels."))
 
     return findings

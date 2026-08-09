@@ -14,6 +14,7 @@ pass rate to measure whether retrieved lessons actually help —
 """
 import asyncio
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -125,6 +126,62 @@ def year_count_case():
     )
 
 
+_OHIO_RN_AWARDS = """
+SELECT SUM(CASE WHEN c.awlevel IN (1,2,3,4,5,6,7,8,17,18,19) THEN c.ctotalt END),
+       SUM(CASE WHEN c.awlevel IN (20,21) THEN c.ctotalt END)
+FROM c_a c JOIN hd h ON h.unitid = c.unitid AND h.year = c.year
+WHERE c.cipcode = '51.3801' AND c.majornum = 1 AND h.stabbr = 'OH'
+  AND c.year = (SELECT MAX(year) FROM _years)
+"""
+
+
+def award_level_case():
+    """The award-level double count, encoded at the level that actually broke.
+
+    `awlevel` 20 and 21 are SUBDIVISIONS of 1 (20+21 = 1, exactly), but
+    SCHEMA.md used to call 1-8 & 17-21 mutually exclusive. Asked for Ohio's
+    Registered Nursing awards "across all award levels", the agent wrote
+    precisely the licensed `awlevel IN (1,...,8,17,...,21)` and returned 10,592
+    against a true 10,574 — then rationalized the 18-award gap rather than
+    seeing it. `grounding.py` graded it `exact` and the reader got the ✓ mark,
+    because grounding attests reproduction from the query result and never that
+    the query was right. No unit test can reach this: the defect is in the SQL
+    the MODEL writes, so it belongs here.
+
+    The check is two-sided on purpose — the true total must appear AND the
+    double-counted one must not. `contains_number(correct)` alone would pass on
+    an answer that reported both.
+
+    Expected values are derived from the live ipeds.db (like year_count_case),
+    and the case SKIPS rather than passing for free when it cannot discriminate:
+    with no short-certificate rows the two totals are equal and the case proves
+    nothing.
+    """
+    path = get_settings().ipeds_db_path
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            correct, short_certs = con.execute(_OHIO_RN_AWARDS).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not correct or not short_certs:
+        return None          # nothing to double-count → the case can't fail
+    doubled = correct + short_certs
+
+    def check(res):
+        found = _nums(res.answer)
+        return correct in found and doubled not in found
+
+    return (
+        "How many Registered Nursing degrees did Ohio institutions award in the "
+        "most recent year, across all award levels?",
+        f"{correct:,} (NOT {doubled:,} — awlevel 20/21 are part of 1)",
+        check,
+    )
+
+
 async def main() -> int:
     s = get_settings()
     if not s.llm_api_key:
@@ -139,6 +196,13 @@ async def main() -> int:
     else:
         print("SKIP: year-count case — ipeds.db missing/unreadable, "
               "can't derive an expected value.")
+
+    al = award_level_case()
+    if al is not None:
+        cases.append(al)
+    else:
+        print("SKIP: award-level case — ipeds.db missing, or it holds no "
+              "awlevel 20/21 rows for the query, so the case can't discriminate.")
 
     passed = 0
     for q, expect, check in cases:
