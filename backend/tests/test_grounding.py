@@ -79,14 +79,55 @@ def test_a_per_row_ratio_column_grounds_every_cell():
     assert got.status == grounding.TABLE_MATCHED, got
 
 
-def test_a_per_row_ratio_figure_grounds():
-    """The figure is the same arithmetic (60,836 / 258,184) and was `ungrounded`
-    on the same turn -- which is not observe-only: _maybe_retry_figure and
-    _s5_fabricated both act on that verdict."""
+def test_a_per_row_ratio_figure_does_NOT_ground():
+    """The documented limitation, and the reason it is one.
+
+    A table cell has an anchor row, so _match_at_row tries k(k-1) pairs from
+    that ONE row. The figure has no anchor, so the same idea must try every
+    row's pairs -- rows x k(k-1) ratios, all in (0,100], each against a
+    display-rounding window. #318 shipped exactly that and it verified 22-97%
+    of FABRICATED hero percentages (see the next test). The figure therefore
+    keeps no route for this shape: a correct per-row share reads `ungrounded`
+    and renders NO mark, which is the safe direction for a positive-only mark.
+
+    Delete this test the day a MEASURED bound exists -- not before."""
     check = grounding.check_figure(
         {"value": "23.6%", "unit": "%", "label": "Share of RN degrees"}, [_RATIO])
-    assert check.status != grounding.UNGROUNDED, check
-    assert check.grounded, check
+    assert check.status == grounding.UNGROUNDED, check
+
+
+def test_a_fabricated_figure_percentage_does_not_ground_against_a_wide_result():
+    """THE TEST THAT WAS MISSING, and the reason #318's regression shipped.
+
+    All three of that PR's counterweights ran through check_table
+    (allow_dimension=False) or _match_at_row -- neither of which reaches the
+    figure path -- so deleting BOTH guards from the figure block left every
+    test green. This one drives check_figure against the shape the sieve fed
+    on: many rows, several measure columns, a percentage that is in no way
+    derivable from the data.
+
+    A handful of coincidental hits is expected and fine; a majority is the
+    failure. The bound is deliberately loose so it pins the CLASS rather than
+    a tolerance."""
+    import random
+    rows = 200
+    rnd = random.Random(4)
+    wide = result(["year", "a", "b", "c", "d", "e", "f"],
+                  [tuple([2000 + i] + [rnd.randint(50, 90000) for _ in range(6)])
+                   for i in range(rows)])
+    rnd = random.Random(99)
+    n = 200
+    grounded = 0
+    for _ in range(n):
+        v = rnd.uniform(0.5, 99.5)
+        fig = {"value": f"{v:.1f}%", "unit": "%", "label": "fabricated hero stat"}
+        if grounding.check_figure(fig, [wide]).status != grounding.UNGROUNDED:
+            grounded += 1
+    rate = grounded / n
+    assert rate < 0.20, (
+        f"{rate:.1%} of fabricated hero percentages verified against a "
+        f"{rows}-row x 6-measure result -- the figure path has an unbounded "
+        f"ratio sieve again (#318 measured 97% here)")
 
 
 def test_the_row_ratio_beats_the_coincidental_column_share():
@@ -1901,7 +1942,10 @@ def run():
     print("  -- row-wise ratio of two measure columns --")
     check("a per-row ratio column grounds every cell",
           test_a_per_row_ratio_column_grounds_every_cell)
-    check("a per-row ratio figure grounds", test_a_per_row_ratio_figure_grounds)
+    check("a per-row ratio figure does NOT ground (documented limit)",
+          test_a_per_row_ratio_figure_does_NOT_ground)
+    check("a fabricated figure percentage does not ground against a wide result",
+          test_a_fabricated_figure_percentage_does_not_ground_against_a_wide_result)
     check("the row ratio beats the coincidental column share",
           test_the_row_ratio_beats_the_coincidental_column_share)
     check("a wrong share still fails", test_a_wrong_share_still_fails)
