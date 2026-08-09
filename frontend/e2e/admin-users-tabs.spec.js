@@ -238,3 +238,56 @@ test.describe("Users sub-tabs — timestamp columns", () => {
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
   });
 });
+
+test.describe("the Actions column does not push the table wider than it renders", () => {
+  // A `.tip` tooltip is an absolutely-positioned ::after on its button, and the
+  // Actions column is flush with the table's right edge — so a CENTRED tip on
+  // the rightmost control hung ~18px past the table. An abspos descendant still
+  // counts toward an ancestor's scrollable overflow, so `table.scrollWidth` read
+  // 976 against a rendered 958 on a desktop table that visually fits perfectly.
+  //
+  // Nothing showed, because `.admin`'s own scroller absorbed it. It matters
+  // twice over: the moment the table gets a scroll container of its own (the
+  // deferred WCAG 1.4.10 reflow wrapper) that 18px becomes a permanent
+  // horizontal scrollbar under EVERY admin table, and until then no test can
+  // ask "does this table overflow?" without measuring the tooltip instead.
+  //
+  // All three sub-tabs, because each renders a different Actions cell: two
+  // buttons on Current, two on Pending, and one on Blocked — whose lone button
+  // carries the longest tip of the three, so a per-tab regression is real.
+  for (const [sub, panel] of [["current", "#userpanel-current"],
+    ["pending", "#userpanel-pending"], ["blocked", "#userpanel-blocked"]]) {
+    test(`${sub}: the table's scrollWidth equals the width it renders at`, async ({ page }) => {
+      await openUsers(page, { path: `/admin/users/${sub}` });
+      const table = page.locator(`${panel} table.grid.data`);
+      await expect(table.locator("td.actions button").first()).toBeVisible();
+
+      const { scrollWidth, clientWidth } = await table.evaluate((el) => ({
+        scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+      }));
+      expect(scrollWidth).toBe(clientWidth);
+    });
+  }
+
+  // The over-broad-fix guard. Hiding or shrinking the tooltip would satisfy the
+  // three assertions above while destroying the only label these icon-only
+  // buttons carry on screen. So: it still appears on hover, and it is still
+  // legible — wider than its button, i.e. genuinely showing its text rather
+  // than clipped to the anchor.
+  test("the tooltip still opens on hover and is not clipped to its button", async ({ page }) => {
+    await openUsers(page, { path: "/admin/users/blocked" });
+    const btn = page.getByRole("button", { name: /Allow new access request/ });
+    await btn.hover();
+
+    // The tip fades in over .1s, so a single read lands mid-transition.
+    await expect
+      .poll(() => btn.evaluate((el) => globalThis.getComputedStyle(el, "::after").opacity))
+      .toBe("1");
+
+    const seen = await btn.evaluate((el) => ({
+      tipWidth: parseFloat(globalThis.getComputedStyle(el, "::after").width),
+      btnWidth: el.getBoundingClientRect().width,
+    }));
+    expect(seen.tipWidth).toBeGreaterThan(seen.btnWidth);
+  });
+});
