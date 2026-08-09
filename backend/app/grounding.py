@@ -35,6 +35,47 @@ match. `check_figure` therefore records WHICH derivation matched, so the
 false-positive rate is inspectable before any policy hangs off the status. A
 model-declared provenance removes the search entirely and is the real fix.
 
+TWO THINGS DELIBERATELY NOT BUILT HERE, both measured. Recorded so the next
+person weighs the evidence instead of re-deriving it — each looks obviously
+worth doing until you measure it.
+
+1. PROSE NUMBERS ARE NOT GRADED. Two wrong numbers reached users inside
+   sentences (a fabricated "~31,000 national Mechanical Engineering bachelor's"
+   against a true 33,126; "about 165,000 degrees ... roughly 32 per 100" over a
+   column summing to 155,693, i.e. 30.0). Neither check sees prose. Three
+   scopings were measured on an 84-answer retained corpus and none is usable:
+
+     * every prose number          425/804 reproducible (52.9%) — the misses are
+                                   CIP codes ("11.0701"), ordinals, list counts;
+     * after an aggregate cue word  47/60 (78.3%) — false-positives on IPEDS
+                                   terminology ("150% of normal time") and bare
+                                   years, and a fixed cue window missed the real
+                                   165,000 case;
+     * near a table column sum      57 flags in 119 answers — mostly year
+                                   literals colliding with sums, plus
+                                   legitimately different totals (a national
+                                   figure quoted beside a top-10 subtotal).
+
+   Against an observed incidence of 2 defects in 29 turns, every variant reports
+   a rate dominated by correct prose. The mitigation is prompt-side (step 4:
+   never state a total you did not query); the real fix is server-computed
+   numbers from a declared provenance, the same end-state named above.
+
+2. THE FIGURE HAS NO ROW-TO-ROW ROUTE, so a hero stat that is an adjacent-row
+   difference ("largest single-year drop = 8,341" = 155,020 - 146,679) reads
+   `ungrounded`. An adjacent-row-diff route was measured on fabricated hero
+   numbers first (the #318/#320 methodology), and its false-verify rate scales
+   with the candidate count, which is rows x measure columns:
+
+       6 rows x 1 col ->   5 diffs ->  0.5%      50 x 3 ->  147 ->  9.5%
+      12 rows x 3 col ->  33 diffs ->  2.25%    200 x 6 -> 1194 -> 49.0%
+
+   `sql_row_cap_model` is 200, so the 49% case is not hypothetical — it is the
+   cap, which rankings reach routinely. That is #318 repeating (a per-row ratio
+   verified 97% of fabricated figures and was reverted in #320). A route safe
+   only under two magic thresholds, to recover one observed figure, is not worth
+   the surface: the mark is positive-only precisely so a missing tick is cheap.
+
 TRUNCATION. app/tools/sql.py cuts a result at sql_row_cap_model (200) and
 prompt.py tells the model to fix a cut ranking with a separate
 `SELECT SUM(...)` — but a model that instead sums the visible page gets a
