@@ -543,10 +543,34 @@ _MAX_CLARIFY_OPTIONS = 4
 # Length caps mirror the _MAX_* precedent in critic.py/feedback.py: the model is
 # asked for "one line" / "short phrases", but nothing stops a runaway or
 # adversarial value from ignoring that, and an unbounded string would flow
-# straight into a rendered chip label. Plain-slice truncation, same as
-# critic._MAX_ANSWER_CHARS / feedback._MAX_FEEDBACK_CHARS.
+# straight into a rendered chip label.
 _MAX_CLARIFY_QUESTION_CHARS = 200
 _MAX_CLARIFY_OPTION_CHARS = 80
+
+
+def _ellipsize(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters, on a WORD boundary, with an
+    ellipsis when anything was dropped.
+
+    A plain slice was the bug: the model wrote a 236-character clarifying
+    question and the stored one ended '...Miami Dade College). Did you mean
+    those to' — mid-word, question mark gone. Latent rather than visible today
+    (Chat.jsx renders `c.question` only when the answer bubble carries no prose,
+    and the full sentence normally rides in the prose), but it is what gets
+    PERSISTED, so a reload or the fallback path shows the half word.
+
+    critic._truncate_headline is the existing word-boundary helper and is
+    deliberately NOT reused: its contract is "never an ellipsis" because it
+    builds a headline, where a trailing '…' would be noise. Here the ellipsis is
+    the point — it tells the reader the sentence was cut rather than leaving
+    them to wonder."""
+    t = (text or "").strip()
+    if len(t) <= limit:
+        return t
+    cut = t.rfind(" ", 0, limit - 1)
+    if cut <= 0:
+        cut = limit - 1
+    return t[:cut].rstrip(" ,;:-–—") + "…"
 
 
 def _extract_clarify(answer: str) -> tuple[str, dict | None]:
@@ -565,7 +589,8 @@ def _extract_clarify(answer: str) -> tuple[str, dict | None]:
         return clean, None
     if not isinstance(data, dict):
         return clean, None
-    question = str(data.get("question") or "").strip()[:_MAX_CLARIFY_QUESTION_CHARS].strip()
+    question = _ellipsize(str(data.get("question") or ""),
+                          _MAX_CLARIFY_QUESTION_CHARS)
     if not question:
         return clean, None
     seen = set()
