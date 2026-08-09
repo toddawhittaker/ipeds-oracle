@@ -734,39 +734,6 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                 best = (status, derivation)
     if best is not None and best[0] != DERIVED:
         return best          # a verbatim/rounded cell already beats a derivation
-    # A row's own cell OVER another cell of the same row — the figure's half of
-    # the blind spot _match_at_row route 2b closes for table cells. A headline
-    # share ("23.6% of RN degrees are private non-profit") is one row's B/A, and
-    # no column route can express it: the figure has no anchor row, so every
-    # row's pairs are candidates. FIGURE-ONLY, exactly like row_total below —
-    # check_table reaches this function only for a row it could not anchor, and
-    # widening that fallback would inflate Grounded-cells with coincidental
-    # hits, which is the whole reason anchoring exists. Guarded on the value
-    # being written as a percentage and on (0,100], as everywhere else.
-    if allow_dimension and "%" in _strip_emphasis(raw_value):
-        tol = _displayed_precision_tol(raw_value, target)
-
-        def _repro(got: float) -> bool:
-            return _close(target, got) or bool(tol and abs(target - got) <= tol)
-
-        for r_idx, result in enumerate(results):
-            cols = measure_columns(result)
-            names = list(cols)
-            if len(names) < 2:
-                continue
-            depth = max((len(v) for v in cols.values()), default=0)
-            for row_i in range(depth):
-                cells = [(n, cols[n][row_i]) for n in names
-                         if row_i < len(cols[n]) and cols[n][row_i] is not None]
-                for n_name, n_v in cells:
-                    for d_name, d_v in cells:
-                        if d_name == n_name or not d_v:
-                            continue
-                        got = n_v / d_v * 100.0
-                        if 0.0 < got <= 100.0 and _repro(got):
-                            return DERIVED, Derivation(
-                                op="row_ratio", result_index=r_idx,
-                                column=f"{n_name}/{d_name}@row{row_i + 1}")
     # Row-wise totals, last: strictly weaker evidence than a column route, and
     # only for the FIGURE. check_table passes allow_dimension=False and is
     # deliberately excluded — a table grades hundreds of cells, so widening its
@@ -780,6 +747,25 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                 if _close(target, total) or (tol and abs(target - total) <= tol):
                     return DERIVED, Derivation(op="row_total", result_index=r_idx,
                                                column=f"row{row_i + 1}")
+    # A per-row RATIO of two measure columns is deliberately NOT offered here,
+    # only in _match_at_row (route 2b). A table cell has an anchor row, so that
+    # route tries k(k-1) pairs from ONE row; the figure has no anchor, so the
+    # same idea has to try every row's pairs — rows x k(k-1), all landing in
+    # (0,100], each against a display-rounding window. That is not a search, it
+    # is a sieve. Measured against 400 FABRICATED hero percentages on one
+    # synthetic result: 22.5% of them "verified" on a 200-row/2-measure result,
+    # 89.2% when written without a decimal, and 97.0% at 200 rows x 6 measures
+    # (the honest routes score 0.8-16.5% on the same inputs). It shipped in #318
+    # and was caught in review before any release: `derived` is in figure.js's
+    # VERIFIED_STATUSES, so it renders the reader-facing "✓ verified", and both
+    # _maybe_retry_figure and _s5_fabricated act on the verdict.
+    # A last-row-only bound measures clean (0-2.2%) but does not recover the
+    # real cases — a headline share legitimately cites any row (observed: row 5
+    # of 6). So the figure keeps NO route for this shape, and a correct per-row
+    # share reads `ungrounded`, i.e. no mark at all. That is the documented
+    # asymmetry: the mark is positive-only because a missing mark costs a little
+    # trust while a false one destroys it. Re-opening this needs a bound that is
+    # measured on FABRICATED figures, not only on correct ones.
     # Cross-result totals, absolutely last — the widest search here, so it may
     # only run once every in-result route has failed. Numerators are the totals
     # themselves: this reaches a summary line ("top 5 combined", "all others")
