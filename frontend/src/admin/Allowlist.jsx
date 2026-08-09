@@ -1000,22 +1000,29 @@ jamie@example.com,External reviewer,`}</pre>
             <>
               {r.is_admin ? (
                 <button type="button" className="icon-btn tip" data-tip="Demote admin"
-                        aria-label="Demote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                        aria-label={`Demote admin: ${r.email}`} disabled={busy}
+                        onClick={() => toggleAdmin(r)}>
                   <IconShieldMinus />
                 </button>
               ) : (
                 <button type="button" className="icon-btn tip" data-tip="Promote admin"
-                        aria-label="Promote admin" disabled={busy} onClick={() => toggleAdmin(r)}>
+                        aria-label={`Promote admin: ${r.email}`} disabled={busy}
+                        onClick={() => toggleAdmin(r)}>
                   <IconShieldPlus />
                 </button>
               )}
               {/* An admin can't be removed while they hold admin -- demote first.
                   aria-disabled (not `disabled`) keeps the button hoverable/
                   focusable so the tooltip explains WHY; removeUser early-returns
-                  on an admin so the click is a safe no-op. */}
+                  on an admin so the click is a safe no-op.
+                  The row's address is in the NAME, as Pending and Blocked
+                  already do it. Without it a screen reader's element list shows
+                  25 identical "Remove user" buttons on a destructive action. */}
               <button type="button" className="icon-btn danger tip"
                       data-tip={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
-                      aria-label={r.is_admin ? "Can't remove an admin — demote first" : "Remove user"}
+                      aria-label={r.is_admin
+                        ? `Can't remove an admin — demote first: ${r.email}`
+                        : `Remove user: ${r.email}`}
                       aria-disabled={r.is_admin ? "true" : undefined}
                       disabled={busy} onClick={() => removeUser(r)}>
                 <IconTrash />

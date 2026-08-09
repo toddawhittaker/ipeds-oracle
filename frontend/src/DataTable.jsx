@@ -138,6 +138,9 @@ const DataTable = forwardRef(function DataTable({
   }), []);
 
   const hasActions = typeof renderActions === "function";
+  // See the wrapper below: a scroll region needs a focusable child, or
+  // it must become focusable itself.
+  const needsRegion = !hasActions || columns.some((c) => !c.sortable);
   const colCount = columns.length + (hasActions ? 1 : 0) + (selectable ? 1 : 0);
   // Pad short pages up to a full page's height with structurally-identical
   // spacer rows (only when there's more than one page) so the pager below never
@@ -213,14 +216,25 @@ const DataTable = forwardRef(function DataTable({
           scroll the entire page in two directions. This wrapper gives the table
           a scroll region of its own; `min-width` on `.grid.data` is what it
           scrolls.
-          Deliberately NOT `tabIndex={0} role="region"`: the Markdown.jsx
-          precedent for that is justified by "its rows hold no focusable
-          children", and these rows hold a sort button in every header and
-          action buttons in every row, so both horizontal extremes are already
-          keyboard-reachable and focusing one scrolls it into view. A tab stop
-          before each table would be noise, and a region sharing the table's own
-          aria-label makes a screen reader announce the name twice. */}
-      <div className="table-scroll">
+          Whether it needs `tabIndex={0} role="region"` is DERIVED, not
+          decided once in a comment. A scroll region is only keyboard-reachable
+          if something inside it can take focus: with a sort button in every
+          header and action buttons in every row, both horizontal extremes are
+          already reachable and focusing one scrolls it into view, so a tab stop
+          would be noise and a region sharing the table's own aria-label would
+          announce the name twice.
+          That held for all three current consumers -- and it held by
+          COINCIDENCE, in a shared component, with nothing enforcing it. The
+          proof is one file over: Usage.jsx copied this wrapper onto a table of
+          plain <th>/<td> and shipped a scroll region no keyboard user could
+          reach (WCAG 2.1.1). So the precondition is now a predicate. A table
+          with no actions column, or with any non-sortable column, gets a named
+          focusable region; one whose extremes are already reachable does not. */}
+      <div className={"table-scroll" + (needsRegion ? " table-scroll-region" : "")}
+           {...(needsRegion
+             ? { tabIndex: 0, role: "region",
+                 "aria-label": `${ariaLabel || "Table"}, scrollable` }
+             : {})}>
       <table className={tableClass} aria-label={ariaLabel}>
         <colgroup>
           {selectable && <col className="col-select" />}

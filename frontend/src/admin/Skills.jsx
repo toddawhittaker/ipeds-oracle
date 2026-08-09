@@ -374,7 +374,13 @@ export default function Skills({ onAttentionChanged }) {
         <p className="denied-error" role="alert">{rejectionsErr}</p>
       ) : (
         <details className="lesson-desc">
-          <summary ref={rejectedSummaryRef} tabIndex={-1}>
+          {/* NO tabIndex={-1}: a <summary> is natively focusable, and
+              removing it from the tab order made this the only way to
+              open a section that is collapsed by default — so Undo and
+              Clear all were mouse-only (WCAG 2.1.1). The ref still
+              works for the post-Undo focus move; programmatic focus
+              does not need a negative tabindex on a focusable element. */}
+          <summary ref={rejectedSummaryRef}>
             {rejectionCountLabel(rejections, "")}
           </summary>
           {rejections.length === 0 ? (
