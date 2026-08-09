@@ -149,6 +149,74 @@ def test_a_sub_baccalaureate_certificate_sum_is_not_flagged():
     assert codes == set(), codes
 
 
+def test_separate_awlevel_predicates_are_not_a_double_count():
+    """THE FALSE-POSITIVE CLASS the first draft of these rules shipped with.
+
+    The rules mined every awlevel code in the STATEMENT and flagged the set, but
+    the defect is codes meeting inside ONE aggregate. Correct SQL that names 1
+    and 21 — or a rollup and a real level — in SEPARATE predicates was flagged,
+    including `_OHIO_RN_AWARDS` in `eval_nl2sql.py`, the reference query added in
+    the very same PR as the fix.
+
+    A lint that fires on correct SQL is worse than no lint: prompt step 3 tells
+    the model to treat the ⚠ as blocking and re-write, so a false positive costs
+    an iteration and can talk it out of a breakdown the user asked for. The
+    module's stated bias is toward FEWER warnings."""
+    # Two IN-lists, one aggregate each — the canonical correct all-levels split.
+    assert _codes(
+        "SELECT SUM(CASE WHEN c.awlevel IN (1,2,3,4,5,6,7,8,17,18,19) THEN c.ctotalt END),"
+        " SUM(CASE WHEN c.awlevel IN (20,21) THEN c.ctotalt END) "
+        "FROM c_a c WHERE c.cipcode='99' AND c.majornum=1") == set()
+    # A share of a rollup: two separate equalities, never summed together.
+    assert _codes(
+        "SELECT (SELECT SUM(ctotalt) FROM c_a WHERE awlevel=5 AND cipcode='99' AND majornum=1)"
+        "*100.0/(SELECT SUM(ctotalt) FROM c_a WHERE awlevel=15 AND cipcode='99' AND majornum=1)"
+    ) == set()
+    # A per-year pivot naming a rollup and a real level in different columns.
+    assert _codes(
+        "SELECT year, SUM(CASE WHEN awlevel=15 THEN ctotalt END) all_levels,"
+        " SUM(CASE WHEN awlevel=5 THEN ctotalt END) bach "
+        "FROM c_a WHERE cipcode='99' AND majornum=1 GROUP BY year") == set()
+
+
+def test_the_eval_harnesss_own_reference_query_is_clean():
+    """Pinned by IMPORT, not by a copy: `_OHIO_RN_AWARDS` is the query the eval
+    uses to derive the correct all-levels total, so if the lint ever flags it
+    again the two halves of #326 are contradicting each other. A pasted copy
+    would drift and stop testing that."""
+    from tests.eval_nl2sql import _OHIO_RN_AWARDS
+    assert _codes(_OHIO_RN_AWARDS) == set(), _codes(_OHIO_RN_AWARDS)
+
+
+def test_a_pathological_awlevel_in_list_does_not_hang_the_linter():
+    """ReDoS, found in review. The first `awlevel IN (...)` regex put `\\s*`,
+    `[\\d\\s,]+?` and `\\s*` adjacent over overlapping classes, so a long
+    whitespace run that never reaches a `)` made the engine enumerate the splits:
+    measured 0.055s at 500 spaces, 0.45s at 1,000, 3.4s at 2,000, ~23s at 3,900.
+
+    That cost lands INSIDE `run_sql` but OUTSIDE every budget it establishes —
+    `lint_sql` runs before the interrupt watchdog is armed, and before the 3s
+    CSV probe timeout can apply — and `validate_sql` accepts the query, since it
+    is a single read-only SELECT. It also persists into `sql_log`, so a CSV
+    export replays it."""
+    import time
+    sql = ("SELECT SUM(ctotalt) FROM c_a WHERE awlevel IN (" + " " * 4000
+           + "SELECT awlevel FROM c_a) AND cipcode='99' AND majornum=1")
+    start = time.perf_counter()
+    lint_sql(sql)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"lint_sql took {elapsed:.2f}s on a padded IN-list (ReDoS)"
+
+
+def test_an_absurd_awlevel_literal_does_not_raise():
+    """`int()` caps string conversion at 4,300 digits, so a long digit run raised
+    ValueError out of `lint_sql`. Both callers catch it, so there was no crash —
+    but an ADVISORY linter could veto a query the sandbox would have run, and the
+    model got Python internals ("use sys.set_int_max_str_digits()") as if it were
+    a SQL error."""
+    assert lint_sql("SELECT SUM(ctotalt) FROM c_a WHERE awlevel = " + "9" * 4400) is not None
+
+
 def test_awlevel_rollup_mixed_with_a_real_level_is_flagged():
     # 15 already CONTAINS 5; adding them is a double count SCHEMA.md documents
     # and nothing enforced until now.
@@ -275,6 +343,14 @@ def run():
           test_short_certificates_without_their_parent_are_not_flagged)
     check("a sub-baccalaureate 1+2+4 sum stays clean",
           test_a_sub_baccalaureate_certificate_sum_is_not_flagged)
+    check("separate awlevel predicates are not a double count",
+          test_separate_awlevel_predicates_are_not_a_double_count)
+    check("the eval harness's own reference query is clean",
+          test_the_eval_harnesss_own_reference_query_is_clean)
+    check("a pathological awlevel IN-list does not hang the linter",
+          test_a_pathological_awlevel_in_list_does_not_hang_the_linter)
+    check("an absurd awlevel literal does not raise",
+          test_an_absurd_awlevel_literal_does_not_raise)
     check("a rollup mixed with a real level is flagged",
           test_awlevel_rollup_mixed_with_a_real_level_is_flagged)
     check("a rollup on its own stays clean", test_a_rollup_on_its_own_is_not_flagged)

@@ -183,6 +183,14 @@ Open the app, sign in with an address in `ADMIN_EMAILS` (auto‑allowlisted + ad
 on first boot), and add colleagues under **Admin → Users**. Update later with
 `docker compose pull && docker compose up -d` (pin a release via `IPEDS_TAG`).
 
+> **The first boot after an upgrade clears the cached answers.** The app reuses a
+> stored answer when someone asks a near‑identical question again, and a cached
+> answer is prose an *older* build wrote under an older schema guide — which can
+> make it simply wrong after a fix. So a version change wipes the cache once and
+> logs how many entries it dropped. The only effect you will notice is that the
+> first person to ask each question after an upgrade waits for a full answer
+> instead of an instant one.
+
 #### The container runs as a non‑root user
 
 It runs as the numeric uid/gid **10001:10001**, with `no-new-privileges` and all

@@ -594,12 +594,22 @@ The three guards:
   rounding, or via the derivation menu prompt step 6(ii) asks for
   (`sum`/`mean`/`pct_change`/`diff`/`share`/`max`/`min`/`row_total`) — recording
   `exact`/`rounded`/`derived`/`ungrounded` (plus non-evidence
-  `no_figure`/`unchecked`). Pure arithmetic (no DB/LLM/network), runs on every
+  `no_figure`/`unchecked`/`retry_suppressed`). Pure arithmetic (no DB/LLM/network),
+  runs on every
   answer, no setting. **OBSERVE-ONLY — alters no answer, blocks nothing**; lands on
   `usage_log.figure_grounding` (migration 21) → **Grounded figures** on Admin →
   Usage (`groundedFigureRate`, vitest-pinned), whose denominator counts *only* turns
   with both a numeric figure and results to check (folding the no-figure majority in
-  would peg it near 100% and destroy the signal). Aggregations are barred over
+  would peg it near 100% and destroy the signal).
+  **`retry_suppressed` is outside both counts, and that correction mattered:** a
+  figure the retry forced, found ungrounded and therefore WITHHELD leaves a turn
+  that shipped no figure at all, so scoring it as a missed figure contradicted the
+  denominator's own definition. It was recorded as plain `ungrounded` until
+  #330 — **10 of the 25 ungrounded turns in the real log were suppressions**, and
+  the tile read 88.2% against a true 92.5%. The count is still surfaced, as
+  `figures_suppressed` → a `· N suppressed` tail on the tile (omitted at zero), so
+  correcting the rate did not delete the signal: a rising number means the model is
+  repeatedly being pushed into figures the data cannot support. Aggregations are barred over
   **dimension** columns (`year`/`unitid`/`cipcode`/… — `_DIMENSION_COL_RE`): `year`
   is in nearly every IPEDS result, and a real +25.0% trend once "verified" as
   `share(year)` inside tolerance. **`row_total` is the SECOND op added after a LIVE
@@ -743,6 +753,20 @@ The three guards:
   and fabricated grounds went **0.9% → 10.4%**), and a share must land **in
   (0,100]**. Applies to the FIGURE too, so Grounded figures moves — correctly: it
   was reporting a false `ungrounded` on a right answer.
+  **The complement count is a CEILING, never an on/off switch** (#332). It used to
+  be `if len(totals) <= 8: build all the pairs` — a cliff, not a bound: 8 totals
+  yielded all 28 pairs and 9 yielded ZERO, so the widest route in the module
+  silently switched off on exactly the result-rich turns where a share and its
+  complement are most likely. Measured: **20% of turns with retained results (17 of
+  84) were over that line** — conversation-scoped grounding makes it ordinary, since
+  the prior-results window alone can carry six results before this turn's own, and
+  the `45,883-30,568 = 15,315` example above is the shape that stopped grounding.
+  Now `_MAX_COMPLEMENTS` (6) caps the OUTPUT, with **same-result pairs ordered
+  first** (a share and its complement almost always come from one query). The
+  ceiling is small because it was swept, not out of caution: recall plateaus at 3
+  while fabricated cells climb monotonically (3→28, 6→30, 12→33, 28→38 of 1,715),
+  so "keep every pair the old 8-total turns had" preserves the old NOISE and is the
+  worst option. The sweep table is in the code — move it with data, not taste.
   Anchoring scores (label matches, numeric matches) and returns the **GROUP** of
   rows tied at the best score — not a unique winner. A **PIVOTED** table row
   legitimately describes several result rows at once (one row per year, one
@@ -763,7 +787,15 @@ The three guards:
   present. Anchoring still needs a label or ≥2 numeric matches, and
   compares numbers by **IDENTITY, never `_close()`** — a relative tolerance made
   adjacent years indistinguishable (2023 is within 0.1% of 2021/2022/2024/2025), tying
-  every row of a by-year result and DROPPING correct cells. An unanchorable row (a
+  every row of a by-year result and DROPPING correct cells.
+  It scores **DISTINCT** values, not a list (#333): counting a repeated value twice
+  is double-counting EVIDENCE, not stronger evidence, and with the tie-only grouping
+  it actively evicted other entities. Live case — `| IN | 2,475 | MT | 67 | AK | 67 |`
+  gave Montana and Alaska `(1 label, 2 numbers)` from the two 67s while Indiana
+  scored `(1,1)` and was dropped, so a correct 2,475 was graded against the wrong
+  rows and the table read `partial 2/3`: a ⚠ on numbers that were all right. #331
+  stopped the model emitting multi-entity rows, so this is now defence in depth.
+  An unanchorable row (a
   `Total` line, a reshape) falls back to the old unrestricted search, so those keep
   grounding as before. An anchored cell may use: its own row's cells; row-wise
   `sum`/`pct_change`/`diff`/`mean`/`share` (**the fix for (a)**); `prev_diff`/
@@ -1128,6 +1160,36 @@ The three guards:
   passed the entire time it was broken; the regression test therefore asserts
   **containment** (`[role="img"] .chart-head` → 0) in `chat-happy-path.spec.js`, not
   role. Treat "pinned by e2e" with suspicion for a11y semantics specifically.
+- **Four ANSWER-PROSE contracts in prompt step 4** (#331, #334), all pinned in
+  `test_prompt.py` and all covering defects **no checker can see** — grounding
+  grades numbers, and these are about the shape of the prose around them. Each was
+  observed live in a single 29-turn pass.
+  **(1) ONE ENTITY PER ROW** — a 54-state answer came back as a three-pair
+  newspaper grid with repeated headers. Every value was right, but column sorting,
+  the CSV export and compare-mode row selection all read one row as one entity, so
+  the grid breaks all three; it is also what triggers the `_anchor_rows` eviction
+  above. The rule states WHY, because a bare rule with no reason is the first thing
+  a later edit drops. **(2) DON'T PROMISE A DOWNLOAD YOU DIDN'T PRODUCE** — step 4
+  already said to mention the CSV when `run_sql` TRUNCATES, and never distinguished
+  that from a `LIMIT` the model wrote itself; an answer showed 20 of 53 under its
+  own LIMIT and pointed at the download "for the full list", which re-runs the same
+  query. **(3) NO THINKING OUT LOUD** — an answer shipped "…the only school where
+  women are a majority... wait, no — it's actually 23.9% there." This is prevented
+  in the prompt rather than SCRUBBED server-side, deliberately: the FALSE claim
+  precedes the marker, so deleting "wait, no —" and what follows would leave the
+  wrong statement standing, and there is no reliable way to delimit backwards where
+  the bad clause began. A scrubber could only make the answer worse.
+  **(4) EVERY NUMBER IN A SENTENCE COMES FROM A QUERY** — two wrong numbers shipped
+  in prose (a fabricated "~31,000" against a true 33,126; "about 165,000 …
+  roughly 32 per 100" over a column summing to 155,693). **A prose checker was
+  measured and deliberately NOT built** — three scopings, all dominated by correct
+  prose (52.9% / 78.3% / 57 flags in 119 answers, against 2 real defects in 29
+  turns); the numbers are in `grounding.py`'s docstring under "TWO THINGS
+  DELIBERATELY NOT BUILT HERE". Don't re-propose it without new evidence.
+  Testing note that cost a vacuous assertion twice: key these on the phrase the
+  rule ADDS, not on words step 4 already contained ("limit"/"truncat"/"total"/
+  "query" were all present before), and whitespace-normalize the step-4 slice — the
+  phrases are contiguous to a reader but land either side of the prompt's hard wrap.
 - **The analyst layer** on top of the brief:
   - **Trend line + %-change** — `Chart.jsx` overlays a least-squares fit (a computed
     `__trend` `<Line>`, dashed ochre, injected into `chartChildren()` so it flows to

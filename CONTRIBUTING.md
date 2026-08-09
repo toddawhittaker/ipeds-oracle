@@ -150,6 +150,32 @@ The backend suites are dependency‑light plain scripts (they `sys.exit(1)` on
 failure) and need **no** API key — most build a tiny throwaway `app.db` and a
 fixture `ipeds.db`.
 
+> **Changing `grounding.py`? Measure both ways, and check the probe first.**
+> Passing tests are not enough: every route in that module trades recall against
+> the risk of "verifying" a number that isn't in the data. Measure **recall on
+> real answers AND precision on fabricated ones**, on the retained corpus, and
+> put both numbers in the PR body.
+>
+> The probe is the part that goes wrong. Four have lied here:
+> - **zeros left unperturbed** — no multiplicative factor moves `0`, and the cell
+>   then grounds against any result holding a zero. Reported 10.95% fabricated
+>   cells against a true 1.87%. Perturb `0` **additively**.
+> - **one shared scale factor** — preserves every ratio, share and `pct_change`,
+>   so those routes reproduce exactly on "fabricated" data. Use a factor **per
+>   number**.
+> - **a constant-increment fixture** — 1,194 "candidate" values that were really
+>   two, reporting a clean 0.0% for a route that actually verifies 49% of
+>   fabricated figures at the row cap.
+> - **a wrong-database join** — matching by content across two DBs where the same
+>   id is a different row.
+>
+> Assert the probe actually changed something, and treat a result that is *too
+> clean* or that contradicts something already known as a broken probe, not a
+> finding. When a route breakdown is available (instrument `_match_at_row` /
+> `_match_in_column` to record which op matched), read it before believing an
+> aggregate — that turned "we have an 11% problem" into "the probe skipped
+> zeros" in ten minutes.
+
 ```bash
 # Every backend suite, from ONE list (a glob — adding a suite is adding the file)
 scripts/run_backend_suites.sh

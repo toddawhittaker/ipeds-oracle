@@ -27,6 +27,20 @@ you find — that goes back to the implementer.
      year list (a join full-scans the 8M-row `c_a` and hangs).
    - No SUM may mix CIP or award-level aggregation levels (2-/4-/6-digit + the
      `'99'` grand-total rows each sum to the same total — mixing double-counts).
+   - **`awlevel` nests TWICE, and SCHEMA.md said otherwise until #326.** The
+     mutually-exclusive real levels are `1,2,3,4,5,6,7,8,17,18,19`. **`20` and
+     `21` are SUBDIVISIONS of `1`** (`20`+`21` = `1` exactly), and `12`–`15` are
+     rollups (`13`=`1`+`2`+`4`, `14`=`6`+`8`, `12`=`3`+`5`+`7`+`17`+`18`+`19`,
+     `15`=`12`+`13`+`14`). An `awlevel IN (...)` list holding `1` alongside `20`
+     or `21` is always a double count; `sqllint` catches it, but flag it in
+     hand-written SQL and in docs too. Prefer the rollup for an all-levels total.
+   - **A change to `grounding.py` needs a BOTH-WAYS measurement in the PR body** —
+     recall on real answers AND precision on fabricated ones — not just passing
+     tests. Widening a matching route is how a false ✓ ships. Flag its absence.
+     If a measurement IS quoted, check the probe: zeros must be perturbed
+     ADDITIVELY (no factor moves 0) and each number needs its OWN factor (one
+     shared scale leaves every ratio, share and pct_change reproducible). Both
+     mistakes have produced confidently wrong numbers here.
    - Text code columns must keep leading zeros (`cipcode='01.0000'`); numeric
      codes stay numeric (`awlevel=3`).
    - The `ipeds.db` connection must stay read-only/immutable; the SQL validator

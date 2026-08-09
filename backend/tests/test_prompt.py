@@ -279,13 +279,16 @@ def test_step4_forbids_estimating_a_number_in_prose():
     That is the vacuous-assertion trap this same test hit once already."""
     step4 = prompt.INSTRUCTIONS.split("\n4.", 1)[1].split("\n5.", 1)[0]
     low = " ".join(step4.split()).lower()
-    assert "must come from a query" in low, (
-        "step 4 must require prose numbers to come from a query, like table cells")
-    assert "in your head" in low, (
-        "name the actual behaviour being forbidden — estimating — not just "
-        "'be accurate'")
-    assert "run the" in low and "select" in low, (
+    assert "never estimate a number in your sentences" in low, (
+        "step 4 must forbid ESTIMATING a prose number, in those words")
+    assert "exact arithmetic over rows you are actually showing" in low, (
+        "the rule must permit exact derivation from displayed rows, or it "
+        "contradicts step 6(ii), which REQUIRES a derived hero statistic")
+    assert "run the query for it" in low, (
         "give the remedy: run one more SELECT rather than drop the sentence")
+    assert "does not stop you deriving the step-6 hero statistic" in low, (
+        "say so explicitly — figure emission is the project's most fragile "
+        "prompt behaviour and must not be collateral damage here")
 
 
 def run():

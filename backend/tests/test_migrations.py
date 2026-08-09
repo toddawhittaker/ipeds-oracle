@@ -504,6 +504,42 @@ def test_migration_7_adds_headline_column():
     assert row[0] is None, row
 
 
+def test_migration_36_relabels_historical_suppressed_figures():
+    """The suppression fix (#330) corrected NEW rows only. A figure the retry
+    forced, found ungrounded and WITHHELD was recorded as a plain `ungrounded`
+    figure, which put a turn that shipped NO figure into the Grounded-figures
+    denominator as a miss.
+
+    Those rows are exactly identifiable — `figure_derivation` has recorded
+    `retry:suppressed` all along — and on the real app.db there were 10 of them,
+    the entire evidence base the fix was argued from. Without this backfill an
+    admin viewing any window covering pre-upgrade history still reads the wrong
+    rate, while `figures_suppressed` reads 0 for that period, so the new
+    "· N suppressed" tail is missing on precisely the data that motivated it.
+
+    The predicate must be BOTH columns: `figure_derivation='retry:suppressed'`
+    alone would be right today, but pairing it with the old status is what keeps
+    the statement idempotent and stops it touching a genuinely ungrounded figure
+    that merely came from a retry (`retry:sum(...)`, `retry:value(...)` — 32 such
+    rows exist and must keep their status)."""
+    con = sqlite3.connect(":memory:")
+    _apply_migrations(con, [m for m in MIGRATIONS if m[0] <= 35])
+    con.execute("INSERT INTO usage_log(user_id, question, created_at, "
+                "figure_grounding, figure_derivation) VALUES "
+                "(1,'a',0,'ungrounded','retry:suppressed'),"        # relabel
+                "(1,'b',0,'ungrounded','retry:sum(q1.awards)'),"    # keep: real miss
+                "(1,'c',0,'ungrounded',NULL),"                      # keep: first-pass
+                "(1,'d',0,'exact','retry:value(q1.n)')")            # keep: grounded
+    con.commit()
+
+    _apply_migrations(con, MIGRATIONS)
+
+    got = dict(con.execute(
+        "SELECT question, figure_grounding FROM usage_log").fetchall())
+    assert got == {"a": "retry_suppressed", "b": "ungrounded",
+                   "c": "ungrounded", "d": "exact"}, got
+
+
 def test_migration_35_adds_category_and_lesson_rejections_table():
     """A2 (lesson-rejection memory): rejecting a lesson currently DELETEs the row
     outright with no trace, so skills._find_duplicate can never suppress the
@@ -2199,6 +2235,8 @@ def run():
           test_migration_6_is_idempotent_and_noop_on_fresh_db)
     check("migration 7 adds skills.headline (nullable)",
           test_migration_7_adds_headline_column)
+    check("migration 36 relabels historical retry-suppressed figures",
+          test_migration_36_relabels_historical_suppressed_figures)
     check("migration 35 adds skills.category + the lesson_rejections tombstone table",
           test_migration_35_adds_category_and_lesson_rejections_table)
     check("migration 8 adds idx_access_requests_email (idempotent re-apply)",
