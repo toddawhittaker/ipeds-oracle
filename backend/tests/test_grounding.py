@@ -430,6 +430,54 @@ def test_trailing_zeros_alone_cannot_license_a_huge_rounding_window():
     assert got.status == grounding.ROUNDED, got
 
 
+def test_a_small_percentage_keeps_the_precision_it_was_WRITTEN_to():
+    """A figure under 1.0 must still get the rounding window its own digits
+    declare. Found live: a correct "+0.4%" net change read `ungrounded`.
+
+    `_MAX_ROUNDING_SHARE` caps the window at 5% of the value. For a number
+    written to k decimals that cap binds whenever |target| < 10^-k — so every
+    sub-1% figure at one decimal place was given +/-0.02 when its own notation
+    declares +/-0.05. The true net change here is 0.3535%, which rounds to 0.4
+    at one decimal place; the cap refused it and the reader lost the ✓ on a
+    correct number.
+    """
+    years = result(["year", "awards"],
+                   [(2020, 146826), (2021, 152183), (2022, 157536),
+                    (2023, 155020), (2024, 146679), (2025, 147345)])
+    got = grounding.check_figure(
+        {"value": "+0.4%", "label": "RN bachelor's, 2020-2025"}, [years])
+    assert got.status == grounding.DERIVED, got
+    assert got.derivation.op == "pct_change", got
+
+
+def test_a_small_percentage_outside_its_own_rounding_window_still_fails():
+    """The paired negative — the window is the WRITTEN precision, not a licence.
+    A true 0.9% cannot be reported as "+0.4%": 0.9 is outside 0.4 +/- 0.05.
+    Without this, the fix above would be indistinguishable from removing the
+    tolerance check for small numbers altogether.
+    """
+    years = result(["year", "awards"], [(2020, 100000), (2025, 100900)])
+    got = grounding.check_figure(
+        {"value": "+0.4%", "label": "net change"}, [years])
+    assert got.status == grounding.UNGROUNDED, got
+
+
+def test_a_table_cell_under_one_percent_also_keeps_its_written_precision():
+    """The same defect on the table path, where it raises the reader-facing ⚠.
+    Live case: a year-over-year "+0.5%" column cell against a true 0.4541%
+    graded the table `partial`, i.e. "Check 1 of 12 values" on a correct table.
+    """
+    base = result(["year", "awards"],
+                  [(2024, 146679), (2025, 147345)])
+    answer = ("| Year | Degrees | YoY % change |\n"
+              "| --- | ---: | ---: |\n"
+              "| 2024 | 146,679 | — |\n"
+              "| 2025 | 147,345 | +0.5% |\n")
+    got = grounding.check_table(answer, [base])
+    assert got.status == grounding.TABLE_MATCHED, got
+    assert got.cells_matched == got.cells_checked, got
+
+
 def test_a_magnitude_suffix_figure_is_measured_not_dropped():
     got = grounding.check_figure({"value": "1.2M", "label": "Bachelor's degrees"},
                                  [result(["awards"], [(1_200_000,)])])
@@ -1812,6 +1860,12 @@ def run():
     check("display rounding is not flagged", test_display_rounding_is_not_flagged)
     check("rounding tolerance doesn't swallow a real mismatch",
           test_rounding_tolerance_does_not_swallow_a_real_mismatch)
+    check("a small percentage keeps its WRITTEN precision",
+          test_a_small_percentage_keeps_the_precision_it_was_WRITTEN_to)
+    check("a small percentage outside its own window still fails",
+          test_a_small_percentage_outside_its_own_rounding_window_still_fails)
+    check("a sub-1% table cell keeps its written precision too",
+          test_a_table_cell_under_one_percent_also_keeps_its_written_precision)
     check("trailing zeros can't license a huge rounding window",
           test_trailing_zeros_alone_cannot_license_a_huge_rounding_window)
     check("a magnitude-suffix figure is measured, not dropped",
