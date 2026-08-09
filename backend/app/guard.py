@@ -25,12 +25,34 @@ import httpx
 from app.config import get_settings
 from app.llmhttp import CHAT_ERRORS, PROBE_TIMEOUT, Usage, chat_completion
 
+# The subject areas this assistant covers, declared ONCE. Both the classifier
+# prompt and the user-facing refusal are built from it, because they are the
+# same claim told to two audiences and they had already drifted: the refusal
+# said "institutional finances" was in scope while the gate refused "the average
+# student loan default rate by institution" as off-topic. A user reading that
+# refusal cannot tell whether they asked the wrong thing or hit a bug.
+#
+# Student financial aid is its own IPEDS survey family (`sfa`: LOAN_P, LOAN_A,
+# UFLOANP, UFLOANT, …) and was simply missing here. IPEDS carries no COHORT
+# DEFAULT RATE — that is a Federal Student Aid measure — but "we don't publish
+# that; here is the loan burden we do have" is a data-coverage answer for the
+# AGENT to give, not a reason for the gate to refuse the question.
+_TOPICS = (
+    "institutions",
+    "enrollment",
+    "degrees and completions",
+    "graduation and retention",
+    "admissions",
+    "staffing",
+    "institutional finances",
+    "student financial aid",
+)
+_TOPIC_LIST = ", ".join(_TOPICS[:-1]) + ", and " + _TOPICS[-1]
+
 # Shown to the user (Markdown) when a message is refused.
 REFUSAL = (
     "I'm the **IPEDS data assistant**, so I can only help with questions about "
-    "U.S. postsecondary education — institutions, enrollments, degrees and "
-    "completions, graduation and retention, admissions, staffing, and "
-    "institutional finances.\n\n"
+    f"U.S. postsecondary education — {_TOPIC_LIST}.\n\n"
     "Try something like *\"How many nursing degrees did Ohio community colleges "
     "award last year?\"* or *\"Which states granted the most master's degrees in "
     "education?\"*"
@@ -38,9 +60,11 @@ REFUSAL = (
 
 _SYSTEM = (
     "You are a strict topical gate for an assistant that ONLY answers questions "
-    "about U.S. postsecondary education using IPEDS data (institutions, "
-    "enrollment, degrees/completions, graduation and retention, admissions, "
-    "staffing, and institutional finances).\n\n"
+    "about U.S. postsecondary education using IPEDS data "
+    f"({_TOPIC_LIST}).\n\n"
+    "A question about a subject in that list is IN_SCOPE even if IPEDS may not "
+    "carry the exact measure asked for — whether the data exists is the "
+    "assistant's job to answer, not yours.\n\n"
     "Decide whether the LATEST user message — read in the context of the "
     "conversation so far — is a good-faith request answerable from that data. "
     "Brief contextual follow-ups (e.g. 'what about California?', 'now by year') "

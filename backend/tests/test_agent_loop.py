@@ -981,6 +981,40 @@ def test_extract_clarify_missing_question_or_options_is_none():
     assert c4 is None, c4
 
 
+def test_an_over_long_clarify_question_is_cut_on_a_word_boundary():
+    """Regression (live pass, 2026-08-09): the model wrote a 236-character
+    clarifying question and the plain `[:200]` slice stored it ending
+    '...Miami Dade College). Did you mean those to' — mid-word, question mark
+    gone. Latent rather than visible (Chat.jsx shows `c.question` only when the
+    bubble carries no prose) but it is what gets PERSISTED.
+    """
+    from app.llm import _MAX_CLARIFY_QUESTION_CHARS, _extract_clarify
+    long_q = ("In IPEDS, public four-year institutions include large "
+              "community-college systems that grant bachelor's degrees, such as "
+              "Lone Star College System, Dallas College and Miami Dade College. "
+              "Did you mean to include those too, or only traditional universities?")
+    assert len(long_q) > _MAX_CLARIFY_QUESTION_CHARS, "fixture must exceed the cap"
+    _, c = _extract_clarify(
+        '```clarify\n{"question":' + json.dumps(long_q) + ',"options":["a","b"]}\n```')
+    q = c["question"]
+    assert len(q) <= _MAX_CLARIFY_QUESTION_CHARS, (len(q), q)
+    assert q.endswith("…"), q
+    # The load-bearing part: the cut lands between words, never inside one.
+    assert long_q.startswith(q[:-1]), q
+    assert q[:-1].endswith(" ") is False and long_q[len(q) - 1] in " ", (
+        f"cut must fall on a word boundary, got {q!r}")
+
+
+def test_a_short_clarify_question_is_left_exactly_as_written():
+    """The cap must not touch an ordinary question — no stray ellipsis, no
+    reformatting. Without this the fix above is satisfiable by always
+    ellipsizing."""
+    from app.llm import _extract_clarify
+    _, c = _extract_clarify(
+        '```clarify\n{"question":"Which award level?","options":["a","b"]}\n```')
+    assert c["question"] == "Which award level?", c
+
+
 def test_clarify_present_skips_critic_and_unsets_figure_and_suggestions():
     # A defensive scenario: the model ran SQL (sql_log non-empty, so the EXISTING
     # `res.sql_log` gate alone would let the critic through) but then decided the
@@ -1995,6 +2029,10 @@ def run():
           test_extract_clarify_no_fence_is_unchanged)
     check("_extract_clarify returns None for a missing question/options",
           test_extract_clarify_missing_question_or_options_is_none)
+    check("an over-long clarify question is cut on a word boundary",
+          test_an_over_long_clarify_question_is_cut_on_a_word_boundary)
+    check("a short clarify question is left exactly as written",
+          test_a_short_clarify_question_is_left_exactly_as_written)
     check("a clarify turn skips the critic and unsets figure/suggestions",
           test_clarify_present_skips_critic_and_unsets_figure_and_suggestions)
     check("a normal answer carries no clarify", test_clarify_absent_on_a_normal_answer)

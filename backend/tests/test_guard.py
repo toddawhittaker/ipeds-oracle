@@ -93,6 +93,37 @@ def test_system_prompt_classifies_corrective_feedback_as_in_scope():
         f"of a prior answer as IN_SCOPE (regression: conversation-12 message 57): {t}")
 
 
+def test_student_financial_aid_is_named_in_scope():
+    """Regression (live pass, 2026-08-09): "What is the average student loan
+    default rate by institution?" was refused as OUT_OF_SCOPE. Student financial
+    aid is a whole IPEDS survey family — `sfa` carries LOAN_P, LOAN_A, UFLOANP,
+    UFLOANT and a dozen more — it simply has no COHORT DEFAULT RATE, which is a
+    Federal Student Aid measure. That distinction is a data-coverage answer the
+    agent should give ("IPEDS doesn't publish default rates; here is the loan
+    burden it does have"), not a topical refusal that tells the user their
+    on-topic question is off-topic.
+
+    Key-free suite, so the classifier's own instructions are the only testable
+    surface — same reasoning as the corrective-feedback case above."""
+    assert "financial aid" in guard._SYSTEM.lower(), guard._SYSTEM
+
+
+def test_the_refusal_and_the_gate_describe_the_SAME_scope():
+    """The refusal message and the classifier prompt are two topic lists that
+    must never disagree, and they DID: the refusal told the user "institutional
+    finances" was in scope while the gate refused a student-aid question. A user
+    reading the refusal cannot tell whether they asked the wrong thing or hit a
+    bug.
+
+    They are now generated from one `_TOPICS` tuple. This pins that derivation —
+    it fails the moment someone re-splits them into two hand-written strings and
+    edits only one, which is exactly how they drifted."""
+    assert guard._TOPICS, "the scope must be declared in ONE place"
+    for topic in guard._TOPICS:
+        assert topic in guard._SYSTEM, (topic, guard._SYSTEM)
+        assert topic in guard.REFUSAL, (topic, guard.REFUSAL)
+
+
 # ---------------------------------------------------------------------------
 # LIVE classify() path — a key IS configured, so classify() must actually
 # build the request and interpret a real HTTP response (or fail open on a
@@ -339,6 +370,10 @@ def run():
     check("_SYSTEM whitelists corrective feedback / a meta-critique as IN_SCOPE "
           "(conversation-12 msg-57 regression)",
           test_system_prompt_classifies_corrective_feedback_as_in_scope)
+    check("_SYSTEM names student financial aid as in scope",
+          test_student_financial_aid_is_named_in_scope)
+    check("the refusal and the gate describe the SAME scope",
+          test_the_refusal_and_the_gate_describe_the_SAME_scope)
     check("classify (live key): IN_SCOPE reply allows, with history + tokens",
           test_classify_in_scope_reply_with_live_key)
     check("classify (live key): OUT_OF_SCOPE reply refuses",
