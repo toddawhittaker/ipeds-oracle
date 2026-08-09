@@ -28,6 +28,7 @@ from app.db import (
     connect,
     get_meta,
     init_db,
+    set_meta,
 )
 from app.seeds import SEED_LESSON_REWRITES
 
@@ -1998,6 +1999,37 @@ def test_a_demoted_bootstrap_admin_is_not_re_promoted_by_a_restart():
     con.close()
 
 
+def test_a_corrupt_bootstrap_marker_does_not_brick_startup():
+    """The warning in _bootstrap_admins TELLS the admin to hand-edit this JSON
+    ("remove just its entry from the JSON list in the '%s' row"), and init_db
+    is deliberately un-caught in lifespan -- so an unguarded json.loads meant a
+    dropped comma bricked every subsequent boot with a raw JSONDecodeError,
+    remediable only by another hand-edit of the same row.
+
+    Fails OPEN, matching skills.muted_categories and _applied_seed_keys. The
+    direction is also the safe one: an empty `applied` against an ESTABLISHED
+    allowlist takes the record-only branch, so the corrupt marker cannot cause
+    a re-grant of an admin someone removed -- which this asserts, because
+    failing open in the WRONG direction would be a worse bug than the crash."""
+    con = _boot_db()
+    # Established deployment, with an offboarded admin -- the state a re-grant
+    # would damage.
+    con.execute("INSERT INTO allowlist(email, added_by, added_at) VALUES (?,?,?)",
+                ("colleague@example.edu", "admin", 0))
+    con.execute("INSERT INTO users(email, is_admin, created_at) VALUES (?,0,?)",
+                ("departed@example.edu", 0))
+    set_meta(con, _BOOTSTRAP_APPLIED_KEY, '["departed@example.edu",]')  # trailing comma
+    con.commit()
+
+    _bootstrap_admins(con, ["departed@example.edu"])          # must not raise
+
+    assert not _is_admin(con, "departed@example.edu"), \
+        "a corrupt marker must not re-grant an admin who was removed"
+    assert get_meta(con, _BOOTSTRAP_APPLIED_KEY) is not None, \
+        "the marker should be rewritten, not left corrupt"
+    con.close()
+
+
 def test_an_established_db_does_not_re_grant_on_the_upgrade_hop():
     """The migration point. On a database that predates the marker, granting
     'one last time' would restore precisely the admin someone had already
@@ -2079,6 +2111,8 @@ def run():
           test_removing_a_bootstrap_admin_survives_a_restart)
     check("a demoted bootstrap admin is not re-promoted by a restart",
           test_a_demoted_bootstrap_admin_is_not_re_promoted_by_a_restart)
+    check("a corrupt bootstrap marker does not brick startup",
+          test_a_corrupt_bootstrap_marker_does_not_brick_startup)
     check("an established db does not re-grant on the upgrade hop",
           test_an_established_db_does_not_re_grant_on_the_upgrade_hop)
     check("an address added to ADMIN_EMAILS later is still granted",

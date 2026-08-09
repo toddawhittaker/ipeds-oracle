@@ -1214,6 +1214,46 @@ def test_tombstone_fallback_exact_text_without_embeddings():
     assert _count() == 1, "a non-matching candidate must still insert when embeddings are off"
 
 
+def test_a_null_embedding_tombstone_still_suppresses_once_embeddings_recover():
+    """THE PERMANENTLY-INVISIBLE TOMBSTONE.
+
+    The exact-text match used to be the `else` of the vector arm, so it only
+    ran when the CANDIDATE could not be embedded. A tombstone written while
+    fastembed was down has embedding = NULL (delete_skill reuses the skill's
+    stored vector, and re-embedding returns None for the same reason it was
+    NULL), and the vector arm filters those rows out with
+    `WHERE embedding IS NOT NULL`. So the moment embeddings recovered, that
+    rejection became invisible and the identical lesson re-queued forever —
+    the exact failure lesson_rejections exists to end, silent in both
+    directions.
+
+    Sequence, which is the only way to reach it: reject with embeddings DOWN,
+    then propose the same lesson with embeddings UP."""
+    _reset()
+    _clear_rejections()
+    headline = "Bound a recent-years filter with a constant, never a join."
+    description = ("a DISTINCT-year subquery joined against c_a full-scans "
+                   "the whole table and effectively hangs")
+
+    # Rejected while embeddings were unavailable -> tombstone has no vector.
+    _insert_tombstone(headline, description, created_by="critic",
+                      embed_fn=lambda _t: None)
+    con = connect()
+    got = con.execute(
+        "SELECT embedding FROM lesson_rejections WHERE headline=?",
+        (headline,)).fetchone()
+    con.close()
+    assert got is not None and got["embedding"] is None, \
+        "fixture must produce a NULL-embedding tombstone or this proves nothing"
+
+    # ...and now embeddings work again. The same idea must still be suppressed.
+    _with_embed(lambda: skills.record_lesson_from_critic(
+        "null-embedding tombstone probe", "SELECT 1", headline, description))
+    assert _count() == 0, \
+        "a tombstone written without an embedding must still suppress once " \
+        "embeddings recover — otherwise the rejection is permanent-invisible"
+
+
 def test_tombstone_dimension_mismatch_is_skipped_not_fatal():
     """Reuses _find_duplicate's skip-on-dimension-mismatch guard: a tombstone
     embedded under a stale/different embed_model must never crash the dot
@@ -1465,6 +1505,8 @@ def run():
           test_feedback_candidate_with_no_category_still_records)
     check_pending("tombstone suppression falls back to exact text without embeddings",
                   test_tombstone_fallback_exact_text_without_embeddings)
+    check_pending("a NULL-embedding tombstone suppresses once embeddings recover",
+                  test_a_null_embedding_tombstone_still_suppresses_once_embeddings_recover)
     check_pending("a dimension-mismatched tombstone is skipped, not fatal",
                   test_tombstone_dimension_mismatch_is_skipped_not_fatal)
     check_pending("suppression reaches a NULL created_by row (IFNULL)",

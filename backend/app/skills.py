@@ -306,13 +306,13 @@ def _check_tombstone(con, qvec: np.ndarray | None, headline: str,
     source. Same dimension-mismatch skip guard as _find_duplicate/_find_suppressor,
     and the same exact-text fallback for when embeddings are unavailable
     system-wide."""
+    best_id = None
     if qvec is not None:
         rows = con.execute(
             "SELECT id, embedding FROM lesson_rejections "
             "WHERE embedding IS NOT NULL").fetchall()
         dim = qvec.shape[0]
-        floor = get_settings().skill_dedup_threshold
-        best_id, best_sim = None, floor
+        best_sim = get_settings().skill_dedup_threshold
         for r in rows:
             vec = _from_blob(r["embedding"])
             if vec.shape[0] != dim:
@@ -320,7 +320,16 @@ def _check_tombstone(con, qvec: np.ndarray | None, headline: str,
             sim = float(vec @ qvec)
             if sim >= best_sim:
                 best_id, best_sim = r["id"], sim
-    else:
+    # The exact-text match is an ADDITIONAL arm, not an `else`, and that is the
+    # whole point. A tombstone written while embeddings were unavailable has
+    # embedding = NULL -- delete_skill reuses the skill's stored vector and
+    # re-embedding returns None for the same reason it was NULL, since
+    # _embedder swallows everything. The vector arm filters those rows out, so
+    # the moment fastembed recovers that rejection becomes PERMANENTLY
+    # invisible and the identical lesson re-queues forever: exactly the failure
+    # this table exists to end, silent in both directions (a suppression leaves
+    # no row, a missed suppression leaves no trace).
+    if best_id is None:
         row = con.execute(
             "SELECT id FROM lesson_rejections WHERE headline=? AND description=?",
             (headline, description)).fetchone()

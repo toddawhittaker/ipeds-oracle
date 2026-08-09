@@ -671,7 +671,21 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
     re-granted. Only a genuinely empty allowlist (a fresh install) bootstraps.
     """
     raw = get_meta(con, _BOOTSTRAP_APPLIED_KEY)
-    applied = set(json.loads(raw or "[]"))
+    # Fails OPEN on a corrupt marker, mirroring skills.muted_categories and
+    # _applied_seed_keys. Not defensive tidiness: the warning 40 lines below
+    # TELLS the admin to hand-edit this JSON ("remove just its entry from the
+    # JSON list in the '%s' row"), and init_db is deliberately un-caught in
+    # lifespan -- so a dropped comma bricked startup with a raw JSONDecodeError,
+    # remediable only by another hand-edit of the same row. Failing open is
+    # also the safe direction here: an empty `applied` against an ESTABLISHED
+    # allowlist takes the record-only branch, so nothing is re-granted.
+    try:
+        applied = set(json.loads(raw or "[]"))
+        marker_ok = True
+    except (ValueError, TypeError):
+        log.warning("unreadable %s marker; treating it as absent",
+                    _BOOTSTRAP_APPLIED_KEY)
+        applied, marker_ok = set(), False
     fresh = con.execute("SELECT COUNT(*) AS n FROM allowlist").fetchone()["n"] == 0
     now = time.time()
 
@@ -682,7 +696,14 @@ def _bootstrap_admins(con: sqlite3.Connection, emails: list[str]) -> None:
     #       already removed -- reproducing the bug once on the way to fixing it.
     #   established, marker present          -> grant anything NOT yet applied,
     #       so an address the operator ADDS to ADMIN_EMAILS later still works.
-    marked = raw is not None
+    # A CORRUPT marker counts as ABSENT, not present. `marked` selects the
+    # "grant anything not yet applied" branch, and with `applied` emptied by
+    # the parse failure that would grant EVERYTHING -- re-promoting exactly the
+    # admin someone had offboarded, which is the bug this whole function exists
+    # to fix. Reading it as absent takes the conservative record-only hop
+    # instead. (Caught by the test, not by review: failing open is right, but
+    # only in one of the two places it has to be applied.)
+    marked = raw is not None and marker_ok
     for email in emails:
         if email in applied:
             continue
