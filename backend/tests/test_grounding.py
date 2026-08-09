@@ -1063,6 +1063,57 @@ def test_a_cross_result_share_reproduces():
     assert (got2.cells_matched, got2.cells_checked) == (2, 2), got2
 
 
+def _padding_results(n):
+    """`n` single-column results whose totals are all distinct and unrelated —
+    the noise that pushes a turn over the old cliff. Deliberately far from the
+    values used by the caller's real result so nothing collides by luck."""
+    return [QueryResult(columns=[f"pad{i}"], rows=[(31 * (i + 1),)], row_count=1)
+            for i in range(n)]
+
+
+def test_a_complement_still_grounds_on_a_result_rich_turn():
+    """THE REGRESSION: `_cross_scalars` appended pairwise complements only when
+    it held <= 8 totals, and past that appended NONE — so the widest route in
+    the module did not degrade on a result-rich turn, it switched OFF. Measured
+    on the retained corpus: 20% of turns with results (17 of 84) were over that
+    line, and it is a cliff, not a slope — 8 totals yielded 28 complements, 9
+    yielded zero. Conversation-scoped grounding makes it common rather than
+    exotic: the prior-results window alone can carry six results before this
+    turn's own, and CLAUDE.md's worked example (45,883-30,568 = 15,315) is
+    exactly the shape that stopped grounding.
+
+    The real complement here lives in ONE result (state total vs its top
+    institution), which is the case the same-result-first ordering exists to
+    protect: it must survive even when ten unrelated totals are queued ahead of
+    it. A value reachable only as a difference — never as a total or a cell —
+    is what makes this test about the complement route and not about `value`."""
+    base = QueryResult(columns=["state_total", "top_inst"],
+                       rows=[(45883, 30568)], row_count=1)
+    # The real result goes LAST, behind ten unrelated totals. In source order its
+    # pair sits around index 65 of 66, far outside the ceiling — so this only
+    # grounds if same-result pairs are promoted ahead of cross-result ones. With
+    # `base` first the test passes either way, which is how the ordering was
+    # briefly unpinned (caught by mutating the sort out).
+    results = _padding_results(10) + [base]          # 12 totals: over the old cliff
+    assert len([n for n, _ in grounding._cross_scalars(results) if "-" in n]), (
+        "no complement offered on a 12-total turn — the route switched off")
+    md = "| Group | Degrees |\n| --- | --- |\n| All others | 15,315 |\n"
+    got = grounding.check_table(md, results)
+    assert (got.cells_matched, got.cells_checked) == (1, 1), got
+
+
+def test_the_complement_set_stays_bounded_on_a_rich_turn():
+    """The cap must bound the OUTPUT, not the eligibility to produce any. Twelve
+    totals is 66 unordered pairs, and this list is searched per graded cell, so
+    an unbounded expansion costs both runtime and precision — measured, the
+    fabricated-cell count rises monotonically with the ceiling (28 pairs → 38
+    fabricated cells against 30 at six)."""
+    complements = [n for n, _v in grounding._cross_scalars(_padding_results(12))
+                   if "-" in n]
+    assert complements, "still needs SOME complements at the ceiling"
+    assert len(complements) <= grounding._MAX_COMPLEMENTS, len(complements)
+
+
 def test_a_cross_result_SHARE_needs_the_percent_marker():
     """THE precision guard on the widest route in the module, pinned directly
     because the aggregate probe cannot see it: the corpus is uneven enough that
@@ -1964,6 +2015,10 @@ def run():
     print("  -- cross-result derivations (rows from one query, total from another) --")
     check("a cross-result share reproduces",
           test_a_cross_result_share_reproduces)
+    check("a complement still grounds on a result-rich turn",
+          test_a_complement_still_grounds_on_a_result_rich_turn)
+    check("the complement set stays bounded on a rich turn",
+          test_the_complement_set_stays_bounded_on_a_rich_turn)
     check("a cross-result SHARE needs the percent marker (precision guard)",
           test_a_cross_result_SHARE_needs_the_percent_marker)
     check("a cross-result share over 100% is refused",

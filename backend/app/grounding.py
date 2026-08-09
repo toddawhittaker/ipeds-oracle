@@ -661,7 +661,31 @@ def _row_totals(result: QueryResult) -> list[tuple[int, float]]:
 _MAX_ANCHOR_GROUP = 12
 
 _MAX_CROSS_TOTALS = 12
-_MAX_FOR_COMPLEMENTS = 8
+# Cap the complement OUTPUT, not the eligibility to produce any. The previous
+# form (`if len(totals) <= 8: build them all`) was a CLIFF, not a bound: a turn
+# with 8 totals got all 28 pairs and a turn with 9 got none, so the widest route
+# in the module silently switched OFF on exactly the result-rich turns where a
+# share and its complement are most likely. Measured on the retained corpus:
+# 20% of turns with results (17 of 84) were over that line — conversation-scoped
+# grounding makes it common, since the prior-results window alone can carry six
+# results before this turn's own. CLAUDE.md's own worked example
+# (45,883-30,568 = 15,315) is the shape that stopped grounding.
+#
+# The ceiling is SMALL, and that is measured, not cautious. Sweeping it on the
+# retained corpus (real cells / fabricated cells out of 1,715):
+#
+#     HEAD (cliff)  1701 / 33      3 → 1703 / 28      6 → 1703 / 30
+#                                  4 → 1703 / 29      8 → 1703 / 31
+#                                  5 → 1703 / 29     12 → 1703 / 33
+#                                                    28 → 1703 / 38
+#
+# Recall plateaus immediately and precision degrades monotonically, so keeping
+# "every pair the old 8-total turns used to get" (28) would have preserved the
+# old NOISE along with the old reach — it is the worst row in the table. 6 beats
+# HEAD on both axes (+2 real, −3 fabricated) with headroom over the observed
+# requirement, rather than sitting at the corpus argmin of 3, which would be
+# fitting 84 answers.
+_MAX_COMPLEMENTS = 6
 
 
 def _cross_scalars(results: list[QueryResult]) -> list[tuple[str, float]]:
@@ -687,11 +711,21 @@ def _cross_scalars(results: list[QueryResult]) -> list[tuple[str, float]]:
         if len(totals) >= _MAX_CROSS_TOTALS:
             break
     out = list(totals)
-    if len(totals) <= _MAX_FOR_COMPLEMENTS:
-        for i, (na, a) in enumerate(totals):
-            for nb, b in totals[i + 1:]:
-                if a != b:
-                    out.append((f"{na}-{nb}", abs(a - b)))
+    # Pairs from the SAME result first: a share and its complement almost always
+    # come from one query ("this institution" and "the state total"), so when the
+    # ceiling bites, the pairs most likely to be real survive it. `q<N>.` is the
+    # label prefix _cross_scalars just wrote, so the result is recoverable from
+    # the label without threading an index through.
+    def _same_result(pair) -> bool:
+        (na, _a), (nb, _b) = pair
+        return na.split(".", 1)[0] == nb.split(".", 1)[0]
+
+    pairs = [(totals[i], totals[j])
+             for i in range(len(totals)) for j in range(i + 1, len(totals))
+             if totals[i][1] != totals[j][1]]
+    pairs.sort(key=lambda p: not _same_result(p))   # stable: same-result first
+    for (na, a), (nb, b) in pairs[:_MAX_COMPLEMENTS]:
+        out.append((f"{na}-{nb}", abs(a - b)))
     return out
 
 
