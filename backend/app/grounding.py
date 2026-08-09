@@ -310,12 +310,18 @@ def _close(a: float, b: float, rel_tol: float = _REL_TOL) -> bool:
     return math.isclose(a, b, rel_tol=rel_tol, abs_tol=_ABS_TOL)
 
 
-# A display rounding may never move the number by more than this share of it.
-# Trailing zeros alone are an unreliable signal of INTENDED precision: "1,000"
-# has three of them, which would otherwise license a +/-500 window and let the
-# figure "1,000" verify against a true value of 1,400. Honest headline rounding
-# is small in relative terms (42,300 for 42,318 is 0.04%), so capping at 5%
-# keeps every legitimate case while refusing to call a 40% miss a rounding.
+# A display rounding read from TRAILING ZEROS may never move the number by more
+# than this share of it. Trailing zeros alone are an unreliable signal of
+# INTENDED precision: "1,000" has three of them, which would otherwise license a
+# +/-500 window and let the figure "1,000" verify against a true value of 1,400.
+# Honest headline rounding is small in relative terms (42,300 for 42,318 is
+# 0.04%), so capping at 5% keeps every legitimate case while refusing to call a
+# 40% miss a rounding.
+#
+# It governs the INTEGER branch only — see _displayed_precision_tol. An explicit
+# decimal is not ambiguous the way trailing zeros are, and applying the cap there
+# too was a defect: it bound on every value below one unit of its own leading
+# place and refused correct numbers.
 _MAX_ROUNDING_SHARE = 0.05
 
 
@@ -325,23 +331,41 @@ def _displayed_precision_tol(raw, target: float) -> float:
     Display rounding is legitimate: a model told to write a readable headline
     will round 42,318 to "42,300". The digits it chose tell us how much rounding
     it intended, so a value written to the hundreds place tolerates +/-50.
-    Without this, honest rounding would read as ungrounded and swamp the signal
-    — but see _MAX_ROUNDING_SHARE for why it is also capped.
+    Without this, honest rounding would read as ungrounded and swamp the signal.
+
+    Two branches, and only one of them is ambiguous:
+
+      * an EXPLICIT DECIMAL states its precision outright — "0.4" means one
+        decimal place, +/-0.05, and there is nothing to second-guess. The window
+        it yields also shrinks with every decimal written, so it is
+        self-limiting (never wider than +/-0.5);
+      * an INTEGER has to be read from trailing zeros, which is a guess, so that
+        branch is additionally capped by _MAX_ROUNDING_SHARE.
+
+    Capping the decimal branch too was a live defect. `abs(target) * 0.05` binds
+    whenever |target| < 10^-k for a value written to k decimals — i.e. EVERY
+    sub-1% figure at one decimal place, which is exactly the shape a flat trend
+    takes. A correct "+0.4%" for a true 0.3535% needs the +/-0.05 its own
+    notation declares and was given +/-0.02, so it graded `ungrounded` (no ✓ for
+    the reader) and the same arithmetic in a table cell raised the ⚠ "Check N of
+    M values" caution on a correct table. Measured over 64 retained messages,
+    removing the cap here recovered one figure and one cell and changed the
+    fabricated-match rate on neither probe.
     """
     s = str(raw or "")
     frac = re.search(r"\.(\d+)", s)
     if frac:
-        tol = 0.5 * (10 ** -len(frac.group(1)))
-    else:
-        digits = _DECORATION_RE.sub("", _LEADING_JUNK_RE.sub("", s.strip()))
-        digits = digits.lstrip("-")
-        if not digits.isdigit():
-            return 0.0
-        trailing_zeros = len(digits) - len(digits.rstrip("0"))
-        # No trailing zeros still implies rounding to the UNITS place: a model
-        # that writes "39%" for a true 39.45% has rounded, and granting 0
-        # tolerance there would read honest rounding as an invented number.
-        tol = 0.5 * (10 ** trailing_zeros)
+        # Written precision, uncapped: unambiguous, and self-limiting.
+        return 0.5 * (10 ** -len(frac.group(1)))
+    digits = _DECORATION_RE.sub("", _LEADING_JUNK_RE.sub("", s.strip()))
+    digits = digits.lstrip("-")
+    if not digits.isdigit():
+        return 0.0
+    trailing_zeros = len(digits) - len(digits.rstrip("0"))
+    # No trailing zeros still implies rounding to the UNITS place: a model
+    # that writes "39%" for a true 39.45% has rounded, and granting 0
+    # tolerance there would read honest rounding as an invented number.
+    tol = 0.5 * (10 ** trailing_zeros)
     return min(tol, abs(target) * _MAX_ROUNDING_SHARE)
 
 
