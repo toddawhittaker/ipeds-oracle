@@ -7,6 +7,8 @@ import { svgToPngDataUrl } from "./chartimg.js";
 import { IconCopy, IconCheck, IconTag, IconMaximize } from "./icons.jsx";
 import ChartModal from "./ChartModal.jsx";
 import { deltaAnnouncement, pctChange, trendValues } from "./trendstats.js";
+import { COPY_FAILED } from "./announce.js";
+import { useToast } from "./Toast.jsx";
 
 // Series colors. Muted/earthy to match the app's archival cream+teal+ochre
 // aesthetic (the old palette read as neon on both themes), but still six
@@ -194,6 +196,7 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
   const [showLabels, setShowLabels] = useState(initialLabels ?? false);
   const [showTrend, setShowTrend] = useState(initialTrend ?? true);
   const [png, setPng] = useState(null);
+  const toast = useToast();
   const [copied, setCopied] = useState(false);
   const [maxed, setMaxed] = useState(false);
   const exportRef = useRef(null);
@@ -276,7 +279,13 @@ export default function Chart({ spec, inModal = false, initialType, initialTrend
         document.body.removeChild(holder);
       } catch { ok = false; }
     }
+    // The third copy path. #309 gave doCopy and Copy SQL a failure
+    // message and missed this one, so a denied clipboard or an
+    // insecure context (plain http over a LAN — the documented
+    // self-host case) just left the icon un-flipped: no toast, no
+    // state change, nothing for a screen reader at all.
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1400); }
+    else toast(COPY_FAILED, "error");
   }
 
   const alt = `${spec.title || "Chart"}: ${type} chart of ${keys.join(", ")}`

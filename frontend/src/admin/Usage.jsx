@@ -162,8 +162,18 @@ export default function Usage() {
               unbreakable token — measured at 526px for an ordinary long
               address, which made the whole `.admin` column scroll sideways at
               320px. No `min-width` here: the table is otherwise fluid, so it
-              only scrolls when its own content is genuinely too wide. */}
-          <div className="table-scroll">
+              only scrolls when its own content is genuinely too wide.
+              FOCUSABLE, unlike DataTable's: every cell here is plain text, so
+              there is nothing inside for a keyboard to land on and nothing to
+              scroll the region into view. Shipping the wrapper without this
+              made the Tokens/Spend columns unreachable by keyboard the moment
+              a long address pushed them out (WCAG 2.1.1) -- axe's
+              scrollable-region-focusable, invisible to our gate only because
+              the scans run at 1280x2600 where a fluid table never overflows.
+              The name differs from the table's own so it is not announced
+              twice. */}
+          <div className="table-scroll table-scroll-region" tabIndex={0}
+               role="region" aria-label="Top users, scrollable">
           <table className="grid" aria-label="Top users">
             <thead><tr>
               <th scope="col">User</th><th scope="col">Queries</th>

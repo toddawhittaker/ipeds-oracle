@@ -119,4 +119,47 @@ test.describe("admin tables reflow into their own scroll region", () => {
     expect(geo.scroll).toBeGreaterThan(geo.client);
     expect(geo.adminScroll).toBe(geo.adminClient);
   });
+
+  test("a scroll region with nothing focusable inside is focusable itself",
+    async ({ page }) => {
+      // WCAG 2.1.1. Top users is not a DataTable: every cell is plain text, so
+      // there is nothing inside to tab to and nothing to scroll the region into
+      // view. The wrapper was copied from DataTable.jsx, whose exemption
+      // depends on rows having focusable controls — a precondition that
+      // silently did not transfer, which is why DataTable now DERIVES it.
+      await mockMe(page, ADMIN);
+      await mockConversations(page, []);
+      await mockAttention(page, { users: 0, skills: 0, logs: 0 });
+      await mockMarkLogsSeen(page);
+      await mockUsage(page, {
+        bucket: "day", series: [],
+        top_users: [{ email: "someone.with.a.long.address@example.edu",
+          queries: 42, tokens: 900, spend: 0.5 }],
+        totals: { queries: 120, tokens: 8400, spend: 1.23, cache_hits: 9,
+          escalations: 2, failures: 1, prompt_tokens: 8400,
+          cached_prompt_tokens: 4200 },
+      });
+      await page.goto("/admin/usage");
+
+      const region = page.getByRole("region", { name: /Top users/ });
+      await expect(region).toBeVisible();
+      await region.focus();
+      await expect(region).toBeFocused();
+      // ...and its name is NOT the table's own, which would announce twice.
+      expect(await region.getAttribute("aria-label"))
+        .not.toBe(await page.getByRole("table", { name: "Top users" })
+          .getAttribute("aria-label"));
+    });
+
+  test("a table whose rows are already keyboard-reachable gets NO extra tab stop",
+    async ({ page }) => {
+      // The other half of the derivation, and why it is a predicate rather than
+      // "add a region everywhere": all three Users tables have a sort button in
+      // every header and action buttons in every row, so a region would be a
+      // tab stop before each of three mounted tables for no gain.
+      await openUsers(page, "/admin/users/current");
+      await expect(page.locator("#userpanel-current .table-scroll")).toBeVisible();
+      await expect(page.locator("#userpanel-current .table-scroll[role=region]"))
+        .toHaveCount(0);
+    });
 });

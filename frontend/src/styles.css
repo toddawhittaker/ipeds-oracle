@@ -1544,6 +1544,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    the table — a scroll container turns any overflow into a scrollbar, and the
    18px it used to add would have put a permanent one under all three tables. */
 .table-scroll { overflow-x: auto; }
+/* A scroll region that is focusable in its own right (see DataTable.jsx's
+   `needsRegion`) must SHOW that focus, or a keyboard user lands somewhere
+   invisible. */
+.table-scroll-region:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .grid.data { min-width: 720px; }
 .grid.data .col-admin { width: 132px; }
 /* Last active carries a date AND a time ("12/31/2023, 11:59:59 PM"), which the
