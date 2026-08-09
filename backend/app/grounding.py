@@ -734,6 +734,39 @@ def _reconcile_value(target: float, raw_value, results: list[QueryResult],
                 best = (status, derivation)
     if best is not None and best[0] != DERIVED:
         return best          # a verbatim/rounded cell already beats a derivation
+    # A row's own cell OVER another cell of the same row — the figure's half of
+    # the blind spot _match_at_row route 2b closes for table cells. A headline
+    # share ("23.6% of RN degrees are private non-profit") is one row's B/A, and
+    # no column route can express it: the figure has no anchor row, so every
+    # row's pairs are candidates. FIGURE-ONLY, exactly like row_total below —
+    # check_table reaches this function only for a row it could not anchor, and
+    # widening that fallback would inflate Grounded-cells with coincidental
+    # hits, which is the whole reason anchoring exists. Guarded on the value
+    # being written as a percentage and on (0,100], as everywhere else.
+    if allow_dimension and "%" in _strip_emphasis(raw_value):
+        tol = _displayed_precision_tol(raw_value, target)
+
+        def _repro(got: float) -> bool:
+            return _close(target, got) or bool(tol and abs(target - got) <= tol)
+
+        for r_idx, result in enumerate(results):
+            cols = measure_columns(result)
+            names = list(cols)
+            if len(names) < 2:
+                continue
+            depth = max((len(v) for v in cols.values()), default=0)
+            for row_i in range(depth):
+                cells = [(n, cols[n][row_i]) for n in names
+                         if row_i < len(cols[n]) and cols[n][row_i] is not None]
+                for n_name, n_v in cells:
+                    for d_name, d_v in cells:
+                        if d_name == n_name or not d_v:
+                            continue
+                        got = n_v / d_v * 100.0
+                        if 0.0 < got <= 100.0 and _repro(got):
+                            return DERIVED, Derivation(
+                                op="row_ratio", result_index=r_idx,
+                                column=f"{n_name}/{d_name}@row{row_i + 1}")
     # Row-wise totals, last: strictly weaker evidence than a column route, and
     # only for the FIGURE. check_table passes allow_dimension=False and is
     # deliberately excluded — a table grades hundreds of cells, so widening its
@@ -1061,6 +1094,36 @@ def _match_at_row(target: float, raw_value, prep: _Prepared, index: int,
         for i in range(len(series)):
             if reproduces(compute("share", series, index=i)):
                 return "row_share"
+    # 2b. This row's own cells, one OVER another. Neither route above expresses
+    #     it: compute("share") is a cell's share of its own COLUMN's total, and
+    #     row_share (just above) is its share of the ROW's sum — so a "Share"
+    #     column that is, per row, `priv_np / total` had no route at all. Found
+    #     live on a table whose every number was correct and whose share column
+    #     graded 5-of-6 UNREPRODUCED, raising the reader-facing caution on
+    #     faultless work.
+    #
+    #     Cheapest search in this function — k measure columns give k(k-1)
+    #     ordered pairs from ONE row (2 here), against the cross-result route's
+    #     totals-times-complements — and it runs BEFORE that route on purpose:
+    #     the six-year aggregate share of that same table (25.98%) rounds to the
+    #     same 26.0% as 2023's own row, so the wide route was "verifying" one
+    #     cell through a ratio that has nothing to do with it. A cell whose own
+    #     row explains it must ground on its own row.
+    #
+    #     Both guards are the ones _match_cross_result already proved necessary:
+    #     the value must be WRITTEN as a percentage (unsplit, that marker was
+    #     worth 0.9% -> 10.4% fabricated grounds there), and a share cannot
+    #     exceed its whole, which is also what refuses the INVERTED pair.
+    if "%" in _strip_emphasis(raw_value):
+        pairs = [(name, values[index]) for name, values in prep.measures.items()
+                 if index < len(values) and values[index] is not None]
+        for n_name, n_v in pairs:
+            for d_name, d_v in pairs:
+                if d_name == n_name or not d_v:
+                    continue
+                got = n_v / d_v * 100.0
+                if 0.0 < got <= 100.0 and reproduces(got):
+                    return f"row_ratio({n_name}/{d_name})"
     # 3. Derived DOWN a column: only the ops that can legitimately REPEAT on an
     #    entity row — a national total or average carried beside each row — plus
     #    `share` pinned to THIS row (a share-of-column-total column is

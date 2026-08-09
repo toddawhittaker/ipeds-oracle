@@ -44,6 +44,92 @@ def result(columns, rows, truncated=False):
                        truncated=truncated, row_count=len(rows))
 
 
+# --- Row-wise ratio of two measure columns (the chat-51 blind spot) -----------
+# Found live. An answer tabulated "Total RN awards", "Private non-profit awards"
+# and a "Share" column that is, per row, priv / total * 100. Every number was
+# correct and every Share cell graded UNREPRODUCED -- 5 of 6 -- because no route
+# expressed "this row's column B over this row's column A": compute("share") is
+# a cell's share of its own COLUMN's total, and row_share is its share of the
+# ROW's sum. The one cell that did "match" matched by coincidence, through the
+# whole-column cross_share, which is the more alarming half.
+
+_RATIO = result(["year", "total_rn", "priv_np_rn"],
+                [(2020, 251160, 67536), (2021, 260564, 71169),
+                 (2022, 268486, 71373), (2023, 264511, 68790),
+                 (2024, 254773, 65027), (2025, 258184, 60836)])
+
+_RATIO_MD = """| Year | Total RN awards | Private non-profit awards | Share |
+| --- | ---: | ---: | ---: |
+| 2020 | 251,160 | 67,536 | 26.9% |
+| 2021 | 260,564 | 71,169 | 27.3% |
+| 2022 | 268,486 | 71,373 | 26.6% |
+| 2023 | 264,511 | 68,790 | 26.0% |
+| 2024 | 254,773 | 65,027 | 25.5% |
+| 2025 | 258,184 | 60,836 | 23.6% |
+"""
+
+
+def test_a_per_row_ratio_column_grounds_every_cell():
+    """THE REGRESSION. All 18 cells are correct and reproducible; before the
+    row-ratio route only 13 did, so a correct answer raised the reader-facing
+    caution."""
+    got = grounding.check_table(_RATIO_MD, [_RATIO])
+    assert got.cells_checked == 18, got
+    assert got.cells_matched == 18, f"expected every cell to ground, got {got}"
+    assert got.status == grounding.TABLE_MATCHED, got
+
+
+def test_a_per_row_ratio_figure_grounds():
+    """The figure is the same arithmetic (60,836 / 258,184) and was `ungrounded`
+    on the same turn -- which is not observe-only: _maybe_retry_figure and
+    _s5_fabricated both act on that verdict."""
+    check = grounding.check_figure(
+        {"value": "23.6%", "unit": "%", "label": "Share of RN degrees"}, [_RATIO])
+    assert check.status != grounding.UNGROUNDED, check
+    assert check.grounded, check
+
+
+def test_the_row_ratio_beats_the_coincidental_column_share():
+    """PRECISION, and the reason the row-local route must be tried BEFORE the
+    cross-result one. The six-year aggregate share is 404,731/1,557,678 =
+    25.98%, which rounds to the same 26.0% as 2023's own share -- so 2023 used
+    to "verify" against a whole-column ratio that has nothing to do with its
+    row. A cell must ground through its OWN row when its own row explains it."""
+    prep = grounding._prepare(_RATIO)
+    scalars = grounding._cross_scalars([_RATIO])
+    op = grounding._match_at_row(26.0, "26.0%", prep, 3, scalars)
+    assert op is not None
+    assert "cross" not in op, f"2023 grounded coincidentally as {op}"
+
+
+def test_a_wrong_share_still_fails():
+    """The anti-vacuity half: the new route must not ground an arbitrary
+    percentage. 30.0% is not any pair ratio in any row of this result."""
+    md = _RATIO_MD.replace("| 23.6% |", "| 30.0% |")
+    got = grounding.check_table(md, [_RATIO])
+    assert got.cells_matched == got.cells_checked - 1, got
+    assert got.status == grounding.TABLE_PARTIAL, got
+
+
+def test_a_ratio_not_written_as_a_percent_does_not_ground():
+    """The `%` marker splits the two routes here exactly as it does for
+    cross-result shares, where dropping it took fabricated grounds from 0.9% to
+    10.4%. A bare count that happens to equal a ratio is not a share."""
+    md = ("| Year | Total RN awards | Private non-profit awards | Count |\n"
+          "| --- | ---: | ---: | ---: |\n"
+          "| 2020 | 251,160 | 67,536 | 26.9 |\n")
+    got = grounding.check_table(md, [_RATIO])
+    assert got.cells_matched == 2, f"the bare 26.9 must not ground: {got}"
+
+
+def test_an_out_of_range_ratio_does_not_ground():
+    """A share cannot exceed its whole. total/priv is 371.9% for 2020; the
+    (0,100] guard is what stops the INVERTED pair matching."""
+    prep = grounding._prepare(_RATIO)
+    assert grounding._match_at_row(371.9, "371.9%", prep, 0, ()) is None
+
+
+
 # --- QueryResult.to_storage / from_storage (cross-turn grounding persistence) --
 
 def test_storage_round_trip_preserves_columns_and_cells():
@@ -1812,6 +1898,17 @@ def run():
           test_check_table_counts_cells_only_a_truncated_aggregate_would_have_matched)
     check("cells_blocked is zero when no result was truncated",
           test_cells_blocked_is_zero_when_no_result_was_truncated)
+    print("  -- row-wise ratio of two measure columns --")
+    check("a per-row ratio column grounds every cell",
+          test_a_per_row_ratio_column_grounds_every_cell)
+    check("a per-row ratio figure grounds", test_a_per_row_ratio_figure_grounds)
+    check("the row ratio beats the coincidental column share",
+          test_the_row_ratio_beats_the_coincidental_column_share)
+    check("a wrong share still fails", test_a_wrong_share_still_fails)
+    check("a ratio not written as a percent does not ground",
+          test_a_ratio_not_written_as_a_percent_does_not_ground)
+    check("an out-of-range ratio does not ground",
+          test_an_out_of_range_ratio_does_not_ground)
     print("  -- truncated-result persistence (to_storage/from_storage) --")
     check("to_storage preserves the truncated flag",
           test_to_storage_preserves_the_truncated_flag)
