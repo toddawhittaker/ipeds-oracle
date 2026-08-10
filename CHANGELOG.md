@@ -13,7 +13,7 @@ detail.
 
 ## v0.4.0
 
-The hardening release. Nothing here changes what the app is for — it is 68
+The hardening release. Nothing here changes what the app is for — it is seventy
 commits of closing holes, most of them found by reading the code rather than by
 anything going wrong in production. The container no longer runs as root, four
 importer paths that could report the wrong outcome now report the right one, a
