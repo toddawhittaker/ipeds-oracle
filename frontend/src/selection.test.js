@@ -18,7 +18,7 @@ import {
 // tables). The stateful React side (useTableSelection, DataTable's checkbox
 // column, BulkBar) is Playwright-covered (frontend/e2e/admin-bulk-actions.spec.js)
 // -- everything here is deterministic input->output string/counting logic, so it
-// belongs in vitest per CLAUDE.md's test pyramid.
+// belongs in vitest per docs/TESTING.md's test pyramid.
 //
 // NUMBER RENDERING (pinned convention, per the architect's plan + PM decision):
 // cardinal numbers 0-9 are spelled out ("Five", "one") -- capitalized only when

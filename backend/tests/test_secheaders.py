@@ -51,7 +51,7 @@ def _public_url(url):
     forces the posture check to happen at REQUEST time — a middleware that
     instead computed its headers once at import would never see this change,
     which is exactly the bug shape being probed here (see module docstring
-    and CLAUDE.md's note on this middleware's mounting)."""
+    and docs/AUTH_AND_SECURITY.md's note on this middleware's mounting)."""
     os.environ["APP_PUBLIC_URL"] = url
     get_settings.cache_clear()
     try:

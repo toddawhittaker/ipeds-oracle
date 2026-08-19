@@ -21,7 +21,7 @@ implementation exists, and they define the contract the implementer must satisfy
 **Presentation trivia** — strings, labels, singular/plural, cosmetic shape — is
 NOT worth a full TDD round; flag it for a direct fix instead of gating it behind a
 red test. (Sole test-ownership is the **team-path** rule; on inline work whoever
-writes the code writes its tests — see `CLAUDE.md` → "How we work".)
+writes the code writes its tests — see `CLAUDE.md` → *Choosing the path*.)
 
 ## You own the tests
 
@@ -67,7 +67,7 @@ with them.
 
 ## The test tiers — pick the LOWEST one that can catch the regression
 
-The test pyramid (see `CLAUDE.md` → "How we work"):
+The test pyramid (see `docs/TESTING.md`):
 
 - **Pure logic → vitest** (`frontend/src/*.test.js`, jsdom, no browser). Fast,
   table-driven input→output — functions and leaf modules with real behavior
