@@ -2,12 +2,18 @@ name: CodeQL
 
 # Static security analysis for the auth / SQL-execution surfaces (and the SPA).
 # Free on public repositories; results appear under the Security tab. Runs on PRs
-# and pushes to main, plus a weekly sweep for newly-published queries.
+# and pushes to main and to the release epic branch, plus a weekly sweep for
+# newly-published queries.
 on:
   push:
-    branches: [main]
+    # feat/mcp-server is the v0.5.0 epic branch, mirroring ci.yml: sub-PRs merge
+    # into it rather than main. Without it here, an epic that adds an
+    # internet-reachable endpoint and a hand-written bearer check would land
+    # unanalysed and arrive at main as one diff too large to triage.
+    # Remove this line once the epic merges to main and the branch is deleted.
+    branches: [main, feat/mcp-server]
   pull_request:
-    branches: [main]
+    branches: [main, feat/mcp-server]
   schedule:
     - cron: "27 4 * * 1"
 
