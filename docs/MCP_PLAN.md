@@ -471,7 +471,7 @@ gate, the route registration, and the middleware stack all live.
 
 ---
 
-## Step 3 — the `ask` tool
+## Step 3 — the `ask` tool — **DONE**
 
 **PR title:** `feat(mcp): expose the full agent as an ask tool`
 
@@ -524,6 +524,53 @@ must not change: the helper runs inside the same `con`, not on a new one.
   keep working).
 - `enforce_chat_rate_limit` is hit by `ask`, proving MCP and chat share the
   per-user budget.
+
+### What Step 3 found that this plan had wrong
+
+**`ask` cannot go through `_call`, and the instruction not to add a second
+try/except was still right.** `_call` is synchronous and runs in a worker
+thread; `ask` awaits the agent loop, which is an async generator doing its own
+thread hops for every blocking step, so it stays on the event loop. What the two
+now share is the error SHAPE — `server._tool_error`, one definition, so an
+escaped exception comes back as a failed TOOL and not a failed CALL whichever
+handler it escaped from. Putting `ask` in a worker thread would have meant
+running an event loop inside one.
+
+**How the handler learns who is calling: a context variable, measured twice.**
+The MCP tier hands a handler no route back to the HTTP request, and
+`ctx.transport.headers` — which looks like the answer, and is what the SDK's own
+`TransportContext` documents — **is `None` on both protocol legs here**, because
+the session manager builds its context without them. So `app/mcpsrv/auth.py`
+sets a `contextvars.ContextVar` after the gate admits a request and `ask` reads
+it. That was verified before it was relied on, because both failure modes are
+silent and one of them crosses users: the value **does** reach the handler on
+both legs, and two overlapping requests on two different keys each saw their own
+caller either side of an interleaving await. An unset caller is a REFUSAL, never
+a default — there is no safe guess for whose budget a turn spends.
+
+**The usage_log extraction landed in `app/db.py`**, next to the table's own DDL
+and alongside `get_meta`/`set_meta`/`data_version`, which are already
+connection-taking helpers for one table each. `_persist` passes `source=None`
+and keeps its transaction: `record_usage` takes the open connection and does not
+commit. No new module was needed.
+
+**A decision this plan never made: `ask` records NO critic-derived lesson.** The
+chat path files a critic's finding as an unverified lesson for an admin to
+review; `ask` does not, because a key holder reaching this endpoint from the
+internet could otherwise steer what lands in that queue by choosing questions,
+and the queue is a human's attention. Worth revisiting once an operator can see
+MCP traffic; it is not an oversight. Everything else the chat path does and
+`ask` skips — titling, the feedback distiller, result persistence — follows from
+statelessness rather than being a separate call.
+
+**Six guards were mutation-tested, and the first pass found a vacuous test of my
+own.** "An unidentified caller is refused" asserted only `isError`, which this
+suite satisfies anyway — with no provider key configured *every* completed `ask`
+ends in a tool error. It now asserts the refusal's own wording and runs a
+boom-agent, and the mutant dies. The other five (dropping the shared rate limit,
+dropping `source='mcp'`, admitting a refused question, caching an answer without
+its result rows, un-advertising the tool) each killed exactly their intended
+check.
 
 ---
 

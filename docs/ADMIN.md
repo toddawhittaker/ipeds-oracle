@@ -70,6 +70,21 @@ turns that burned the whole tool budget (`usage_log.exhaustion` NOT NULL), with 
 bullet in [`AGENT_LOOP.md`](AGENT_LOOP.md)). A rising Exhausted count is the signal to lift
 `LLM_MAX_TOOL_ITERS`.
 
+**THERE ARE TWO DOORS ONTO THE AGENT, AND `usage_log.source` IS WHAT TELLS THEM
+APART.** The web chat is one; the MCP endpoint's `ask` tool (`app/mcpsrv/ask.py`,
+migration 37) is the other, and it runs the same pipeline — guard, answer cache,
+learned lessons, tool loop, critic, grounding — minus everything that serves a
+conversation. It writes `source='mcp'`; a chat turn leaves the column NULL, so
+every row predating the MCP endpoint keeps reading as the chat traffic it was.
+Two consequences for reading spend: an `ask` turn is a **full-price turn** and
+appears in every Usage total alongside chat, and it charges the **same per-user
+limiter** (`chat_request_attempts`, `CHAT_RATE_MAX_PER_USER`), so one person's
+budget is capped across both doors rather than once each. A key that is spending
+is revoked from Admin → Keys, which ends that door without touching the person's
+web access. The INSERT itself is `db.record_usage`, one statement both callers
+use — a 22-column list hand-copied into the second door is how a billing row
+silently starts under-reporting.
+
 **EVERY LLM call a turn causes is billed, not just the agent's.** `usage_log` used
 to record only `stream_agent`'s usage, so three probes were invisible: the topical
 **guard** (`guard.classify` — runs on EVERY question, *before* the answer cache and

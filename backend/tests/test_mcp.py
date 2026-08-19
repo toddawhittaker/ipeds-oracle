@@ -54,6 +54,14 @@ os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
 # brushes it. The 429 case mints its OWN key so its spending is its own.
 MCP_CAP = 30
 os.environ["MCP_RATE_MAX_PER_KEY"] = str(MCP_CAP)
+# `ask` charges the SAME per-user limiter the web chat charges, so this file has
+# to pin it: config.py's default is 30, and a suite that quietly drifts past it
+# would start failing on a call count rather than on a contract. Low enough that
+# the shared-budget case can exhaust it quickly, high enough that the handful of
+# `ask` calls the other cases make never brush it — and that case spends a
+# DIFFERENT user's budget anyway, because this limiter is keyed on the user.
+CHAT_CAP = 12
+os.environ["CHAT_RATE_MAX_PER_USER"] = str(CHAT_CAP)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -69,10 +77,14 @@ mailer.send_access_approved = lambda to: True
 # quietly testing only the legacy leg forever.
 from mcp.server.lowlevel.server import MODERN_PROTOCOL_VERSIONS  # noqa: E402
 
+from app import guard, skills  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.db import connect  # noqa: E402
+from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
-from app.mcpsrv import resources  # noqa: E402
+from app.mcpsrv import ask, resources  # noqa: E402
 from app.tools import registry  # noqa: E402
+from app.tools.sql import QueryResult  # noqa: E402
 
 PROTOCOL_VERSION = MODERN_PROTOCOL_VERSIONS[-1]
 META_VERSION = "io.modelcontextprotocol/protocolVersion"
@@ -133,6 +145,59 @@ def result_of(response):
     return payload["result"]
 
 
+def call_ask(c, question, key):
+    """One `ask` tool call, returning the JSON-RPC result."""
+    return result_of(mcp_post(c, "tools/call",
+                              {"name": "ask", "arguments": {"question": question}},
+                              key=key))
+
+
+def fake_agent(answer="Ohio awarded **1,234** nursing degrees in 2023.",
+               figure=None, sql="SELECT 1", grounding="exact", boom=False):
+    """A stand-in for llm.stream_agent that yields the events a real turn does.
+
+    The agent loop itself is pinned by test_agent_loop.py; what these checks are
+    about is the PLUMBING around it — that a turn bills exactly one usage row,
+    writes no conversation, and hands the figure and its grounding status back
+    through MCP's structured channel. Driving a real turn would need a provider
+    key CI does not have, and would test the model instead of the wiring.
+    """
+    async def gen(question, **kwargs):
+        if boom:
+            raise AssertionError("the agent ran when it should not have")
+        # A real QueryResult, not an empty list: the cache check below asserts
+        # that ask stores the rows behind an answer, and an agent that returned
+        # none would satisfy that assertion by having nothing to lose.
+        rows = QueryResult(columns=["stabbr", "n"], rows=[("OH", 1234)],
+                           row_count=1, sql=sql)
+        res = AgentResult(answer=answer, model_used="fake-model",
+                          sql_log=[sql], figure=figure, results=[rows],
+                          last_result=rows,
+                          figure_grounding=grounding if figure else "no_figure",
+                          prompt_tokens=100, completion_tokens=20, cost=0.001)
+        yield {"type": "answer", "text": answer}
+        yield {"type": "done", "result": res}
+    return gen
+
+
+def usage_rows(question):
+    """Every usage_log row for `question`, newest last."""
+    con = connect()
+    try:
+        return [dict(r) for r in con.execute(
+            "SELECT * FROM usage_log WHERE question=? ORDER BY id", (question,))]
+    finally:
+        con.close()
+
+
+def table_count(table):
+    con = connect()
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
 def sign_in(c, email):
     r = c.post("/api/auth/request", json={"email": email})
     assert r.status_code == 200, r.text
@@ -154,6 +219,16 @@ def run():
             assert r.status_code == 401, f"a bogus key got {r.status_code}"
             assert "ipeds" not in r.text.lower() or "detail" in r.text, r.text
         check("no key and a wrong key are both refused", rejects_without_a_key)
+
+        def a_wrong_auth_scheme_is_a_clean_401():
+            # A client configured for Basic auth (or any other scheme) must get
+            # the same flat refusal as one with no header at all, rather than
+            # having its credential parsed as a bearer token or blowing up
+            # inside the gate.
+            r = mcp_post(c, "tools/list", headers={"Authorization": "Basic Zm9vOmJhcg=="})
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"
+        check("an Authorization header in another scheme is refused cleanly",
+              a_wrong_auth_scheme_is_a_clean_401)
 
         def a_revoked_key_stops_working():
             minted = c.post("/api/keys", json={"label": "doomed"}).json()
@@ -210,7 +285,11 @@ def run():
         def lists_exactly_the_registry_tools():
             listed = result_of(mcp_post(c, "tools/list", key=key))["tools"]
             names = sorted(t["name"] for t in listed)
-            expected = sorted(s["function"]["name"] for s in registry.tool_specs())
+            # Every registry tool, plus `ask` — which is appended by the server
+            # and deliberately absent from the registry (see the ask check
+            # below for why that separation is load-bearing).
+            expected = sorted([s["function"]["name"] for s in registry.tool_specs()]
+                              + ["ask"])
             assert names == expected, f"{names} != {expected}"
             by_name = {t["name"]: t for t in listed}
             assert by_name["run_sql"]["inputSchema"] == \
@@ -315,6 +394,318 @@ def run():
                 "the model-facing text dropped the warning"
         check("a query that trips the SQL linter carries its warning to the caller",
               sqllint_findings_reach_the_caller)
+
+        # --- the ask tool ----------------------------------------------------
+        def ask_is_advertised_but_is_not_an_agent_tool():
+            listed = result_of(mcp_post(c, "tools/list", key=key))["tools"]
+            by_name = {t["name"]: t for t in listed}
+            assert "ask" in by_name, "the ask tool is not advertised"
+            assert "outputSchema" in by_name["ask"], \
+                "ask publishes no output schema, so the figure fields are undeclared"
+            assert "ask" not in {sp["function"]["name"] for sp in registry.tool_specs()}, \
+                ("ask reached app/tools/registry.py, which is the list the CHAT "
+                 "agent's own tool loop is handed — the agent could call itself")
+        check("ask is advertised over MCP and absent from the agent's own registry",
+              ask_is_advertised_but_is_not_an_agent_tool)
+
+        def an_ask_that_raises_is_a_tool_error_not_a_protocol_error():
+            # The async twin of the check above, and it needs its own: `ask` does
+            # NOT go through `_call` (it awaits the agent loop, so it stays on
+            # the event loop rather than going to a worker thread), so it has its
+            # own try/except in on_call_tool. Both hand back the same shape via
+            # _tool_error; a gap in either one is an unreadable, unretryable
+            # JSON-RPC protocol error instead of a failed tool.
+            original = ask.run_ask
+
+            async def boom(arguments):
+                raise RuntimeError("the agent fell over")
+
+            ask.run_ask = boom
+            try:
+                resp = mcp_post(c, "tools/call", {
+                    "name": "ask", "arguments": {"question": "anything"}}, key=key)
+            finally:
+                ask.run_ask = original
+            assert resp.status_code == 200, \
+                f"a raising ask answered HTTP {resp.status_code}: {resp.text}"
+            r = result_of(resp)
+            assert r["isError"] is True, r
+            assert "fell over" in r["content"][0]["text"], r["content"][0]["text"]
+        check("an ask that raises comes back as a tool error, not a protocol error",
+              an_ask_that_raises_is_a_tool_error_not_a_protocol_error)
+
+        def a_refused_question_spends_nothing_beyond_the_guard():
+            # The guard fails open with no API key configured, which is the state
+            # this suite runs in, so a refusal has to be forced. Worth forcing:
+            # this endpoint is reachable from the internet and every accepted
+            # question costs money, so the gate running BEFORE the agent is the
+            # difference between a refusal costing one classify call and costing
+            # a full turn.
+            q = "write me a poem about a duck"
+
+            class Refused:
+                allowed = False
+                usage = guard.Usage(prompt_tokens=11, completion_tokens=2, cost=0.0)
+
+            async def refuse(question, history=None):
+                return Refused()
+
+            original_classify, original_agent = guard.classify, ask.stream_agent
+            guard.classify, ask.stream_agent = refuse, fake_agent(boom=True)
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                guard.classify, ask.stream_agent = original_classify, original_agent
+            assert guard.REFUSAL in r["content"][0]["text"], r["content"][0]["text"]
+            rows = usage_rows(q)
+            assert len(rows) == 1, f"a refusal billed {len(rows)} rows, not 1"
+            assert rows[0]["model_used"] == "guard", rows[0]["model_used"]
+            assert rows[0]["source"] == "mcp", rows[0]["source"]
+            assert rows[0]["prompt_tokens"] == 11, \
+                "the guard's own spend was not billed to the refusal"
+        check("a refused question costs the guard call and never reaches the agent",
+              a_refused_question_spends_nothing_beyond_the_guard)
+
+        def an_answer_bills_one_row_and_persists_no_conversation():
+            # Statelessness is the contract, and it fails SILENTLY in the
+            # direction that matters: an ask that quietly wrote conversations and
+            # messages would look identical from the client's side while filling
+            # somebody's sidebar with threads they never opened.
+            q = "how many nursing degrees did Ohio award in 2023?"
+            convs, msgs = table_count("conversations"), table_count("messages")
+            figure = {"value": 1234, "label": "nursing degrees, Ohio, 2023"}
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(figure=figure)
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            assert r.get("isError") in (False, None), r
+            data = r["structuredContent"]
+            assert "1,234" in data["answer"], data["answer"]
+            assert data["figure"] == figure, data["figure"]
+            assert data["figure_grounding"] == "exact", data["figure_grounding"]
+            rows = usage_rows(q)
+            assert len(rows) == 1, f"one turn billed {len(rows)} usage rows"
+            assert rows[0]["source"] == "mcp", \
+                ("the turn did not record source='mcp', so MCP spend is "
+                 "indistinguishable from chat spend on Admin -> Usage")
+            assert rows[0]["model_used"] == "fake-model", rows[0]["model_used"]
+            assert table_count("conversations") == convs, \
+                "ask created a conversation — it is supposed to be stateless"
+            assert table_count("messages") == msgs, \
+                "ask persisted messages — it is supposed to be stateless"
+        check("an answered ask bills one mcp usage row and persists no thread",
+              an_answer_bills_one_row_and_persists_no_conversation)
+
+        def a_cache_hit_does_not_run_the_agent():
+            # The cache is SHARED with the web chat, so this also pins the thing
+            # that goes wrong quietly: an ask that stored an answer without its
+            # result rows would hand a later chat hit an answer with nothing to
+            # ground a recited number against (the gap migration 31 closed).
+            q = "which state granted the most masters degrees in education?"
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(answer="Cached answer body.",
+                                          sql="SELECT stabbr FROM hd LIMIT 1")
+            try:
+                first = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            assert "Cached answer body." in first["content"][0]["text"], first
+
+            ask.stream_agent = fake_agent(boom=True)
+            try:
+                second = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            assert "Cached answer body." in second["content"][0]["text"], \
+                f"the second ask did not replay the cached answer: {second}"
+            rows = usage_rows(q)
+            assert len(rows) == 2, f"two asks billed {len(rows)} rows"
+            assert rows[1]["cached"] == 1, "the replay was not billed as a cache hit"
+            assert rows[1]["source"] == "mcp", rows[1]["source"]
+            assert rows[1]["model_used"] == "cache", rows[1]["model_used"]
+            con = connect()
+            try:
+                stored = con.execute(
+                    "SELECT results FROM query_cache WHERE question=?", (q,)).fetchone()
+            finally:
+                con.close()
+            assert stored is not None and stored["results"], \
+                ("ask cached an answer with no result rows — a later CHAT hit on "
+                 "this row would lose the conversation's grounding chain")
+        check("a cached question replays its answer without running the agent",
+              a_cache_hit_does_not_run_the_agent)
+
+        def a_caching_failure_does_not_lose_the_answer():
+            # Chat caches AFTER it has streamed the answer, so a throw there
+            # costs the tail of something the user already read. Here the answer
+            # has not been returned yet, so an unguarded throw would come back as
+            # a tool error and lose an answer that was finished and already
+            # billed for.
+            q = "what happens when the cache write fails?"
+            original_agent, original_store = ask.stream_agent, skills.cache_store
+
+            def explode(*a, **kw):
+                raise RuntimeError("the cache is on fire")
+
+            ask.stream_agent = fake_agent(answer="The answer survived.")
+            skills.cache_store = explode
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                ask.stream_agent, skills.cache_store = original_agent, original_store
+            assert r.get("isError") in (False, None), \
+                f"a failed cache write turned a good answer into an error: {r}"
+            assert "The answer survived." in r["content"][0]["text"], r
+            assert len(usage_rows(q)) == 1, "the turn was billed more than once"
+        check("a failed cache write costs the cache entry, not the answer",
+              a_caching_failure_does_not_lose_the_answer)
+
+        def no_llm_key_is_a_clean_tool_error():
+            # The real, unpatched path: this suite runs with LLM_API_KEY="", so
+            # stream_agent yields an error and no `done` event. The contract is
+            # that ask says so readably and the DATA tools keep working — an MCP
+            # client on a deployment with no provider configured can still query.
+            resp = mcp_post(c, "tools/call",
+                            {"name": "ask", "arguments": {"question": "how many students?"}},
+                            key=key)
+            assert resp.status_code == 200, \
+                f"an unconfigured provider answered HTTP {resp.status_code}: {resp.text}"
+            r = result_of(resp)
+            assert r["isError"] is True, f"the failure was returned as an answer: {r}"
+            assert "not configured" in r["content"][0]["text"].lower(), \
+                r["content"][0]["text"]
+            assert usage_rows("how many students?") == [], \
+                "a turn that spent nothing still wrote a usage row"
+            still_works = result_of(mcp_post(c, "tools/call", {
+                "name": "run_sql",
+                "arguments": {"sql": "SELECT unitid FROM hd LIMIT 1"}}, key=key))
+            assert still_works.get("isError") in (False, None), \
+                "ask being unavailable took the data tools down with it"
+        check("with no LLM provider configured ask fails cleanly and run_sql still works",
+              no_llm_key_is_a_clean_tool_error)
+
+        def a_malformed_question_is_refused_before_any_spend():
+            # The length cap is the chat path's, for the chat path's reason: the
+            # body limiter allows 10 MB, and 10 MB of "question" would be billed
+            # to the provider as tokens and written to usage_log. Refused before
+            # the rate limiter, so a script hammering junk cannot also burn the
+            # asker's turn budget doing it.
+            for arguments, why in (({"question": "   "}, "an empty question"),
+                                   ({}, "a missing question"),
+                                   ({"question": "x" * 5000}, "an over-long question")):
+                r = result_of(mcp_post(c, "tools/call",
+                                       {"name": "ask", "arguments": arguments}, key=key))
+                assert r["isError"] is True, f"{why} was accepted: {r}"
+            assert usage_rows("x" * 5000) == [], "a refused question was billed"
+        check("an empty or over-long question is refused as a tool error",
+              a_malformed_question_is_refused_before_any_spend)
+
+        def an_unidentified_caller_is_refused_not_defaulted():
+            # The gate knows who is calling; `ask` reads that through a context
+            # variable, and the SDK's task plumbing is what carries it. If that
+            # ever stops working the value is None, and None must never be read
+            # as a default — every step after this point spends money, reads a
+            # cache, and bills a row on somebody's behalf, and there is no safe
+            # guess for whose. Forced here because the only way to observe it
+            # for real is the plumbing already being broken.
+            #
+            # Asserting `isError` alone would be VACUOUS here and was, until a
+            # mutation showed it: this suite has no provider key, so every ask
+            # that runs to completion already ends as a tool error. The check has
+            # to name THIS refusal, and the boom-agent proves nothing downstream
+            # ran on a caller the gate never named.
+            original_caller, original_agent = ask.current_caller, ask.stream_agent
+            ask.current_caller, ask.stream_agent = (lambda: None), fake_agent(boom=True)
+            try:
+                r = result_of(mcp_post(c, "tools/call", {
+                    "name": "ask", "arguments": {"question": "who is asking?"}}, key=key))
+            finally:
+                ask.current_caller, ask.stream_agent = original_caller, original_agent
+            assert r["isError"] is True, \
+                f"an unidentifiable caller got an answer anyway: {r}"
+            assert "identify the caller" in r["content"][0]["text"], \
+                (f"the refusal did not come from the caller check: "
+                 f"{r['content'][0]['text']!r}")
+            assert usage_rows("who is asking?") == [], \
+                "a turn with no known caller still billed somebody"
+        check("a caller the gate did not identify is refused, never defaulted",
+              an_unidentified_caller_is_refused_not_defaulted)
+
+        def no_dataset_is_a_tool_error_not_an_agent_turn():
+            # A deployment with no year imported would otherwise pay for a guard
+            # call and a full agent turn to discover the tables are not there,
+            # and hand back whatever the model made of that.
+            original_years, original_agent = ask.ipeds_years, ask.stream_agent
+            ask.ipeds_years, ask.stream_agent = (lambda: []), fake_agent(boom=True)
+            try:
+                r = result_of(mcp_post(c, "tools/call", {
+                    "name": "ask", "arguments": {"question": "any data?"}}, key=key))
+            finally:
+                ask.ipeds_years, ask.stream_agent = original_years, original_agent
+            assert r["isError"] is True, r
+            assert "dataset" in r["content"][0]["text"].lower(), r["content"][0]["text"]
+        check("with no dataset loaded ask says so without running the agent",
+              no_dataset_is_a_tool_error_not_an_agent_turn)
+
+        def a_failed_turn_is_an_error_and_is_still_billed():
+            # An agent turn that ends in an error still consumed provider calls.
+            # Returning it as an ANSWER would hand the caller an error string as
+            # though it were data; dropping its usage row would under-report the
+            # spend it really cost.
+            q = "a question whose turn fails"
+
+            async def failing(question, **kwargs):
+                yield {"type": "done",
+                       "result": AgentResult(model_used="fake-model",
+                                             error="The provider timed out.",
+                                             prompt_tokens=40, completion_tokens=0)}
+
+            original = ask.stream_agent
+            ask.stream_agent = failing
+            try:
+                r = result_of(mcp_post(c, "tools/call",
+                                       {"name": "ask", "arguments": {"question": q}}, key=key))
+            finally:
+                ask.stream_agent = original
+            assert r["isError"] is True, f"a failed turn came back as an answer: {r}"
+            assert "timed out" in r["content"][0]["text"], r["content"][0]["text"]
+            rows = usage_rows(q)
+            assert len(rows) == 1 and rows[0]["ok"] == 0 and rows[0]["source"] == "mcp", \
+                f"a failed turn was not billed as a failed mcp turn: {rows}"
+        check("a turn that ends in an error is a tool error and still bills its spend",
+              a_failed_turn_is_an_error_and_is_still_billed)
+
+        def ask_spends_the_same_per_user_budget_as_the_web_chat():
+            # Its OWN user, because this limiter is keyed on the user and the rest
+            # of the file shares one. The regression: swapping this call for the
+            # per-KEY MCP limiter, or dropping it, would leave MCP as an
+            # unmetered second door onto the same provider spend — and every
+            # other test in this file would still pass.
+            budget_email = "budget@example.edu"
+            assert c.post("/api/admin/allowlist",
+                          json={"email": budget_email}).status_code in (200, 201)
+            sign_in(c, budget_email)
+            bkey = c.post("/api/keys", json={"label": "budget"}).json()["key"]
+            for i in range(CHAT_CAP):
+                r = mcp_post(c, "tools/call",
+                             {"name": "ask", "arguments": {"question": f"q{i}"}},
+                             key=bkey)
+                assert r.status_code == 200, f"ask {i} got HTTP {r.status_code}"
+            r = result_of(mcp_post(c, "tools/call",
+                                   {"name": "ask", "arguments": {"question": "one more"}},
+                                   key=bkey))
+            assert r["isError"] is True and "many requests" in r["content"][0]["text"].lower(), \
+                f"the {CHAT_CAP + 1}th ask was not throttled: {r}"
+            chat = c.post("/api/chat/stream", json={"question": "and through the web door?"})
+            assert chat.status_code == 429, \
+                (f"the web chat still answered ({chat.status_code}) after ask "
+                 "exhausted this user's budget — the two doors are not sharing a "
+                 "limiter, so one person can spend twice over")
+            sign_in(c, "admin@example.edu")
+        check("ask charges the same per-user budget the web chat charges",
+              ask_spends_the_same_per_user_budget_as_the_web_chat)
 
         # --- resources -------------------------------------------------------
         def resources_are_listed_and_readable():
