@@ -150,6 +150,36 @@ jobs:
             --config=.semgrep \
             backend/app frontend/src scripts
 
+  deps:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      # Composition analysis, complementing the code analysis the other jobs do.
+      # It exists because requirements.lock is the file nothing else watches:
+      # GitHub's dependency graph reads requirements.txt (floors, no versions) and
+      # requirements-dev.txt (pinned, so Dependabot covers those two tools), but
+      # its pip parser does not recognise a .lock extension. Everything the image
+      # actually installs is therefore transitive-only from GitHub's point of view
+      # -- including cryptography and pyjwt -- and would never raise an alert.
+      # --no-deps because the lock is already fully pinned, so there is nothing to
+      # resolve; --strict so a dependency that cannot be audited fails the job
+      # rather than passing quietly. A finding fails the job (and the merge); the
+      # fix is to regenerate the lock, and --ignore-vuln is the documented escape
+      # hatch for an advisory with no fixed version yet.
+      - name: Audit the shipped lockfile
+        run: pip-audit --no-deps --strict --progress-spinner=off -r backend/requirements.lock
+
   backend:
     name: Backend suites (guards · hardening · backend · security)
     runs-on: ubuntu-latest

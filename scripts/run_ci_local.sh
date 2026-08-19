@@ -69,6 +69,24 @@ else
 fi
 
 # =========================================================================
+# Job 0c — dependency audit (pip-audit) — matches CI's "Dependency audit" job
+# =========================================================================
+# Audits backend/requirements.lock, the file the image and CI actually install
+# and the one GitHub's dependency graph does not read (its pip parser ignores a
+# .lock extension). Runs only if pip-audit is on PATH; CI enforces it
+# unconditionally, so a missing local binary downgrades to a warning rather than
+# a false green. Install (isolated from the app venv):
+#   uv tool install pip-audit   # or: pipx install pip-audit
+if command -v pip-audit >/dev/null 2>&1; then
+  step "Dependency audit: pip-audit (backend/requirements.lock)"
+  pip-audit --no-deps --strict --progress-spinner=off \
+    -r "$REPO_ROOT/backend/requirements.lock" \
+    || fail "pip-audit (vulnerable dependency)"
+else
+  printf '%s\n' "${YEL}Skipping dependency audit — pip-audit not on PATH (CI still enforces it). Install: uv tool install pip-audit${RST}"
+fi
+
+# =========================================================================
 # Job 1 — lint (ruff · eslint)
 # =========================================================================
 step "Lint: ruff check backend/app backend/tests scripts"
