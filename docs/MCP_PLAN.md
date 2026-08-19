@@ -61,6 +61,10 @@ sub-PR merges unchecked.
 Per-PR rules from `CLAUDE.md` still apply on the epic branch: `scripts/run_ci_local.sh`
 before pushing, never merge on a red or stale check, never lower a floor.
 
+Step 0 widened `ci.yml` only. `codeql.yml` was left on `main`, so the epic ran
+without static security analysis until #348 widened it the same way; both
+`feat/mcp-server` lines come out together when the branch is deleted.
+
 ---
 
 ## Step 0 — CI on the epic branch, and this plan checked in
@@ -194,7 +198,11 @@ per-module 80% floor in `scripts/coverage_check.sh`.
 - **2a** — `chore(deps): add the mcp SDK` (dependency only, nothing else)
 - **2b** — `feat(mcp): serve a Streamable HTTP MCP endpoint at /mcp`
 
-### Step 2a — the dependency, alone
+### Step 2a — the dependency, alone — **DONE** (#347)
+
+Landed as predicted: 16 new distributions, 47 lock pins to 63, nothing removed
+and no existing pin moved. Three corrections to what this section guessed are
+recorded at the end of it.
 
 Add `mcp>=2.0.0` to `backend/requirements.txt`, and regenerate
 `backend/requirements.lock` **in the same PR** with
@@ -219,9 +227,16 @@ and for dependabot noise. Worth a sentence in the PR body.
 **Two things to deal with in this PR, both found before we started:**
 
 1. **`mcp==1.23.3` is already installed in `/home/todd/projects/ipeds/.venv` and
-   is not in `requirements.lock`.** Somebody pip-installed it by hand. Reconcile
-   that before trusting any local run, or you will be testing against a version
-   the lockfile does not name.
+   is not in `requirements.lock`.** ~~Somebody pip-installed it by hand.~~
+   **Wrong — it was a transitive of `semgrep`**, which bundles an MCP feature and
+   pins that exact version. Taking the venv to `mcp` 2.0.0 therefore broke
+   semgrep outright (`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`,
+   a module the 2.0 SDK no longer has), which would have failed the pre-push gate
+   with a misleading "SAST finding" for anyone whose semgrep lived in the app
+   venv. Fixed by isolating semgrep as its own tool
+   (`uv tool install semgrep==1.171.0`, or `pipx`) and removing it from `.venv`,
+   which is what `scripts/run_ci_local.sh:59` already recommended. CI was never
+   affected — it installs semgrep on its own runner.
 2. **Adding `mcp` changes the HTTP client under the whole backend test suite.**
    `mcp` 2.0 depends on `httpx2`, and Starlette's `TestClient` prefers `httpx2`
    when it is importable (it currently emits a deprecation warning because it is
@@ -235,6 +250,31 @@ and for dependabot noise. Worth a sentence in the PR body.
 turns out to be unacceptable once you see the lockfile diff, the fallback is a
 few hundred lines of plain JSON-RPC handling with no new dependency — but that is
 a decision to revisit deliberately, not to drift into.
+
+**What #347 corrected in the above, so nobody re-derives it:**
+
+- **`typing-inspection` was already in the lock** via `pydantic-settings`, so it
+  is not new. The list of seven "new" packages above also omits the second-order
+  transitives that make up the rest of the sixteen: `httpcore2`, `truststore`,
+  `jsonschema-specifications`, `referencing`, `rpds-py`, `attrs`, `cffi`,
+  `pycparser`.
+- **"A second HTTP stack" undersells what was already there.** The image has
+  shipped `requests` and `urllib3` all along, via `fastembed` and `resend`, so
+  `httpx2` makes four rather than two. Consolidating to one stack is **not
+  available**: `huggingface_hub`, a hard dependency of `fastembed`, requires
+  `httpx<1,>=0.23.0` unconditionally, while `mcp` requires `httpx2>=2.5.0`.
+  Migrating the app's 22 `httpx` call sites would delete zero packages and would
+  re-derive `nces.py`'s manual redirect validation (SEC-6) and `llmhttp.py`'s
+  error taxonomy against a young library. Revisit only if `huggingface_hub` ever
+  drops `httpx`.
+- **The Dockerfile needed no change.** Every compiled distribution
+  (`cryptography`, `cffi`, `rpds-py`) has a prebuilt cp312 manylinux wheel and
+  `python:3.12-slim` is glibc 2.41, so no build dependencies were required. Added
+  wheel weight is 6.2 MB.
+- **Two gaps found by the review passes, both fixed on the epic branch:** CodeQL
+  did not run here at all (`codeql.yml` was `main`-only — #348), and nothing
+  audited `requirements.lock` for advisories, because GitHub's dependency graph
+  cannot read a `.lock` file (#349 adds a `pip-audit` job).
 
 ### Step 2b — what the SDK actually looks like in 2.0
 
@@ -597,18 +637,26 @@ server-side and Origin-based.
    internet-reachable authentication surface that spends money; the failure mode
    is a standing credential, not a wrong number. Fix what it finds in a PR on the
    branch.
-2. Merge `feat/mcp-server` into `main` via PR. All five checks green.
+2. Merge `feat/mcp-server` into `main` via PR. Every check green — that is now
+   eight CI jobs plus CodeQL, not the five this plan was written against.
 3. Check the code-scanning queue after the merge — findings never block a merge
    and sit silently in the Security tab:
    ```bash
    gh api "repos/toddawhittaker/ipeds-oracle/code-scanning/alerts?state=open" \
      --jq '.[] | "\(.number)\t\(.rule.security_severity_level)\t\(.rule.id)"'
    ```
-4. Write the `## v0.5.0` entry in `CHANGELOG.md`, seeded from
+4. **Regenerate `backend/requirements.lock` and let the audit re-run.** `httpx2`
+   2.12.0 was pinned one day after it was published (2026-08-18), on a library
+   first released 2026-05-11 — the newest release `pip-compile` could pick, where
+   `mcp` only requires `>=2.5.0`. Nothing in the app imports it, so its only live
+   exposure until now is the test harness; the tag is the point where that stops
+   being true enough to ignore. Regenerating here takes whatever has aged in the
+   intervening weeks and re-runs `pip-audit` over the result.
+5. Write the `## v0.5.0` entry in `CHANGELOG.md`, seeded from
    `git log --oneline v0.4.0..HEAD`. House structure: narrative prose first, then
    `###` theme sections, opening with `### Read this before upgrading` and
    closing with `### For developers`. The entry becomes the GitHub Release body.
-5. `git tag -a v0.5.0` on the merge commit, `git push --no-verify <remote> v0.5.0`,
+6. `git tag -a v0.5.0` on the merge commit, `git push --no-verify <remote> v0.5.0`,
    then `gh release create`. CI publishes `ghcr.io/toddawhittaker/ipeds-oracle:0.5.0`,
    `:0.5`, and `:latest`, with `APP_VERSION` baked from the tag.
 
