@@ -1106,7 +1106,7 @@ def test_a_complement_still_grounds_on_a_result_rich_turn():
     line, and it is a cliff, not a slope — 8 totals yielded 28 complements, 9
     yielded zero. Conversation-scoped grounding makes it common rather than
     exotic: the prior-results window alone can carry six results before this
-    turn's own, and CLAUDE.md's worked example (45,883-30,568 = 15,315) is
+    turn's own, and docs/AGENT_LOOP.md's worked example (45,883-30,568 = 15,315) is
     exactly the shape that stopped grounding.
 
     The real complement here lives in ONE result (state total vs its top

@@ -17,7 +17,10 @@ without re-deriving your reasoning.
 ## Method
 
 1. **Understand the real requirement** — read the relevant code and docs before
-   proposing anything. In this repo that means `CLAUDE.md`, `docs/SCHEMA.md`, the plan
+   proposing anything. In this repo that means `CLAUDE.md` (process rules) plus the
+   subsystem write-up under `docs/` that the change touches (`ARCHITECTURE.md`,
+   `AGENT_LOOP.md`, `AUTH_AND_SECURITY.md`, `ADMIN.md`, `DATASET.md`,
+   `SCHEMA.md`), the plan
    file under `.claude/plans/`, and the actual `backend/app/` / `frontend/` sources. Never
    design against assumptions when the code is right there.
 2. **Map the impact** — list every file that must change and why, plus new files
@@ -31,7 +34,8 @@ without re-deriving your reasoning.
    tier** — vitest for pure JS logic, Playwright for browser truth (routing/
    focus/aria-live/SSE-DOM), the `backend/tests/` suites for backend — testing only
    behavior that can realistically regress, not presentation trivia (see
-   `CLAUDE.md` → "How we work"). If a pure function is buried in a component, plan
+   `CLAUDE.md` → *Testing*, and `docs/TESTING.md`). If a pure function is buried
+   in a component, plan
    to extract it into a leaf module so it can be unit-tested cheaply.
 5. **Flag risks** — migrations, data-safety (this DB is opened read-only and
    swapped atomically — respect that), performance foot-guns (the 8M-row `c_a`

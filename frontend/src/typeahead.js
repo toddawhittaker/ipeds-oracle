@@ -2,7 +2,7 @@
 // typed while nothing editable has focus should land in the composer (the
 // ChatGPT/Claude convention), so a user never has to click the box before
 // asking. Deterministic input->output, so it lives here under vitest per
-// CLAUDE.md's test pyramid; Chat.jsx owns the DOM listener that feeds it.
+// docs/TESTING.md's test pyramid; Chat.jsx owns the DOM listener that feeds it.
 //
 // The contract (each clause guards a real misfire):
 //  - Only single printable characters. Named keys ("Enter", "Escape",

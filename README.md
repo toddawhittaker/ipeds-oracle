@@ -149,6 +149,13 @@ Admin → Usage integrity rates report. Details in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [Self-hosting](#self-hosting) below; the
 data model and query conventions are documented in [SCHEMA.md](docs/SCHEMA.md).
 
+How the pieces fit together is written up under `docs/`:
+[Architecture](docs/ARCHITECTURE.md) (layout, stack, the three SQLite stores),
+[The agent loop](docs/AGENT_LOOP.md) (guards, grounding, self-learning),
+[Auth & security](docs/AUTH_AND_SECURITY.md), [Admin areas](docs/ADMIN.md),
+[The dataset](docs/DATASET.md), [Testing and the gates](docs/TESTING.md), and
+[Releasing](docs/RELEASING.md).
+
 ## Self-hosting
 
 IPEDS Oracle runs as a single container (or a plain Python process). You bring
