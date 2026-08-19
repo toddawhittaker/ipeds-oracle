@@ -1,4 +1,4 @@
-"""Admin API: allowlist, access requests, data imports, usage, skills."""
+"""Admin API: allowlist, access requests, data imports, usage, skills, API keys."""
 from __future__ import annotations
 
 import logging
@@ -14,11 +14,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 import app.nces as nces
-from app import estimate, importer, lessoncats, skills
-from app.auth import canon_email, require_admin
+from app import apikeys, estimate, importer, lessoncats, skills
+from app.auth import canon_email, is_allowlisted, require_admin
 from app.config import get_settings, resolve_tz
 from app.db import connect
 from app.mailer import send_access_approved
+from app.routers.keys import MAX_LABEL_LEN
 
 log = logging.getLogger("ipeds.admin")
 
@@ -1517,3 +1518,54 @@ def mark_logs_seen(admin: sqlite3.Row = Depends(require_admin)):
     finally:
         con.close()
     return {"logs": 0}
+
+
+# --- API keys -----------------------------------------------------------------
+class AdminKeyCreate(BaseModel):
+    email: EmailStr
+    label: str | None = Field(default=None, max_length=MAX_LABEL_LEN)
+
+
+@router.get("/keys")
+def list_all_keys():
+    """Every API key with its owner's email. Never carries a hash or a secret."""
+    return apikeys.list_all()
+
+
+@router.post("/keys")
+def create_key_for(body: AdminKeyCreate, admin: sqlite3.Row = Depends(require_admin)):
+    """Mint a key on someone else's behalf.
+
+    The recipient must already be an allowlisted user with a `users` row, i.e.
+    someone who has signed in at least once — a key is a credential for an
+    existing account, not a way to create one, and apikeys.verify would refuse
+    a key whose owner is not allowlisted anyway.
+
+    `key` is returned exactly once and is never recoverable, so the admin has to
+    hand it to its owner out of band.
+    """
+    email = str(body.email).strip().lower()
+    con = connect()
+    try:
+        row = con.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        allowed = is_allowlisted(con, email)
+    finally:
+        con.close()
+    if row is None:
+        raise HTTPException(400, "That address has never signed in, so it has no "
+                                 "account to attach a key to.")
+    if not allowed:
+        raise HTTPException(400, "That address is not on the allowlist.")
+    raw, key_row = apikeys.mint(int(row["id"]), label=(body.label or "").strip() or None,
+                                created_by=admin["email"])
+    return {"key": raw, "id": key_row["id"], "last4": key_row["last4"],
+            "label": key_row["label"], "email": email,
+            "created_at": key_row["created_at"]}
+
+
+@router.delete("/keys/{key_id}")
+def revoke_any_key(key_id: int):
+    """Revoke anyone's key. Idempotent: revoking an already-revoked or unknown
+    key still reports ok, matching delete_skill's contract above."""
+    apikeys.revoke(key_id)
+    return {"ok": True}

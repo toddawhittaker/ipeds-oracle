@@ -18,7 +18,7 @@ from app.bodylimit import BodyLimitMiddleware
 from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
-from app.routers import admin, auth, chat
+from app.routers import admin, auth, chat, keys
 from app.secheaders import SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO,
@@ -190,6 +190,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(admin.router)
+app.include_router(keys.router)
 
 
 @app.get("/api/health")

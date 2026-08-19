@@ -830,6 +830,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       "table": "query_cache",
       "unique": 0
     },
+    "ix_api_keys_user": {
+      "columns": [
+        "user_id"
+      ],
+      "table": "api_keys",
+      "unique": 0
+    },
     "ix_conv_user": {
       "columns": [
         "user_id",
@@ -843,6 +850,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "created_at"
       ],
       "table": "lesson_rejections",
+      "unique": 0
+    },
+    "ix_mcp_attempts_created": {
+      "columns": [
+        "created_at"
+      ],
+      "table": "mcp_request_attempts",
       "unique": 0
     },
     "ix_msg_conv": {
@@ -955,6 +969,71 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "note",
         "TEXT",
         0,
+        null,
+        0
+      ]
+    ],
+    "api_keys": [
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_by",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "id",
+        "INTEGER",
+        0,
+        null,
+        1
+      ],
+      [
+        "key_hash",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "label",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "last4",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "last_used_at",
+        "REAL",
+        0,
+        null,
+        0
+      ],
+      [
+        "revoked_at",
+        "REAL",
+        0,
+        null,
+        0
+      ],
+      [
+        "user_id",
+        "INTEGER",
+        1,
         null,
         0
       ]
@@ -1198,6 +1277,22 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         "used_at",
         "REAL",
         0,
+        null,
+        0
+      ]
+    ],
+    "mcp_request_attempts": [
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "key_id",
+        "INTEGER",
+        1,
         null,
         0
       ]
@@ -1705,6 +1800,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       ],
       [
         "question",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "source",
         "TEXT",
         0,
         null,
