@@ -512,6 +512,54 @@ MIGRATIONS: list[tuple[int, str]] = [
     (36, "UPDATE usage_log SET figure_grounding='retry_suppressed' "
          "WHERE figure_grounding='ungrounded' "
          "AND figure_derivation='retry:suppressed';"),
+    # API keys for the MCP endpoint (v0.5.0). Three tables' worth of change,
+    # kept in one migration because none of it is useful without the rest.
+    #
+    # `api_keys` deliberately mirrors `sessions`: only the SHA-256 hash is
+    # stored, so a dump of app.db cannot be replayed as a credential, and the
+    # raw key exists exactly once — in the HTTP response that minted it. The
+    # input is 32 bytes from secrets.token_urlsafe, not a guessable password,
+    # so sha256 is the right primitive and a slow KDF would only add a cost to
+    # every MCP request while buying nothing against an attacker who cannot
+    # enumerate the space anyway.
+    #
+    # `last4` is for the UI. A user with three keys has to be able to tell
+    # which one they are revoking, and the label alone is not enough once
+    # someone names two keys "laptop". Four characters of a 43-character
+    # secret identifies without meaningfully narrowing a guess.
+    #
+    # Revocation sets `revoked_at` instead of deleting the row. A key that was
+    # used against the data and then withdrawn is exactly the thing an
+    # administrator needs to still be able to see afterwards.
+    #
+    # `mcp_request_attempts` mirrors `chat_request_attempts` (migration 28) so
+    # the per-key rate limiter can reuse the shape ratelimit.py already uses
+    # twice. No foreign key on key_id on purpose: the limiter writes on the
+    # request path and must not be able to fail a request because a key row
+    # was revoked and swept between the auth check and the insert.
+    #
+    # usage_log.source separates MCP spend from chat spend on Admin -> Usage.
+    # Nullable with no default so every historical row keeps reading as the
+    # chat traffic it actually was, rather than being retroactively relabelled.
+    (37, "CREATE TABLE api_keys (\n"
+         "    id           INTEGER PRIMARY KEY,\n"
+         "    user_id      INTEGER NOT NULL REFERENCES users(id),\n"
+         "    key_hash     TEXT NOT NULL UNIQUE,\n"
+         "    last4        TEXT NOT NULL,\n"
+         "    label        TEXT,\n"
+         "    created_at   REAL NOT NULL,\n"
+         "    created_by   TEXT,\n"
+         "    last_used_at REAL,\n"
+         "    revoked_at   REAL\n"
+         ");\n"
+         "CREATE INDEX ix_api_keys_user ON api_keys(user_id);\n"
+         "CREATE TABLE mcp_request_attempts (\n"
+         "    key_id     INTEGER NOT NULL,\n"
+         "    created_at REAL NOT NULL\n"
+         ");\n"
+         "CREATE INDEX ix_mcp_attempts_created "
+         "ON mcp_request_attempts(created_at);\n"
+         "ALTER TABLE usage_log ADD COLUMN source TEXT;"),
 ]
 
 
