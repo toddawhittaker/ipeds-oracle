@@ -44,9 +44,10 @@ permissions:
 # until it was cancelled and re-run.
 #
 # The values are ~5-8x each job's observed maximum over its last five green
-# runs (gitleaks 10s, lint 37s, semgrep 38s, vitest 48s, image 86s, backend
-# 149s, e2e 195s) — loose enough that a legitimately slow runner or a cold cache
-# still passes, tight enough that a hang fails in minutes instead of hours.
+# runs (gitleaks 10s, pip-audit 28s, lint 37s, semgrep 38s, vitest 48s, image
+# 86s, backend 149s, e2e 195s) — loose enough that a legitimately slow runner or
+# a cold cache still passes, tight enough that a hang fails in minutes instead of
+# hours.
 # Re-measure before tightening: a timeout that trips on a slow-but-working run
 # is worse than the stall, because it trains you to re-run red checks reflexively.
 jobs:
