@@ -14,6 +14,7 @@ embed a copy of its contents, and fail red until the change lands.
 Standalone script style (`sys.exit(1)` on failure, no API key), auto-discovered
 by `scripts/run_backend_suites.sh`'s `test_*.py` glob.
 """
+import fnmatch
 import re
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ DOCKERFILE = ROOT / "Dockerfile"
 ENTRYPOINT = ROOT / "scripts" / "docker-entrypoint.sh"
 COMPOSE = ROOT / "compose.yaml"
 ENV_EXAMPLE = ROOT / ".env.example"
+DOCKERIGNORE = ROOT / ".dockerignore"
 
 FAILURES = []
 
@@ -298,6 +300,72 @@ def test_env_example_documents_ipeds_uid_and_gid():
     )
 
 
+# ---------------------------------------------------------------------------
+# 5. Every file the Dockerfile COPYs is actually in the build context.
+# ---------------------------------------------------------------------------
+#
+# THE REGRESSION THIS CATCHES, which happened on the way in: `.dockerignore`
+# excludes `docs/*` and re-admits single files with `!docs/SCHEMA.md`. Adding
+# `COPY docs/DATASET.md` to the Dockerfile without the matching `!` line makes
+# the build fail outright — and NOTHING local catches it, because
+# `run_ci_local.sh` does not build the image. It surfaces only in CI's Docker
+# job, minutes after a push that looked green everywhere else.
+#
+# Deliberately narrow: it evaluates fnmatch against the exclusion patterns and
+# their `!` negations, not the whole of Docker's context-exclusion grammar. That
+# is enough for the one shape this file actually uses (exclude a directory,
+# re-admit named files), and a checker that tried to be complete would be
+# guessing at semantics nobody here relies on.
+
+_COPY_RE = re.compile(r"^COPY\s+(.*)$", re.IGNORECASE)
+
+
+def _dockerignore_rules(text: str) -> tuple[list[str], set[str]]:
+    """(exclusion patterns, negated paths), comments and blanks dropped."""
+    excludes, negations = [], set()
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("!"):
+            negations.add(s[1:].strip())
+        else:
+            excludes.append(s)
+    return excludes, negations
+
+
+def _copy_sources(text: str) -> list[str]:
+    """Every repo-relative source path a COPY instruction reads.
+
+    Skips `COPY --from=<stage>`, whose sources come from an earlier build stage
+    rather than from the context, and the destination (the last argument).
+    """
+    out = []
+    for line in text.splitlines():
+        m = _COPY_RE.match(line.strip())
+        if not m:
+            continue
+        args = m.group(1).split()
+        if any(a.startswith("--from=") for a in args):
+            continue
+        args = [a for a in args if not a.startswith("--")]
+        out.extend(args[:-1])
+    return out
+
+
+def test_every_dockerfile_copy_survives_dockerignore():
+    excludes, negations = _dockerignore_rules(DOCKERIGNORE.read_text())
+    for src in _copy_sources(DOCKERFILE.read_text()):
+        path = src.rstrip("/")
+        hit = next((p for p in excludes if fnmatch.fnmatch(path, p.rstrip("/"))), None)
+        if hit is None:
+            continue
+        assert path in negations, (
+            f"Dockerfile COPYs {src!r}, which .dockerignore excludes via {hit!r} "
+            f"and never re-admits — the image build fails on that COPY. Add "
+            f"`!{path}` to .dockerignore.")
+
+
 def run():
     print("Non-root container contracts (Dockerfile / entrypoint / compose / .env.example):")
     check("Dockerfile has at least one USER instruction",
@@ -318,6 +386,8 @@ def run():
           test_compose_sets_a_user_key_on_the_app_service)
     check(".env.example documents IPEDS_UID/IPEDS_GID",
           test_env_example_documents_ipeds_uid_and_gid)
+    check("every Dockerfile COPY source survives .dockerignore",
+          test_every_dockerfile_copy_survives_dockerignore)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

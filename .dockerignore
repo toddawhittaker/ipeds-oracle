@@ -10,9 +10,14 @@ data/
 output/
 frontend/node_modules
 frontend/dist
-# docs/ is excluded EXCEPT SCHEMA.md, which the image needs (system prompt).
+# docs/ is excluded EXCEPT the two guides the image needs: SCHEMA.md is the
+# system prompt's body, and both are served to MCP clients as resources
+# (backend/app/mcpsrv/resources.py). This list and the Dockerfile's COPY lines
+# have to agree — an un-excepted file makes the COPY fail the image build
+# outright, which is how this one was found.
 docs/*
 !docs/SCHEMA.md
+!docs/DATASET.md
 __pycache__/
 *.pyc
 .env
