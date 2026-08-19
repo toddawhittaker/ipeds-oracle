@@ -68,10 +68,14 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-smal
  && rm -rf "$HOME/.cache/huggingface/xet"
 USER root
 
-# App code + the loader + the schema guide (used as the system prompt).
+# App code + the loader + the two data guides. SCHEMA.md is the system prompt's
+# body; both are served to MCP clients as resources (backend/app/mcpsrv/
+# resources.py), so leaving DATASET.md out works locally and 404s in every
+# container build.
 COPY backend/app ./backend/app
 COPY scripts/ ./scripts/
 COPY docs/SCHEMA.md ./docs/SCHEMA.md
+COPY docs/DATASET.md ./docs/DATASET.md
 # Built SPA from stage 1.
 COPY --from=frontend /frontend/dist ./frontend/dist
 
