@@ -2200,7 +2200,7 @@ def test_message_less_turns_carry_no_done_event_fields():
 
 
 def test_live_and_reloaded_cell_counts_agree_for_an_ungrounded_turn():
-    """THE 0-vs-null divergence CLAUDE.md flags as the same bug class as the two
+    """THE 0-vs-null divergence docs/ARCHITECTURE.md flags as the same bug class as the two
     that already shipped: `_persist` NULLs table_cells_checked/matched whenever
     table_grounding is falsy (nothing was graded), but the `done` dict used to
     send AgentResult's raw int default (0) regardless of table_grounding. So an

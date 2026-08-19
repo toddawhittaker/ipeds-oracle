@@ -69,8 +69,11 @@ frontend/             React + Vite front end
     inflight.js       the app's one module-level store: turns still streaming,
                       kept outside React because Chat UNMOUNTS on /admin
   e2e/                Playwright specs (network-mocked)
-docs/               SCHEMA.md (data model + query guide), USER_GUIDE.md,
-                    ADMIN_GUIDE.md, AI_ASSISTED_ENGINEERING.md, images/
+docs/               SCHEMA.md (data model + query guide), DATASET.md,
+                    ARCHITECTURE.md, AGENT_LOOP.md, AUTH_AND_SECURITY.md,
+                    ADMIN.md (how the system works — CLAUDE.md is process only),
+                    USER_GUIDE.md, ADMIN_GUIDE.md, AI_ASSISTED_ENGINEERING.md,
+                    images/
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
 data/               source IPEDS{YYYY}{YY}.accdb (gitignored; online-only via NCES now)
 .github/workflows/  CI (lint · secrets · sast · backend · unit · e2e · image) +

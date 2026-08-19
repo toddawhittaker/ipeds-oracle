@@ -17,7 +17,10 @@ without re-deriving your reasoning.
 ## Method
 
 1. **Understand the real requirement** — read the relevant code and docs before
-   proposing anything. In this repo that means `CLAUDE.md`, `docs/SCHEMA.md`, the plan
+   proposing anything. In this repo that means `CLAUDE.md` (process rules) plus the
+   subsystem write-up under `docs/` that the change touches (`ARCHITECTURE.md`,
+   `AGENT_LOOP.md`, `AUTH_AND_SECURITY.md`, `ADMIN.md`, `DATASET.md`,
+   `SCHEMA.md`), the plan
    file under `.claude/plans/`, and the actual `backend/app/` / `frontend/` sources. Never
    design against assumptions when the code is right there.
 2. **Map the impact** — list every file that must change and why, plus new files

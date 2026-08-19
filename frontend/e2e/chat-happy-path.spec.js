@@ -139,7 +139,7 @@ test("every field on the done event reaches the LIVE turn, not just a reload",
       resultsTruncated: true,
       // Two things at once, both about mocks.js's new `doneExtra` escape
       // hatch rather than this dedicated per-field option list, which is
-      // itself the "FOURTH hand-enumerated site" CLAUDE.md flags:
+      // itself the "FOURTH hand-enumerated site" docs/ARCHITECTURE.md flags:
       //   1. table_cells_matched arrives with NO matching named mockStreamChat
       //      option used above — proving a spec can drive a real field through
       //      the generic hatch instead of needing yet another named parameter

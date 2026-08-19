@@ -75,7 +75,7 @@ Allowlist/Imports/Usage/Skills/Logs), `Markdown.jsx`
 - **Reflow (1.4.10) is not something axe measures.** The admin tables each have
   their own `.table-scroll` region with `min-width` on the table; the deliberate
   decision NOT to make those `tabIndex={0} role="region"` is recorded in
-  `CLAUDE.md` with its reasoning, so overrule it knowingly rather than as a
+  `docs/ARCHITECTURE.md` with its reasoning, so overrule it knowingly rather than as a
   fresh finding — and if you do, it needs a distinct accessible name and a case
   in `frontend/e2e/admin-table-reflow.spec.js`.
 - For each finding: the component + `file:line`, the WCAG criterion it violates,

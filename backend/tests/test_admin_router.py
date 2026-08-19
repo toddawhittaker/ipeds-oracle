@@ -1776,7 +1776,7 @@ def test_usage_response_has_no_recent_key():
         assert r.status_code == 200, r.text
         assert "recent" not in r.json(), \
             "the usage dashboard must not return a 'recent' key of verbatim " \
-            "question text (privacy leak; deliberately removed -- see CLAUDE.md)"
+            "question text (privacy leak; deliberately removed -- see docs/ADMIN.md)"
 
 
 def test_usage_dashboard_never_leaks_question_text():

@@ -4,7 +4,7 @@ The model can *never* mutate the database and can *never* hang a worker:
   * the connection is opened read-only + immutable, with PRAGMA query_only;
   * only a single SELECT / WITH statement is accepted (no DDL/DML/PRAGMA/ATTACH);
   * a watchdog thread calls connection.interrupt() after a timeout — this is the
-    programmatic equivalent of the CLAUDE.md `timeout 30 sqlite3 …` rule and
+    programmatic equivalent of the docs/DATASET.md `timeout 30 sqlite3 …` rule and
     defuses the known "recent-N-years JOIN full-scans c_a and hangs" foot-gun.
 """
 from __future__ import annotations
