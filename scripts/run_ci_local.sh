@@ -38,6 +38,53 @@ step() { printf '%s\n' "${BOLD}${YEL}==> $*${RST}"; }
 fail() { printf '%s\n' "${BOLD}${RED}CI FAILED: $*${RST}" >&2; exit 1; }
 
 # =========================================================================
+# Precondition — this venv installs what the lockfile says
+# =========================================================================
+# CI and the Dockerfile install backend/requirements.lock; this script runs from
+# .venv, and nothing kept the two in step. A stale venv therefore runs every
+# suite against DIFFERENT packages than CI and still prints "All CI checks
+# passed" -- a false green, which is worse than a red one because there is
+# nothing to look at.
+#
+# Not hypothetical: adding the mcp SDK (#347) put httpx2 in the lock, and
+# starlette/testclient.py imports httpx2 in preference to httpx. A venv predating
+# that merge silently runs all ~30 TestClient suites on the OLD client while
+# GitHub runs them on the new one.
+#
+# Only packages the lock names are compared, so anything else you have installed
+# is ignored. Bypass the whole gate with `git push --no-verify`.
+step "Precondition: .venv matches backend/requirements.lock"
+"$PY" - "$REPO_ROOT/backend/requirements.lock" <<'PYCHECK' || fail "venv does not match requirements.lock -- run: pip install -r backend/requirements.lock"
+import re
+import sys
+from importlib.metadata import distributions
+
+lock = sys.argv[1]
+
+
+def norm(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+pinned = {}
+for line in open(lock):
+    m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;]+)", line)
+    if m:
+        pinned[norm(m.group(1))] = m.group(2)
+
+have = {norm(d.metadata["Name"]): d.version for d in distributions() if d.metadata["Name"]}
+bad = [(n, v, have.get(n)) for n, v in sorted(pinned.items()) if have.get(n) != v]
+
+if bad:
+    print(f"{len(bad)} of {len(pinned)} locked packages do not match this environment:")
+    for name, want, got in bad[:10]:
+        print(f"  {name}: lock has {want}, installed {got or '(missing)'}")
+    if len(bad) > 10:
+        print(f"  ... and {len(bad) - 10} more")
+    sys.exit(1)
+PYCHECK
+
+# =========================================================================
 # Job 0 — secret scan (gitleaks) — matches CI's "Secret scan (gitleaks)" job
 # =========================================================================
 # Runs only if gitleaks is on PATH; CI enforces it unconditionally, so a missing

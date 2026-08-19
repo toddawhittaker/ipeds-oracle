@@ -170,8 +170,16 @@ regenerate that file against a moved base — #269/#273/#274 were combined into
 ## The local gate and static analysis
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (a **gitleaks** secret scan, a **semgrep** SAST pass, and a **pip-audit**
-dependency audit, each when the binary is on `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
+CI. It opens with a **precondition**: the packages `.venv` has installed must
+match every pin in `backend/requirements.lock`, which is what CI and the image
+install. Nothing else keeps those in step, and a stale venv runs every suite
+against different packages than CI while still printing "All CI checks passed" —
+the false green that adding the mcp SDK (#347) would otherwise have produced,
+since `starlette/testclient.py` picks `httpx2` over `httpx` when it is present.
+Only packages the lock names are compared, so anything else you install is
+ignored; the fix it prints is `pip install -r backend/requirements.lock`. Then
+the CI jobs themselves (a **gitleaks** secret scan, a **semgrep** SAST pass, and
+a **pip-audit** dependency audit, each when the binary is on `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
 **vitest** unit tests; the `backend/tests/` backend suites against a fixture DB;
 Playwright e2e — run against a **prebuilt static bundle**, `E2E_PREVIEW=1`, which
 is 3.4× faster over a full run than the dev server that re-transforms modules per
