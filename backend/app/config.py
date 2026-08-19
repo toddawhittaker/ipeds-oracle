@@ -261,6 +261,13 @@ class Settings(BaseSettings):
     # chat_rate_max_per_user DISABLES the limiter (tests + self-hosters can flip).
     chat_rate_window_seconds: float = Field(default=60.0)
     chat_rate_max_per_user: int = Field(default=30)
+    # Per-KEY throttle on the MCP endpoint (app/mcpsrv/), the same shape and the
+    # same reasoning as the chat limiter above: an MCP client is a script, and a
+    # script in a loop is the normal way one gets away from its author. Keyed on
+    # the api_keys row rather than on the user, so revoking one leaked key also
+    # ends its share of the budget. A non-positive max DISABLES the limiter.
+    mcp_rate_window_seconds: float = Field(default=60.0)
+    mcp_rate_max_per_key: int = Field(default=60)
     # How many trusted reverse proxies / tunnels sit in front of the app. The
     # per-IP rate limiter's real client IP comes from X-Forwarded-For, but that
     # header is attacker-controlled — a client can prepend a bogus left-most entry.

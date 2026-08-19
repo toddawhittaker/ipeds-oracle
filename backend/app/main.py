@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
 from app import version
 from app.auth import current_user
@@ -18,6 +19,8 @@ from app.bodylimit import BodyLimitMiddleware
 from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
+from app.mcpsrv import MCP_PATH, start_mcp
+from app.mcpsrv import endpoint as mcp_endpoint
 from app.routers import admin, auth, chat, keys
 from app.secheaders import SecurityHeadersMiddleware
 
@@ -155,8 +158,13 @@ async def lifespan(app: FastAPI):
             log.info("re-embedded %d skill(s) onto the headline+description embedding source", n)
     except Exception as e:  # noqa: BLE001
         log.warning("skill re-embed skipped: %s", e)
-    log.info("IPEDS Oracle API ready (db=%s)", get_settings().ipeds_db_path)
-    yield
+    # The MCP transport's session manager has to be started by SOMEBODY's
+    # lifespan, and Starlette never runs an adopted sub-app's — so it is started
+    # here, wrapping the yield, and torn down with the rest of the app. Until
+    # this runs, GET/POST /mcp answers 503 rather than failing inside the SDK.
+    async with start_mcp():
+        log.info("IPEDS Oracle API ready (db=%s)", get_settings().ipeds_db_path)
+        yield
 
 
 # docs_url/redoc_url/openapi_url are OFF. This is a private, allowlisted app,
@@ -204,6 +212,18 @@ def get_version(_=Depends(current_user)):
     only (the About dialog and Admin banner that consume it are both authed);
     the GitHub call is cached + fails open (see app/version.py)."""
     return version.version_info()
+
+
+# --- MCP endpoint -------------------------------------------------------------
+# Registered as a Route, never a Mount, and BEFORE the SPA block below. Two
+# reasons, and both fail silently:
+#   * Starlette compiles a Mount's pattern as `path + "/{path:path}"`, so
+#     `app.mount("/mcp", …)` does not match a bare `/mcp` at all.
+#   * Whatever /mcp does not match falls through to the catch-alls further down,
+#     where POST gets a 405 and GET gets served the React shell.
+# A Route whose endpoint is an ASGI instance rather than a function accepts every
+# method, which is what the transport needs.
+app.router.routes.append(Route(MCP_PATH, endpoint=mcp_endpoint))
 
 
 # --- Serve the built React app (production) -----------------------------------
