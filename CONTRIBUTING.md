@@ -72,6 +72,7 @@ frontend/             React + Vite front end
 docs/               SCHEMA.md (data model + query guide), DATASET.md,
                     ARCHITECTURE.md, AGENT_LOOP.md, AUTH_AND_SECURITY.md,
                     ADMIN.md (how the system works — CLAUDE.md is process only),
+                    TESTING.md (the tiers, the gates, the traps), RELEASING.md,
                     USER_GUIDE.md, ADMIN_GUIDE.md, AI_ASSISTED_ENGINEERING.md,
                     images/
 scripts/            build_ipeds_db.py, backups, CI fixture builder, run_ci_local.sh
@@ -561,6 +562,15 @@ orchestrator plus **architect**, **implementer**, **test‑engineer** (the only
 one that writes tests), **code‑reviewer**, **security‑reviewer**,
 **a11y‑reviewer**, **ui‑ux**, and **debugger**. They encode the conventions
 above; read their `.md` files for the rubrics each applies.
+
+**Use them selectively.** The routing test is design uncertainty or large blast
+radius, not "touches multiple files" — `CLAUDE.md` → *Choosing the path* is the
+governing statement. The chain's overhead (stalls, dropped inter‑agent messages,
+ceremony over trivia like a singular/plural string) costs more than the
+specialization saves on small work, so a well‑specified change goes inline with a
+review pass at the end, and follow‑on fixes to a shipped feature default to
+inline. The test‑engineer‑owns‑tests rule is team‑path only; inline, whoever
+writes the code writes its tests.
 
 **Keep them current.** A major architecture or infrastructure change — a new test
 tier, a new gate, a removed/renamed feature, a changed workflow rule — must sweep

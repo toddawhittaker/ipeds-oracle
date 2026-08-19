@@ -64,7 +64,7 @@ def _set_email_domain(domain):
     """Explicit, never ambient: EMAIL_DOMAIN="" (accept-any-domain) is the
     DEFAULT several tests below depend on. Popping the OS var would just
     fall through to whatever a real developer .env sets, which is exactly
-    the bleed run_ci_local.sh/ci_env.sh exist to prevent -- see CLAUDE.md's
+    the bleed run_ci_local.sh/ci_env.sh exist to prevent -- see docs/TESTING.md's
     "Test-env gotcha". An explicit "" always wins."""
     os.environ["EMAIL_DOMAIN"] = domain or ""
     get_settings.cache_clear()

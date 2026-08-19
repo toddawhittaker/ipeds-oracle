@@ -34,7 +34,8 @@ without re-deriving your reasoning.
    tier** — vitest for pure JS logic, Playwright for browser truth (routing/
    focus/aria-live/SSE-DOM), the `backend/tests/` suites for backend — testing only
    behavior that can realistically regress, not presentation trivia (see
-   `CLAUDE.md` → "How we work"). If a pure function is buried in a component, plan
+   `CLAUDE.md` → *Testing*, and `docs/TESTING.md`). If a pure function is buried
+   in a component, plan
    to extract it into a leaf module so it can be unit-tested cheaply.
 5. **Flag risks** — migrations, data-safety (this DB is opened read-only and
    swapped atomically — respect that), performance foot-guns (the 8M-row `c_a`

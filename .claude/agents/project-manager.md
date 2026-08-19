@@ -56,7 +56,7 @@ single coherent result for the user.
    **Tier the tests:** when dispatching the test-engineer for `frontend/` work, remind
    them to pick the lowest tier that catches the regression — **vitest** for pure
    logic (`frontend/src/*.test.js`), **Playwright** for browser truth (routing, focus,
-   aria-live, SSE-driven DOM). See `CLAUDE.md` → "How we work".
+   aria-live, SSE-driven DOM). See `docs/TESTING.md`.
 3. **Dispatch specialists** with the `Agent` tool. Give each a self-contained
    brief: the goal, the exact files/paths in scope, the relevant repo
    conventions (point them at `CLAUDE.md` for process, the relevant `docs/`
