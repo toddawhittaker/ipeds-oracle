@@ -22,7 +22,7 @@ const gatedModules = readdirSync("src", { recursive: true })
   .map((f) => `src/${f.replace(/\.test\.js$/, ".js")}`)
   .sort();
 
-// Vitest — the FAST unit tier for pure logic (see CLAUDE.md "How we work" -> the
+// Vitest — the FAST unit tier for pure logic (see docs/TESTING.md -> the
 // test pyramid). Genuine browser truth (routing, focus, aria-live/AT, back/
 // forward, SSE-driven DOM) lives in web/e2e/ under Playwright; jsdom's focus and
 // history models are NOT the browser's, so anything that leans on them belongs

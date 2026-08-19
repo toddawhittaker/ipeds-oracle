@@ -20,7 +20,7 @@ const CONVERSATION_ID_FIELD = "conversation_id";
 // Forward buttons behave like a normal multi-page app:
 //   /            -> Chat, empty new-chat screen
 //   /chat/:id    -> Chat with that conversation loaded
-// See CLAUDE.md / the SPA-routing spec this suite pins. Written before the
+// See docs/ARCHITECTURE.md / the SPA-routing spec this suite pins. Written before the
 // feature exists (TDD) -- these specs are expected to be RED against the
 // current (routerless) App.jsx.
 

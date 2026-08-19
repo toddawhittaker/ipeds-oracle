@@ -64,7 +64,7 @@ def _set_email_domain(domain):
     """Explicit, never ambient: EMAIL_DOMAIN="" (accept-any-domain) is the
     DEFAULT several tests below depend on. Popping the OS var would just
     fall through to whatever a real developer .env sets, which is exactly
-    the bleed run_ci_local.sh/ci_env.sh exist to prevent -- see CLAUDE.md's
+    the bleed run_ci_local.sh/ci_env.sh exist to prevent -- see docs/TESTING.md's
     "Test-env gotcha". An explicit "" always wins."""
     os.environ["EMAIL_DOMAIN"] = domain or ""
     get_settings.cache_clear()
@@ -1776,7 +1776,7 @@ def test_usage_response_has_no_recent_key():
         assert r.status_code == 200, r.text
         assert "recent" not in r.json(), \
             "the usage dashboard must not return a 'recent' key of verbatim " \
-            "question text (privacy leak; deliberately removed -- see CLAUDE.md)"
+            "question text (privacy leak; deliberately removed -- see docs/ADMIN.md)"
 
 
 def test_usage_dashboard_never_leaks_question_text():

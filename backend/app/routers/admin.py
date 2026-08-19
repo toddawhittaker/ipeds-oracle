@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"],
 # Shared cap for every /*/bulk* endpoint below (see the "BULK OPERATIONS"
 # section) -- a plain module constant, not a setting, since it's an
 # implementation safety limit rather than deployment-tunable config (so
-# ci_env.sh needs no new entry -- see CLAUDE.md's test-env-gotcha rule).
+# ci_env.sh needs no new entry -- see docs/TESTING.md's test-env-bleed note).
 BULK_MAX_ITEMS = 1000
 
 

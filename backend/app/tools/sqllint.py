@@ -1,7 +1,7 @@
 """Deterministic pre-flight lint for model-generated IPEDS SQL.
 
-These are the project-specific aggregation foot-guns documented in SCHEMA.md /
-CLAUDE.md that a general-purpose LLM gets wrong and that no amount of few-shot
+These are the project-specific aggregation foot-guns documented in docs/SCHEMA.md
+/ docs/DATASET.md that a general-purpose LLM gets wrong and that no amount of few-shot
 priming reliably prevents:
 
   * CIP-rollup double counting — c_a stores 2-/4-/6-digit cipcode rows PLUS a
