@@ -522,10 +522,11 @@ combine them into one PR rather than merging serially.
 
 ## CI & the contribution workflow
 
-`.github/workflows/ci.yml` runs on every PR and push to `main`, with seven jobs:
+`.github/workflows/ci.yml` runs on every PR and push to `main`, with eight jobs:
 **lint** (ruff + ESLint), **secrets** (gitleaks over full history), **sast**
 (semgrep — `p/python` · `p/security-audit` · `p/javascript` plus repo-local
-`.semgrep/` rules), **backend** (all the `backend/tests/test_*` suites against a
+`.semgrep/` rules), **deps** (pip-audit over `backend/requirements.lock`),
+**backend** (all the `backend/tests/test_*` suites against a
 fixture DB), **unit** (vitest — the fast pure-logic tier, with the JS coverage
 floor), **e2e** (Playwright, network‑mocked), and **image** (builds the Docker
 image, boots it, and curls `/api/health` as a smoke test). A separate **CodeQL**
