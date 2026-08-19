@@ -694,7 +694,7 @@ def test_migration_10_adds_expression_index_used_by_is_denied():
         f"expected a NEW expression index idx_access_requests_canon_expr "
         f"among {idx_after}")
     # Migration 9's plain-column index must NOT be dropped/renamed -- never
-    # edit a shipped migration (CLAUDE.md / MIGRATIONS' own header comment).
+    # edit a shipped migration (docs/ARCHITECTURE.md / MIGRATIONS' own header comment).
     assert "idx_access_requests_canon_email" in idx_after, idx_after
 
     # Re-applying against an already-migrated db must be a safe no-op.

@@ -3,8 +3,9 @@
 // tables). The stateful React side (useTableSelection.js, DataTable.jsx's
 // checkbox column, BulkBar.jsx) is Playwright-covered
 // (frontend/e2e/admin-bulk-actions.spec.js); everything here is deterministic
-// input->output string/counting logic, so it belongs in vitest per CLAUDE.md's
-// test pyramid. The exact input->output behaviour is pinned by selection.test.js.
+// input->output string/counting logic, so it belongs in vitest per
+// docs/TESTING.md's test pyramid. The exact input->output behaviour is
+// pinned by selection.test.js.
 //
 // SELECTION MODEL (see the architect's plan): a selection is
 // `{ mode: "explicit" | "all", selectedIds: Set }`.

@@ -712,7 +712,7 @@ _MAX_CROSS_TOTALS = 12
 # share and its complement are most likely. Measured on the retained corpus:
 # 20% of turns with results (17 of 84) were over that line — conversation-scoped
 # grounding makes it common, since the prior-results window alone can carry six
-# results before this turn's own. CLAUDE.md's own worked example
+# results before this turn's own. docs/AGENT_LOOP.md's own worked example
 # (45,883-30,568 = 15,315) is the shape that stopped grounding.
 #
 # The ceiling is SMALL, and that is measured, not cautious. Sweeping it on the

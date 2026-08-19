@@ -262,7 +262,7 @@ export async function mockRenameConversation(page, id, { httpStatus = 200 } = {}
  * AFTER every named option above, so a spec can put an arbitrary field on the
  * live `done` frame (e.g. a brand-new server field this mock has no named
  * option for yet) without this function growing a new option/spread pair for
- * every one — the same hand-enumeration shape CLAUDE.md names as the bug
+ * every one — the same hand-enumeration shape docs/ARCHITECTURE.md names as the bug
  * class this whole feature exists to close, reproduced here in the mock
  * layer if left to grow indefinitely. Named options above still win on a key
  * collision (doneExtra is spread first, then the named fields), so existing

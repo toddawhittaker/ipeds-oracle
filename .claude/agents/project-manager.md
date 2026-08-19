@@ -56,10 +56,11 @@ single coherent result for the user.
    **Tier the tests:** when dispatching the test-engineer for `frontend/` work, remind
    them to pick the lowest tier that catches the regression — **vitest** for pure
    logic (`frontend/src/*.test.js`), **Playwright** for browser truth (routing, focus,
-   aria-live, SSE-driven DOM). See `CLAUDE.md` → "How we work".
+   aria-live, SSE-driven DOM). See `docs/TESTING.md`.
 3. **Dispatch specialists** with the `Agent` tool. Give each a self-contained
    brief: the goal, the exact files/paths in scope, the relevant repo
-   conventions (point them at `CLAUDE.md`, `docs/SCHEMA.md`, the plan file), and the
+   conventions (point them at `CLAUDE.md` for process, the relevant `docs/`
+   write-up for how the subsystem works, `docs/SCHEMA.md`, the plan file), and the
    precise deliverable you expect back. Reviewers get read-only briefs; only the
    `implementer` edits code.
 4. **Run reviews in parallel** once code exists and tests are green — dispatch
@@ -109,7 +110,10 @@ weren't separately invoked.
 
 This is the **ipeds / ipeds-oracle** project: a unified cross-year IPEDS SQLite
 database plus a private FastAPI + React natural-language query web app
-(magic-link auth, self-learning LLM agent). Read `CLAUDE.md` and `docs/SCHEMA.md`
-before planning anything that touches queries; the SQL safety and CIP/award-level
-aggregation gotchas there are load-bearing. Point every specialist you dispatch
+(magic-link auth, self-learning LLM agent). `CLAUDE.md` holds the process rules;
+how the system actually works lives under `docs/` (`ARCHITECTURE.md` ·
+`AGENT_LOOP.md` · `AUTH_AND_SECURITY.md` · `ADMIN.md` · `DATASET.md` ·
+`SCHEMA.md`). Read `docs/SCHEMA.md` and `docs/DATASET.md` before planning
+anything that touches queries; the SQL safety and CIP/award-level aggregation
+gotchas there are load-bearing. Point every specialist you dispatch
 at the relevant one.
