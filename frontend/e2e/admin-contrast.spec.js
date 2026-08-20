@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { contrastRatio, nonTextContrast } from "./contrast.js";
+import { borderContrast, contrastRatio, nonTextContrast } from "./contrast.js";
 import {
   mockMe, mockConversations, mockAttention, mockMarkLogsSeen,
   mockAllowlist, mockAccessRequests, mockDeniedRequests, mockSkills, mockLogs,
@@ -98,4 +98,49 @@ for (const theme of ["light", "dark"]) {
           .toBeGreaterThanOrEqual(3);
       });
   }
+
+  test(`form control borders are findable in the ${theme} theme`, async ({ page }) => {
+    // WCAG 1.4.11: the border IS the affordance on an empty text field and on
+    // the outline buttons, which carry no fill of their own. They all used
+    // --line, a 1.2-1.3:1 hairline -- measured 1.33:1 on --panel in light and
+    // as low as 1.14:1 on --panel-2 in dark. --line is deliberately that soft,
+    // because it is also every table rule and panel edge in the app, so the fix
+    // was a second token (--line-control) rather than darkening the first.
+    //
+    // These four are representatives of the ~19 rules that moved: an input, a
+    // select, an outline button, and the search field. They share the token, so
+    // one retune below 3:1 reddens all of them; each also catches its own rule
+    // being pointed back at --line. Nothing else covers this -- axe has no
+    // 1.4.11 rule.
+    await page.emulateMedia({ colorScheme: theme });
+    await adminMocks(page);
+    await page.goto("/admin/usage");
+
+    const measured = [];
+    const measure = async (sel, name) => {
+      await expect(page.locator(sel).first()).toBeVisible();
+      const ratio = await borderContrast(page, sel);
+      measured.push(name);
+      expect(ratio, `${name} border measured ${ratio?.toFixed(2)}:1 in ${theme}`)
+        .toBeGreaterThanOrEqual(3);
+    };
+
+    await measure(".usage-range button", "outline button");
+    // Custom reveals a real <input>, the headline case: on an EMPTY field the
+    // border is the only thing saying a control is there at all.
+    await page.getByRole("button", { name: "Custom" }).click();
+    await measure(".usage-custom input", "date input");
+
+    // mockLogs BEFORE navigating: the search field renders with the log view,
+    // and leaving /api/admin/logs unrouted makes its appearance depend on how a
+    // dead request resolves. That is a flaky test, not a fast one -- this
+    // assertion passed three runs in a row before the missing mock was spotted.
+    await mockLogs(page, RECORDS);
+    await page.goto("/admin/logs");
+    await measure(".searchwrap .logsearch", "search field");
+
+    // Named rather than counted, so a selector that silently stops matching
+    // shows up as a missing name instead of a quietly smaller number.
+    expect(measured).toEqual(["outline button", "date input", "search field"]);
+  });
 }
