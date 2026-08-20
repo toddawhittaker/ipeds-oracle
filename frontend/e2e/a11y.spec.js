@@ -526,6 +526,24 @@ test.describe("axe smoke scan", () => {
     expect(found, JSON.stringify(found, null, 2)).toEqual([]);
   });
 
+  test("the one-shot key reveal has no critical or serious violations",
+    async ({ page }) => {
+      // Every scan below catches its page at REST. The reveal dialog is the one
+      // screen in a key's whole life where the secret is visible, it exists only
+      // for the moment after a mint, and no scan had ever seen it — the same
+      // shape of blind spot that made widening this loop find two `serious`
+      // violations on main.
+      await mockMe(page, { email: "user@example.edu", is_admin: false });
+      await mockConversations(page, []);
+      await mockApiKeys(page, []);
+      await page.goto("/keys");
+      await page.getByRole("button", { name: "Create key" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
   for (const [path, ready, content] of [
     ["/admin/users/current", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
     ["/admin/users/pending", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],

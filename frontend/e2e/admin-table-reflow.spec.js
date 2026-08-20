@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   mockMe, mockConversations, mockAllowlist, mockAccessRequests, mockDeniedRequests,
-  mockAttention, mockMarkLogsSeen, mockUsage,
+  mockAttention, mockMarkLogsSeen, mockUsage, mockAdminKeys,
 } from "./mocks.js";
 
 // WCAG 1.4.10 Reflow, for the admin tables.
@@ -149,6 +149,43 @@ test.describe("admin tables reflow into their own scroll region", () => {
       expect(await region.getAttribute("aria-label"))
         .not.toBe(await page.getByRole("table", { name: "Top users" })
           .getAttribute("aria-label"));
+    });
+
+  test("the Keys table DOES get a region, because one of its columns is unsortable",
+    async ({ page }) => {
+      // The other side of the derivation, and the first consumer ever to ship
+      // it. `needsScrollRegion` (datatable-region.js) returns true when any
+      // column is unsortable, because that column's header has no button — so a
+      // table with an unsortable column is NOT fully keyboard-reachable through
+      // its own contents, and the wrapper has to be a tab stop. Admin -> Keys
+      // declares `last4` unsortable (there is no sensible order for four
+      // characters of a hash), so it takes the true branch that the three
+      // Allowlist tables never do. Until this test the branch had no browser
+      // coverage at all, and `docs/ARCHITECTURE.md` still described it as a
+      // decision NOT to render a region.
+      await mockMe(page, ADMIN);
+      await mockConversations(page, []);
+      await mockAttention(page, { users: 0, skills: 0, logs: 0 });
+      await mockMarkLogsSeen(page);
+      await mockAdminKeys(page, [{
+        id: 1, email: "someone@example.edu", label: "laptop", last4: "9f2a",
+        created_at: 1_700_000_000, last_used_at: null, revoked_at: null,
+      }]);
+      await page.goto("/admin/keys");
+
+      const region = page.getByRole("region", { name: /API keys/ });
+      await expect(region).toBeVisible();
+      await region.focus();
+      await expect(region).toBeFocused();
+      // The region's name must differ from the table's, or a screen reader
+      // announces "API keys" twice on the way in.
+      expect(await region.getAttribute("aria-label"))
+        .not.toBe(await page.getByRole("table", { name: "API keys" })
+          .getAttribute("aria-label"));
+      // And at 1280 it must not actually scroll — a region that always shows a
+      // scrollbar is the failure mode this file's other half exists to catch.
+      const geo = await region.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(geo.scroll).toBe(geo.client);
     });
 
   test("a table whose rows are already keyboard-reachable gets NO extra tab stop",

@@ -1781,5 +1781,44 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
 }
 /* break-all, not break-word: the key is one unbroken token with no spaces, so
-   anything softer overflows the dialog instead of wrapping. */
-.keyreveal-secret { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; word-break: break-all; }
+   anything softer overflows the dialog instead of wrapping. It is a READONLY
+   INPUT (so it can be selected without a mouse — see KeyReveal.jsx), stripped of
+   the input chrome it would otherwise bring into a box that already has a
+   border. `width: 100%` with the flex parent's min-width: 0 keeps a 43-character
+   value from pushing the box wide. */
+.keyreveal-secret {
+  flex: 1; min-width: 0; width: 100%; font-family: var(--mono); font-size: 13px;
+  word-break: break-all; border: 0; background: none; color: inherit; padding: 0;
+  text-overflow: ellipsis;
+}
+.keyreveal-secret:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* The copy button holds "Copied" until the dialog closes, so this is a resting
+   state rather than a flash: --ok is the app's success token, and the label and
+   the check icon carry the meaning without it. */
+.modal-confirm.copied { background: var(--ok); }
+/* An ACTIVE key says so. An empty cell under a column headed "Status" reads as
+   data that failed to load. Same pill as Revoked, in the text colour, so the two
+   differ by word and weight rather than by colour alone. */
+.keyrow-state.active { color: var(--text); }
+
+/* "Connecting a client" on /keys: the endpoint the docs cannot print, because
+   only the running app knows its own host. */
+.keys-connect-head { font-size: 15px; margin: 22px 0 6px; }
+/* The app styles links per container (.modal-body a, .about-version a, …) and
+   has no global rule, so a bare <a> here rendered as the UA's #0000ee — 1.77:1
+   on the dark panel, which the axe gate failed on sight. Same token pair as
+   every other link in the app. */
+.keys-connect a, .keys-connect a:visited { color: var(--accent); text-decoration: underline; }
+.keys-connect a:hover { color: var(--accent-d); }
+.endpoint-row {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0 0;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+}
+.endpoint-row code { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+/* pre, so the line continuations survive; the scroll region is its own, because
+   a long host must not widen the page (WCAG 1.4.10). */
+.codeblock {
+  margin: 10px 0 0; padding: 10px 12px; overflow-x: auto; white-space: pre;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+}

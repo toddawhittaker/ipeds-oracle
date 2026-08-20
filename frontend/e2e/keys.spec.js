@@ -55,7 +55,7 @@ test("minting shows the raw key once, and a reload cannot get it back", async ({
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByTestId("revealed-key")).toHaveText(secret);
+  await expect(dialog.getByTestId("revealed-key")).toHaveValue(secret);
   expect(api.mints).toEqual(["CI runner"]);
 
   await dialog.getByRole("button", { name: "Done" }).click();
@@ -72,16 +72,21 @@ test("minting shows the raw key once, and a reload cannot get it back", async ({
   await expect(page.getByText(secret)).toHaveCount(0);
 });
 
-test("the reveal dialog traps focus and returns it to the page on Done", async ({ page }) => {
+test("the reveal dialog opens on Copy, traps focus, and returns it on Done", async ({ page }) => {
   await openKeys(page, []);
   const create = page.getByRole("button", { name: "Create key" });
   await create.click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toHaveAttribute("aria-modal", "true");
-  // Focus lands inside the dialog, not on the button that is now behind an
-  // inert background.
-  await expect(dialog.getByRole("button", { name: "Done" })).toBeFocused();
+  // Focus lands on COPY, not on Done. The regression this replaces: the dialog
+  // opened with the dismiss button focused, so a user who submitted the mint
+  // form with Enter and pressed Enter again — the ordinary reflex when a request
+  // feels slow — destroyed the one and only copy of an unrecoverable credential.
+  // Asserting the FOCUSED button's name is the whole point; "a button is
+  // focused" would have passed before and after.
+  await expect(dialog.getByRole("button", { name: "Copy key" })).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Done" })).toBeVisible();
   // The background really is inert, so nothing behind it is reachable.
   await expect(page.locator(".app")).toHaveAttribute("inert", "");
 
@@ -177,20 +182,48 @@ test("the copy button reaches the clipboard through the non-secure-context fallb
 
     await page.getByRole("button", { name: "Create key" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: "Copy API key" }).click();
+    await dialog.getByRole("button", { name: "Copy key" }).click();
 
     expect(await page.evaluate(() => globalThis.__copied)).toEqual([secret]);
-    // Announced, not only shown: the icon swap is silent to a screen reader and
-    // there is no toast on the success path.
+    // Announced, not only shown: the button's own label change is not reliably
+    // announced and there is no toast on the success path.
     await expect(dialog.locator("[aria-live=polite]")).toHaveText("API key copied.");
+    // And the confirmation HOLDS. It used to revert after 1.4s, so by the moment
+    // the user reached for Done the dialog showed no evidence the copy had ever
+    // happened — on the one screen where "did I get it?" is the only question
+    // that matters. 2s is past the old timer with margin; a timer that came back
+    // shorter would still be caught by the wait, and one that came back longer
+    // is a different bug this test would not claim to catch.
+    await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
+    await page.waitForTimeout(2000);
+    await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
   });
+
+test("a keyboard user can select the key when the clipboard is refused", async ({ page }) => {
+  // The documented self-host case is plain http on a LAN, where
+  // navigator.clipboard does not exist and execCommand can be refused. The
+  // failure toast tells the user to "select the text and copy it manually" —
+  // which was impossible without a mouse, because the value was a <code>. It is
+  // a readonly input now: a tab stop that selects itself on focus.
+  await stubClipboard(page, { succeed: false });
+  await openKeys(page, [], { secret: "ipeds_mcp_selectable-by-keyboard-abcd" });
+  await page.getByRole("button", { name: "Create key" }).click();
+
+  const dialog = page.getByRole("dialog");
+  const field = dialog.getByTestId("revealed-key");
+  await field.focus();
+  await expect(field).toBeFocused();
+  const selected = await field.evaluate(
+    (el) => el.value.slice(el.selectionStart, el.selectionEnd));
+  expect(selected).toBe("ipeds_mcp_selectable-by-keyboard-abcd");
+});
 
 test("a refused copy says so instead of silently failing", async ({ page }) => {
   await stubClipboard(page, { succeed: false });
   await openKeys(page, []);
 
   await page.getByRole("button", { name: "Create key" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Copy API key" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Copy key" }).click();
 
   // The wording names the escape hatch — select the text by hand — because the
   // dialog is the only place this value will ever appear.
