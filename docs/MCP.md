@@ -209,10 +209,11 @@ locked by a concurrent writer the row is lost and logged rather than taking the
 finished answer down with it. Spend stays *bounded* either way, because the
 per-user rate limiter is charged first.
 
-`source` is written, but nothing reads it yet: Admin → Usage shows MCP turns in
-its totals alongside chat and has no control to separate them. Splitting the two
-doors on that screen is filed as follow-up work; until then the separation is a
-SQL query away, not a click. See `docs/ADMIN.md`.
+`source` is what separates these turns from chat on Admin → Usage: its **Source**
+filter (All / Web chat / MCP) narrows the totals, the chart and the Top users
+table to one door, so a runaway script on this endpoint is distinguishable from
+web traffic rather than blended into one number. Unfiltered, an `ask` turn still
+counts in every total, because it is a full-price turn. See `docs/ADMIN.md`.
 
 ## Rate limits and spend
 

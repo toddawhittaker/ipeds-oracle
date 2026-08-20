@@ -183,8 +183,32 @@ export async function mockConversations(page, initial = []) {
     queries.push(q);
     const want = terms(q);
     const hay = (c) => `${c.title || ""} ${c.body || ""}`.toLowerCase();
+    // Mirrors app/search.py snippet_for: while searching, each row carries a
+    // one-line extract around the EARLIEST match on any term, and while
+    // browsing it carries no `snippet` key at all. A fixture that always
+    // supplied one could not express the difference, so a spec asserting the
+    // line disappears when the search clears would pass against a UI that
+    // never removes it.
+    // Lopsided like app/search.py's SNIPPET_LEAD/SNIPPET_TRAIL, for the reason
+    // given there: the row clips at one line, so a centred match is not shown.
+    const LEAD = 16, TRAIL = 96;
+    const snippetOf = (c) => {
+      const text = (c.body || "").replace(/\s+/g, " ").trim();
+      let at = -1;
+      for (const term of want) {
+        const i = text.toLowerCase().indexOf(term);
+        if (i !== -1 && (at === -1 || i < at)) at = i;
+      }
+      if (at === -1) return null;
+      const term = want.find((t) => text.toLowerCase().indexOf(t) === at);
+      const left = Math.max(0, at - LEAD);
+      const right = Math.min(text.length, at + term.length + TRAIL);
+      return (left > 0 ? "\u2026" : "") + text.slice(left, right)
+        + (right < text.length ? "\u2026" : "");
+    };
     const body = want.length
       ? list.filter((c) => want.every((term) => hay(c).includes(term)))
+        .map((c) => ({ ...c, snippet: snippetOf(c) }))
       : list;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });

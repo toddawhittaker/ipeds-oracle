@@ -95,3 +95,43 @@ export async function contrastRatio(page, selector) {
     return (hi + 0.05) / (lo + 0.05);
   }, selector);
 }
+
+// Non-text contrast (WCAG 1.4.11) for a control whose BORDER is its boundary —
+// text inputs, selects, and the outline buttons that carry no fill. Measured
+// against the nearest opaque backdrop ABOVE the control, i.e. the surface it
+// sits on, because that is the edge the eye has to find. An empty text field
+// whose border does not clear 3:1 is genuinely hard to locate, which is the
+// whole point of the criterion.
+//
+// Like the helpers above this reads RESOLVED pixels rather than asserting a
+// colour literal, so retuning the palette keeps the test honest instead of
+// breaking it. axe has no 1.4.11 rule at all, so nothing else covers this.
+export async function borderContrast(page, selector) {
+  return page.evaluate((sel) => {
+    const el = globalThis.document.querySelector(sel);
+    if (!el) return null;
+    const channels = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+    const luminance = (rgb) => {
+      const [r, g, b] = rgb.map((v) => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opaque = (s) => s && s !== "transparent" && !/rgba\([^)]*,\s*0\s*\)$/.test(s);
+    const cs = globalThis.getComputedStyle(el);
+    // A zero-width border paints nothing, so a control that "has" a border
+    // colour but no border is not bounded at all — report null rather than a
+    // flattering ratio for a line the user cannot see.
+    if (parseFloat(cs.borderTopWidth) === 0) return null;
+    let bg = null;
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const c = globalThis.getComputedStyle(n).backgroundColor;
+      if (opaque(c)) { bg = channels(c); break; }
+    }
+    if (!bg) return null;
+    const [hi, lo] = [luminance(channels(cs.borderTopColor)), luminance(bg)]
+      .sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  }, selector);
+}

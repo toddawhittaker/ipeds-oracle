@@ -95,3 +95,65 @@ def like_pattern(term: str) -> str:
     """
     escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
+
+
+# Context around the matched text in a search snippet, and it is deliberately
+# LOPSIDED. The obvious shape -- centre the match, equal radius either side --
+# renders wrong in the only place this is shown: the sidebar row clips at one
+# line, roughly 40 characters at a default width, so a centred match sits past
+# the ellipsis and the snippet displays pure lead-in. The word the reader
+# searched for is the one thing guaranteed off screen, which is the bug this
+# feature exists to fix, wearing a fix's clothes.
+#
+# So: a short run-up for grammatical context, then the match, then as much
+# trailing text as is useful at a widened sidebar. Caught by looking at a
+# screenshot; every test still passed, because "contains the term" is true of a
+# string whose visible half does not.
+SNIPPET_LEAD = 16
+SNIPPET_TRAIL = 96
+
+
+def snippet_for(content: str | None, terms: list[str]) -> str | None:
+    """A one-line extract of `content` around its first match on any of `terms`.
+
+    Exists because a search hit whose TITLE contains none of the typed words is
+    unexplained: the row is in the list, the person cannot see why, and the only
+    way to find out is to open it. The snippet is the why.
+
+    Whitespace is collapsed FIRST, then the match is located, so the lead and
+    trail count characters the reader will actually see. Message content is Markdown
+    and an answer may match inside a table or a fenced block, where the raw text
+    is mostly newlines and pipes; collapsing turns that into one legible line.
+    The Markdown syntax itself is deliberately left alone -- stripping it
+    properly means parsing it, and a stray `**` reads as noise where a wrong
+    strip would read as a different sentence.
+
+    Returns None when no term appears, which is not an error: with the search
+    ANDing its terms, a conversation can match entirely on its title and have no
+    message worth quoting. The caller shows the title alone in that case.
+    """
+    if not content or not terms:
+        return None
+    text = " ".join(content.split())
+    hay = text.lower()
+    # The EARLIEST match across all terms, so the snippet shows the first place
+    # this conversation answers to the search rather than whichever term the
+    # caller happened to list first.
+    best: tuple[int, int] | None = None
+    for term in terms:
+        i = hay.find(term.lower())
+        if i != -1 and (best is None or i < best[0]):
+            best = (i, i + len(term))
+    if best is None:
+        return None
+    start, end = best
+    left = max(0, start - SNIPPET_LEAD)
+    right = min(len(text), end + SNIPPET_TRAIL)
+    out = text[left:right]
+    # A leading/trailing ellipsis says the quote is cut, so a mid-sentence
+    # fragment does not read as the whole of what was said.
+    if left > 0:
+        out = "\u2026" + out
+    if right < len(text):
+        out = out + "\u2026"
+    return out

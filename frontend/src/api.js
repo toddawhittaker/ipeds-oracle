@@ -146,10 +146,14 @@ export const api = {
     j("DELETE", `/api/admin/access-requests/${encodeURIComponent(email)}/denial`),
   bulkClearDenials: (ids) =>
     j("POST", "/api/admin/access-requests/denial/bulk", { action: "unblock", ids }),
-  usage: (since, until) => {
+  usage: (since, until, source) => {
     const p = new URLSearchParams();
     if (since) p.set("since", String(Math.floor(since)));
     if (until) p.set("until", String(Math.floor(until)));
+    // Which door onto the agent: "web" (chat UI), "mcp" (the ask tool), or
+    // "all". Omitted rather than sent as "all" so the default request is byte
+    // for byte the one this endpoint has always received.
+    if (source && source !== "all") p.set("source", source);
     // The viewer's own timezone, so the graph buckets in local time.
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
