@@ -25,17 +25,19 @@ import { IconClose } from "./icons.jsx";
  * @property {string} [id] Applied to the input, for an external <label htmlFor>.
  * @property {React.RefObject<HTMLInputElement>} [inputRef] The parent's handle on
  *   the input — DataTable exposes it as focusSearch() on its imperative handle.
+ * @property {number} [maxLength] Cap on the typed query. Only worth setting
+ *   where the query reaches a server that pays per character for it.
  */
 
 /** @param {SearchBoxProps} props */
 export default function SearchBox({ value, onChange, placeholder, label, id,
-                                    inputRef }) {
+                                    inputRef, maxLength }) {
   const ownRef = React.useRef(null);
   const ref = inputRef || ownRef;
   return (
     <div className="searchwrap">
       <input id={id} ref={ref} type="search" className="logsearch"
-             placeholder={placeholder} value={value}
+             placeholder={placeholder} value={value} maxLength={maxLength}
              aria-label={label || placeholder}
              onChange={(e) => onChange(e.target.value)}
              onKeyDown={(e) => {

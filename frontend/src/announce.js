@@ -30,10 +30,21 @@ export const COPY_FAILED =
 // Build the announcement for a successful delete.
 //   open      — the deleted conversation was the one currently open
 //   remaining — how many conversations remain after the delete (>= 0)
+//   filtered  — a sidebar search is active, so `remaining` counts MATCHES
 // `title` is passed already-resolved (Chat.jsx defaults a blank title to
 // "Untitled" before opening the confirm modal, so it's non-empty here).
-export function deleteAnnouncement({ title, open, remaining }) {
+//
+// The count is dropped entirely while a search is active, rather than reworded.
+// `remaining` is derived from the rendered list, which under a search is the
+// match count — so deleting the only hit for "nursing" announced "No chats
+// remaining." to someone with forty. There is no honest count to give here
+// (the client does not know the unfiltered total), and this string is both a
+// toast and a live-region announcement, so a screen-reader user has no list to
+// glance at and disprove it with. Delete is also the one action where "did I
+// just lose everything?" is a plausible fear.
+export function deleteAnnouncement({ title, open, remaining, filtered = false }) {
   if (open) return `Deleted "${title}". Started a new chat.`;
+  if (filtered) return `Deleted "${title}".`;
   if (remaining === 0) return `Deleted "${title}". No chats remaining.`;
   const noun = remaining === 1 ? "chat" : "chats";
   return `Deleted "${title}". ${remaining} ${noun} remaining.`;

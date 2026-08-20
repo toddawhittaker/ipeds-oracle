@@ -34,4 +34,21 @@ describe("deleteAnnouncement", () => {
     const second = deleteAnnouncement({ title: "Untitled", open: false, remaining: 0 });
     expect(first).not.toBe(second);
   });
+
+  it("drops the count entirely while a search is active", () => {
+    // `remaining` is derived from the RENDERED list, which under a search is
+    // the match count. Deleting the only hit for "nursing" therefore announced
+    // "No chats remaining." to someone with forty — as a toast AND a live
+    // region, so a screen-reader user has nothing to disprove it with.
+    expect(deleteAnnouncement({ title: "Nursing 2023", open: false, remaining: 0, filtered: true }))
+      .toBe('Deleted "Nursing 2023".');
+    expect(deleteAnnouncement({ title: "Nursing 2023", open: false, remaining: 3, filtered: true }))
+      .toBe('Deleted "Nursing 2023".');
+    // Unfiltered, the count is honest and stays.
+    expect(deleteAnnouncement({ title: "Nursing 2023", open: false, remaining: 0 }))
+      .toBe('Deleted "Nursing 2023". No chats remaining.');
+    // The open-chat wording wins over both, as it always did.
+    expect(deleteAnnouncement({ title: "N", open: true, remaining: 0, filtered: true }))
+      .toBe('Deleted "N". Started a new chat.');
+  });
 });

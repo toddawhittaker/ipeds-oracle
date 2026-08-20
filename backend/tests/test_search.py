@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.search import MAX_TERMS, like_pattern, parse_terms  # noqa: E402
+from app.search import MAX_TERM_LEN, MAX_TERMS, like_pattern, parse_terms  # noqa: E402
 
 FAILURES = []
 
@@ -82,6 +82,45 @@ def run():
         assert got[0] == "w0" and got[-1] == f"w{MAX_TERMS - 1}", got
     check("the term count is capped, keeping the earliest terms",
           the_term_count_is_capped)
+
+    def a_pasted_question_keeps_every_word():
+        # Dropping a term WIDENS the result — it answers a question the user did
+        # not ask, and looks like a wrong hit rather than a missing one. The cap
+        # therefore has to sit past a pasted half-remembered question, not just
+        # past a typical two-word search.
+        pasted = ("how many nursing degrees were awarded in Ohio in 2023 "
+                  "by private institutions")
+        got = parse_terms(pasted)
+        assert len(got) == len(pasted.split()), \
+            f"a {len(pasted.split())}-word paste lost terms: {got}"
+        assert "2023" in got and "institutions" in got, got
+    check("a pasted question keeps every word rather than silently widening",
+          a_pasted_question_keeps_every_word)
+
+    def a_single_term_is_length_capped():
+        # LIKE '%x%' costs O(len(content) x len(term)) on text that keeps
+        # partially matching, and the caller controls both sides — their own
+        # messages are the content. Uncapped, one request measured 3.6s of CPU
+        # on a route that holds a shared threadpool slot and has no rate limit.
+        got = parse_terms("y" * (MAX_TERM_LEN + 500))
+        assert got == ["y" * MAX_TERM_LEN], len(got[0])
+        # The cap is per TERM, so it cannot be dodged by quoting.
+        quoted = parse_terms('"' + "z" * (MAX_TERM_LEN + 500) + '"')
+        assert quoted == ["z" * MAX_TERM_LEN], len(quoted[0])
+    check("one term cannot be longer than MAX_TERM_LEN",
+          a_single_term_is_length_capped)
+
+    def control_characters_are_stripped():
+        # A NUL truncates a LIKE pattern at the C level, so '%\x00%' reaches
+        # SQLite as '%' and matches EVERY row — the exact failure like_pattern
+        # exists to prevent, arriving by a route that bypasses its escaping.
+        assert parse_terms("\x00") == [], "a NUL survived as a term"
+        # Real text either side of one is preserved, minus the control char.
+        assert parse_terms("a\x00b c") == ["ab", "c"]
+        # Whitespace is NOT a control character here — it separates terms.
+        assert parse_terms("a\tb\nc") == ["a", "b", "c"]
+    check("control characters are stripped, whitespace is not",
+          control_characters_are_stripped)
 
     def wildcards_are_escaped():
         # Unescaped, each of these is a LIKE metacharacter: '%' matches any run

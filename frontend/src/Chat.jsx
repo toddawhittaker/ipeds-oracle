@@ -245,6 +245,12 @@ const hydrate = (msgs) => msgs.map((m) => ({
 }));
 const NOT_AVAILABLE = "That conversation isn't available.";
 
+// Mirrors app/search.py's per-term cap. A term longer than this is truncated
+// server-side anyway, and an uncapped box lets someone paste a paragraph that
+// costs real CPU to match (see MAX_TERM_LEN there). Generous enough that a
+// pasted half-remembered question still fits whole.
+const SEARCH_MAX_LEN = 200;;
+
 export default function Chat({ me }) {
   const yearRange = collectionYearRange(me?.years);
   const [convos, setConvos] = useState([]);
@@ -253,6 +259,12 @@ export default function Chat({ me }) {
   // only and the text being searched lives in messages it has never fetched.
   const [convoQuery, setConvoQuery] = useState("");
   const [convosFailed, setConvosFailed] = useState(false);
+  // The query the CURRENTLY RENDERED list answers, and whether any response has
+  // landed at all. Without the second, the first paint of every page load takes
+  // the "no history" branch and tells a returning user they have never used the
+  // app for the length of a round trip.
+  const [convosFor, setConvosFor] = useState("");
+  const [convosReady, setConvosReady] = useState(false);
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -451,25 +463,62 @@ export default function Chat({ me }) {
   // since the mutation still lands inside the initial-load window screen
   // readers swallow either way.) The visible `.notice` below is deliberately
   // NOT role="status" anymore -- exactly one announcement, not two.
-  // Every refresh carries the CURRENT query. refreshConvos() is called after a
-  // submit, a rename and a delete, and a version that dropped the query would
-  // silently un-filter the sidebar the moment the user asked anything — the
-  // list would quietly stop matching the box above it.
+  // Every refresh carries the query as it is AT CALL TIME, which is why this
+  // reads a ref rather than the state directly.
   //
+  // refreshConvos() is called after a submit, a rename and a delete, and
+  // submit() is an async function that awaits the whole stream — so the call it
+  // makes when the answer lands runs in the closure captured when Send was
+  // CLICKED. Reading `convoQuery` from that closure returns whatever was in the
+  // box a minute ago, normally "". Measured: send, then type a search while it
+  // streams, and the query sequence reads ["", "", "nursing", ""] — the box
+  // still says nursing and the whole unfiltered list is back. The sequence
+  // guard below makes that worse, not better: the stale call is the newest
+  // request, so its answer always wins.
+  const convoQueryRef = useRef("");
   // Responses can land out of order — a slow first query resolving after a
   // faster later one would leave the list showing results for a query the user
   // has already typed past. Only the newest request may write.
   const convoReqSeq = useRef(0);
   const refreshConvos = () => {
+    const q = convoQueryRef.current.trim();
     const seq = ++convoReqSeq.current;
-    return api.conversations(convoQuery.trim())
+    return api.conversations(q)
       .then((d) => {
         if (seq !== convoReqSeq.current) return;
         setConvos(d);
+        // What the rendered list is a result OF. The empty states branch on
+        // this, not on the live input: clearing a no-match search empties the
+        // box instantly while the refetch is still behind the debounce, and
+        // branching on the input would flash "No chats yet." at someone with a
+        // full history.
+        setConvosFor(q);
         setConvosFailed(false);
+        setConvosReady(true);
       })
-      .catch(() => { if (seq === convoReqSeq.current) setConvosFailed(true); });
+      .catch(() => {
+        if (seq !== convoReqSeq.current) return;
+        // Drop the stale rows. Leaving them renders an error ABOVE a list that
+        // matches neither the server nor the search box, and the rows stay
+        // clickable, so the error reads as a lie.
+        setConvos([]);
+        setConvosFor(q);
+        setConvosFailed(true);
+        setConvosReady(true);
+      });
   };
+  useEffect(() => { convoQueryRef.current = convoQuery; }, [convoQuery]);
+  // What the live region says. Derived from the COMMITTED result, never from
+  // the input, so it announces what is on screen rather than what is being
+  // typed — and stays empty until a search has actually run, so a page load
+  // announces nothing.
+  const convoLive = !convosReady || !convosFor
+    ? ""
+    : convosFailed
+      ? "Couldn't search your chats."
+      : convos.length === 0
+        ? "No chats match your search."
+        : `${convos.length} ${convos.length === 1 ? "chat" : "chats"} match your search.`;
   // Typing is debounced (250ms, the same as admin/Logs.jsx, which also searches
   // server-side); the FIRST load is not. Debouncing the mount too would hold the
   // sidebar empty for a quarter second on every page load to save a request
@@ -484,7 +533,6 @@ export default function Chat({ me }) {
     }
     const t = setTimeout(refreshConvos, 250);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [convoQuery]);
   // Moves focus after deleting a DIFFERENT conversation (case 2 -- deleting
   // the OPEN one is handled directly in deleteConvo() via navigate() + rAF,
@@ -685,6 +733,14 @@ export default function Chat({ me }) {
     // Plain left click (the one react-router turns into an in-tab nav to "/").
     // Abandon whichever turn is in flight (see turnToken).
     turnToken.current++;
+    // Clicking New chat is the user declaring the search over. Keeping the
+    // query is right for a rename, a delete, or a follow-up in a chat they
+    // found BY searching — but here the chat they are about to create almost
+    // certainly does not contain their old terms, so it would never appear in
+    // the sidebar while the list went on showing a search they had finished
+    // with. After the modifier guards above, so a middle-click that opens a new
+    // tab does not clear this tab's search.
+    setConvoQuery("");
     if (routeId === null) {
       // Already at "/" -- a Link nav to "/" would push a DUPLICATE history entry
       // and the render-time reset (openId !== routeId) never fires. Suppress the
@@ -921,13 +977,16 @@ export default function Chat({ me }) {
     const isOpen = id === convId;
     const next = convos[idx + 1] || convos[idx - 1] || null;
     const remaining = Math.max(convos.length - 1, 0);
+    // Under a search, `convos` is the match list, so `remaining` is a match
+    // count and must not be spoken as a history count — see deleteAnnouncement.
+    const filtered = !!convosFor;
     confirm({
       variant: "danger",
       title: `Delete "${title}"?`,
       body: "This will permanently delete the chat and all of its messages. This action cannot be undone.",
       confirmLabel: "Delete chat",
       onConfirm: () => api.deleteConversation(id), // throws -> in-modal error + DELETE_FAILED toast
-      successToast: deleteAnnouncement({ title, open: isOpen, remaining }),
+      successToast: deleteAnnouncement({ title, open: isOpen, remaining, filtered }),
       errorToast: DELETE_FAILED,
       onSuccess: () => {
         if (isOpen) {
@@ -1215,22 +1274,52 @@ export default function Chat({ me }) {
           <>
             {/* The same control the admin screens use, so the clear button, the
                 Escape-clears behaviour and the accessible name all come for
-                free (SearchBox.jsx). */}
+                free (SearchBox.jsx). The placeholder says "and messages"
+                because that is the part of this feature no one can guess:
+                every other sidebar filter in the world matches names only, so
+                a hit whose title contains none of your words reads as a bug
+                until you know the search reads the conversation. The
+                accessible name CONTAINS the visible placeholder (WCAG 2.5.3),
+                or speech input cannot address the control by what it says. */}
             <div className="convo-search">
               <SearchBox value={convoQuery} onChange={setConvoQuery}
-                         placeholder="Search chats"
-                         label="Search your chats" />
+                         placeholder="Search chats and messages"
+                         label="Search chats and messages"
+                         maxLength={SEARCH_MAX_LEN} />
             </div>
-            {/* Three states, where there used to be none. A failed load must
-                never render as "no chats": telling someone their history is
-                empty when the request simply failed is the one wrong answer
-                this list can give. */}
-            {convosFailed ? (
-              <p className="convo-empty" role="alert">
-                Couldn&apos;t load your chats. Try again.
+            {/* One live region, always mounted, fed only when a SEARCH commits.
+                A region inserted into the DOM with its text already in it is
+                announced unreliably, which is why this is not just role=status
+                on the paragraphs below (DataTable.jsx:333 and Toast.jsx solve
+                the same problem the same way). Only on search: a delete already
+                announces through the toast, and two announcements for one
+                action is the thing this file's own comment warns about. */}
+            <div className="sr-only convo-live" aria-live="polite">{convoLive}</div>
+            {/* Nothing at all until the first response lands. `convos` starts
+                empty with an empty query, which is exactly the "no history"
+                branch — so rendering these eagerly told every returning user
+                they had never used the app, for the length of a round trip. */}
+            {!convosReady ? null : convosFailed ? (
+              <p className="convo-empty">
+                {convosFor ? "Couldn't search your chats." : "Couldn't load your chats."}{" "}
+                {/* A real control, because "Try again." with nothing to press
+                    leaves a keyboard or screen-reader user with a page reload
+                    as their only move. */}
+                <button type="button" className="link" onClick={refreshConvos}>
+                  Try again
+                </button>
               </p>
-            ) : convos.length === 0 && convoQuery.trim() ? (
-              <p className="convo-empty">No chats match your search.</p>
+            ) : convos.length === 0 && convosFor ? (
+              <p className="convo-empty">
+                No chats match your search.{" "}
+                {/* Taught at the point of failure, where it costs nothing in
+                    the common case and answers the question the user is asking
+                    right now. */}
+                <span className="convo-empty-hint">
+                  Every word has to appear somewhere in the chat. Put a phrase
+                  in quotes to keep it together.
+                </span>
+              </p>
             ) : convos.length === 0 ? (
               <p className="convo-empty">No chats yet.</p>
             ) : null}

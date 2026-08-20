@@ -443,9 +443,21 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    because .convo-list is the flex child that takes the leftover height — without
    it the box would shrink as the list grows. */
 .convo-search { flex: none; margin-bottom: 8px; }
+/* .searchwrap carries `flex: 1 1 260px; max-width: 360px` for the admin
+   toolbars it was written for. Here the flex half is inert (.convo-search is
+   not a flex container) but the cap is not: the sidebar resizes to 480px, so
+   from ~380px on, the field visibly stopped short of a "New chat" button that
+   kept growing. Both are neutralised, including the dormant flex-basis that
+   would wake up the moment anyone puts a second control on this row. */
+.convo-search .searchwrap { flex: none; max-width: none; }
 /* The three list states (no chats, no matches, load failed). Muted body text
    rather than a panel: it replaces a list of links, not a section. */
-.convo-empty { flex: none; margin: 4px 2px; font-size: 13px; color: var(--muted); }
+/* margin-left matches .convo's own text inset, so an empty state lines up with
+   the list it replaces instead of hanging 8px to its left. */
+.convo-empty { flex: none; margin: 4px 2px 4px 12px; font-size: 13px; color: var(--muted); }
+/* The syntax hint under "no matches" — a step quieter than the sentence above
+   it, because it is a teach, not the answer. */
+.convo-empty-hint { display: block; margin-top: 4px; font-size: 12px; opacity: .85; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
 /* Reveal-trigger states share the row background so the actions' fade (below)

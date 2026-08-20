@@ -36,6 +36,16 @@ _handler: SqliteLogHandler | None = None
 
 _EXCLUDED_LOGGERS = ("ipeds.mail",)
 _REDACT_RE = re.compile(r"(?i)(token=|bearer\s+|sk-or-[\w-]{0,4})[\w.\-]+")
+# The chat sidebar's search term travels in the query string
+# (`GET /api/chat/conversations?q=...`), and uvicorn's access log writes the
+# whole path. That text is the user's own private search — the chat where they
+# asked about a named person, a salary, a disciplinary matter — and this app
+# deliberately keeps question text out of URLs everywhere else. Scoped to the
+# ACCESS log only (see _AccessLogRedactor), because `q=` in an ordinary log
+# message is not a URL. Consumes to `&` or whitespace rather than reusing
+# _REDACT_RE's `[\w.\-]+`, which stops at the first percent-escape and would
+# leave most of a multi-word search in place.
+_ACCESS_QUERY_RE = re.compile(r"(?i)(\bq=)[^&\s]*")
 # Flatten CR/LF and other C0/DEL control chars to a space before a record is
 # persisted. This neutralizes log-injection (forged log lines via a newline in a
 # user-controlled value — an email, an entity label, an upstream error) for EVERY
@@ -253,7 +263,11 @@ def get_handler() -> SqliteLogHandler | None:
 
 
 class _AccessLogRedactor(logging.Filter):
-    """Scrub `token=...` out of uvicorn's access log line.
+    """Scrub `token=...` and `q=...` out of uvicorn's access log line.
+
+    Also scrubs `q=` — the chat search term, which is the user's own private
+    query text and has no business in a log an operator reads (see
+    _ACCESS_QUERY_RE).
 
     Sign-in links now carry the token in a URL fragment, which browsers never
     transmit — so nothing reaches this filter from a link minted today. It
@@ -270,13 +284,18 @@ class _AccessLogRedactor(logging.Filter):
     that reorders its args cannot silently un-fix this.
     """
 
+    @staticmethod
+    def _scrub(s: str) -> str:
+        return _ACCESS_QUERY_RE.sub(r"\1<redacted>",
+                                    _REDACT_RE.sub(r"\1<redacted>", s))
+
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args and isinstance(record.args, tuple):
             record.args = tuple(
-                _REDACT_RE.sub(r"\1<redacted>", a) if isinstance(a, str) else a
+                self._scrub(a) if isinstance(a, str) else a
                 for a in record.args)
         if isinstance(record.msg, str):
-            record.msg = _REDACT_RE.sub(r"\1<redacted>", record.msg)
+            record.msg = self._scrub(record.msg)
         return True
 
 

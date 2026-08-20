@@ -23,6 +23,11 @@ export type SearchBoxProps = {
      * the input — DataTable exposes it as focusSearch() on its imperative handle.
      */
     inputRef?: React.RefObject<HTMLInputElement>;
+    /**
+     * Cap on the typed query. Only worth setting
+     * where the query reaches a server that pays per character for it.
+     */
+    maxLength?: number;
 };
 /**
  * @typedef {object} SearchBoxProps
@@ -34,6 +39,8 @@ export type SearchBoxProps = {
  * @property {string} [id] Applied to the input, for an external <label htmlFor>.
  * @property {React.RefObject<HTMLInputElement>} [inputRef] The parent's handle on
  *   the input — DataTable exposes it as focusSearch() on its imperative handle.
+ * @property {number} [maxLength] Cap on the typed query. Only worth setting
+ *   where the query reaches a server that pays per character for it.
  */
 /** @param {SearchBoxProps} props */
-export default function SearchBox({ value, onChange, placeholder, label, id, inputRef }: SearchBoxProps): React.JSX.Element;
+export default function SearchBox({ value, onChange, placeholder, label, id, inputRef, maxLength }: SearchBoxProps): React.JSX.Element;

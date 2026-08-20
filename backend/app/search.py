@@ -17,9 +17,28 @@ from __future__ import annotations
 
 # The most terms one query may contribute. Each term becomes its own AND'd
 # clause with a correlated EXISTS inside it, so an unbounded term count is an
-# unbounded amount of SQL generated from one text field. Eight is far past any
-# real search (three words is a lot) and far below anything that costs.
-MAX_TERMS = 8
+# unbounded amount of SQL generated from one text field.
+#
+# Terms past the cap are DROPPED, which makes the result a superset of what was
+# asked for — the one direction that returns a wrong answer rather than a
+# missing one. So the cap is set past any plausible query instead of snugly
+# above the typical one: pasting a half-remembered question ("how many nursing
+# degrees were awarded in Ohio in 2023 by private institutions" is 13 words)
+# has to keep every word, or the search quietly answers a different question.
+# Each term is length-capped below, so 24 short clauses cost less than the one
+# 1800-character term that used to be allowed.
+MAX_TERMS = 24
+
+# The longest a single term may be. LIKE '%x%' costs O(len(content) x len(term))
+# when the text keeps partially matching, and a user controls both sides: their
+# own messages are the content. Measured against 3.2 MB of deliberately
+# repetitive self-authored history, one non-matching term costs 0.05s at 10
+# characters, 1.2s at 500 and 3.6s at 1800; this route is a sync def holding one
+# of the 40 shared threadpool slots that sign-in and every admin handler also
+# use, and it has no rate limit of its own. 100 characters holds the worst case
+# to ~0.3s. Ordinary prose never reaches it — matching stops at the first
+# mismatched character, so realistic text measures 0.002s at any term length.
+MAX_TERM_LEN = 100
 
 
 def parse_terms(q: str | None) -> list[str]:
@@ -33,6 +52,17 @@ def parse_terms(q: str | None) -> list[str]:
     """
     if not q:
         return []
+    # Control characters are stripped, NUL above all: a NUL inside a LIKE
+    # pattern truncates it at the C level, so `%\x00%` reaches SQLite as `%` and
+    # matches every row — silently undoing the escaping below. Harmless today
+    # (the caller's own conversations are all it could over-match, and the
+    # tenancy scope is a separate bound predicate) but it is the exact failure
+    # like_pattern exists to prevent, and it would become real the moment this
+    # helper is reused somewhere the scope is inside the pattern.
+    # Whitespace is kept (it is what separates terms); NUL and every other
+    # control character is not — isprintable() is False for both, and isspace()
+    # is False for NUL.
+    q = "".join(ch for ch in q if ch.isprintable() or ch.isspace())
     terms: list[str] = []
     buf: list[str] = []
     quoted = False
@@ -52,7 +82,7 @@ def parse_terms(q: str | None) -> list[str]:
             buf.append(ch)
     if buf:
         terms.append("".join(buf))
-    return [t for t in terms if t][:MAX_TERMS]
+    return [t[:MAX_TERM_LEN] for t in terms if t][:MAX_TERMS]
 
 
 def like_pattern(term: str) -> str:

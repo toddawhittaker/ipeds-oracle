@@ -258,7 +258,8 @@ automatically from your first question.
   warns you first.)
 - **Search** your history with the box above the list. It looks inside your
   chats — your questions *and* the answers — not just their names, so you can
-  find one by something you remember it saying.
+  find one by something you remember it saying. Starting a **New chat** clears
+  the search.
 
   Several words all have to appear somewhere in the same conversation, though
   not in the same message: `nursing 2023` finds the chat where you asked about

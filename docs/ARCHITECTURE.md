@@ -430,7 +430,17 @@ documents are:
   carry the active query, or the list silently stops agreeing with the search box
   above it; `frontend/e2e/chat-search.spec.js` asserts that over the whole
   request sequence, because a later correct refresh repairs the end state and
-  hides the bug. Not FTS5: one person's history is a few hundred message rows,
+  hides the bug. It carries the query through a **ref read at call time**, not
+  the state: `submit()` awaits the whole stream, so the refresh it runs when the
+  answer lands executes in the closure captured when Send was clicked, and
+  reading state there returns whatever was in the box a minute ago. The empty
+  states branch on the query the RENDERED list answers (`convosFor`) plus a
+  first-response flag, never on the live input — otherwise the first paint of
+  every page load tells a returning user they have no chats, and clearing a
+  no-match search flashes the same lie for the length of the debounce. A failed
+  refresh drops the rows rather than leaving them under the error, and a search
+  outcome is announced through one always-mounted live region (a region inserted
+  with its text already in it is announced unreliably). Not FTS5: one person's history is a few hundred message rows,
   so the scan costs less than a second table plus the trigger to keep it in sync. An answer's **Thinking / SQL traces are
   mutually-exclusive disclosure toggles** whose panel opens **full-width below**
   the actions row (never as an inline `<details>` inside the flex row, which
