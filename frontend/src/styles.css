@@ -439,6 +439,13 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .icon-btn:hover { color: var(--text); }
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
 .newchat { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; }
+/* The sidebar search sits between the New chat row and the list. `flex: none`
+   because .convo-list is the flex child that takes the leftover height — without
+   it the box would shrink as the list grows. */
+.convo-search { flex: none; margin-bottom: 8px; }
+/* The three list states (no chats, no matches, load failed). Muted body text
+   rather than a panel: it replaces a list of links, not a section. */
+.convo-empty { flex: none; margin: 4px 2px; font-size: 13px; color: var(--muted); }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
 /* Reveal-trigger states share the row background so the actions' fade (below)

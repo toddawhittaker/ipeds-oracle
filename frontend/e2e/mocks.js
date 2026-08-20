@@ -159,13 +159,36 @@ export async function mockLogout(page) {
  * Returns a handle whose `setList` lets a spec change what's returned for
  * later requests (e.g. after a chat is saved), without re-registering the route.
  */
+/**
+ * GET /api/chat/conversations, with the sidebar's `?q=` search.
+ *
+ * The search is SERVER-side, so a mock that ignored `q` would let a client that
+ * never sends it pass every spec. This applies the same rules the endpoint does
+ * (backend/app/search.py): terms ANDed, a quoted run kept whole, matched
+ * against the title plus each row's optional `body` — the stand-in here for the
+ * message text the real query searches and the browser never sees.
+ *
+ * `queries` records every `q` the client asked for, in order, so a spec can
+ * assert what was actually sent rather than only what came back.
+ */
 export async function mockConversations(page, initial = []) {
   let list = initial;
-  await page.route("**/api/chat/conversations", async (route) => {
+  const queries = [];
+  const terms = (q) => (q.match(/"[^"]*"?|\S+/g) || [])
+    .map((s) => s.replace(/"/g, "").toLowerCase())
+    .filter(Boolean);
+  await page.route("**/api/chat/conversations*", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(list) });
+    const q = new URL(route.request().url()).searchParams.get("q") || "";
+    queries.push(q);
+    const want = terms(q);
+    const hay = (c) => `${c.title || ""} ${c.body || ""}`.toLowerCase();
+    const body = want.length
+      ? list.filter((c) => want.every((term) => hay(c).includes(term)))
+      : list;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
-  return { setList: (l) => { list = l; } };
+  return { setList: (l) => { list = l; }, queries };
 }
 
 /**

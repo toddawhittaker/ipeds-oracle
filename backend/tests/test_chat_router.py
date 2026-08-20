@@ -190,6 +190,136 @@ def _post_turn(c, question, *, conversation_id=None, edit_message_id=None,
 
 
 # ---------------------------------------------------------------------------
+# GET /conversations?q= : searching one's own history
+# ---------------------------------------------------------------------------
+
+def _login_fresh(c, email):
+    """Allowlist `email` as the admin, then sign in as them on `c`.
+
+    Every search test gets its OWN user: the searches below assert exact result
+    SETS, and sharing the admin's history would make them pass or fail on what
+    unrelated tests in this file happened to create.
+    """
+    with TestClient(app) as adm:
+        _login(adm, "admin@example.edu")
+        adm.post("/api/admin/allowlist", json={"email": email})
+    _login(c, email)
+
+
+def _conv_with(c, question, answer):
+    """One conversation holding `question` and `answer`. Returns its id."""
+    r = _post_turn(c, question, answer_text=answer)
+    assert r.status_code == 200, r.text
+    return c.get("/api/chat/conversations").json()[0]["id"]
+
+
+def _search(c, q):
+    r = c.get("/api/chat/conversations", params={"q": q})
+    assert r.status_code == 200, r.text
+    return {row["id"] for row in r.json()}
+
+
+def test_search_ands_its_terms_across_a_conversation():
+    """Two words find only the conversation holding BOTH — anywhere in it, not
+    necessarily in one message. The regression this catches is ORing the terms,
+    which returns nearly the whole history and looks like search "working"."""
+    with TestClient(app) as c:
+        _login_fresh(c, "ander@example.edu")
+        both = _conv_with(c, "how many nursing degrees", "here is the nursing count for 2023")
+        one = _conv_with(c, "how many nursing degrees", "here is the nursing count for 2019")
+
+        assert _search(c, "nursing 2023") == {both}, "AND across terms is not holding"
+        # Each term alone still finds both, so the test above is about the AND
+        # and not about one of the words simply being absent.
+        assert _search(c, "nursing") == {both, one}
+
+
+def test_a_quoted_phrase_does_not_match_its_words_apart():
+    """`"hello world"` is one string. Without the quoting rule it degrades to an
+    AND of its words, which matches text where they appear paragraphs apart."""
+    with TestClient(app) as c:
+        _login_fresh(c, "phrase@example.edu")
+        together = _conv_with(c, "say hello world please", "hello world")
+        apart = _conv_with(c, "say hello there", "the world is large")
+
+        assert _search(c, '"hello world"') == {together}
+        # Unquoted, the same two words match both — the contrast IS the feature.
+        assert _search(c, "hello world") == {together, apart}
+
+
+def test_search_covers_answers_and_titles_not_just_questions():
+    """A term in the assistant's reply, or in a renamed title, must match: the
+    user is searching a conversation, not a list of their own questions."""
+    with TestClient(app) as c:
+        _login_fresh(c, "reply@example.edu")
+        conv = _conv_with(c, "a question about degrees", "the answer mentions baccalaureate")
+        assert _search(c, "baccalaureate") == {conv}, "an answer-only term did not match"
+
+        assert c.patch(f"/api/chat/conversations/{conv}",
+                       json={"title": "Renamed to something distinctive"}).status_code == 200
+        assert _search(c, "distinctive") == {conv}, "a title-only term did not match"
+
+
+def test_search_treats_like_wildcards_as_literal_text():
+    """`%` and `_` are LIKE's own wildcards. Unescaped, searching `%` returns
+    every conversation, which reads as a broken search box rather than as a bug."""
+    with TestClient(app) as c:
+        _login_fresh(c, "wild@example.edu")
+        pct = _conv_with(c, "what share is 50% of the total", "50% exactly")
+        other = _conv_with(c, "an unrelated question", "an unrelated answer")
+
+        # The literal is findable...
+        assert _search(c, "50%") == {pct}
+        # ...and searching the metacharacter alone finds the conversation that
+        # literally contains a percent sign — NOT every conversation, which is
+        # what an unescaped '%' would return.
+        assert _search(c, "%") == {pct}, "'%' behaved as a wildcard"
+        assert other not in _search(c, "%")
+        # '_' likewise: it must not stand in for the 'n' in "an unrelated".
+        assert _search(c, "a_") == set(), "'_' behaved as a single-character wildcard"
+
+
+def test_search_never_matches_on_another_users_messages():
+    """The EXISTS reads the messages table, which holds every user's text, and
+    is kept honest only by its correlation to the caller's own conversations.
+
+    Drop that correlation and the outer user_id scope still hides other people's
+    ROWS — so nobody sees a stranger's conversation — but every one of the
+    caller's own conversations starts matching any word ANY user ever typed.
+    That leaks what colleagues are asking about, and it is invisible unless the
+    searcher owns a conversation that does NOT contain the term. Hence the
+    shapes below: the stranger's history is deliberately free of the word."""
+    with TestClient(app) as c:
+        _login_fresh(c, "owner@example.edu")
+        mine = _conv_with(c, "a distinctive haddock question", "about haddock")
+    with TestClient(app) as other:
+        _login_fresh(other, "stranger@example.edu")
+        theirs = _conv_with(other, "an entirely separate topic", "no fish here")
+        # The stranger owns one conversation and it does not say "haddock", so a
+        # correlation-free EXISTS would return it and this would fail.
+        assert _search(other, "haddock") == set(), \
+            "matched on another user's messages"
+        assert _search(other, "separate") == {theirs}, "setup failed"
+    with TestClient(app) as c:
+        _login_fresh(c, "owner@example.edu")
+        assert _search(c, "haddock") == {mine}
+
+
+def test_an_empty_search_returns_the_unfiltered_list():
+    """A blank or all-whitespace box is not a search for nothing — it is no
+    search at all, and must return the same list as omitting `q` entirely."""
+    with TestClient(app) as c:
+        _login_fresh(c, "blank@example.edu")
+        _conv_with(c, "first question", "first answer")
+        _conv_with(c, "second question", "second answer")
+
+        plain = {row["id"] for row in c.get("/api/chat/conversations").json()}
+        assert len(plain) == 2, plain
+        for q in ("", "   ", '""'):
+            assert _search(c, q) == plain, f"{q!r} filtered the list"
+
+
+# ---------------------------------------------------------------------------
 # chat_stream: validation, ownership, edit/rerun
 # ---------------------------------------------------------------------------
 
@@ -2412,6 +2542,18 @@ def run():
     check("live and reloaded cell counts agree for an ungrounded turn "
           "(0 vs NULL divergence)",
           test_live_and_reloaded_cell_counts_agree_for_an_ungrounded_turn)
+    check("search ANDs its terms across a whole conversation",
+          test_search_ands_its_terms_across_a_conversation)
+    check("a quoted phrase does not match its words apart",
+          test_a_quoted_phrase_does_not_match_its_words_apart)
+    check("search covers answers and titles, not just questions",
+          test_search_covers_answers_and_titles_not_just_questions)
+    check("LIKE wildcards in a search are literal text",
+          test_search_treats_like_wildcards_as_literal_text)
+    check("search never matches on another user's messages",
+          test_search_never_matches_on_another_users_messages)
+    check("an empty search returns the unfiltered list",
+          test_an_empty_search_returns_the_unfiltered_list)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} contract(s) FAILED: {FAILURES}")

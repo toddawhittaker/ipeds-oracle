@@ -6,6 +6,7 @@ import { IconClose, IconEdit, IconRerun, IconSend, IconTrash,
 import Markdown from "./Markdown.jsx";
 import MarkdownTextarea from "./MarkdownTextarea.jsx";
 import Figure from "./Figure.jsx";
+import SearchBox from "./SearchBox.jsx";
 import Suggestions from "./Suggestions.jsx";
 import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
@@ -247,6 +248,11 @@ const NOT_AVAILABLE = "That conversation isn't available.";
 export default function Chat({ me }) {
   const yearRange = collectionYearRange(me?.years);
   const [convos, setConvos] = useState([]);
+  // Sidebar search over the caller's own history — questions, answers and
+  // titles. Server-side (app/routers/chat.py), because the browser holds titles
+  // only and the text being searched lives in messages it has never fetched.
+  const [convoQuery, setConvoQuery] = useState("");
+  const [convosFailed, setConvosFailed] = useState(false);
   const { id: routeId = null } = useParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -445,14 +451,48 @@ export default function Chat({ me }) {
   // since the mutation still lands inside the initial-load window screen
   // readers swallow either way.) The visible `.notice` below is deliberately
   // NOT role="status" anymore -- exactly one announcement, not two.
-  const refreshConvos = () => api.conversations().then(setConvos).catch(() => {});
-  useEffect(() => { refreshConvos(); }, []);
+  // Every refresh carries the CURRENT query. refreshConvos() is called after a
+  // submit, a rename and a delete, and a version that dropped the query would
+  // silently un-filter the sidebar the moment the user asked anything — the
+  // list would quietly stop matching the box above it.
+  //
+  // Responses can land out of order — a slow first query resolving after a
+  // faster later one would leave the list showing results for a query the user
+  // has already typed past. Only the newest request may write.
+  const convoReqSeq = useRef(0);
+  const refreshConvos = () => {
+    const seq = ++convoReqSeq.current;
+    return api.conversations(convoQuery.trim())
+      .then((d) => {
+        if (seq !== convoReqSeq.current) return;
+        setConvos(d);
+        setConvosFailed(false);
+      })
+      .catch(() => { if (seq === convoReqSeq.current) setConvosFailed(true); });
+  };
+  // Typing is debounced (250ms, the same as admin/Logs.jsx, which also searches
+  // server-side); the FIRST load is not. Debouncing the mount too would hold the
+  // sidebar empty for a quarter second on every page load to save a request
+  // nobody is racing — the delay is there to skip the queries between
+  // keystrokes, and on mount there are none.
+  const convosLoaded = useRef(false);
+  useEffect(() => {
+    if (!convosLoaded.current) {
+      convosLoaded.current = true;
+      refreshConvos();
+      return undefined;
+    }
+    const t = setTimeout(refreshConvos, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convoQuery]);
   // Moves focus after deleting a DIFFERENT conversation (case 2 -- deleting
   // the OPEN one is handled directly in deleteConvo() via navigate() + rAF,
   // matching fillExample/saveEdit's precedent, and never touches this ref).
   // `convos` changes for lots of reasons that have nothing to do with a
   // delete -- this mount effect, every submit()'s refreshConvos(), the
-  // optimistic title patch -- so the ref is a ONE-SHOT: it's cleared the
+  // optimistic title patch, and now every keystroke in the sidebar search --
+  // so the ref is a ONE-SHOT: it's cleared the
   // instant this effect runs, regardless of whether `want` was set, so an
   // unrelated later `convos` update never re-fires the focus move.
   useEffect(() => {
@@ -1172,6 +1212,28 @@ export default function Chat({ me }) {
           <Link to="/" className="icon-btn newchat-collapsed" onClick={handleNewChat}
                 title="New chat" aria-label="New chat"><IconPlus /></Link>
         ) : (
+          <>
+            {/* The same control the admin screens use, so the clear button, the
+                Escape-clears behaviour and the accessible name all come for
+                free (SearchBox.jsx). */}
+            <div className="convo-search">
+              <SearchBox value={convoQuery} onChange={setConvoQuery}
+                         placeholder="Search chats"
+                         label="Search your chats" />
+            </div>
+            {/* Three states, where there used to be none. A failed load must
+                never render as "no chats": telling someone their history is
+                empty when the request simply failed is the one wrong answer
+                this list can give. */}
+            {convosFailed ? (
+              <p className="convo-empty" role="alert">
+                Couldn&apos;t load your chats. Try again.
+              </p>
+            ) : convos.length === 0 && convoQuery.trim() ? (
+              <p className="convo-empty">No chats match your search.</p>
+            ) : convos.length === 0 ? (
+              <p className="convo-empty">No chats yet.</p>
+            ) : null}
           <div className="convo-list thin-scroll">
             {convos.map((c) => (
               <div key={c.id} className={"convo-row" + (c.id === convId ? " on" : "")}>
@@ -1211,6 +1273,7 @@ export default function Chat({ me }) {
               </div>
             ))}
           </div>
+          </>
         )}
       </aside>
 
