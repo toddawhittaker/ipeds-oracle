@@ -70,10 +70,8 @@ describe("the keys table config", () => {
   });
 
   // Never-used keys are the common case, so where they land is not an edge case.
-  // The regression: without the -Infinity mapping the comparator returns NaN for
-  // every null pair, which is not an ordering at all — the unused rows end up
-  // wherever the incoming list happened to put them, so they read as scattered
-  // through the table rather than grouped.
+  // The unused rows must group at one end rather than scattering through the
+  // table wherever the incoming list happened to put them.
   it("groups never-used keys at one end, both directions", () => {
     const used = [
       K(10, { used: 1_700_000_100 }),
@@ -85,6 +83,30 @@ describe("the keys table config", () => {
       .toEqual([12, 10, 11, 13]);
     expect(sortRows(used, "last_used_at", "asc", KEY_CONFIG).map((r) => r.id))
       .toEqual([11, 13, 10, 12]);
+  });
+
+  // The case the mixed one above CANNOT see, and the one every deployment starts
+  // in: no key has been presented yet, so every value is null. The comparator
+  // used to map null to -Infinity, and `-Infinity - -Infinity` is NaN —
+  // `sortRows` returns the comparator's result the moment it is `!== 0`, and NaN
+  // is, so the id tiebreak never ran. Measured on the real modules: ascending
+  // and descending both returned [13, 11, 12] for that input, and [11, 12, 13]
+  // when the same rows arrived in a different order. An admin clicked "Last
+  // used", nothing moved, they clicked again for the other direction, and
+  // nothing moved again.
+  //
+  // The comment above this test used to assert the opposite — that the mapping
+  // was what PREVENTED the NaN — and the test passed anyway, because Array.sort
+  // is stable and its fixture happened to arrive in id order.
+  it("orders an all-unused list by the tiebreak, not by arrival order", () => {
+    const ids = (rows, dir) =>
+      sortRows(rows, "last_used_at", dir, KEY_CONFIG).map((r) => r.id);
+    const fresh = (order) => order.map((id) => K(id, { used: null }));
+    expect(ids(fresh([13, 11, 12]), "asc")).toEqual([11, 12, 13]);
+    expect(ids(fresh([11, 12, 13]), "asc")).toEqual([11, 12, 13]);
+    // Same list, arrived differently, same answer — which is the property the
+    // tiebreak exists for and the one NaN destroyed.
+    expect(ids(fresh([13, 11, 12]), "desc")).toEqual(ids(fresh([11, 12, 13]), "desc"));
   });
 
   it("sorts active before revoked ascending, and surfaces revoked descending", () => {

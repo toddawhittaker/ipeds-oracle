@@ -2,16 +2,12 @@ import React, { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { IconInfo, IconGitHub } from "./icons.jsx";
 import Wordmark from "./Wordmark.jsx";
+import { ADMIN_GUIDE_URL, GITHUB_URL, IPEDS_URL, LICENSE_URL, RELEASES_URL,
+         USER_GUIDE_URL } from "./links.js";
 
-const IPEDS_URL = "https://nces.ed.gov/ipeds/";
 
-const GITHUB_URL = "https://github.com/toddawhittaker/ipeds-oracle";
-const LICENSE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/LICENSE";
-const RELEASES_URL = "https://github.com/toddawhittaker/ipeds-oracle/releases";
 // The guides live in the repo and render on GitHub (with screenshots). The Admin
 // guide link is shown only to admins (see the `isAdmin` gate below).
-const USER_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/USER_GUIDE.md";
-const ADMIN_GUIDE_URL = "https://github.com/toddawhittaker/ipeds-oracle/blob/main/docs/ADMIN_GUIDE.md";
 
 // An informational "About" dialog. Deliberately NOT built on useConfirm (that's
 // action-shaped — a confirm/cancel button row and an onConfirm callback); this is

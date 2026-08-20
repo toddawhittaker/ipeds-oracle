@@ -28,12 +28,20 @@ export function isRevoked(row) {
 }
 
 // last_used_at is null for a key that has never been presented, which is the
-// common case for a key minted five minutes ago. A null sorts as -Infinity so
-// that DESC (most-recent-first) puts the unused ones at the END and ASC puts
-// them at the start — a consistent grouping either way, rather than nulls
-// interleaving wherever the backend happened to return them.
+// common case for a key minted five minutes ago — and the case for EVERY key on
+// a fresh deployment.
+//
+// 0, not -Infinity. The mapping used to be -Infinity, which grouped nulls at one
+// end as intended for a MIXED list and broke the all-null one completely:
+// `-Infinity - -Infinity` is NaN, `sortRows` returns the comparator's value the
+// moment it is `!== 0`, and NaN is — so the id tiebreak below it never ran.
+// Ascending and descending produced the same order, that order tracked whatever
+// order the rows arrived in, and two loads could disagree. 0 keeps the same
+// grouping (an unused key still sorts before every used one, because every real
+// timestamp is a positive epoch) and `0 - 0` falls through to the tiebreak,
+// which is what makes the sort stable and its two directions different.
 function usedValue(r) {
-  return r.last_used_at == null ? -Infinity : r.last_used_at;
+  return r.last_used_at == null ? 0 : r.last_used_at;
 }
 
 // Comparators keyed by sort column, each returning the ASC ordering (sortRows

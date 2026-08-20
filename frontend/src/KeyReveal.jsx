@@ -35,7 +35,12 @@ import { useToast } from "./Toast.jsx";
 export default function KeyReveal({ secret, label, email, onClose }) {
   const toast = useToast();
   const dialogRef = useRef(null);
-  const closeRef = useRef(null);
+  // Focus opens on COPY, not on the dismiss button. The dialog exists to get an
+  // unrecoverable value out of the screen and into the user's clipboard, and a
+  // user who submitted the mint form with Enter is one habitual second Enter
+  // away from destroying it. It also restores the app's modal grammar, where the
+  // filled button is the action and focus lands on the safe one (ConfirmModal).
+  const copyRef = useRef(null);
   const openerRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const ids = useId();
@@ -47,7 +52,7 @@ export default function KeyReveal({ secret, label, email, onClose }) {
     const appEl = document.querySelector(".app");
     appEl?.setAttribute("inert", "");
     appEl?.setAttribute("aria-hidden", "true");
-    closeRef.current?.focus();
+    copyRef.current?.focus();
     return () => {
       appEl?.removeAttribute("inert");
       appEl?.removeAttribute("aria-hidden");
@@ -64,14 +69,23 @@ export default function KeyReveal({ secret, label, email, onClose }) {
       onClose();
       return;
     }
-    // Minimal focus trap: Copy and Close are the only stops, so keep Tab inside.
+    // Minimal focus trap over the dialog's own stops: the key field (a readonly
+    // input, so it can be selected and read without a mouse) and the two
+    // buttons. `input,button` rather than `button` alone for that reason.
     if (e.key !== "Tab") return;
-    const items = [...dialogRef.current.querySelectorAll("button")];
+    const items = [...dialogRef.current.querySelectorAll("input,button")];
     if (items.length === 0) return;
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;
-    if (e.shiftKey && active === first) {
+    // Clicking the dialog's own padding focuses the container (it carries
+    // tabIndex={-1}), and from there Shift+Tab walked backwards OUT of the
+    // dialog. ConfirmModal.jsx has carried this branch all along; this file
+    // diverged from it for no reason.
+    if (!dialogRef.current.contains(active)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && active === first) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && active === last) {
@@ -89,8 +103,12 @@ export default function KeyReveal({ secret, label, email, onClose }) {
     // not recoverable, so a silently-denied clipboard would leave the user with
     // a key they cannot get back. Say so, and leave the dialog open.
     if (await copyText(secret)) {
+      // Held until the dialog closes, deliberately: a tick that reverts after
+      // 1.4s is gone by the moment the user reaches for Done, which is exactly
+      // when they want to know whether they got it. For an ordinary copy button
+      // a flash is right; for the only appearance of an unrecoverable value the
+      // answer has to still be on screen at the decision point.
       setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
     } else {
       toast(COPY_FAILED, "error");
     }
@@ -110,35 +128,58 @@ export default function KeyReveal({ secret, label, email, onClose }) {
       >
         <div className="modal-head">
           <span className="modal-icon warning"><IconKey size={20} /></span>
-          <h2 className="modal-title" id={titleId}>Copy your API key now</h2>
+          {/* On the admin path this is somebody ELSE's key, and a title reading
+              "your API key" told the wrong person they were the owner. */}
+          <h2 className="modal-title" id={titleId}>
+            {email ? `Copy this key for ${email}` : "Copy your API key now"}
+          </h2>
         </div>
         <div className="modal-body" id={bodyId}>
           <p>
-            This is the only time this key will be shown. Nothing stores it, so if
-            you lose it you will have to revoke it and create another.
+            {email
+              ? "This is the only time the key will be shown. Nothing stores it, "
+                + "so if it is lost the only fix is to revoke it and issue another."
+              : "This is the only time this key will be shown. Nothing stores it, "
+                + "so if you lose it you will have to revoke it and create another."}
           </p>
           <div className="keyreveal-value">
-            {/* The value is selectable text, not an input: a user without a
-                working clipboard (plain http on a LAN is the documented
-                self-host case) has to be able to select it by hand. */}
-            <code className="keyreveal-secret" data-testid="revealed-key">{secret}</code>
-            <button type="button" className="icon-btn tip" data-tip="Copy key"
-                    aria-label="Copy API key" onClick={copy}>
-              {copied ? <IconCheck /> : <IconCopy />}
-            </button>
+            {/* A READONLY INPUT, not a <code>: the copy button's own failure
+                message tells the user to select the text and copy it by hand
+                (the documented plain-http self-host case, where
+                navigator.clipboard does not exist), and a <code> gave a
+                keyboard-only user no way to do that. As an input it is a tab
+                stop that selects itself on focus, and a screen reader can walk
+                it character by character. Still selectable by mouse, which was
+                the reason the <code> was chosen. */}
+            <input className="keyreveal-secret" data-testid="revealed-key"
+                   readOnly value={secret} aria-label="Your new API key"
+                   onFocus={(e) => e.target.select()} />
           </div>
-          {/* aria-live so a screen-reader user hears the copy land — the icon
-              swap alone is silent, and there is no toast on the success path. */}
+          {/* aria-live so a screen-reader user hears the copy land — the button's
+              own label change is not reliably announced, and there is no toast on
+              the success path. */}
           <span className="sr-only" aria-live="polite">{copied ? "API key copied." : ""}</span>
+          {email ? (
+            <p>
+              <strong>Send it to them over a channel you trust</strong> — it lets
+              any tool ask questions as them.
+            </p>
+          ) : null}
           <p className="muted small">
-            {email ? <>For <strong>{email}</strong>. Send it to them over a channel you trust. </> : null}
             {label ? <>Labelled &ldquo;{label}&rdquo;. </> : null}
             Give it to an MCP client as a bearer token.
           </p>
         </div>
+        {/* Done LEFT and plain, Copy right and filled: ConfirmModal's row, so the
+            action sits where every other dialog in the app puts it. */}
         <div className="modal-actions">
-          <button type="button" className="modal-confirm warning" ref={closeRef} onClick={onClose}>
+          <button type="button" className="modal-cancel" onClick={onClose}>
             Done
+          </button>
+          <button type="button" ref={copyRef} onClick={copy}
+                  className={"modal-confirm" + (copied ? " copied" : "")}>
+            {copied ? <IconCheck size={15} /> : <IconCopy size={15} />}
+            {copied ? "Copied" : "Copy key"}
           </button>
         </div>
       </div>

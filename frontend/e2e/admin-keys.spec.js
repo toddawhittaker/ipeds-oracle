@@ -56,11 +56,17 @@ test("minting for a user reveals the key once and names who to hand it to", asyn
   await page.getByRole("button", { name: "Create key" }).click();
 
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByTestId("revealed-key")).toHaveText(secret);
+  await expect(dialog.getByTestId("revealed-key")).toHaveValue(secret);
   // The admin cannot read this value back, so the dialog has to say whose it is
   // — otherwise a mint for the wrong address is discovered only by the person it
-  // does not work for.
-  await expect(dialog).toContainText("new@example.edu");
+  // does not work for. It says so in the TITLE, which used to be the constant
+  // "Copy your API key now": on this path the key is not the reader's, and a
+  // dialog that calls it theirs muddies who is responsible for delivering it.
+  await expect(dialog.getByRole("heading"))
+    .toHaveText("Copy this key for new@example.edu");
+  // And the duty is body text, not the tail of a muted footnote — the admin
+  // guide leads with it.
+  await expect(dialog).toContainText("Send it to them over a channel you trust");
   expect(api.mints).toEqual([{ email: "new@example.edu", label: "Their laptop" }]);
 
   await dialog.getByRole("button", { name: "Done" }).click();

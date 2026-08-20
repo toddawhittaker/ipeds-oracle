@@ -3,7 +3,10 @@ import { api } from "./api.js";
 import { loadErrorMessage } from "./authcopy.js";
 import { KEY_PREFIX, isRevoked, maskedKey, sortByNewest } from "./apikeys.js";
 import { fmtDateTime } from "./admin/format.js";
-import { IconTrash } from "./icons.jsx";
+import { IconCopy, IconTrash } from "./icons.jsx";
+import { copyText } from "./clipboard.js";
+import { COPY_FAILED } from "./announce.js";
+import { USER_GUIDE_URL } from "./links.js";
 import KeyReveal from "./KeyReveal.jsx";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
@@ -32,6 +35,13 @@ export default function Keys() {
   // reveal dialog. Never persisted anywhere — see KeyReveal.jsx.
   const [minted, setMinted] = useState(null);
   const headingRef = useRef(null);
+  // window.location.origin, not a setting: this page is being SERVED from the
+  // host the client has to reach, so the address is already known here — which
+  // is exactly what the guides cannot say.
+  const endpoint = `${window.location.origin}/mcp`;
+  const connectCommand =
+    `claude mcp add --transport http ipeds ${endpoint} \\\n`
+    + `  --header "Authorization: Bearer ${KEY_PREFIX}…"`;
 
   // A failed load must never render as "you have no keys": that reads as a
   // confirmed empty state, and the fix a user would reach for (mint another) is
@@ -101,13 +111,22 @@ export default function Keys() {
             {minting ? "Creating…" : "Create key"}
           </button>
         </form>
+        {/* aria-busy is not a live message and a name change on the element that
+            already holds focus is not reliably announced, so a screen-reader user
+            heard nothing between pressing the button and the dialog opening.
+            ConfirmModal.jsx solved the same problem the same way. */}
+        <span className="sr-only" aria-live="polite">
+          {minting ? "Creating key…" : ""}
+        </span>
 
         {err ? (
           <p className="denied-error" role="alert">{err}</p>
         ) : rows.length === 0 ? (
-          <p className="muted">You don&rsquo;t have any API keys yet.</p>
+          <p className="muted">
+            No keys yet. Create one above, then give it to your MCP client.
+          </p>
         ) : (
-          <ul className="keylist">
+          <ul className="keylist" role="list">
             {sortByNewest(rows).map((k) => {
               const revoked = isRevoked(k);
               return (
@@ -115,11 +134,18 @@ export default function Keys() {
                   <div className="keyrow-main">
                     <span className="keyrow-label">{k.label || "Unlabelled key"}</span>
                     <code className="keyrow-id">{maskedKey(k)}</code>
-                    {revoked && <span className="keyrow-state">Revoked</span>}
+                    {revoked && (
+                      // The stamp answers the question that always follows
+                      // "this key was revoked": for how long was it live?
+                      <span className="keyrow-state"
+                            title={`Revoked ${fmtDateTime(k.revoked_at)}`}>
+                        Revoked
+                      </span>
+                    )}
                   </div>
                   <div className="keyrow-meta muted small">
                     Created {fmtDateTime(k.created_at)}
-                    {k.created_by ? ` by ${k.created_by}` : ""}
+                    {k.created_by ? ` by an administrator (${k.created_by})` : ""}
                     {" · Last used "}
                     {k.last_used_at ? fmtDateTime(k.last_used_at) : "never"}
                   </div>
@@ -141,10 +167,32 @@ export default function Keys() {
           </ul>
         )}
 
+        {/* The docs all carry this command with a <host> placeholder, because a
+            document cannot know the deployment. This page can: it is the one
+            place the real endpoint can be printed, and it is the moment of need
+            — the user has just copied a key. The KEY stays a placeholder; a
+            secret does not belong in a block that lives on the page forever. */}
+        <h2 className="keys-connect-head">Connecting a client</h2>
         <p className="muted small">
-          Point your client at <code>/mcp</code> on this server and send the key as
-          a bearer token. Keys all begin <code>{KEY_PREFIX}</code>, so one that
-          turns up in a log or a config file is recognisable on sight.
+          Keys all begin <code>{KEY_PREFIX}</code>, so one that turns up in a log
+          or a config file is recognisable on sight.
+        </p>
+        <div className="endpoint-row">
+          <code>{endpoint}</code>
+          <button type="button" className="icon-btn tip" data-tip="Copy endpoint"
+                  aria-label="Copy the endpoint URL"
+                  onClick={() => copyText(endpoint).then(
+                    (ok) => toast(ok ? "Endpoint copied." : COPY_FAILED,
+                                  ok ? "success" : "error"))}>
+            <IconCopy />
+          </button>
+        </div>
+        <pre className="codeblock thin-scroll">{connectCommand}</pre>
+        <p className="muted small keys-connect">
+          Other clients: the same URL, with the key sent as a bearer token.{" "}
+          <a href={USER_GUIDE_URL} target="_blank" rel="noreferrer">
+            How to connect a client
+          </a>
         </p>
       </div>
 

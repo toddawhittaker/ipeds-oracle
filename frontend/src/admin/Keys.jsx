@@ -29,6 +29,7 @@ export default function Keys() {
   // The raw key, held only until the admin dismisses the reveal dialog.
   const [minted, setMinted] = useState(null);
   const tableRef = useRef(null);
+  const headingRef = useRef(null);
 
   // A failed load must render a visible error, never an empty table — "nobody
   // has a key" is a dangerous thing to tell an admin auditing access when the
@@ -61,7 +62,7 @@ export default function Keys() {
       variant: "danger",
       title: "Revoke this key?",
       body: `Any MCP client still using ${maskedKey(row)} stops working immediately. `
-        + "This can't be undone.",
+        + "This can't be undone — mint a new key instead.",
       details: [row.email, row.label].filter(Boolean).join(" · ") || undefined,
       confirmLabel: "Revoke key",
       busyLabel: "Revoking…",
@@ -71,13 +72,18 @@ export default function Keys() {
       // The row survives the revoke but loses its only action, so there is no
       // row action left to return focus to. The search box is the table's stable
       // landing spot (the same fallback BulkBar uses).
-      onSuccess: () => { load(); tableRef.current?.focusSearch(); },
+      // The heading, not the table's search box: `load()` was just kicked off,
+      // and if it FAILS the panel swaps the DataTable for a role="alert", which
+      // unmounts the element holding focus and drops a keyboard user to <body>.
+      // The heading is outside that branch — the same reason src/Keys.jsx uses
+      // its <h1>.
+      onSuccess: () => { load(); headingRef.current?.focus?.(); },
     });
   }
 
   return (
     <div className="panel">
-      <h2>API keys</h2>
+      <h2 ref={headingRef} tabIndex={-1}>API keys</h2>
       <p className="muted">
         Keys let an MCP client reach IPEDS Oracle as the person they belong to.
         Minting one requires an allowlisted address that has signed in at least
@@ -100,6 +106,10 @@ export default function Keys() {
           {minting ? "Creating…" : "Create key"}
         </button>
       </form>
+      {/* See the same line in src/Keys.jsx: aria-busy is not a live message. */}
+      <span className="sr-only" aria-live="polite">
+        {minting ? "Creating key…" : ""}
+      </span>
 
       {err ? (
         <p className="denied-error" role="alert">{err}</p>
@@ -136,15 +146,29 @@ export default function Keys() {
             // for a key the audit question is which DAY it was last presented,
             // not which minute — see .col-day in styles.css.
             { key: "created_at", label: "Created", sortable: true, colClass: "col-day",
-              cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.created_at),
+              cellClass: "cell-trunc",
+              // `created_by` is in the payload and had nowhere to be seen. Six
+              // columns already fill the panel, so it rides in the title of the
+              // cell it describes: self-issued vs admin-issued is a real
+              // distinction when reviewing who has access.
+              cellTitle: (r) => fmtDateTime(r.created_at)
+                + (r.created_by ? ` by ${r.created_by}` : ""),
               render: (r) => fmtDay(r.created_at) },
             { key: "last_used_at", label: "Last used", sortable: true, colClass: "col-day",
               cellClass: "cell-trunc", cellTitle: (r) => fmtDateTime(r.last_used_at),
               render: (r) => fmtDay(r.last_used_at) },
+            // An active key used to render an EMPTY cell under a column headed
+            // "Status" — a screen reader says "Status, blank", which is what a
+            // failed load looks like, and sorting by it reordered rows with
+            // nothing visible changing for half of them. "Revoked" now reads as
+            // a contrast rather than as an absence, and the title answers the
+            // question that always follows: for how long was it live?
             { key: "status", label: "Status", sortable: true, colClass: "col-status",
+              cellTitle: (r) => (isRevoked(r)
+                ? `Revoked ${fmtDateTime(r.revoked_at)}` : undefined),
               render: (r) => (isRevoked(r)
                 ? <span className="keyrow-state">Revoked</span>
-                : null) },
+                : <span className="keyrow-state active">Active</span>) },
           ]}
           renderActions={(r) => (isRevoked(r) ? null : (
             <button type="button" className="icon-btn danger tip" data-tip="Revoke key"

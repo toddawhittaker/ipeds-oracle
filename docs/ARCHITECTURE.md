@@ -140,12 +140,21 @@ documents are:
   so every desktop geometry above is byte-identical at 1280. Admin → Usage's
   **Top users** is not a `DataTable` and sets no column widths, but an email
   address is one unbreakable token (measured 526px), so it gets the same wrapper
-  and no `min-width`. Deliberately **NOT `tabIndex={0} role="region"`**: the
-  `Markdown.jsx` precedent for that is justified by "its rows hold no focusable
-  children", and these rows have a sort button in every header and action
-  buttons in every row, so both extremes are already keyboard-reachable and
-  focusing one scrolls it into view — a tab stop before each table would be
-  noise, and a region sharing the table's `aria-label` announces the name twice.
+  and no `min-width`. Whether the wrapper is **`tabIndex={0} role="region"`** is
+  DERIVED, not decided per table (`src/datatable-region.js`,
+  `needsScrollRegion(hasActions, columns)`): a region is a tab stop worth adding
+  only when the table's own contents are not already keyboard-reachable, which is
+  the `Markdown.jsx` precedent's real precondition ("its rows hold no focusable
+  children") rather than the table's identity. The three `Allowlist.jsx` tables
+  have a sort button in every header and action buttons in every row, so they get
+  **no** region — a tab stop before each of three mounted tables for no gain, and
+  a region sharing the table's `aria-label` announces the name twice. **Admin →
+  Keys is the first table to take the other branch**: its `Key` column (`last4`)
+  is unsortable, so that header holds no button and the wrapper becomes a
+  focusable region named `"API keys, scrollable"` — distinct from the table's own
+  name on purpose. `.grid.data.keys` also raises the floor to **900px** for its
+  six columns. Both branches are pinned in
+  `frontend/e2e/admin-table-reflow.spec.js`.
   **This was only shippable once the Actions tooltip stopped hanging outside the
   table**: `.tip::after` is absolutely positioned and centred on its button, and
   an abspos descendant counts toward an ancestor's scrollable overflow, so the
@@ -153,7 +162,8 @@ documents are:
   `overflow-x: auto` wrapper would have put a permanent 18px scrollbar under
   every admin table. The tip is now anchored to its button's **right** edge
   (left overflow does not enter `scrollWidth` in LTR). Note `src/DataTable.jsx`
-  is used by exactly the three `Allowlist.jsx` tables — `Markdown.jsx` has a
+  is used by the three `Allowlist.jsx` tables and by `admin/Keys.jsx` —
+  `Markdown.jsx` has a
   same-named LOCAL component that is a different thing entirely. Pinned in
   `frontend/e2e/admin-table-reflow.spec.js` + the Actions-column describe in
   `admin-users-tabs.spec.js`, both viewports load-bearing (at 320 the region
