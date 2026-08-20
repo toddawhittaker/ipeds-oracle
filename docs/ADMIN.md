@@ -76,12 +76,23 @@ migration 37) is the other, and it runs the same pipeline — guard, answer cach
 learned lessons, tool loop, critic, grounding — minus everything that serves a
 conversation. It writes `source='mcp'`; a chat turn leaves the column NULL, so
 every row predating the MCP endpoint keeps reading as the chat traffic it was.
-**The column is written but not yet read**: nothing on Admin → Usage filters or
-splits by it, so the screen shows one blended total and the separation is a SQL
-query (`SELECT source, COUNT(*), SUM(cost) FROM usage_log GROUP BY source`),
-not a control. Splitting the two doors on that screen is filed follow-up work.
-Two consequences for reading spend meanwhile: an `ask` turn is a **full-price
-turn** and appears in every Usage total alongside chat, and it charges the **same per-user
+**A Source filter on the tab reads it** — All / Web chat / MCP — and narrows
+every windowed number to one door: the totals, the series behind the chart, and
+the Top users table alike. It has to reach all three, or the stat cards would
+name a door while the chart and table beneath them still showed everybody, which
+reads as authoritative and is wrong; `test_admin_router.py` pins that. The chat
+half is expressed as **not `'mcp'`**, never `source IS NULL`, so the two halves
+partition the window: every row predating migration 37 keeps reading as the chat
+traffic it was, and a future third door lands visibly in the chat half rather
+than vanishing from both (see `_source_sql` in `app/routers/admin.py`). An
+unrecognised `source` is a 422, not a silent widening back to everything.
+
+The `cost_warning` probe is deliberately **not** filtered: it asks whether this
+server's provider reports cost at all, which is a config-health question about
+the deployment rather than about either door.
+
+Two consequences for reading spend: an `ask` turn is a **full-price
+turn** and appears in every unfiltered Usage total alongside chat, and it charges the **same per-user
 limiter** (`chat_request_attempts`, `CHAT_RATE_MAX_PER_USER`), so one person's
 budget is capped across both doors rather than once each. A key that is spending
 is revoked from Admin → Keys, which ends that door without touching the person's
