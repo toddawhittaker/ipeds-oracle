@@ -2,7 +2,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { filterRows, viewRows } from "./datatable.js";
 import { needsScrollRegion } from "./datatable-region.js";
 import { pageHeaderState } from "./selection.js";
-import { IconClose } from "./icons.jsx";
+import SearchBox from "./SearchBox.jsx";
 
 // Reusable admin data table: search + sortable headers + pagination + a polite
 // aria-live status + focus management, driven by a column config and the
@@ -181,30 +181,17 @@ const DataTable = forwardRef(function DataTable({
   return (
     <>
       <div className="row usersearch">
-        <div className="searchwrap">
-          <input id={searchId} ref={searchRef} type="search" className="logsearch"
-                 placeholder={searchPlaceholder} value={q}
-                 aria-label={searchLabel || searchPlaceholder}
-                 onChange={(e) => {
-                   setQ(e.target.value); setPage(1); onSearchChange?.(e.target.value);
-                 }}
-                 onKeyDown={(e) => {
-                   // Escape clears an active search in place (standard search-
-                   // field affordance); focus stays in the box.
-                   if (e.key === "Escape" && q) {
-                     e.preventDefault();
-                     setQ(""); setPage(1); onSearchChange?.("");
-                   }
-                 }} />
-          {q && (
-            <button type="button" className="search-clear" aria-label="Clear search"
-                    onClick={() => {
-                      setQ(""); setPage(1); searchRef.current?.focus(); onSearchChange?.("");
-                    }}>
-              <IconClose size={14} />
-            </button>
-          )}
-        </div>
+        {/* The field, its clear button and Escape-to-clear live in SearchBox so
+            Admin -> Logs gets the identical control. Paging resets here rather
+            than in the component: it is this table's concern, and every path
+            that changes the query — typing, the button, Escape — goes through
+            this one callback. */}
+        <SearchBox id={searchId} inputRef={searchRef} value={q}
+                   placeholder={searchPlaceholder}
+                   label={searchLabel || searchPlaceholder}
+                   onChange={(next) => {
+                     setQ(next); setPage(1); onSearchChange?.(next);
+                   }} />
       </div>
 
       {selectable && typeof renderSelectionBar === "function"
