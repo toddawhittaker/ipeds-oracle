@@ -39,6 +39,23 @@ deployment, and together they mean a key created on your behalf is a standing
 credential you would only notice on your own `/keys` page — worth knowing before
 you decide who mints.
 
+**An admin-minted key acts as its owner in full, and that reaches further than
+the dataset.** `ask` looks up the answer cache scoped to the key's owner
+(`skills.cache_lookup(question, caller.user_id)`), so an admin holding a key
+they minted can be served that person's stored answer **prose** verbatim by
+asking a semantically similar question — the same cross-user flow the per-user
+cache scope (migration 29) was added to stop between colleagues. The turn also
+bills to the owner: `usage_log` has no key column, `created_by` lives on the key
+row rather than on the turn, and the owner gets no mail.
+
+**Accepted, not overlooked** (Todd, 2026-08-20, raised by the pre-v0.5.0
+security pass). An admin here is already trusted with the allowlist, can mint a
+key for anyone at will, and reads Admin → Usage. The mitigations considered and
+rejected as not worth their cost: skipping the cache when `created_by IS NOT
+NULL` (loses the cache for those keys), and mailing the recipient on mint (a new
+mail path that tells the user but does not stop the read). Revisit if this app
+ever has admins who are not also the operator.
+
 One user may hold **ten live keys** (`routers/keys.py::MAX_ACTIVE_KEYS`);
 revoked ones do not count. Minting is otherwise free and charges no rate limit,
 and each key carries its own request budget, so an uncapped mint loop is an
@@ -312,6 +329,15 @@ transport state. Not a session id.
 
 ## Operating it
 
+- **A tool call that cannot get a slot within `MCP_TOOL_WAIT_SECONDS` (30s) is
+  refused**, with a "server busy, retry" tool error. `MCP_TOOL_CONCURRENCY`
+  bounds what RUNS; on its own it does not bound what is QUEUED, and the rate
+  limiter counts requests started per minute rather than requests pending — so
+  one key could put 60/min in front of a drain rate of 8 per SQL timeout, every
+  waiter holding a socket and a task. Uvicorn does not cancel an ASGI task when
+  the client hangs up, so a script with a short client timeout would keep adding
+  work nobody waits for. Refusing gives the client something to act on and makes
+  the per-key limit mean something again.
 - **Behind a reverse proxy**, `/mcp` needs to be forwarded like everything else.
   A proxy that forwards the whole site already covers it; one that lists paths
   needs `/mcp` added beside `/api`. See the README's **Self-hosting → HTTPS**.

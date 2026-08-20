@@ -386,6 +386,56 @@ def run():
         check("concurrent tool calls are bounded to MCP_TOOL_CONCURRENCY",
               tool_calls_cannot_flood_the_shared_worker_pool)
 
+        def a_call_that_cannot_get_a_slot_is_refused_not_queued():
+            """The semaphore bounds what RUNS; without a wait bound it does not
+            bound what is QUEUED.
+
+            The rate limiter counts requests started per minute, not requests
+            pending, so one key can put 60/min in front of a drain rate of 8
+            per SQL timeout. Every waiter holds a socket and a task, and uvicorn
+            does not cancel an ASGI task when the client hangs up — so a script
+            with a 1s client timeout adds work nobody is waiting for, forever.
+
+            Driven at the handler for the same reason as the check above, with a
+            semaphore of ONE that is already held, so no slot can come free: the
+            call must come back refused rather than hang. A short wait is
+            patched in, or this test would take MCP_TOOL_WAIT_SECONDS.
+            """
+            import asyncio as aio
+
+            async def drive():
+                prev_slots = server._current["slots"]
+                prev_wait = server.MCP_TOOL_WAIT_SECONDS
+                server._current["slots"] = aio.Semaphore(1)
+                server.MCP_TOOL_WAIT_SECONDS = 0.25
+                try:
+                    # Hold the only slot for longer than the wait.
+                    await server._current["slots"].acquire()
+                    class _P:
+                        name, arguments = "list_families", {}
+                    return await aio.wait_for(server.on_call_tool(None, _P()), 5.0)
+                finally:
+                    server._current["slots"] = prev_slots
+                    server.MCP_TOOL_WAIT_SECONDS = prev_wait
+
+            try:
+                res = aio.run(drive())
+            except TimeoutError:
+                # The unbounded `async with` waits forever; without this the
+                # regression surfaces as the whole suite hanging then crashing,
+                # which reads like a broken test rather than a found defect.
+                raise AssertionError(
+                    "the call hung waiting for a slot instead of being refused "
+                    "— the wait bound is gone, so the queue is unbounded again"
+                ) from None
+            assert res.is_error, "a refused call must be reported as a failed tool call"
+            text = res.content[0].text
+            assert "server busy" in text.lower(), text
+            # Actionable: the client is told to retry, not just told "error".
+            assert "retry" in text.lower(), text
+        check("a tool call that cannot get a slot is refused, never queued forever",
+              a_call_that_cannot_get_a_slot_is_refused_not_queued)
+
         def a_truncated_result_does_not_claim_a_total_it_never_read():
             """The published `output_schema` used to promise `row_count` was
             "larger than len(rows) when truncated is true" — the field a caller
