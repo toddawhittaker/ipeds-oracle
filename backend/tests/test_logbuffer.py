@@ -78,6 +78,29 @@ def run():
     check("access-log token redacted in args, not just msg", "LIVETOKEN9876" not in line)
     check("access-log line still usable", "/verify" in line and "200" in line)
 
+    # The same log line carries the chat sidebar's SEARCH TERM, which is the
+    # user's own private query text — the chat where they asked about a named
+    # person, a salary, a disciplinary matter. This app keeps question text out
+    # of URLs everywhere else; the search box is the one place a subset of it
+    # travels in a query string, so it must not land in `docker logs`.
+    #
+    # Percent-escapes are the trap: a multi-word search arrives as `a%20b`, and
+    # the token pattern's `[\w.\-]+` stops dead at the `%`, leaving the rest of
+    # the search in the line while looking redacted.
+    search_rec = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:52014", "GET",
+         "/api/chat/conversations?q=salary%20dispute%20haddock", "1.1", 200),
+        None)
+    for f in access.filters:
+        f.filter(search_rec)
+    search_line = search_rec.getMessage()
+    for leaked in ("salary", "dispute", "haddock"):
+        check(f"access-log search term redacted ({leaked})", leaked not in search_line)
+    check("access-log search line still usable",
+          "/api/chat/conversations" in search_line and "200" in search_line)
+
     # Idempotent: install() runs at import time and may run again in tests; a
     # second filter would double-substitute and is a leak of a different kind.
     before = len(access.filters)

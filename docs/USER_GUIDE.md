@@ -256,6 +256,18 @@ automatically from your first question.
   *"Still working on your question…"*, replaced by the answer when it lands.
   (Reloading the page is different — that cancels the question, so the browser
   warns you first.)
+- **Search** your history with the box above the list. It looks inside your
+  chats — your questions *and* the answers — not just their names, so you can
+  find one by something you remember it saying. Starting a **New chat** clears
+  the search.
+
+  Several words all have to appear somewhere in the same conversation, though
+  not in the same message: `nursing 2023` finds the chat where you asked about
+  nursing and 2023 came up two answers later. To search for an exact phrase,
+  put it in quotes: `"award level"` finds those two words together, while
+  `award level` would also match a chat mentioning each of them separately.
+  Everything is matched literally — there are no wildcards, so searching `50%`
+  looks for `50%`.
 - **Rename** a conversation inline to something memorable.
 - **Delete** any you don't need.
 - **Collapse** the sidebar (the « button) for more room.

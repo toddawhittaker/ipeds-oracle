@@ -420,7 +420,28 @@ documents are:
   Conversations can be **renamed inline**
   (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
   never touch `updated_at`, or renaming an old chat would reorder the
-  recency-sorted sidebar). An answer's **Thinking / SQL traces are
+  recency-sorted sidebar). The sidebar list is a **query, not a cache**:
+  `GET /api/chat/conversations` takes an optional `q` that searches the caller's
+  own titles AND message text (`app/search.py` parses it — terms ANDed, a quoted
+  run kept whole, LIKE wildcards escaped to literals). Server-side because the
+  browser holds titles only, and the `LIMIT 100` applies **after** the match, so
+  it returns the 100 most recent *matching* chats rather than searching within
+  the most recent 100. Every refresh — after a send, a rename, a delete — has to
+  carry the active query, or the list silently stops agreeing with the search box
+  above it; `frontend/e2e/chat-search.spec.js` asserts that over the whole
+  request sequence, because a later correct refresh repairs the end state and
+  hides the bug. It carries the query through a **ref read at call time**, not
+  the state: `submit()` awaits the whole stream, so the refresh it runs when the
+  answer lands executes in the closure captured when Send was clicked, and
+  reading state there returns whatever was in the box a minute ago. The empty
+  states branch on the query the RENDERED list answers (`convosFor`) plus a
+  first-response flag, never on the live input — otherwise the first paint of
+  every page load tells a returning user they have no chats, and clearing a
+  no-match search flashes the same lie for the length of the debounce. A failed
+  refresh drops the rows rather than leaving them under the error, and a search
+  outcome is announced through one always-mounted live region (a region inserted
+  with its text already in it is announced unreliably). Not FTS5: one person's history is a few hundred message rows,
+  so the scan costs less than a second table plus the trigger to keep it in sync. An answer's **Thinking / SQL traces are
   mutually-exclusive disclosure toggles** whose panel opens **full-width below**
   the actions row (never as an inline `<details>` inside the flex row, which
   widened its own cell and shoved the copy buttons around); opening one closes

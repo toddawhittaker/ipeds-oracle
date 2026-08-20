@@ -439,6 +439,25 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .icon-btn:hover { color: var(--text); }
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
 .newchat { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; }
+/* The sidebar search sits between the New chat row and the list. `flex: none`
+   because .convo-list is the flex child that takes the leftover height — without
+   it the box would shrink as the list grows. */
+.convo-search { flex: none; margin-bottom: 8px; }
+/* .searchwrap carries `flex: 1 1 260px; max-width: 360px` for the admin
+   toolbars it was written for. Here the flex half is inert (.convo-search is
+   not a flex container) but the cap is not: the sidebar resizes to 480px, so
+   from ~380px on, the field visibly stopped short of a "New chat" button that
+   kept growing. Both are neutralised, including the dormant flex-basis that
+   would wake up the moment anyone puts a second control on this row. */
+.convo-search .searchwrap { flex: none; max-width: none; }
+/* The three list states (no chats, no matches, load failed). Muted body text
+   rather than a panel: it replaces a list of links, not a section. */
+/* margin-left matches .convo's own text inset, so an empty state lines up with
+   the list it replaces instead of hanging 8px to its left. */
+.convo-empty { flex: none; margin: 4px 2px 4px 12px; font-size: 13px; color: var(--muted); }
+/* The syntax hint under "no matches" — a step quieter than the sentence above
+   it, because it is a teach, not the answer. */
+.convo-empty-hint { display: block; margin-top: 4px; font-size: 12px; opacity: .85; }
 .convo-list { overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .convo-row { display: flex; align-items: center; border-radius: 8px; position: relative; }
 /* Reveal-trigger states share the row background so the actions' fade (below)
@@ -1506,7 +1525,18 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* Search box with an in-field clear control. */
 .usersearch { margin-top: 14px; }
 .searchwrap { position: relative; flex: 1 1 260px; max-width: 360px; }
-.searchwrap .logsearch { width: 100%; min-width: 0; padding-right: 34px; }
+/* The field chrome lives HERE, on the shared component, not on the container it
+   happens to sit in. Every admin search box is inside a `.row`, so it used to
+   borrow `.row input`'s border/padding/background — which meant SearchBox
+   rendered as a bare browser input the first time it was used anywhere else
+   (the chat sidebar). Same declarations, so the admin screens are unchanged;
+   `.searchwrap .logsearch` (0,2,0) simply outranks `.row input` (0,1,1) where
+   both apply. */
+.searchwrap .logsearch {
+  width: 100%; min-width: 0; padding: 10px 12px; padding-right: 34px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+}
 /* Suppress the browser's native type=search clear (×) so there aren't TWO clear
    controls overlapping — our own keyboard/tooltip-labelled button is the one. */
 .searchwrap .logsearch::-webkit-search-cancel-button,

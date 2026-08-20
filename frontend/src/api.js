@@ -103,7 +103,11 @@ export const api = {
   verify: (token) => j("POST", "/api/auth/verify", { token }),
   logout: () => j("POST", "/api/auth/logout"),
 
-  conversations: () => j("GET", "/api/chat/conversations"),
+  // `q` searches the caller's own history — their questions, the assistant's
+  // replies, and conversation titles. Terms are ANDed and "a quoted run" is one
+  // phrase; the rules live in backend/app/search.py. Empty means no search.
+  conversations: (q) => j("GET", "/api/chat/conversations"
+    + (q ? `?q=${encodeURIComponent(q)}` : "")),
   conversation: (id) => j("GET", `/api/chat/conversations/${id}`),
   renameConversation: (id, title) => j("PATCH", `/api/chat/conversations/${id}`, { title }),
   deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
