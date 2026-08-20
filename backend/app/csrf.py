@@ -15,6 +15,13 @@ Kept deliberately config-light so it can't lock out a legitimate deployment:
    same-origin case, robust to whatever host/IP/port the deployment is reached
    on) OR the configured `APP_PUBLIC_URL` (covers a proxy that rewrites `Host`).
  - Anything else — a foreign origin, or a malformed/`null` origin — is refused.
+ - A path in `exempt_paths` is skipped entirely. Only one qualifies (`/mcp`,
+   passed in by app/main.py): it is authenticated by a bearer header rather than
+   a cookie, so a cross-origin page has no ambient credential to borrow and
+   there is nothing for this layer to defend. Without the exemption every
+   browser-hosted MCP client — the MCP Inspector included — got a 403 talking
+   about cross-origin requests, which is neither true of that request nor
+   diagnosable from the client's side.
 """
 from __future__ import annotations
 
@@ -81,11 +88,15 @@ class CSRFMiddleware:
     refused request it short-circuits with a 403 and never calls the inner app.
     """
 
-    def __init__(self, app):
+    def __init__(self, app, exempt_paths: tuple[str, ...] = ()):
         self.app = app
+        # Exact paths, not prefixes: a prefix would exempt anything a later
+        # route happens to hang below one of them.
+        self.exempt_paths = frozenset(exempt_paths)
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and is_state_changing(scope["method"]):
+        if (scope["type"] == "http" and is_state_changing(scope["method"])
+                and scope.get("path") not in self.exempt_paths):
             headers = {k.decode("latin-1").lower(): v.decode("latin-1")
                        for k, v in scope.get("headers", [])}
             s = get_settings()

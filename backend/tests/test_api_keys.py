@@ -46,6 +46,7 @@ mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or
 from app import apikeys  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.main import app  # noqa: E402
+from app.routers import keys as keys_router  # noqa: E402
 from app.security import hash_token  # noqa: E402
 
 FAILURES = []
@@ -249,6 +250,72 @@ def run():
                 f"minted a key for an address with no account: {r4.status_code}"
         check("minting for an address with no account is refused",
               admin_minting_refuses_a_stranger)
+
+        def removing_a_user_revokes_their_keys():
+            """The offboarding hole: removing someone ended their SESSIONS and
+            left their keys `revoked_at IS NULL`. `verify` refuses them while the
+            owner is off the allowlist, so nothing looked wrong — until the
+            address was re-added, at which point every key that person ever
+            minted came back to life, including the leaked one that prompted the
+            removal, with no admin action and no signal. The admin's own Keys tab
+            showed them as Active throughout.
+
+            Asserts the row, not just `verify`, precisely because `verify` was
+            already correct and hid this for the whole life of the branch.
+            """
+            allow(c, "leaver@example.edu")
+            # The admin mint path needs a `users` row, i.e. one sign-in.
+            sign_in(c, "leaver@example.edu")
+            sign_in(c, "admin@example.edu")
+            r_mint = c.post("/api/admin/keys", json={"email": "leaver@example.edu"})
+            assert r_mint.status_code == 200, r_mint.text
+            leaver = r_mint.json()
+            assert apikeys.verify(leaver["key"]) is not None, "the fresh key did not work"
+
+            r6 = c.delete("/api/admin/allowlist/leaver@example.edu")
+            assert r6.status_code == 200, r6.text
+            con = connect()
+            try:
+                row = con.execute("SELECT revoked_at FROM api_keys WHERE id=?",
+                                  (leaver["id"],)).fetchone()
+            finally:
+                con.close()
+            assert row["revoked_at"] is not None, \
+                "removing the user left their key live in the table"
+
+            # The half that actually bites: re-adding the address must not
+            # resurrect the credential.
+            allow(c, "leaver@example.edu")
+            assert apikeys.verify(leaver["key"]) is None, \
+                "re-allowlisting the address brought a removed user's key back"
+        check("removing a user revokes their keys, and re-adding does not restore them",
+              removing_a_user_revokes_their_keys)
+
+        def the_live_key_cap_is_enforced_and_revoking_makes_room():
+            """Minting charges no rate limiter, so an uncapped loop is free —
+            and each key carries its own MCP request budget, so unlimited keys
+            multiply that ceiling. Checks BOTH directions: the cap refuses, and
+            a revoke frees a slot (a cap counting revoked rows would lock a user
+            out permanently after ten mints and one cleanup)."""
+            allow(c, "minty@example.edu")
+            sign_in(c, "minty@example.edu")
+            ids = []
+            for i in range(keys_router.MAX_ACTIVE_KEYS):
+                rk = c.post("/api/keys", json={"label": f"k{i}"})
+                assert rk.status_code == 200, f"key {i} was refused: {rk.text}"
+                ids.append(rk.json()["id"])
+            over = c.post("/api/keys", json={"label": "one too many"})
+            assert over.status_code == 400, \
+                f"an 11th live key was minted ({over.status_code})"
+            assert str(keys_router.MAX_ACTIVE_KEYS) in over.json()["detail"], \
+                over.json()
+            assert c.delete(f"/api/keys/{ids[0]}").status_code == 200
+            again = c.post("/api/keys", json={"label": "after a revoke"})
+            assert again.status_code == 200, \
+                f"a revoked key still counted against the cap: {again.text}"
+            sign_in(c, "admin@example.edu")
+        check("a user cannot hold more than MAX_ACTIVE_KEYS live keys",
+              the_live_key_cap_is_enforced_and_revoking_makes_room)
 
         def an_over_long_label_is_refused():
             r5 = c.post("/api/keys", json={"label": "x" * 500})

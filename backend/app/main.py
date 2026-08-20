@@ -190,7 +190,11 @@ app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan,
 app.add_middleware(BodyLimitMiddleware)
 # Origin-based CSRF guard (defense in depth over the SameSite=Lax session
 # cookie); pure-ASGI so it never buffers the chat SSE stream. See app/csrf.py.
-app.add_middleware(CSRFMiddleware)
+# MCP_PATH is exempt: it carries no cookie, so there is no ambient credential a
+# cross-origin page could borrow — and without the exemption a browser-hosted
+# MCP client is refused with a 403 about cross-origin requests before the bearer
+# gate ever runs.
+app.add_middleware(CSRFMiddleware, exempt_paths=(MCP_PATH,))
 # Security response headers (CSP + anti-framing + nosniff) on EVERY response —
 # added last so it's the OUTERMOST layer and stamps even the CSRF 403. See
 # app/secheaders.py.
