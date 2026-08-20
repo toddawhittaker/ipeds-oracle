@@ -1081,16 +1081,49 @@ def deintegrate(start_year: int, admin: sqlite3.Row = Depends(require_admin)):
 
 
 # --- Usage dashboard ----------------------------------------------------------
+def _source_sql(source: str, col: str = "source") -> str:
+    """The WHERE fragment that narrows a usage window to one door onto the agent.
+
+    Two doors write `usage_log`: the web chat leaves `source` NULL, and the MCP
+    `ask` tool writes 'mcp' (migration 37). So the chat predicate is written as
+    "not mcp" rather than "IS NULL", for two reasons. Every row predating the
+    MCP endpoint is NULL and must keep reading as the chat traffic it actually
+    was. And the two halves have to PARTITION the window -- an operator
+    reconciling a spend spike that appears in neither bucket has been handed a
+    worse screen than the blended one. A literal `source IS NULL` test would
+    drop any future third door out of both halves silently; this way it lands in
+    the chat half, visibly, until someone gives it its own filter.
+
+    `col` is qualified for the top_users query, which aliases usage_log as `l`.
+    The values are literals in the SQL rather than bound parameters because they
+    are not caller-controlled: FastAPI has already constrained `source` to the
+    Literal below, so an unrecognised value is a 422 and never reaches here.
+    """
+    if source == "mcp":
+        return f" AND {col} = 'mcp'"
+    if source == "web":
+        return f" AND ({col} IS NULL OR {col} <> 'mcp')"
+    return ""
+
+
 @router.get("/usage")
 def usage(since: float | None = None, until: float | None = None,
-          tz: str | None = None):
+          tz: str | None = None,
+          source: Literal["all", "web", "mcp"] = "all"):
     """Usage/spend over a time window [since, until] (unix seconds; default: the
     last 7 days). Returns totals, a time-bucketed series (hourly for short
     windows, else daily) for charting, top users, and recent activity.
 
     `tz` is the VIEWER's IANA timezone (the browser's resolved zone), used to
     bucket the series so the graph reads in the viewer's own local time; an
-    absent/unknown zone falls back to the server default (`resolve_tz`)."""
+    absent/unknown zone falls back to the server default (`resolve_tz`).
+
+    `source` narrows every windowed number -- totals, series and top_users alike
+    -- to one door onto the agent: 'web' for the chat UI, 'mcp' for the `ask`
+    tool, 'all' for both. It must reach all three queries or the stat cards
+    would name a door while the chart and table beneath them still showed
+    everybody, which reads as authoritative and is wrong. See `_source_sql`.
+    The cost_warning probe below is deliberately NOT filtered."""
     now = time.time()
     until = float(until) if until else now
     since = float(since) if since else (now - 7 * 86400)
@@ -1099,7 +1132,7 @@ def usage(since: float | None = None, until: float | None = None,
     hourly = (until - since) <= 2 * 86400 + 1
     bucket_fmt = "%Y-%m-%d %H:00" if hourly else "%Y-%m-%d"
     zone = resolve_tz(tz)
-    win = "WHERE created_at BETWEEN ? AND ?"
+    win = "WHERE created_at BETWEEN ? AND ?" + _source_sql(source)
     args = (since, until)
 
     con = connect()
@@ -1205,8 +1238,9 @@ def usage(since: float | None = None, until: float | None = None,
             "SELECT u.email, COUNT(*) AS queries, "
             "COALESCE(SUM(l.prompt_tokens+l.completion_tokens),0) AS tokens, "
             "COALESCE(SUM(l.cost),0.0) AS spend FROM usage_log l "
-            "JOIN users u ON u.id=l.user_id WHERE l.created_at BETWEEN ? AND ? "
-            "GROUP BY u.email ORDER BY queries DESC LIMIT 10", args).fetchall()
+            "JOIN users u ON u.id=l.user_id WHERE l.created_at BETWEEN ? AND ?"
+            + _source_sql(source, "l.source")
+            + " GROUP BY u.email ORDER BY queries DESC LIMIT 10", args).fetchall()
         # Spend-health probe: is the "Spend" number trustworthy, or silently 0?
         # Spend is provider-reported (OpenRouter's usage.cost); a provider that
         # doesn't report it leaves cost=0 unless the admin sets fallback prices.

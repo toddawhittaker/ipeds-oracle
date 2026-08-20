@@ -34,7 +34,7 @@ export declare const api: {
     deniedRequests: () => Promise<any>;
     clearDenial: (email: any) => Promise<any>;
     bulkClearDenials: (ids: any) => Promise<any>;
-    usage: (since: any, until: any) => Promise<any>;
+    usage: (since: any, until: any, source: any) => Promise<any>;
     attention: () => Promise<any>;
     markLogsSeen: () => Promise<any>;
     skills: () => Promise<any>;

@@ -26,10 +26,21 @@ const RANGES = [
 
 const METRICS = ["queries", "tokens", "spend"];
 
+// The two doors onto the agent (usage_log.source, migration 37). "Web chat" is
+// every row the MCP endpoint did not write, which includes every row predating
+// it -- see _source_sql in backend/app/routers/admin.py for why the split is
+// written that way round.
+const SOURCES = [
+  { key: "all", label: "All" },
+  { key: "web", label: "Web chat" },
+  { key: "mcp", label: "MCP" },
+];
+
 export default function Usage() {
   const [range, setRange] = useState("7d");
   const [custom, setCustom] = useState({ since: "", until: "" });
   const [metric, setMetric] = useState("tokens");
+  const [source, setSource] = useState("all");
   const [u, setU] = useState(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
@@ -47,14 +58,14 @@ export default function Usage() {
       since = now - RANGES.find((r) => r.key === range).secs;
       until = now;
     }
-    api.usage(since, until)
+    api.usage(since, until, source)
       .then((d) => { setU(d); setErr(""); })
       // A swallowed failure left `u` null forever, and the render gate is `!u`
       // -- so a failed load rendered "Loading…" PERMANENTLY, with `loading`
       // already false so even the "updating…" hint was gone.
       .catch((e) => setErr(loadErrorMessage("usage", e?.detail)))
       .finally(() => setLoading(false));
-  }, [range, custom]);
+  }, [range, custom, source]);
 
   const pick = (fn) => { setLoading(true); fn(); };
   const t = u?.totals || {};
@@ -71,23 +82,32 @@ export default function Usage() {
   return (
     <div className="panel">
       <h2 className="sr-only">Usage</h2>
-      <div className="usage-range" role="group" aria-label="Time range">
-        {RANGES.map((r) => (
-          <button key={r.key} className={range === r.key ? "on" : ""} aria-pressed={range === r.key}
-                  onClick={() => pick(() => setRange(r.key))}>{r.label}</button>
-        ))}
-        <button className={range === "custom" ? "on" : ""} aria-pressed={range === "custom"}
-                onClick={() => pick(() => setRange("custom"))}>Custom</button>
-        {range === "custom" && (
-          <span className="usage-custom">
-            <input type="date" value={custom.since} aria-label="From date"
-                   onChange={(e) => pick(() => setCustom((c) => ({ ...c, since: e.target.value })))} />
-            <span className="muted">to</span>
-            <input type="date" value={custom.until} aria-label="To date"
-                   onChange={(e) => pick(() => setCustom((c) => ({ ...c, until: e.target.value })))} />
-          </span>
-        )}
-        {loading && u && <span className="muted small">updating…</span>}
+      <div className="usage-filters">
+        <div className="usage-range" role="group" aria-label="Time range">
+          {RANGES.map((r) => (
+            <button key={r.key} className={range === r.key ? "on" : ""} aria-pressed={range === r.key}
+                    onClick={() => pick(() => setRange(r.key))}>{r.label}</button>
+          ))}
+          <button className={range === "custom" ? "on" : ""} aria-pressed={range === "custom"}
+                  onClick={() => pick(() => setRange("custom"))}>Custom</button>
+          {range === "custom" && (
+            <span className="usage-custom">
+              <input type="date" value={custom.since} aria-label="From date"
+                     onChange={(e) => pick(() => setCustom((c) => ({ ...c, since: e.target.value })))} />
+              <span className="muted">to</span>
+              <input type="date" value={custom.until} aria-label="To date"
+                     onChange={(e) => pick(() => setCustom((c) => ({ ...c, until: e.target.value })))} />
+            </span>
+          )}
+          {loading && u && <span className="muted small">updating…</span>}
+        </div>
+        <div className="usage-range" role="group" aria-label="Source">
+          {SOURCES.map((x) => (
+            <button key={x.key} className={source === x.key ? "on" : ""}
+                    aria-pressed={source === x.key}
+                    onClick={() => pick(() => setSource(x.key))}>{x.label}</button>
+          ))}
+        </div>
       </div>
 
       {err ? <p className="denied-error" role="alert">{err}</p>

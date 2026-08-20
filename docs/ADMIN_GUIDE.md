@@ -167,6 +167,24 @@ choose (hour / day / 7 days / 30 days / custom):
   the chart has the same controls as any answer chart, including image copy).
 - **Top users** — the busiest accounts, by queries, tokens, and spend.
 
+### Telling the two doors apart
+
+There are two ways to reach the assistant: the web app, and the MCP endpoint (a
+key holder's editor or script calling the `ask` tool). Both spend real money, and
+by default every number on this tab counts both together.
+
+The **Source** buttons — **All**, **Web chat**, **MCP** — split them. Pick one and
+the whole tab follows: the totals, the chart, and Top users. So if spend jumps
+and you want to know whether it was people using the app or a script that got
+stuck in a loop, switch to **MCP** and look. If that is where the spend went,
+Top users names whose key it was, and you can revoke it from
+[Admin → Keys](#keys-api-access-for-other-tools) without touching that person's
+normal access.
+
+**Web chat** means everything the MCP endpoint did not do, which includes all
+activity from before the endpoint existed. Nothing lands in a third "unknown"
+bucket, so the two always add up to **All**.
+
 ### Where "Spend" comes from (and what to do if it reads $0)
 
 Spend is **not** computed from a price list we maintain — it's the **actual dollar
@@ -409,8 +427,10 @@ allowlist **also stops their keys**, so offboarding through Admin → Users is
 complete on its own. And an `ask` call through a key is a full-price question:
 it appears in Admin → Usage with everything else and counts against that
 person's usual per-question limit, so one person's spend is capped whichever way
-they ask. A key that is spending more than you expect is revoked here without
-touching that person's web access.
+they ask. To see that traffic on its own rather than blended with web use, switch
+Admin → Usage to **MCP** ([Telling the two doors apart](#telling-the-two-doors-apart)).
+A key that is spending more than you expect is revoked here without touching that
+person's web access.
 
 ---
 

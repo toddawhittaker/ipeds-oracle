@@ -84,6 +84,12 @@ def _fake_embed(text):
 FAILURES = []
 
 
+def _close(a, b, tol=1e-9):
+    """Float compare for summed spend. This suite runs as a plain script, not
+    under pytest, so there is no pytest.approx to reach for."""
+    return abs(float(a) - float(b)) <= tol
+
+
 def check(name, fn):
     try:
         fn()
@@ -164,7 +170,8 @@ def _seed_usage_log(email, question, created_at=None, model_used="test-model",
                      first_call_cached_prompt_tokens=0, escalated=0,
                      figure_grounding=None, emit_mode=None, answer_leaked=0,
                      table_grounding=None, table_cells_checked=0,
-                     table_cells_matched=0, exhaustion=None, cost_estimated=0):
+                     table_cells_matched=0, exhaustion=None, cost_estimated=0,
+                     source=None):
     """Insert one usage_log row directly (mirroring the exact column set
     backend/app/routers/chat.py:_persist's own INSERT uses), bypassing the full
     chat-turn/streaming path -- the same direct-seed convention this file
@@ -179,13 +186,13 @@ def _seed_usage_log(email, question, created_at=None, model_used="test-model",
             "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
             "ok, cached, cost, cost_estimated, figure_grounding, emit_mode, "
             "answer_leaked, table_grounding, table_cells_checked, "
-            "table_cells_matched, exhaustion, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "table_cells_matched, exhaustion, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user_id, question, model_used, escalated, prompt_tokens,
              completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
              first_call_cached_prompt_tokens, ok, cached, cost, cost_estimated,
              figure_grounding, emit_mode, answer_leaked, table_grounding,
-             table_cells_checked, table_cells_matched, exhaustion,
+             table_cells_checked, table_cells_matched, exhaustion, source,
              created_at if created_at is not None else time.time()))
         con.commit()
     finally:
@@ -1675,6 +1682,94 @@ def _clear_usage_log():
         con.commit()
     finally:
         con.close()
+
+
+def test_usage_source_filter_splits_the_two_doors_and_null_reads_as_chat():
+    """`source` selects which door onto the agent the numbers describe. The
+    load-bearing part is that a NULL row -- every turn predating migration 37,
+    plus every web chat turn since -- reads as CHAT and never as a third
+    "unknown" bucket. Seeding one 'mcp' row against two NULL rows catches both a
+    filter that ignores the parameter (all three windows would read 3) and one
+    written as `source = 'web'`, which matches no row this app has ever
+    written."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("chatter@x.edu", "q1", created_at=now - 100, cost=1.0)
+        _seed_usage_log("chatter@x.edu", "q2", created_at=now - 90, cost=2.0)
+        _seed_usage_log("script@x.edu", "q3", created_at=now - 80, cost=4.0,
+                        source="mcp")
+        seen = {}
+        for src in ("all", "web", "mcp"):
+            r = c.get("/api/admin/usage",
+                      params={"since": now - 200, "until": now, "source": src})
+            assert r.status_code == 200, r.text
+            seen[src] = r.json()["totals"]
+        assert seen["all"]["queries"] == 3, seen
+        assert seen["web"]["queries"] == 2, seen
+        assert seen["mcp"]["queries"] == 1, seen
+        assert _close(seen["web"]["spend"], 3.0), seen
+        assert _close(seen["mcp"]["spend"], 4.0), seen
+
+
+def test_usage_source_filter_reaches_the_series_and_top_users_too():
+    """The endpoint runs three separate windowed queries -- totals, the series
+    rows, and top_users -- and a filter threaded into only the first is the
+    obvious way to half-fix this. Then the stat cards would say 'MCP' while the
+    chart and the table underneath still showed everybody, which is worse than
+    not splitting at all because it reads as authoritative."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("chatter@x.edu", "q1", created_at=now - 100, cost=1.0)
+        _seed_usage_log("script@x.edu", "q2", created_at=now - 90, cost=4.0,
+                        source="mcp")
+        r = c.get("/api/admin/usage",
+                  params={"since": now - 200, "until": now, "source": "mcp"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [x["email"] for x in body["top_users"]] == ["script@x.edu"], body
+        assert sum(b["queries"] for b in body["series"]) == 1, body
+        assert _close(sum(b["spend"] for b in body["series"]), 4.0), body
+
+
+def test_usage_web_and_mcp_always_sum_to_all():
+    """The two doors must partition the window, or an operator reconciling a
+    spend spike finds money in neither bucket. An unrecognised source value --
+    a future third door, or a typo written by some other caller -- has to land
+    in 'web' rather than vanishing from both halves, which is what a literal
+    `source IS NULL` test for chat would do."""
+    now = time.time()
+    _clear_usage_log()
+    with TestClient(app) as c:
+        _login(c)
+        _seed_usage_log("chatter@x.edu", "q1", created_at=now - 100, cost=1.0)
+        _seed_usage_log("script@x.edu", "q2", created_at=now - 90, cost=4.0,
+                        source="mcp")
+        _seed_usage_log("future@x.edu", "q3", created_at=now - 80, cost=8.0,
+                        source="something-new")
+        got = {}
+        for src in ("all", "web", "mcp"):
+            r = c.get("/api/admin/usage",
+                      params={"since": now - 200, "until": now, "source": src})
+            got[src] = r.json()["totals"]
+        assert got["web"]["queries"] + got["mcp"]["queries"] == got["all"]["queries"], got
+        assert _close(got["web"]["spend"] + got["mcp"]["spend"],
+                      got["all"]["spend"]), got
+
+
+def test_usage_rejects_an_unknown_source_value():
+    """A typo'd filter must fail loudly rather than silently widening to every
+    door -- a screen that says 'MCP' over blended numbers is a wrong answer, not
+    a missing feature."""
+    now = time.time()
+    with TestClient(app) as c:
+        _login(c)
+        r = c.get("/api/admin/usage",
+                  params={"since": now - 200, "until": now, "source": "MCP"})
+        assert r.status_code == 422, r.text
 
 
 def test_usage_cost_warning_flags_missing_spend():
@@ -4108,6 +4203,14 @@ def run():
           test_usage_totals_count_emit_mode_and_leaks)
     check("usage totals count exhausted + degraded turns (S5 health stat)",
           test_usage_totals_count_exhaustion_turns)
+    check("usage source filter splits the two doors; a NULL row reads as chat",
+          test_usage_source_filter_splits_the_two_doors_and_null_reads_as_chat)
+    check("usage source filter reaches the series and top_users, not just totals",
+          test_usage_source_filter_reaches_the_series_and_top_users_too)
+    check("usage source: web + mcp always sum to all",
+          test_usage_web_and_mcp_always_sum_to_all)
+    check("usage rejects an unknown source value (422, never a silent widening)",
+          test_usage_rejects_an_unknown_source_value)
     check("usage cost_warning fires on unpriced LLM activity, clears when cost lands",
           test_usage_cost_warning_flags_missing_spend)
     check("usage cost_warning ignores activity that spent nothing",

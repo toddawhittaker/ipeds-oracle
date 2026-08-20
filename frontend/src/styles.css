@@ -1204,7 +1204,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    alone is a race a wider locale or a different platform font eventually wins.
    Width only keeps the ellipsis from showing in the ordinary case. */
 .grid.data .col-when { width: 210px; }
-.usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 18px; }
+/* Two filter rows (time range, then source) share one block of spacing, so
+   adding the second did not double the gap above the stat cards. */
+.usage-filters { margin: 2px 0 18px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0; }
 .usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
 .usage-custom { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
