@@ -2,12 +2,13 @@ import js from "@eslint/js";
 import globals from "globals";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
-import prettier from "eslint-config-prettier";
 
 // Flat config (ESLint 10). Lints the React app for real defects — undefined
-// vars, unused code, and the rules-of-hooks / exhaustive-deps foot-guns — and
-// leaves all formatting to Prettier (eslint-config-prettier turns the
-// stylistic rules off). See .github/workflows/ci.yml for the CI gate.
+// vars, unused code, and the rules-of-hooks / exhaustive-deps foot-guns.
+// Formatting is not enforced by any tool: this codebase keeps a compact
+// hand-written style that Prettier disagreed with in 144 of 169 files, so
+// Prettier was dropped rather than mass-reformat. See
+// .github/workflows/ci.yml for the CI gate.
 export default [
   {
     ignores: [
@@ -55,5 +56,4 @@ export default [
       globals: { ...globals.node },
     },
   },
-  prettier,
 ];
