@@ -1513,7 +1513,18 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* Search box with an in-field clear control. */
 .usersearch { margin-top: 14px; }
 .searchwrap { position: relative; flex: 1 1 260px; max-width: 360px; }
-.searchwrap .logsearch { width: 100%; min-width: 0; padding-right: 34px; }
+/* The field chrome lives HERE, on the shared component, not on the container it
+   happens to sit in. Every admin search box is inside a `.row`, so it used to
+   borrow `.row input`'s border/padding/background — which meant SearchBox
+   rendered as a bare browser input the first time it was used anywhere else
+   (the chat sidebar). Same declarations, so the admin screens are unchanged;
+   `.searchwrap .logsearch` (0,2,0) simply outranks `.row input` (0,1,1) where
+   both apply. */
+.searchwrap .logsearch {
+  width: 100%; min-width: 0; padding: 10px 12px; padding-right: 34px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+}
 /* Suppress the browser's native type=search clear (×) so there aren't TWO clear
    controls overlapping — our own keyboard/tooltip-labelled button is the one. */
 .searchwrap .logsearch::-webkit-search-cancel-button,

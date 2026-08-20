@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { mockConversation, mockConversations, mockMe, mockStreamChat, mockVersion } from "./mocks.js";
+import { mockAccessRequests, mockAllowlist, mockConversation, mockConversations,
+         mockDeniedRequests, mockMe, mockStreamChat, mockVersion } from "./mocks.js";
 
 // Browser truth for the sidebar's conversation search. The RULES (terms ANDed,
 // a quoted run kept whole, LIKE wildcards escaped) are the server's and are
@@ -124,3 +125,34 @@ test("no refresh drops the active search, not even a transient one",
     );
     await expect(titles(page)).toHaveCount(2);
   });
+
+test("the sidebar search box is chromed like every other one", async ({ page }) => {
+  // SearchBox is shared with the admin screens, and its field chrome used to
+  // come from `.row input` — the container every admin search happens to sit
+  // in. Rendered anywhere else (here) it fell back to a bare browser input that
+  // visibly did not belong. The chrome now lives on `.searchwrap .logsearch`,
+  // i.e. on the component, and this pins that: the two must COMPUTE the same,
+  // which no unit test can see and only an eye would otherwise catch.
+  const chrome = (el) => {
+    const s = globalThis.getComputedStyle(el);
+    return [s.borderTopWidth, s.borderTopStyle, s.borderTopColor, s.borderRadius,
+            s.paddingTop, s.paddingLeft, s.paddingRight, s.backgroundColor,
+            s.color].join("|");
+  };
+
+  await mockMe(page, { email: "admin@example.edu", is_admin: true });
+  await mockVersion(page);
+  await mockConversations(page, CONVOS);
+  await mockAllowlist(page, [{ email: "a@example.edu", is_admin: 0, added_at: 1 }]);
+  await mockAccessRequests(page, []);
+  await mockDeniedRequests(page, []);
+
+  await page.goto("/");
+  const sidebar = await page.getByRole("searchbox", { name: "Search your chats" })
+    .evaluate(chrome);
+
+  await page.goto("/admin/users");
+  const admin = await page.getByRole("searchbox").first().evaluate(chrome);
+
+  expect(sidebar).toBe(admin);
+});
