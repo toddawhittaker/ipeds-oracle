@@ -14,9 +14,7 @@
     "test:e2e": "playwright test",
     "test:unit": "vitest run --coverage",
     "test:unit:watch": "vitest",
-    "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"e2e/**/*.js\"",
-    "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" \"e2e/**/*.js\""
+    "lint": "eslint ."
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -35,12 +33,10 @@
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.1",
-    "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.11.0",
     "jsdom": "^30.0.1",
-    "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"

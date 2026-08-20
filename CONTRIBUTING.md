@@ -473,13 +473,20 @@ looked at. `[FONT_MISSING]` is expected and accepted: `--serif`/`--mono` are
 system-font stacks with real fallbacks, and this app deliberately ships no
 webfonts (it keeps the CSP's `script-src 'self'` untouched).
 
-## Lint & format
+## Lint
 
 ```bash
 .venv/bin/ruff check --config backend/pyproject.toml backend/app backend/tests scripts   # backend lint + import order (matches CI scope)
-cd frontend && npm run lint             # ESLint (real-defect rules; formatting delegated to Prettier)
-cd frontend && npm run format           # Prettier (write) — optional; existing files aren't mass-reformatted
+cd frontend && npm run lint             # ESLint — real-defect rules only
 ```
+
+**No tool formats the frontend, and that is deliberate.** Prettier used to be
+installed but nothing ever ran it: no CI job, no gate step, and `format:check`
+had never passed — it disagreed with 144 of the 169 files in its own globs,
+because this codebase keeps a compact hand-written style (several short
+statements to a line, one-line `try`/`catch`) that Prettier expands. Adopting it
+meant reformatting 85% of the frontend; it was dropped instead. Match the style
+of the file you are editing.
 
 ## Dependencies
 
