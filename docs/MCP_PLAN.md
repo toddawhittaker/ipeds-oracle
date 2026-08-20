@@ -42,6 +42,7 @@ Two decisions that shape everything below:
 | Tool surface | The seven data tools **and** an `ask` tool that runs the full agent loop |
 | Key powers | Every key can call every tool. No per-key scopes. |
 | `ask` and chat history | Stateless. No conversation or message rows. Spend is still recorded. |
+| MCP transport sessions | **Stateless — no `mcp-session-id`.** Confirmed by Todd 2026-08-19; see below. |
 | Release scope | 0.5.0 is this feature only |
 | Public access | Behind the existing TLS reverse proxy on a real hostname |
 | Protocol code | The official `mcp` Python SDK |
@@ -691,7 +692,9 @@ being an admin path — the loop is the only place a page gets scanned at all, a
   structured result shape, how keys are minted and revoked, the rate limits, and
   the honest OAuth paragraph: static keys work with Claude Code and the Messages
   API connector, not with claude.ai custom connectors, and why we are not
-  serving OAuth discovery.
+  serving OAuth discovery. **Say that the endpoint is stateless** — see the
+  section below; it cost a header probe to discover, which is the definition of
+  something that belonged in the docs.
 - **Delete `docs/MCP_PLAN.md`.** Its job ends here.
 - **`docs/AUTH_AND_SECURITY.md`** — an API-keys section: what is stored, why
   sha256, revocation, and the allowlist re-check.
@@ -708,6 +711,30 @@ being an admin path — the loop is the only place a page gets scanned at all, a
   when it is small, and this one is.
 - **`docs/USER_GUIDE.md` / `docs/ADMIN_GUIDE.md`** — how to get a key, and how an
   admin issues or revokes one.
+
+### Sessions: stateless, and staying that way
+
+The server returns **no `mcp-session-id` header**, so every request stands alone
+carrying only its bearer key. That is a deliberate profile of the transport, not
+an omission, and Todd confirmed it on 2026-08-19 after the hands-on pass surfaced
+the question. Three reasons, recorded so the next reader does not re-derive them:
+
+- **A session id would not give `ask` conversation memory.** It is a routing
+  token for server-to-client pushes — progress on a long call, list-changed
+  notifications, sampling — none of which this server does. Nothing in the tool
+  would read it unless we wrote that code.
+- **It would cost per-session state in server memory**, which ends both
+  restart-safety and the ability to run more than one process without sticky
+  routing or shared state. Today any request can land anywhere and a redeploy
+  interrupts nothing.
+- **Clients do not require one.** The spec makes sessions optional and describes
+  the stateless server explicitly; a client that receives no id does not send
+  one. Claude Code and the Messages API connector both handle it.
+
+If follow-ups over MCP are ever wanted, the design is an explicit
+`conversation_id` **argument** on the `ask` tool, backed by the rows the chat
+path already persists — it works across restarts and processes and does not
+depend on transport state. Not a session id.
 
 ---
 
