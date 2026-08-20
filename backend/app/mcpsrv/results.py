@@ -31,8 +31,13 @@ RUN_SQL_OUTPUT_SCHEMA: dict[str, Any] = {
                  "description": "Result rows, each a list of cell values "
                                 "positionally matching `columns`."},
         "row_count": {"type": "integer",
-                      "description": "Rows the query produced, which is larger "
-                                     "than len(rows) when `truncated` is true."},
+                      "description": "How many rows are in `rows`. When "
+                                     "`truncated` is true the query matched MORE "
+                                     "than this and the true total is NOT known "
+                                     "— the reader stops one row past the cap, "
+                                     "so counting the rest would mean running "
+                                     "the query again. Re-query with COUNT(*) "
+                                     "if the total is what you need."},
         "truncated": {"type": "boolean",
                       "description": "True when the row cap cut the result. An "
                                      "aggregate computed over a truncated "
@@ -54,9 +59,17 @@ def structured_result(result: QueryResult) -> dict[str, Any]:
     `to_storage` carries columns, rows and truncation; the three fields it drops
     (they are model-facing prose the chat path never reloads) are re-added here,
     because an MCP caller reading rows programmatically needs all three:
-    `row_count` to notice it is holding a cut result, `sql` to know what it is
-    holding, and `notes` because a sqllint warning is the difference between a
-    right number and a confidently wrong one.
+    `row_count` to size what it is holding, `sql` to know what it is, and `notes`
+    because a sqllint warning is the difference between a right number and a
+    confidently wrong one.
+
+    `row_count` IS `len(rows)`, always, and the schema now says so. It used to
+    promise the opposite — "larger than len(rows) when truncated is true" — which
+    `QueryResult` cannot deliver: `tools/sql.py` slices to the cap BEFORE
+    counting, and the cursor stops one row past it, so the true total was never
+    read. A caller reading 200 and reporting "200 institutions" was being told by
+    the published schema that 200 was the total. `truncated` is the field that
+    says there were more; nothing here can say how many.
     """
     payload = result.to_storage()
     payload["row_count"] = result.row_count

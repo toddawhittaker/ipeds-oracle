@@ -89,6 +89,7 @@ from app.db import connect  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
 from app.mcpsrv import ask, resources, server  # noqa: E402
+from app.mcpsrv.results import structured_result  # noqa: E402
 from app.tools import registry  # noqa: E402
 from app.tools.sql import QueryResult  # noqa: E402
 
@@ -223,7 +224,12 @@ def run():
             assert r.status_code == 401, f"{r.status_code}: {r.text}"
             r = mcp_post(c, "tools/list", key="ipeds_mcp_not-a-real-key")
             assert r.status_code == 401, f"a bogus key got {r.status_code}"
-            assert "ipeds" not in r.text.lower() or "detail" in r.text, r.text
+            # The refusal says nothing about WHICH check failed, and nothing
+            # about the key it was handed. (The previous form of this line was
+            # `"ipeds" not in text or "detail" in text`, whose right disjunct is
+            # true of every 401 this endpoint produces — it could not fail.)
+            assert r.json() == {"detail": "A valid API key is required."}, r.text
+            assert "not-a-real-key" not in r.text, "the refusal echoed the key"
         check("no key and a wrong key are both refused", rejects_without_a_key)
 
         def a_wrong_auth_scheme_is_a_clean_401():
@@ -379,6 +385,39 @@ def run():
                  f"{limit} bound — MCP can starve chat and the web UI again")
         check("concurrent tool calls are bounded to MCP_TOOL_CONCURRENCY",
               tool_calls_cannot_flood_the_shared_worker_pool)
+
+        def a_truncated_result_does_not_claim_a_total_it_never_read():
+            """The published `output_schema` used to promise `row_count` was
+            "larger than len(rows) when truncated is true" — the field a caller
+            reads to learn how big the result really was. `tools/sql.py` slices
+            to the cap BEFORE counting and the cursor stops one row past it, so
+            the two were always equal and the total was never read at all. A
+            client asking for Ohio institutions got 200 rows, `row_count: 200`,
+            and a schema telling it 200 was the count.
+
+            Drives the real tool with a deliberately tiny cap, so the truncating
+            path this suite otherwise never takes (every other check runs LIMIT
+            3) is the one under test.
+            """
+            from app.tools import sql as sqltool
+            sink = {}
+            text = registry.dispatch(
+                "run_sql", {"sql": "SELECT unitid FROM hd"}, result_sink=sink)
+            assert not text.startswith("ERROR"), text
+            full = sink["result"]
+            assert len(full.rows) >= 2, \
+                f"the fixture needs 2+ hd rows to truncate; got {len(full.rows)}"
+
+            cut = sqltool.run_sql("SELECT unitid FROM hd", limit=1)
+            payload = structured_result(cut)
+            assert payload["truncated"] is True, payload
+            assert payload["row_count"] == len(payload["rows"]) == 1, payload
+            # The whole point: a caller must not be able to read the total out of
+            # this payload, because nothing here knows it.
+            assert payload["row_count"] < len(full.rows), \
+                "row_count reported the full total, which the reader never saw"
+        check("a truncated result never claims a total it did not read",
+              a_truncated_result_does_not_claim_a_total_it_never_read)
 
         def a_nested_lifespan_does_not_blank_the_endpoint():
             """`start_mcp` used to set `_current["app"] = None` on the way out
