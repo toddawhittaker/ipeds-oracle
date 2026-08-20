@@ -33,6 +33,12 @@ the allowlist revokes their keys too, in the same transaction that ends their
 sessions: a session and a key are two doors onto the same data, and closing one
 is not offboarding.
 
+A key **never expires**, and a key an admin mints for someone sends that person
+no mail (unlike an access approval). Both are deliberate for a private
+deployment, and together they mean a key created on your behalf is a standing
+credential you would only notice on your own `/keys` page — worth knowing before
+you decide who mints.
+
 One user may hold **ten live keys** (`routers/keys.py::MAX_ACTIVE_KEYS`);
 revoked ones do not count. Minting is otherwise free and charges no rate limit,
 and each key carries its own request budget, so an uncapped mint loop is an
@@ -171,10 +177,23 @@ of querying. The web UI renders that as chips to click; here the caller gets the
 question as prose and re-asks a narrower one. Such a turn is not cached, exactly
 as in chat.
 
-**Nothing goes unbilled.** Every path out of `ask` that costs an LLM call — a
-guard refusal, a cache hit's guard call, a full turn — writes its `usage_log` row
-with `source='mcp'` before returning. See `docs/ADMIN.md` for how the two doors
-are told apart on Admin → Usage.
+**Spend is recorded on every path that has one** — a guard refusal, a cache
+hit's guard call, a full turn — as a `usage_log` row with `source='mcp'`, written
+before the answer returns.
+
+Two honest gaps, both shared with the web chat rather than special to this door.
+A turn that is **cancelled** before it finishes — the client gave up, or the
+process is shutting down — bills nothing, exactly as `routers/chat.py` documents
+for a cancelled stream; it matters more here, because MCP clients routinely set
+short timeouts. And the billing write itself is **best-effort**: if `app.db` is
+locked by a concurrent writer the row is lost and logged rather than taking the
+finished answer down with it. Spend stays *bounded* either way, because the
+per-user rate limiter is charged first.
+
+`source` is written, but nothing reads it yet: Admin → Usage shows MCP turns in
+its totals alongside chat and has no control to separate them. Splitting the two
+doors on that screen is filed as follow-up work; until then the separation is a
+SQL query away, not a click. See `docs/ADMIN.md`.
 
 ## Rate limits and spend
 
@@ -283,6 +302,13 @@ transport state. Not a session id.
 - **Behind a reverse proxy**, `/mcp` needs to be forwarded like everything else.
   A proxy that forwards the whole site already covers it; one that lists paths
   needs `/mcp` added beside `/api`. See the README's **Self-hosting → HTTPS**.
+- **Give the proxy a long read timeout on this path.** With `json_response`
+  and no progress notifications, nothing goes over the wire until the whole call
+  finishes, so a long `ask` sends no bytes for its entire duration — up to
+  `LLM_MAX_TOOL_ITERS` tool calls, each able to hold `SQL_TIMEOUT_SECONDS`.
+  nginx's default `proxy_read_timeout` is 60s, which would hand the client a 504
+  while the server finishes, caches and bills the answer. The web chat is immune
+  because SSE keeps producing bytes; this path is not.
 - **An MCP client needs a certificate it trusts.** A browser can be told to
   accept a self-signed certificate; a client library generally cannot, so the
   self-signed posture is a LAN convenience, not a way to serve MCP.

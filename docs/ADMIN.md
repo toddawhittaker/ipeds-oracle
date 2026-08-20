@@ -76,8 +76,12 @@ migration 37) is the other, and it runs the same pipeline — guard, answer cach
 learned lessons, tool loop, critic, grounding — minus everything that serves a
 conversation. It writes `source='mcp'`; a chat turn leaves the column NULL, so
 every row predating the MCP endpoint keeps reading as the chat traffic it was.
-Two consequences for reading spend: an `ask` turn is a **full-price turn** and
-appears in every Usage total alongside chat, and it charges the **same per-user
+**The column is written but not yet read**: nothing on Admin → Usage filters or
+splits by it, so the screen shows one blended total and the separation is a SQL
+query (`SELECT source, COUNT(*), SUM(cost) FROM usage_log GROUP BY source`),
+not a control. Splitting the two doors on that screen is filed follow-up work.
+Two consequences for reading spend meanwhile: an `ask` turn is a **full-price
+turn** and appears in every Usage total alongside chat, and it charges the **same per-user
 limiter** (`chat_request_attempts`, `CHAT_RATE_MAX_PER_USER`), so one person's
 budget is capped across both doors rather than once each. A key that is spending
 is revoked from Admin → Keys, which ends that door without touching the person's

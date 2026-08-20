@@ -59,7 +59,7 @@ from app import guard, ratelimit, skills
 from app.db import connect, record_usage
 from app.llm import cost_is_estimated, effective_cost, stream_agent
 from app.mcpsrv.auth import current_caller
-from app.routers.chat import MAX_QUESTION_LEN, _results_for_storage
+from app.routers.chat import MAX_QUESTION_LEN, _guard_usage_kwargs, _results_for_storage
 from app.tools.sql import ipeds_years
 
 log = logging.getLogger("ipeds.mcp")
@@ -241,20 +241,39 @@ def _bill(*, user_id: int, question: str, model_used: str, usage=None,
                             else "answered" if result.exhausted else None),
                 created_at=now)
         else:
+            # `_guard_usage_kwargs` rather than the same five expressions written
+            # out again: it is ONE accounting rule (what a turn whose only LLM
+            # call was the guard costs), and two hand-maintained copies of it
+            # drift the day a field is added — silently, and only on this door.
+            # Same hazard `db.record_usage` was extracted to close on the
+            # 22-column INSERT, left open on the five expressions beside it.
             record_usage(
                 con, user_id=user_id, question=question, model_used=model_used,
-                source="mcp", cached=cached,
-                prompt_tokens=usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens,
-                cached_prompt_tokens=usage.cached_prompt_tokens,
-                cost=effective_cost(usage.cost, usage.prompt_tokens,
-                                    usage.completion_tokens,
-                                    cached_prompt_tokens=usage.cached_prompt_tokens),
-                cost_estimated=cost_is_estimated(usage.cost),
-                created_at=now)
+                source="mcp", cached=cached, created_at=now,
+                **_guard_usage_kwargs(usage))
         con.commit()
     finally:
         con.close()
+
+
+async def _bill_best_effort(**kwargs) -> None:
+    """`_bill` off the event loop, and never at the cost of the answer.
+
+    Billing opens its own connection and commits, so under app.db write
+    contention (WAL, a concurrent chat `_persist` holding the writer, the
+    busy_timeout expiring) it can raise `database is locked`. Unguarded that
+    propagates out of `run_ask` into the handler and comes back as a tool error
+    — so a lock on the accounting table would throw away an answer that is
+    finished and has ALREADY cost the provider its tokens. Losing the row loses
+    the record of the spend; losing the answer loses the record AND the answer.
+
+    Logged loudly, because a silent gap in `usage_log` is exactly the kind of
+    thing an operator only notices when the numbers stop adding up.
+    """
+    try:
+        await run_in_threadpool(_bill, **kwargs)
+    except Exception:
+        log.exception("ask: recording usage failed; the answer still stands")
 
 
 async def run_ask(arguments: dict) -> types.CallToolResult:
@@ -298,7 +317,7 @@ async def run_ask(arguments: dict) -> types.CallToolResult:
     #    History is empty by construction: there is no conversation.
     verdict = await guard.classify(question, [])
     if not verdict.allowed:
-        await run_in_threadpool(_bill, user_id=caller.user_id, question=question,
+        await _bill_best_effort(user_id=caller.user_id, question=question,
                                 model_used="guard", usage=verdict.usage)
         # A refusal is an ANSWER, not a tool failure: the caller asked something
         # this assistant does not cover, and the text says so usefully.
@@ -308,7 +327,7 @@ async def run_ask(arguments: dict) -> types.CallToolResult:
     #    Scoped to this user, like every other read of it.
     cached = await run_in_threadpool(skills.cache_lookup, question, caller.user_id)
     if cached:
-        await run_in_threadpool(_bill, user_id=caller.user_id, question=question,
+        await _bill_best_effort(user_id=caller.user_id, question=question,
                                 model_used="cache", usage=verdict.usage, cached=True)
         # No grounding status on a replay, the same call the chat path makes: the
         # stored prose was graded when it was produced, but re-grading it here
@@ -350,7 +369,7 @@ async def run_ask(arguments: dict) -> types.CallToolResult:
     result.cached_prompt_tokens += verdict.usage.cached_prompt_tokens
     result.cost += verdict.usage.cost
 
-    await run_in_threadpool(_bill, user_id=caller.user_id, question=question,
+    await _bill_best_effort(user_id=caller.user_id, question=question,
                             model_used=result.model_used, result=result)
 
     # 7) Cache a successful answer, on the same terms as chat — and WITH its
