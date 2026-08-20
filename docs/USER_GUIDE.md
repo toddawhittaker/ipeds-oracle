@@ -268,6 +268,10 @@ automatically from your first question.
   `award level` would also match a chat mentioning each of them separately.
   Everything is matched literally — there are no wildcards, so searching `50%`
   looks for `50%`.
+
+  Each result shows a line of the text that matched, underneath the chat's name,
+  so you can tell why a chat is in the list when its name doesn't say. A chat
+  that matched only on its name has nothing extra to show and doesn't get one.
 - **Rename** a conversation inline to something memorable.
 - **Delete** any you don't need.
 - **Collapse** the sidebar (the « button) for more room.

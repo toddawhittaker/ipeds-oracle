@@ -1345,7 +1345,13 @@ export default function Chat({ me }) {
                           className={"convo" + (c.id === convId ? " on" : "")}
                           title={c.title || "Untitled"}
                           aria-current={c.id === convId ? "page" : undefined}>
-                      {c.title || "Untitled"}
+                      <span className="convo-t">{c.title || "Untitled"}</span>
+                      {/* Why this row matched, when its title does not say. Kept
+                          INSIDE the link so it is part of the link's accessible
+                          name: during a search the explanation is exactly what a
+                          screen-reader user needs to choose between rows, and it
+                          is absent the rest of the time. */}
+                      {c.snippet && <span className="convo-snip">{c.snippet}</span>}
                     </Link>
                     <div className="convo-actions">
                       <button type="button" className="convo-act"

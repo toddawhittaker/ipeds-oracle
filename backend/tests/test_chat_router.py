@@ -219,6 +219,81 @@ def _search(c, q):
     return {row["id"] for row in r.json()}
 
 
+def _rows(c, q):
+    r = c.get("/api/chat/conversations", params={"q": q})
+    assert r.status_code == 200, r.text
+    return {row["id"]: row for row in r.json()}
+
+
+def test_a_hit_carries_a_snippet_explaining_why_it_matched():
+    """THE BUG: a row whose title contains none of the typed words is an
+    unexplained hit -- it is in the list and the only way to learn why is to
+    open it. The snippet has to quote the MESSAGE, since the title by
+    construction cannot explain this match."""
+    with TestClient(app) as c:
+        _login_fresh(c, "snip@example.edu")
+        conv = _conv_with(c, "a question about degrees",
+                          "the answer mentions baccalaureate awards in Ohio")
+        row = _rows(c, "baccalaureate")[conv]
+        assert row["snippet"], row
+        assert "baccalaureate" in row["snippet"], row["snippet"]
+        # The title genuinely does not contain the term -- otherwise this test
+        # would pass on a snippet built from the title.
+        assert "baccalaureate" not in (row["title"] or "").lower(), row
+
+
+def test_the_unfiltered_list_carries_no_snippet_key():
+    """Browsing is not searching: with no `q` there is no match to quote, and
+    adding a null key to every row of the default response changes a payload
+    that four other callers already read."""
+    with TestClient(app) as c:
+        _login_fresh(c, "nosnip@example.edu")
+        _conv_with(c, "a question about degrees", "an answer about awards")
+        rows = c.get("/api/chat/conversations").json()
+        assert rows, rows
+        assert "snippet" not in rows[0], rows[0]
+
+
+def test_a_title_only_match_yields_a_null_snippet_not_a_wrong_one():
+    """A conversation can match entirely on its title, leaving no message worth
+    quoting. The row must still come back -- returning null here, rather than
+    dropping the row or quoting an unrelated message, is what keeps the list and
+    the explanation independent."""
+    with TestClient(app) as c:
+        _login_fresh(c, "titleonly@example.edu")
+        conv = _conv_with(c, "a question about degrees", "an answer about awards")
+        assert c.patch(f"/api/chat/conversations/{conv}",
+                       json={"title": "Zymurgy"}).status_code == 200
+        row = _rows(c, "Zymurgy")[conv]
+        assert row["snippet"] is None, row
+
+
+def test_a_snippet_never_quotes_another_users_messages():
+    """The snippet runs its own query, so the tenancy scope the search above
+    carries does not automatically apply to it. Widening that lookup past the
+    conversation id would leak one person's message text into another person's
+    sidebar -- a worse failure than the search bug this feature fixes."""
+    # The OTHER user's conversation is seeded FIRST, deliberately: the snippet
+    # lookup is ORDER BY id LIMIT 1, so a leak only shows when the foreign row
+    # sorts EARLIER than the owner's own. Seeded the other way round this test
+    # passes against a query with no tenancy scope at all -- which is how it was
+    # first written, and a mutation run is what exposed it.
+    with TestClient(app) as c2:
+        _login_fresh(c2, "other@example.edu")
+        # SECRETPHRASE sits in the message that MATCHES. Put it in the answer
+        # instead and the sentinel is unobservable: the lookup returns the
+        # first matching row, so a leak would surface the foreign QUESTION and
+        # this assertion would sail past it.
+        _conv_with(c2, "zymurgy SECRETPHRASE from another user", "an unrelated answer")
+    with TestClient(app) as c:
+        _login_fresh(c, "owner@example.edu")
+        mine = _conv_with(c, "my question about zymurgy", "my own answer text")
+        rows = _rows(c, "zymurgy")
+        assert mine in rows, rows
+        for row in rows.values():
+            assert "SECRETPHRASE" not in (row.get("snippet") or ""), row
+
+
 def test_search_ands_its_terms_across_a_conversation():
     """Two words find only the conversation holding BOTH — anywhere in it, not
     necessarily in one message. The regression this catches is ORing the terms,
@@ -2542,6 +2617,14 @@ def run():
     check("live and reloaded cell counts agree for an ungrounded turn "
           "(0 vs NULL divergence)",
           test_live_and_reloaded_cell_counts_agree_for_an_ungrounded_turn)
+    check("a hit carries a snippet explaining why it matched",
+          test_a_hit_carries_a_snippet_explaining_why_it_matched)
+    check("the unfiltered list carries no snippet key",
+          test_the_unfiltered_list_carries_no_snippet_key)
+    check("a title-only match yields a null snippet, not a wrong one",
+          test_a_title_only_match_yields_a_null_snippet_not_a_wrong_one)
+    check("a snippet never quotes another user's messages",
+          test_a_snippet_never_quotes_another_users_messages)
     check("search ANDs its terms across a whole conversation",
           test_search_ands_its_terms_across_a_conversation)
     check("a quoted phrase does not match its words apart",
