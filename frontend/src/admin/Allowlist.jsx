@@ -349,7 +349,7 @@ export default function Allowlist({ me, sub, onAttentionChanged }) {
       return;
     }
     setCsvError("");
-    let text = "";
+    let text;
     try {
       text = await file.text();
     } catch {
