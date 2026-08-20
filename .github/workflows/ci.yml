@@ -16,13 +16,10 @@ name: CI
 
 on:
   push:
-    # feat/mcp-server is the v0.5.0 epic branch: sub-PRs merge into it rather
-    # than main, so without it here every one of them would land unchecked.
-    # Remove this line once the epic merges to main and the branch is deleted.
-    branches: [main, feat/mcp-server]
+    branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, feat/mcp-server]
+    branches: [main]
   workflow_dispatch:
 
 # A newer commit on the same branch/PR cancels the in-flight run.
