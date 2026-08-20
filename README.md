@@ -91,11 +91,16 @@ Ask a question in the box at the bottom and watch the answer stream in.
   conversation also removes the exchanges below it (they followed from it), so
   the app confirms first and says how many.
 - **Conversations** are saved in the sidebar (named automatically), and you can
-  rename or delete any of them. Collapse the sidebar for more room. A question
-  still running keeps working if you navigate away — come back and you'll see it
-  in progress, then the answer.
+  rename or delete any of them. **Search** them from the box above the list — it
+  looks inside the chats, your questions *and* the answers, so you can find one
+  by something you remember it saying. Every word has to appear somewhere in the
+  same chat; quote a phrase to keep it together. Collapse the sidebar for more
+  room. A question still running keeps working if you navigate away — come back
+  and you'll see it in progress, then the answer.
 - **Your account menu** — the avatar in the top-right holds **light/dark mode**
-  (remembered), **About**, **Sign out**, and **Admin** for administrators.
+  (remembered), **API keys** (for connecting another tool — see
+  [MCP access](#mcp-access)), **About**, **Sign out**, and **Admin** for
+  administrators.
 
 A repeat of a near‑identical question may return instantly from a cache, but the
 numbers are always re‑checked against the live data.
@@ -128,6 +133,9 @@ Signed‑in admins get an **Admin** entry in the account menu:
   the data‑integrity rates (how many answers' figures and table cells could be
   reproduced from the query results).
 - **Skills** — review and curate the lessons the assistant has learned.
+- **Keys** — every API key in the deployment, with its owner and whether it is
+  still live. Mint one on someone's behalf, revoke one, or revoke a selection in
+  one go (see [MCP access](#mcp-access)).
 - **Logs** — recent server activity.
 
 Wherever something is waiting — access requests, unverified lessons, new problems
@@ -140,7 +148,9 @@ The [Admin guide](docs/ADMIN_GUIDE.md) covers all of this in depth.
 
 A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
 SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
-charts. It's designed to be cheap to run and safe by construction — the model
+charts. The same agent and the same data are reachable over a **Model Context
+Protocol** endpoint, so an MCP client can ask the questions the web chat asks
+(see [MCP access](#mcp-access)). It's designed to be cheap to run and safe by construction — the model
 can only issue read‑only queries, bounded by a timeout, a row cap, and a
 per‑value size cap. Answers are additionally checked after the fact: a
 deterministic pass tries to reproduce each answer's hero figure and table cells

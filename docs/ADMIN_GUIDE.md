@@ -371,6 +371,8 @@ Users mint their own keys from the account menu → **API keys**. This tab is fo
 the two things they can't do: seeing everybody's, and issuing one on someone's
 behalf.
 
+![The Keys tab: every user's keys with owner, label, masked value, and status](images/admin-keys.png)
+
 **Issuing a key.** Type the person's email, optionally a label, and select
 **Create key**. The address has to be allowlisted *and* have signed in at least
 once — a key attaches to an existing account, it doesn't create one. The key

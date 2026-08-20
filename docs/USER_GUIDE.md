@@ -309,6 +309,8 @@ Open the account menu → **API keys**. Give the key a label you'll recognize la
 ("work laptop", "the weekly report script"), select **Create key**, and copy the
 value it shows you.
 
+![The API keys page: two keys with their labels and last four characters, and the endpoint to give a client](images/keys.png)
+
 **You only see the key once.** Nothing stores it, so if you lose it you revoke
 that key and create another — there is no way to look it up again. Treat it like
 a password: it carries your access, and anyone holding it can ask questions as
@@ -323,8 +325,13 @@ immediately and can't be undone. A revoked key drops off your list; your
 administrator still sees it in the Admin console, which is what lets them answer
 later what that key had access to.
 
-To connect a client, give it the endpoint and the key as a bearer token. For
-Claude Code that is one command:
+You can hold **ten live keys** at once; revoke one you no longer use if you need
+another.
+
+To connect a client, give it the endpoint and the key as a bearer token. The
+page prints **your** deployment's endpoint under *Connecting a client*, with a
+copy button and the whole Claude Code command — a document can only write it as
+a placeholder, so take it from the page rather than from here:
 
 ```bash
 claude mcp add --transport http ipeds https://<your-ipeds-host>/mcp \
@@ -333,9 +340,8 @@ claude mcp add --transport http ipeds https://<your-ipeds-host>/mcp \
 
 The connected tool gets the same data you do, and the same limits: it can only
 read, questions still count against your usual per-question limit, and answers
-still go through the same checks. Ask your administrator if you're not sure of
-your deployment's address, or if a key you were given stops working — keys can
-also be issued and revoked from the Admin console.
+still go through the same checks. Ask your administrator if a key you were given
+stops working — keys can also be issued and revoked from the Admin console.
 
 ---
 
