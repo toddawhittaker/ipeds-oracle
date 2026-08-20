@@ -9,6 +9,15 @@
 :root, :root[data-theme="light"] {
   --bg: #eceee9; --panel: #fafbf8; --panel-2: #f3f5f0;
   --line: #d8ddd5; --line-strong: #c4cbc1; --text: #1b2624;
+  /* Border for INTERACTIVE controls only (inputs, selects, outline
+     buttons). WCAG 1.4.11 wants 3:1 for the boundary that identifies a
+     UI component, and --line is a 1.2-1.3:1 hairline -- deliberately, it
+     is the drafting rule this palette is built on. Splitting the two
+     keeps the rules soft and makes the controls findable. Verified >= 3:1
+     against --panel, --panel-2 and --bg in BOTH themes; re-measure if any
+     of those move. Decorative edges (panels, cards, table rules, badges)
+     stay on --line: they identify nothing and 1.4.11 does not cover them. */
+  --line-control: #7a8983;
   --muted: #5c6a65; --accent: #12514c; --accent-d: #0d3e3a;
   --ochre: #a66a12; --ochre-soft: #ece0c9;
   --user: #f3f5f0; --danger: #b23a2e; --ok: #1c7a4b; --warn: #8a6300;
@@ -23,6 +32,7 @@
 :root[data-theme="dark"] {
   --bg: #101715; --panel: #17201d; --panel-2: #1d2723;
   --line: #26312d; --line-strong: #33413b; --text: #e7ece8;
+  --line-control: #697871;
   --muted: #8fa099; --accent: #63b4ac; --accent-d: #7ec3bc;
   --ochre: #d89a4b; --ochre-soft: #2a2a1f;
   /* --danger #e5776a clears AA on every dark surface it's used over (--user,
@@ -37,6 +47,7 @@
   :root:not([data-theme]) {
     --bg: #101715; --panel: #17201d; --panel-2: #1d2723;
     --line: #26312d; --line-strong: #33413b; --text: #e7ece8;
+  --line-control: #697871;
     --muted: #8fa099; --accent: #63b4ac; --accent-d: #7ec3bc;
     --ochre: #d89a4b; --ochre-soft: #2a2a1f;
     --user: #1d2723; --danger: #e5776a; --ok: #4cc38a; --warn: #e0a94a;
@@ -235,7 +246,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    buttons at first glance on the login screen, not static glyphs. */
 .dfn-arrow { display: inline-flex; align-items: center; justify-content: center;
   min-width: 26px; min-height: 26px; background: var(--panel-2); color: var(--muted);
-  border: 1px solid var(--line); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  border: 1px solid var(--line-control); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 .dfn-arrow:hover { color: var(--accent); border-color: var(--accent); }
 .dfn-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dfn-toggle { margin-left: 6px; }
@@ -259,7 +270,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .door-fineprint { margin: 14px 0 0; }
 .login form { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 4px; }
 .login input, .row input, .row select {
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; border: 1px solid var(--line-control); border-radius: 8px;
   background: var(--bg); color: var(--text);
 }
 /* The primary action on a login-family card. Login's lives in a <form> and so
@@ -395,7 +406,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .about-gh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .modal-cancel {
   background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; font-size: 14px;
+  border: 1px solid var(--line-control); border-radius: 8px; padding: 8px 16px; font-size: 14px;
 }
 .modal-cancel:hover:not(:disabled) { border-color: var(--muted); }
 .modal-confirm {
@@ -432,13 +443,13 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .sidebar-resizer:hover, .sidebar-resizer:focus-visible { background: var(--accent); opacity: .45; outline: none; }
 .sidebar-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .icon-btn {
-  flex: none; width: 32px; height: 32px; border: 1px solid var(--line);
+  flex: none; width: 32px; height: 32px; border: 1px solid var(--line-control);
   background: var(--bg); color: var(--muted); border-radius: 8px;
   display: grid; place-items: center; font-size: 16px; line-height: 1;
 }
 .icon-btn:hover { color: var(--text); }
 .newchat-collapsed { font-size: 20px; text-decoration: none; }
-.newchat { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; }
+.newchat { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line-control); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px; text-decoration: none; }
 /* The sidebar search sits between the New chat row and the list. `flex: none`
    because .convo-list is the flex child that takes the leftover height — without
    it the box would shrink as the list grows. */
@@ -524,7 +535,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* A query slip: an ochre index-tab appears on hover, and a mono tag names the
    kind of record the question pulls. */
 .example-chip {
-  position: relative; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  position: relative; border: 1px solid var(--line-control); background: var(--panel); color: var(--text);
   border-radius: 8px; padding: 14px 15px; font-size: 14px; line-height: 1.45;
   text-align: left; cursor: pointer; transition: border-color .12s, transform .12s;
 }
@@ -561,7 +572,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .suggestions-chips { display: flex; gap: 8px; align-items: stretch; }
 .suggestion-chip {
   flex: 1 1 0; min-width: 0;
-  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-control); background: var(--panel); color: var(--text);
   border-radius: 12px; padding: 8px 13px; font-size: 13px; line-height: 1.35;
   text-align: left; cursor: pointer; transition: border-color .12s, color .12s;
 }
@@ -714,7 +725,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .composer-box {
   display: flex; align-items: flex-end; gap: 8px;
   width: 100%; max-width: 880px; margin: 0 auto;
-  border: 1px solid var(--line); border-radius: 18px; background: var(--panel);
+  border: 1px solid var(--line-control); border-radius: 18px; background: var(--panel);
   padding: 8px 8px 8px 16px; box-shadow: 0 2px 12px rgba(0, 0, 0, .06);
 }
 .composer-box:focus-within { border-color: var(--accent); }
@@ -1059,12 +1070,12 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .chart-delta.down { color: var(--danger); }
 .chart-delta.flat { color: var(--muted); }
 .chart-types { display: flex; gap: 4px; }
-.chart-types button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+.chart-types button { border: 1px solid var(--line-control); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 10px; font-size: 12px; }
 .chart-types button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
 /* Chart-type <select> collapses Line/Bar/Line+trend into one compact control. */
-.chart-type { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 12px; font-family: inherit; cursor: pointer; }
+.chart-type { border: 1px solid var(--line-control); background: var(--bg); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 12px; font-family: inherit; cursor: pointer; }
 /* Icon-only header controls (data-labels toggle, copy image) — square, tooltip on hover. */
-.chart-ico-toggle, .chart-ico-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px; cursor: pointer; }
+.chart-ico-toggle, .chart-ico-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid var(--line-control); background: var(--bg); color: var(--muted); border-radius: 6px; cursor: pointer; }
 .chart-ico-toggle.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
 .chart-ico-toggle:hover:not(.on), .chart-ico-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .chart-ico-btn:disabled { opacity: .5; cursor: default; }
@@ -1208,10 +1219,10 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    adding the second did not double the gap above the stat cards. */
 .usage-filters { margin: 2px 0 18px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .usage-range { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0; }
-.usage-range button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
+.usage-range button { border: 1px solid var(--line-control); background: var(--bg); color: var(--muted); border-radius: 8px; padding: 6px 13px; }
 .usage-range button.on { color: var(--on-fg); background: var(--accent); border-color: var(--accent); }
 .usage-custom { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
-.usage-custom input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+.usage-custom input { padding: 5px 8px; border: 1px solid var(--line-control); border-radius: 8px; background: var(--bg); color: var(--text); }
 .usage-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
 .usage-chart-head h3 { margin: 0; }
 .usage-body { transition: opacity .12s; }
@@ -1256,7 +1267,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .legend-item { display: inline-flex; align-items: center; }
 .catalog-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .catalog-toolbar button {
-  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-control); background: var(--bg); color: var(--text);
   border-radius: 8px; padding: 6px 12px; font-size: 13px;
 }
 .catalog-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
@@ -1371,7 +1382,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .help-trigger {
   display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; padding: 0; border-radius: 50%;
-  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line-control); background: var(--panel); color: var(--muted);
   cursor: pointer;
 }
 .help-trigger:hover, .help-trigger:focus-visible { color: var(--text); border-color: var(--accent); }
@@ -1537,7 +1548,7 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
    both apply. */
 .searchwrap .logsearch {
   width: 100%; min-width: 0; padding: 10px 12px; padding-right: 34px;
-  border: 1px solid var(--line); border-radius: 8px;
+  border: 1px solid var(--line-control); border-radius: 8px;
   background: var(--bg); color: var(--text);
 }
 /* Suppress the browser's native type=search clear (×) so there aren't TWO clear
@@ -1701,7 +1712,7 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
 
 .bulk-action {
   display: inline-flex; align-items: center; gap: 7px;
-  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border: 1px solid var(--line-control); background: var(--panel); color: var(--text);
   border-radius: 8px; padding: 7px 13px; font-size: 13.5px; font-weight: 550;
   cursor: pointer; white-space: nowrap;
 }
@@ -1750,13 +1761,13 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
 .pager-nav { display: flex; align-items: center; gap: 8px; }
 .pager-page { min-width: 92px; text-align: center; }
 .pgbtn {
-  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-control); background: var(--bg); color: var(--text);
   border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px;
 }
 .pgbtn:hover:not(:disabled) { border-color: var(--accent); }
 .pgbtn:disabled { opacity: .45; cursor: not-allowed; }
 .pager-size select {
-  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line-control); background: var(--bg); color: var(--text);
   border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; cursor: pointer;
 }
 
