@@ -65,14 +65,19 @@ documents are:
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
   `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
 - **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
-  routed** (react-router): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
-  `/admin/:tab`, `/admin/:tab/:sub`, `/verify`, catch-all → `/`. FastAPI's SPA
+  routed** (react-router): `/`, `/chat/:id`, `/keys`, `/admin` →
+  `/admin/users/current`, `/admin/:tab`, `/admin/:tab/:sub`, `/verify`,
+  catch-all → `/`. FastAPI's SPA
   catch-all serves `index.html` for all of them, so a hard refresh / deep link
-  never 404s. **`Admin.jsx` is a ~110-line SHELL** — route params (`AdminRoute`),
-  `ADMIN_TABS`, the alias/redirect rules, and the tab chrome. The five pages live
-  in **`src/admin/`** (`Allowlist` · `Imports` · `Usage` · `Skills` · `Logs`),
+  never 404s. `/keys` is the signed-in user's own MCP API keys (`src/Keys.jsx`,
+  reached from the account menu) — not an admin page, since every user has them;
+  the admin view of everybody's is a tab. **`Admin.jsx` is a ~110-line SHELL** —
+  route params (`AdminRoute`),
+  `ADMIN_TABS`, the alias/redirect rules, and the tab chrome. The six pages live
+  in **`src/admin/`** (`Allowlist` · `Imports` · `Usage` · `Skills` · `Keys` ·
+  `Logs`),
   props-only, plus the pure `admin/format.js` (`humanBytes`/`humanSeconds`/
-  `canonEmailForDisplay`/`fmtDateTime`/`fmtApprovalDate`/`money`/`ruleName`,
+  `canonEmailForDisplay`/`fmtDateTime`/`fmtDay`/`fmtApprovalDate`/`money`/`ruleName`,
   vitest-pinned — they were unreachable by the fast tier while trapped in a
   component file). Sub-tab session memory (`rememberedSubTab`/`rememberSubTab`)
   lives in `usertabs.js` next to `resolveSubTab`, NOT in the shell: `Allowlist`

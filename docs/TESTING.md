@@ -70,7 +70,8 @@ spec that hovered-then-clicked failed 5/5), and **a test named for a scenario it
 cannot actually produce is worse than no test** — it reads as coverage.
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
 and now SCANS THE APP** — a rendered answer with its disclosures open, a
-MID-STREAM answer, and all seven admin paths in **both themes** (19 scans).
+MID-STREAM answer, all six admin paths (Users' three sub-tabs counted
+separately) and the user-facing `/keys` page, in **both themes** (23 scans).
 It previously saw only Login and the EMPTY Chat state, i.e. the two
 least-populated screens: every control the product is made of, and every
 admin page, sat outside the gate. That is a COVERAGE hole, not a threshold

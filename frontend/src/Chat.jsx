@@ -11,6 +11,7 @@ import Clarify from "./Clarify.jsx";
 import SqlBlock from "./SqlBlock.jsx";
 import CopyMenu from "./CopyMenu.jsx";
 import { COPY_FAILED, DELETE_FAILED, deleteAnnouncement } from "./announce.js";
+import { copyText } from "./clipboard.js";
 import { formatStamp, thoughtLabel } from "./datetime.js";
 import { useConfirm } from "./ConfirmModal.jsx";
 import { useToast } from "./Toast.jsx";
@@ -49,21 +50,6 @@ const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 288;
 const clampWidth = (w) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)));
-
-// Copy plain text, falling back to execCommand for non-secure contexts
-// (navigator.clipboard is undefined over plain http on a LAN IP).
-async function copyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
-  } catch { /* fall through */ }
-  const ta = document.createElement("textarea");
-  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-  document.body.appendChild(ta); ta.select();
-  let ok = false;
-  try { ok = document.execCommand("copy"); } catch { ok = false; }
-  document.body.removeChild(ta);
-  return ok;
-}
 
 // Copy a rendered node as rich HTML (so pasting into email/Word keeps the
 // table). Tries the async Clipboard API, then falls back to selecting the node

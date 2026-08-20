@@ -109,6 +109,13 @@ export const api = {
   deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
   csvUrl: (msgId) => `/api/chat/messages/${msgId}/download.csv`,
 
+  // The caller's own MCP API keys. createApiKey's response is the ONLY time the
+  // raw key exists outside the client — nothing stores it and no later request
+  // can return it, so whatever calls this has to show it once and say so.
+  apiKeys: () => j("GET", "/api/keys"),
+  createApiKey: (label) => j("POST", "/api/keys", { label }),
+  revokeApiKey: (id) => j("DELETE", `/api/keys/${id}`),
+
   // admin
   allowlist: () => j("GET", "/api/admin/allowlist"),
   addAllow: (email, note, is_admin) =>
@@ -168,6 +175,12 @@ export const api = {
     j("GET", "/api/admin/import/catalog" + (refresh ? "?refresh=1" : "")),
   integrateYears: (years) => j("POST", "/api/admin/import/integrate", { years }),
   deintegrateYear: (startYear) => j("DELETE", `/api/admin/import/year/${startYear}`),
+  // Every user's keys, and minting one on somebody else's behalf. Same one-shot
+  // `key` contract as createApiKey above: the admin has to hand it over out of
+  // band, because nothing can read it back.
+  allKeys: () => j("GET", "/api/admin/keys"),
+  createKeyFor: (email, label) => j("POST", "/api/admin/keys", { email, label }),
+  revokeAnyKey: (id) => j("DELETE", `/api/admin/keys/${id}`),
   logs: (limit = 200, level = "", q = "", since = null, until = null) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (level) p.set("level", level);

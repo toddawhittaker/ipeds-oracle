@@ -1,5 +1,5 @@
 // The Admin section SHELL: route-param handling (AdminRoute) and the tab chrome
-// (Admin). The five pages it renders live in ./admin/* — they were already
+// (Admin). The six pages it renders live in ./admin/* — they were already
 // independent, props-only components inside one 2,467-line file, which meant
 // their pure helpers could never be unit-tested and every edit to one page
 // touched the same file as the other four.
@@ -16,13 +16,14 @@ import Allowlist from "./admin/Allowlist.jsx";
 import Imports from "./admin/Imports.jsx";
 import Usage from "./admin/Usage.jsx";
 import Skills from "./admin/Skills.jsx";
+import Keys from "./admin/Keys.jsx";
 import Logs from "./admin/Logs.jsx";
 
 // One source of truth for both the subtab nav and the /admin/:tab route
 // validator below -- "users" is the route/label; the underlying component
 // stays named Allowlist (it mirrors the /api/admin/allowlist endpoints it
 // drives, which are unchanged by this rename).
-export const ADMIN_TABS = ["users", "imports", "usage", "skills", "logs"];
+export const ADMIN_TABS = ["users", "imports", "usage", "skills", "keys", "logs"];
 
 // Former standalone user-management pages redirect INTO the Users sub-tabs, so
 // old bookmarks/links keep working. These segments are deliberately NOT in
@@ -104,6 +105,7 @@ export default function Admin({ me, tab, sub, onDataChanged, attention, onAttent
       {tab === "imports" && <Imports onDataChanged={onDataChanged} />}
       {tab === "usage" && <Usage />}
       {tab === "skills" && <Skills onAttentionChanged={refreshAttention} />}
+      {tab === "keys" && <Keys />}
       {tab === "logs" && <Logs onAttentionChanged={refreshAttention} />}
     </main>
   );

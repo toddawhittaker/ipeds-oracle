@@ -58,7 +58,8 @@ suggests:
   never arrives until the turn is over).
 - **`a11y.spec.js`** — the axe gate. Fails on `critical` **and `serious`**, and
   scans the app as it actually renders: a full answer with its disclosures open,
-  a mid-stream answer, and all seven admin paths, in **both themes** (19 scans).
+  a mid-stream answer, all six admin paths (Users' three sub-tabs counted
+  separately) and the user-facing `/keys` page, in **both themes** (23 scans).
 
 ## Four traps that make a spec pass while the product is broken
 

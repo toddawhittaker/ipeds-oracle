@@ -18,6 +18,9 @@ export declare const api: {
     renameConversation: (id: any, title: any) => Promise<any>;
     deleteConversation: (id: any) => Promise<any>;
     csvUrl: (msgId: any) => string;
+    apiKeys: () => Promise<any>;
+    createApiKey: (label: any) => Promise<any>;
+    revokeApiKey: (id: any) => Promise<any>;
     allowlist: () => Promise<any>;
     addAllow: (email: any, note: any, is_admin: any) => Promise<any>;
     bulkAllow: (users: any) => Promise<any>;
@@ -48,6 +51,9 @@ export declare const api: {
     importCatalog: (refresh?: boolean) => Promise<any>;
     integrateYears: (years: any) => Promise<any>;
     deintegrateYear: (startYear: any) => Promise<any>;
+    allKeys: () => Promise<any>;
+    createKeyFor: (email: any, label: any) => Promise<any>;
+    revokeAnyKey: (id: any) => Promise<any>;
     logs: (limit?: number, level?: string, q?: string, since?: any, until?: any) => Promise<any>;
 };
 export declare function streamChat({ question, conversationId, editMessageId }: {
