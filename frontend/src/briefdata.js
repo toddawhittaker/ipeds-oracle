@@ -21,6 +21,6 @@ export function briefLayout(src) {
   const charts = [...src.matchAll(CHART_FENCE)];
   if (charts.length !== 1 || tableCount(src) !== 1) return { pair: false, chart: null };
   let chart = null;
-  try { chart = JSON.parse(charts[0][1].trim()); } catch { chart = null; }
+  try { chart = JSON.parse(charts[0][1].trim()); } catch { /* stays null */ }
   return chart ? { pair: true, chart } : { pair: false, chart: null };
 }

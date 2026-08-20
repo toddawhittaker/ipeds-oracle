@@ -4,7 +4,7 @@ import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
-// Flat config (ESLint 9). Lints the React app for real defects — undefined
+// Flat config (ESLint 10). Lints the React app for real defects — undefined
 // vars, unused code, and the rules-of-hooks / exhaustive-deps foot-guns — and
 // leaves all formatting to Prettier (eslint-config-prettier turns the
 // stylistic rules off). See .github/workflows/ci.yml for the CI gate.
@@ -27,7 +27,13 @@ export default [
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     plugins: { react, "react-hooks": reactHooks },
-    settings: { react: { version: "detect" } },
+    // Pinned rather than "detect": eslint-plugin-react's version
+    // auto-detection calls context.getFilename(), which ESLint 10 removed,
+    // and every rule then throws. Nothing else in the plugin needs the
+    // removed APIs — lib/util/eslint.js falls back to sourceCode.* — so
+    // pinning is the whole fix. The value only gates version-specific
+    // rules; bump it if a rule ever needs to know a newer React.
+    settings: { react: { version: "19.2" } },
     rules: {
       ...react.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,

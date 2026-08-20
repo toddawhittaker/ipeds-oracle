@@ -329,7 +329,7 @@ export default function Imports({ onDataChanged }) {
     setUploadMsg("");
     const fd = new FormData();
     for (const f of dropFiles) fd.append("files", f);
-    let data = {};
+    let data;
     try {
       const r = await fetch("/api/admin/import", { method: "POST", body: fd });
       data = await r.json().catch(() => ({}));

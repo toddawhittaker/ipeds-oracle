@@ -496,7 +496,7 @@ pip-compile --generate-hashes --output-file=backend/requirements.lock backend/re
 cd frontend && npm audit
 ```
 
-Four things that have each caused a real defect:
+Five things that have each caused a real defect:
 
 - **A raised floor with a stale lock is invisible.** Dependabot cannot run
   `pip-compile`, so it bumps `requirements.txt` alone and every check goes green
@@ -512,6 +512,15 @@ Four things that have each caused a real defect:
   range.** One package stayed on its vulnerable version through a full
   `npm install --package-lock-only`; it needed `npm update <pkg>`. The resulting
   lockfile looks the same either way.
+- **`frontend/package.json` has one `overrides` entry, and it is load-bearing.**
+  `eslint-plugin-react` has not published since April 2025 and still peers at
+  `eslint@^9.7`, so `npm ci` fails outright on ESLint 10 with `ERESOLVE`. The
+  override (`"eslint-plugin-react": { "eslint": "$eslint" }`) accepts our ESLint
+  instead. The plugin itself works — its `lib/util/eslint.js` falls back to the
+  `sourceCode.*` APIs — with one exception, which `eslint.config.js` documents:
+  React version auto-detection calls the removed `context.getFilename()`, so the
+  version is pinned rather than `"detect"`. Drop both the moment the plugin
+  ships a release that peers at ESLint 10.
 - **`ci.yml`'s Playwright container tag must move with `@playwright/test`.**
   A mismatched pair fails at browser launch — except across a patch bump, which
   shares a browser build and passes, hiding the drift until a bump that does not.

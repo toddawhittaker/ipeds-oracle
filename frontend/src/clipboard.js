@@ -17,8 +17,10 @@ export async function copyText(text) {
   const ta = document.createElement("textarea");
   ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
   document.body.appendChild(ta); ta.select();
+  // Stays false if execCommand throws (the catch must not re-assign it —
+  // ESLint 10's no-useless-assignment flags a write nothing ever reads).
   let ok = false;
-  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  try { ok = document.execCommand("copy"); } catch { /* keep false */ }
   document.body.removeChild(ta);
   return ok;
 }
