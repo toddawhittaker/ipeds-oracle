@@ -85,6 +85,27 @@ MCP_PATH = "/mcp"
 # each with its own loop. Same reason the transport app is built there.
 MCP_TOOL_CONCURRENCY = 8
 
+# How long a tool call may WAIT for one of those slots before it is refused.
+#
+# The semaphore bounds how much work runs at once; on its own it does not bound
+# how much is QUEUED. The rate limiter counts requests started per minute, not
+# requests pending, so one key holder can put 60/min against a drain rate of 8
+# per (up to) `sql_timeout_seconds` — every waiter holding a socket and a task,
+# and uvicorn does not cancel an ASGI task when the client hangs up, so a script
+# with a 1-second client timeout keeps adding work nobody is waiting for.
+#
+# Refusing is better than queueing: a client gets an answer it can act on, and
+# the per-key rate limit goes back to meaning something. The wait is slightly
+# longer than one full SQL timeout, so a call that queues behind a legitimately
+# slow query still gets its turn rather than being refused for someone else's
+# work.
+MCP_TOOL_WAIT_SECONDS = 30.0
+
+# The refusal itself. Shaped like every other tool error (see ERROR_PREFIXES) so
+# a client renders it as a failed call with a reason, not as an answer.
+BUSY_MESSAGE = ("ERROR server busy: too many tool calls are already running. "
+                "Retry in a few seconds.")
+
 # Prefixes `registry.dispatch` returns instead of raising. They are the tool's
 # way of saying "your call was wrong, here is why" — surfaced with is_error so a
 # client renders them as a failed call rather than as an answer.
@@ -182,8 +203,23 @@ async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallTo
     # Bounded, so MCP traffic cannot starve chat and the web UI of the shared
     # pool — see MCP_TOOL_CONCURRENCY. Acquired around the hop, not inside
     # `_call`, because it is the THREAD that is scarce.
-    async with _current["slots"]:
+    #
+    # With a WAIT BOUND, so the queue in front of those slots is bounded too:
+    # `async with` on its own waits forever, which turns a burst into an
+    # unbounded backlog of held sockets and tasks. See MCP_TOOL_WAIT_SECONDS.
+    slots = _current["slots"]
+    try:
+        await asyncio.wait_for(slots.acquire(), MCP_TOOL_WAIT_SECONDS)
+    except TimeoutError:  # asyncio.TimeoutError is an alias of it on 3.11+
+        log.warning("MCP tool %s refused: no slot within %.0fs",
+                    params.name, MCP_TOOL_WAIT_SECONDS)
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=BUSY_MESSAGE)],
+            is_error=True)
+    try:
         return await run_in_threadpool(_call, params.name, arguments)
+    finally:
+        slots.release()
 
 
 async def on_list_resources(ctx, params) -> types.ListResourcesResult:

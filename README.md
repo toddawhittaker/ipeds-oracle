@@ -279,6 +279,15 @@ Give it TLS one of two ways:
    (uvicorn would otherwise trust the header itself whenever the proxy connects
    over loopback, letting a client spoof its own address past the per-IP limit).
    If you run the app outside the published image, pass that flag yourself.
+
+   **Keep query strings out of your proxy's access log.** The chat sidebar's
+   search sends the term as `?q=…` on `GET /api/chat/conversations`, and that is
+   the user's own private text — the chat where they asked about a named person,
+   a salary, a disciplinary matter. The app scrubs it from its *own* access log,
+   but a proxy logs the full request URI to a file the app never touches. In
+   nginx, use a `log_format` that writes `$uri` rather than `$request`; in
+   Caddy, the JSON logger records `request.uri` — filter it, or turn the access
+   log off for that path.
 2. **Direct HTTPS with a self‑signed cert** (handy on a LAN) — generate a cert and
    point the app at it:
 
