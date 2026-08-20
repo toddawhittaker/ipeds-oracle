@@ -206,6 +206,88 @@ def run():
         check("a revoked key drops off its owner's list and stays in the admin's",
               a_revoked_key_leaves_the_owners_list_but_not_the_admins)
 
+        # --- relabelling ------------------------------------------------------
+        def an_owner_can_relabel_their_own_key():
+            k = c.post("/api/keys", json={"label": "typo"}).json()
+            r2 = c.patch(f"/api/keys/{k['id']}", json={"label": "work laptop"})
+            assert r2.status_code == 200, r2.text
+            assert r2.json()["label"] == "work laptop", r2.json()
+            listed = [x for x in c.get("/api/keys").json() if x["id"] == k["id"]]
+            assert listed and listed[0]["label"] == "work laptop", listed
+        check("a user can change the label on their own key",
+              an_owner_can_relabel_their_own_key)
+
+        def relabelling_touches_only_the_label():
+            k = c.post("/api/keys", json={"label": "before"}).json()
+            con = connect()
+            try:
+                was = dict(con.execute("SELECT * FROM api_keys WHERE id=?",
+                                       (k["id"],)).fetchone())
+            finally:
+                con.close()
+            assert c.patch(f"/api/keys/{k['id']}",
+                           json={"label": "after"}).status_code == 200
+            con = connect()
+            try:
+                now = dict(con.execute("SELECT * FROM api_keys WHERE id=?",
+                                       (k["id"],)).fetchone())
+            finally:
+                con.close()
+            changed = {f for f in was if was[f] != now[f]}
+            assert changed == {"label"}, \
+                f"relabelling also rewrote {changed - {'label'}}"
+            assert now["key_hash"] == was["key_hash"], \
+                "the stored hash moved — the key itself would stop working"
+        check("relabelling rewrites the label and nothing else",
+              relabelling_touches_only_the_label)
+
+        def an_empty_label_clears_it():
+            k = c.post("/api/keys", json={"label": "named"}).json()
+            r2 = c.patch(f"/api/keys/{k['id']}", json={"label": "   "})
+            assert r2.status_code == 200, r2.text
+            assert r2.json()["label"] is None, \
+                "a blanked label was stored as whitespace instead of NULL"
+        check("blanking a label clears it rather than storing whitespace",
+              an_empty_label_clears_it)
+
+        def a_user_cannot_relabel_another_users_key():
+            k = c.post("/api/keys", json={"label": "mine"}).json()
+            with TestClient(app) as o:
+                sign_in(o, "other@example.edu")
+                r2 = o.patch(f"/api/keys/{k['id']}", json={"label": "theirs now"})
+                assert r2.status_code == 404, \
+                    (f"relabelled another user's key by id (got {r2.status_code}) "
+                     "— the id is a guessable integer")
+            after = [x for x in c.get("/api/keys").json() if x["id"] == k["id"]]
+            assert after and after[0]["label"] == "mine", after
+        check("one user cannot relabel another user's key",
+              a_user_cannot_relabel_another_users_key)
+
+        def a_revoked_key_cannot_be_relabelled():
+            k = c.post("/api/keys", json={"label": "retiring"}).json()
+            assert c.delete(f"/api/keys/{k['id']}").status_code == 200
+            r2 = c.patch(f"/api/keys/{k['id']}", json={"label": "renamed"})
+            assert r2.status_code == 404, \
+                ("a revoked key was relabelled: the owner can no longer see it, "
+                 f"so it must not be editable either (got {r2.status_code})")
+            all_keys = c.get("/api/admin/keys").json()
+            row = [x for x in all_keys if x["id"] == k["id"]][0]
+            assert row["label"] == "retiring", \
+                "the admin's record of the withdrawn key was rewritten"
+        check("a revoked key cannot be relabelled, in the admin's record either",
+              a_revoked_key_cannot_be_relabelled)
+
+        def an_over_long_relabel_is_refused():
+            k = c.post("/api/keys", json={"label": "short"}).json()
+            long = "x" * (keys_router.MAX_LABEL_LEN + 1)
+            r2 = c.patch(f"/api/keys/{k['id']}", json={"label": long})
+            assert r2.status_code == 422, \
+                f"an over-long relabel was accepted (got {r2.status_code})"
+            after = [x for x in c.get("/api/keys").json() if x["id"] == k["id"]]
+            assert after and after[0]["label"] == "short", after
+        check("an over-long relabel is refused rather than written",
+              an_over_long_relabel_is_refused)
+
         # --- the allowlist re-check, the one that fails silently -------------
         def de_allowlisting_kills_the_key():
             with TestClient(app) as u:

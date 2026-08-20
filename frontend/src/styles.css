@@ -1763,6 +1763,15 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
    the actions column off the row (the flex-wrap vs min-width trap). */
 .keyrow-main, .keyrow-meta { min-width: 0; }
 .keyrow-id, .keycode { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+/* The inline relabel input, sized to sit in the label's place rather than take
+   the row over (the masked key stays beside it, which is what tells the user
+   WHICH key they are naming). Same border/background treatment as the sidebar's
+   .convo-rename, which is the same interaction. */
+.keyrow-rename {
+  min-width: 0; max-width: 22em; padding: 2px 6px; font-size: 14px; font-weight: 600;
+  font-family: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--accent); border-radius: 6px; outline: none;
+}
 /* The action spans both rows of the grid so the trash button centres against the
    whole card rather than sitting against the label line. */
 .keyrow-actions { grid-column: 2; grid-row: 1 / span 2; }

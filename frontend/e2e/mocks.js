@@ -1000,10 +1000,11 @@ export async function mockDeintegrate(page, { jobId = 1, status = "pending", htt
  * `secret` is the raw value the mint returns, so a spec can assert the dialog
  * shows THAT string and that a later GET carries no trace of it.
  */
-export async function mockApiKeys(page, initialRows = [], { secret = "ipeds_mcp_test-secret-value-1234", httpStatus = 200, detail } = {}) {
+export async function mockApiKeys(page, initialRows = [], { secret = "ipeds_mcp_test-secret-value-1234", httpStatus = 200, detail, relabelStatus = 200 } = {}) {
   let rows = [...initialRows];
   let nextId = Math.max(0, ...rows.map((r) => r.id || 0)) + 1;
   const mints = [];
+  const relabels = [];
   await page.route("**/api/keys", async (route) => {
     const req = route.request();
     if (req.method() === "GET") {
@@ -1028,12 +1029,26 @@ export async function mockApiKeys(page, initialRows = [], { secret = "ipeds_mcp_
   });
   await page.route("**/api/keys/*", async (route) => {
     const req = route.request();
-    if (req.method() !== "DELETE") return route.continue();
     const id = Number(new URL(req.url()).pathname.split("/").pop());
+    // PATCH relabels; the server trims and stores a blanked label as null, and
+    // a spec asserting "the label cleared" would otherwise pass on a mock that
+    // kept "".
+    if (req.method() === "PATCH") {
+      if (relabelStatus !== 200) {
+        return route.fulfill({ status: relabelStatus, contentType: "application/json",
+          body: JSON.stringify({ detail: "Key not found." }) });
+      }
+      const label = ((req.postDataJSON() || {}).label || "").trim() || null;
+      relabels.push({ id, label });
+      rows = rows.map((r) => (r.id === id ? { ...r, label } : r));
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify(rows.find((r) => r.id === id)) });
+    }
+    if (req.method() !== "DELETE") return route.continue();
     rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
-  return { mints, getRows: () => rows };
+  return { mints, relabels, getRows: () => rows };
 }
 
 /**

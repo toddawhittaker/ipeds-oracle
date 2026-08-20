@@ -124,6 +124,66 @@ test("revoke goes through the confirm modal, toasts, and drops the row from the 
     await expect(page.getByRole("heading", { name: "API keys" })).toBeFocused();
   });
 
+test("the pencil renames a key in place, and Escape leaves it alone",
+  async ({ page }) => {
+    const api = await openKeys(page, [KEY]);
+
+    await page.getByRole("button", { name: /^Rename key ipeds_mcp_…9f2a$/ }).click();
+    const input = page.getByRole("textbox", { name: /^Label for key/ });
+    // The existing label is pre-selected, so typing replaces it — the common
+    // case is fixing a name, not appending to one.
+    await expect(input).toHaveValue("Work laptop");
+    await input.fill("Home desktop");
+    await input.press("Escape");
+
+    await expect(input).toHaveCount(0);
+    await expect(page.locator(".keyrow-label")).toHaveText("Work laptop");
+    expect(api.relabels).toEqual([]);
+    // Escape must hand focus back to the pencil it came from, not to <body>.
+    await expect(page.getByRole("button", { name: /^Rename key/ })).toBeFocused();
+
+    await page.getByRole("button", { name: /^Rename key/ }).click();
+    await page.getByRole("textbox", { name: /^Label for key/ }).fill("Home desktop");
+    await page.getByRole("textbox", { name: /^Label for key/ }).press("Enter");
+
+    await expect(page.locator(".keyrow-label")).toHaveText("Home desktop");
+    expect(api.relabels).toEqual([{ id: KEY.id, label: "Home desktop" }]);
+    expect(api.getRows()[0].label).toBe("Home desktop");
+    // Committing unmounts the input too, so it needs the same focus hand-back
+    // Escape gets — asserted separately because they are two code paths.
+    await expect(page.getByRole("button", { name: /^Rename key/ })).toBeFocused();
+  });
+
+test("a rename the server refuses is put back, with a toast", async ({ page }) => {
+  // The commit is optimistic, so a silent failure would leave the user reading a
+  // label the server never accepted — and believing it.
+  const api = await openKeys(page, [KEY], { relabelStatus: 404 });
+
+  await page.getByRole("button", { name: /^Rename key/ }).click();
+  const input = page.getByRole("textbox", { name: /^Label for key/ });
+  await input.fill("Never lands");
+  await input.press("Enter");
+
+  await expect(page.locator(".toast-msg")).toHaveText("Couldn't rename that key. Try again.");
+  await expect(page.locator(".keyrow-label")).toHaveText("Work laptop");
+  expect(api.getRows()[0].label).toBe("Work laptop");
+});
+
+test("blanking a label clears it, rather than reading as an unchanged row",
+  async ({ page }) => {
+    const api = await openKeys(page, [KEY]);
+
+    await page.getByRole("button", { name: /^Rename key/ }).click();
+    const input = page.getByRole("textbox", { name: /^Label for key/ });
+    await input.fill("");
+    await input.press("Enter");
+
+    // Emptied is a real change, unlike unchanged — the row falls back to the
+    // placeholder and the server is told.
+    await expect(page.locator(".keyrow-label")).toHaveText("Unlabelled key");
+    expect(api.relabels).toEqual([{ id: KEY.id, label: null }]);
+  });
+
 test("cancelling the confirm modal revokes nothing", async ({ page }) => {
   const api = await openKeys(page, [KEY]);
 
