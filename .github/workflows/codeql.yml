@@ -6,9 +6,13 @@ name: CodeQL
 # newly-published queries.
 on:
   push:
-    branches: [main]
+    # epic/v0.5.1 is the v0.5.1 epic branch, mirroring ci.yml: sub-PRs merge into
+    # it rather than main, so without it here they would arrive at main as one
+    # unanalysed diff.
+    # Remove this line once the epic merges to main and the branch is deleted.
+    branches: [main, epic/v0.5.1]
   pull_request:
-    branches: [main]
+    branches: [main, epic/v0.5.1]
   schedule:
     - cron: "27 4 * * 1"
 

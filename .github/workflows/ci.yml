@@ -16,10 +16,15 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # epic/v0.5.1 is the v0.5.1 epic branch: sub-PRs merge into it rather than
+    # main, so without it here every one of them would land unchecked — the
+    # pull_request filter matches the BASE branch, and a PR to a non-main base
+    # runs nothing at all while GitHub still reports it mergeable and clean.
+    # Remove this line once the epic merges to main and the branch is deleted.
+    branches: [main, epic/v0.5.1]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, epic/v0.5.1]
   workflow_dispatch:
 
 # A newer commit on the same branch/PR cancels the in-flight run.
