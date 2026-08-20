@@ -46,7 +46,9 @@ of it, not instead of it.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 
 import mcp.types as types
@@ -93,11 +95,52 @@ INPUT_SCHEMA = {
     "required": ["question"],
 }
 
+# A ```chart fence is a RENDERING DIRECTIVE for the web app's Chart.jsx, not
+# prose — `llm.py::_reconstruct_answer` writes it into the answer text on purpose
+# and `frontend/src/Markdown.jsx` turns it back into a figure. That contract is
+# the web UI's, and it does not travel: forwarded verbatim over MCP the spec
+# reaches the caller as undeclared JSON in the middle of a sentence, where a
+# model reads it as part of the answer and a chat client renders it as an opaque
+# block of code.
+#
+# So this boundary DECODES it — MCP has a field channel the browser does not, and
+# `output_schema` is where a payload like this is supposed to live. That is not
+# the regex-on-prose trap: the server wrote this fence with `json.dumps`, so
+# reading it back is decoding a format we defined, not guessing at a model's
+# quirks. The unparseable case exists only because the fence FALLBACK path
+# (structured emission off, or a model that cannot call tools) lets the model
+# write it.
+#
+# The newline is required so this can never match a ```chartjs block, the same
+# guard `frontend/src/Chat.jsx`'s own chart regex carries.
+_CHART_FENCE_RE = re.compile(r"```chart[ \t]*\r?\n(.*?)```", re.DOTALL)
+
+
+def split_chart(answer: str) -> tuple[str, dict | None]:
+    """`(answer_without_any_chart_fence, chart_spec_or_None)`.
+
+    ALWAYS strips every chart fence, even one it cannot parse — the same rule
+    `llm.py`'s figure and followups extractors follow, and for the same reason:
+    a block we could not read is still not something to hand a caller as prose.
+    Returns a spec only when the fence holds a JSON object.
+    """
+    matches = _CHART_FENCE_RE.findall(answer or "")
+    if not matches:
+        return answer or "", None
+    clean = _CHART_FENCE_RE.sub("", answer).strip()
+    try:
+        spec = json.loads(matches[0].strip())
+    except (json.JSONDecodeError, ValueError):
+        return clean, None
+    return clean, (spec if isinstance(spec, dict) and spec else None)
+
+
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "answer": {"type": "string",
-                   "description": "The answer, as Markdown."},
+                   "description": "The answer, as Markdown. Any chart the answer "
+                                  "came with is in `chart`, not inline."},
         "figure": {
             "type": ["object", "null"],
             "description": "The answer's hero statistic — the one number it "
@@ -109,6 +152,14 @@ OUTPUT_SCHEMA = {
                 "label": {"type": "string"},
                 "source": {"type": "string"},
             },
+        },
+        "chart": {
+            "type": ["object", "null"],
+            "description": "A chart the answer offered to illustrate itself — "
+                           "`type` (line/bar/…), the axis keys, and the plotted "
+                           "`data` rows — or null when it offered none. The "
+                           "numbers in it are the same ones the prose cites; "
+                           "render it, ignore it, or read the rows directly.",
         },
         "figure_grounding": {
             "type": ["string", "null"],
@@ -122,7 +173,7 @@ OUTPUT_SCHEMA = {
                            "answer, which runs no query.",
         },
     },
-    "required": ["answer", "figure", "figure_grounding"],
+    "required": ["answer", "figure", "chart", "figure_grounding"],
 }
 
 TOOL = types.Tool(name=TOOL_NAME, description=DESCRIPTION,
@@ -132,10 +183,17 @@ TOOL = types.Tool(name=TOOL_NAME, description=DESCRIPTION,
 def _answer(text: str, figure: dict | None = None,
             figure_grounding: str | None = None) -> types.CallToolResult:
     """A successful `ask`, in both channels MCP gives us: the Markdown for a
-    model to read, and the same thing as fields for the caller's own code."""
+    model to read, and the same thing as fields for the caller's own code.
+
+    The chart is split out HERE rather than at the call sites, because there are
+    two of them — a fresh turn and a cache replay — and the cache stores the
+    answer with its fence still in it (the web app needs it there). One place
+    means the replay path cannot drift away from the live one.
+    """
+    prose, chart = split_chart(text)
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)],
-        structured_content={"answer": text, "figure": figure,
+        content=[types.TextContent(type="text", text=prose)],
+        structured_content={"answer": prose, "figure": figure, "chart": chart,
                             "figure_grounding": figure_grounding})
 
 

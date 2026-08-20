@@ -34,6 +34,7 @@ where the bearer gate and the route registration live.
 Uses the standalone-script style the rest of backend/tests/ uses: env before
 import, a check() helper, non-zero exit on any failure.
 """
+import json
 import os
 import sys
 import tempfile
@@ -49,18 +50,23 @@ os.environ["LLM_API_KEY"] = ""
 os.environ["RESEND_API_KEY"] = ""
 os.environ["AUTH_RATE_MAX_PER_EMAIL"] = "1000"
 os.environ["AUTH_RATE_MAX_PER_IP"] = "1000"
-# Low enough that the 429 case can reach the cap in a fraction of a second, high
-# enough that the rest of the suite (about a dozen calls on one key) never
-# brushes it. The 429 case mints its OWN key so its spending is its own.
-MCP_CAP = 30
+# A SUITE-SIZE BUDGET, not a product number: low enough that the 429 case can
+# reach the cap in a fraction of a second, high enough that the rest of the suite
+# never brushes it on its way past. It therefore has to move when the suite
+# grows — adding the four `ask` calls behind the chart checks put the tail of the
+# file over 30, and the symptom is a pile of unrelated cases failing with
+# "Too many requests" rather than on their own contract. The 429 case mints its
+# OWN key so its spending is its own.
+MCP_CAP = 50
 os.environ["MCP_RATE_MAX_PER_KEY"] = str(MCP_CAP)
 # `ask` charges the SAME per-user limiter the web chat charges, so this file has
 # to pin it: config.py's default is 30, and a suite that quietly drifts past it
-# would start failing on a call count rather than on a contract. Low enough that
-# the shared-budget case can exhaust it quickly, high enough that the handful of
-# `ask` calls the other cases make never brush it — and that case spends a
-# DIFFERENT user's budget anyway, because this limiter is keyed on the user.
-CHAT_CAP = 12
+# would start failing on a call count rather than on a contract. The same
+# suite-size budget as MCP_CAP above, and it moves for the same reason — low
+# enough that the shared-budget case can exhaust it quickly, high enough that
+# every other `ask` in the file never brushes it. That case spends a DIFFERENT
+# user's budget anyway, because this limiter is keyed on the user.
+CHAT_CAP = 20
 os.environ["CHAT_RATE_MAX_PER_USER"] = str(CHAT_CAP)
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -497,6 +503,121 @@ def run():
                 "ask persisted messages — it is supposed to be stateless"
         check("an answered ask bills one mcp usage row and persists no thread",
               an_answer_bills_one_row_and_persists_no_conversation)
+
+        def a_chart_is_a_declared_field_not_prose():
+            # A ```chart fence is a RENDERING DIRECTIVE for the web UI's
+            # Chart.jsx, not prose. Forwarded as-is it reaches an MCP client as
+            # undeclared JSON inside the answer text: a model reads it as part of
+            # the sentence, and a chat client renders it as an opaque code block.
+            # It has to come back as a field the output schema names.
+            spec = {"type": "line", "x": "year", "y": ["awards"],
+                    "data": [{"year": 2023, "awards": 1234}]}
+            body = ("Ohio awarded **1,234** nursing degrees in 2023.\n\n"
+                    "```chart\n" + json.dumps(spec) + "\n```")
+            q = "chart nursing degrees in ohio"
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(answer=body, sql="SELECT 2")
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            data = r["structuredContent"]
+            assert data["chart"] == spec, data.get("chart")
+            assert "```chart" not in data["answer"], \
+                f"the chart fence stayed in the MCP answer text: {data['answer']!r}"
+            # Not just the fence markers — the spec's own JSON must be gone too,
+            # or stripping the backticks would "pass" while leaving the payload.
+            assert '"awards"' not in data["answer"], data["answer"]
+            assert "1,234" in data["answer"], "stripping the chart ate the prose"
+            # The text content and the structured answer are the same string, so
+            # a client reading either channel sees the same thing.
+            assert r["content"][0]["text"] == data["answer"], r["content"][0]["text"]
+        check("a chart comes back as a declared field, not as JSON in the prose",
+              a_chart_is_a_declared_field_not_prose)
+
+        def a_cached_answer_splits_its_chart_too():
+            # The cache stores the answer WITH its fence (the web app needs it
+            # there), so the replay path has to split it exactly like a fresh
+            # turn. Two code paths return an answer; only one of them was
+            # exercised above.
+            spec = {"type": "bar", "x": "state", "y": ["n"],
+                    "data": [{"state": "OH", "n": 7}]}
+            body = ("Seven, in Ohio.\n\n```chart\n" + json.dumps(spec) + "\n```")
+            q = "cached question that carries a chart"
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(answer=body, sql="SELECT 3")
+            try:
+                first = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            assert first["structuredContent"]["chart"] == spec, first
+
+            ask.stream_agent = fake_agent(boom=True)
+            try:
+                replay = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            data = replay["structuredContent"]
+            assert "Seven, in Ohio." in data["answer"], data["answer"]
+            assert "```chart" not in data["answer"], \
+                f"the cache replay shipped the raw fence: {data['answer']!r}"
+            assert data["chart"] == spec, data.get("chart")
+        check("a cached answer's chart is split out on replay too",
+              a_cached_answer_splits_its_chart_too)
+
+        def a_mangled_chart_fence_never_ships_its_json():
+            # The fence is server-written and clean under structured emission,
+            # but the fence FALLBACK path lets the MODEL write it, and that is
+            # where a mangle comes from. A fence we cannot parse is still not
+            # prose: strip it, and report no chart rather than a half-read one.
+            body = ("Twelve.\n\n```chart\n{\"type\": \"line\", \"data\": [{,,,\n```")
+            q = "a question whose chart fence is mangled"
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(answer=body, sql="SELECT 4")
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            data = r["structuredContent"]
+            assert data["chart"] is None, data["chart"]
+            assert "```chart" not in data["answer"], data["answer"]
+            assert "{" not in data["answer"], \
+                f"unparseable chart JSON leaked into the answer: {data['answer']!r}"
+            assert "Twelve." in data["answer"], data["answer"]
+        check("an unparseable chart fence is stripped, not forwarded",
+              a_mangled_chart_fence_never_ships_its_json)
+
+        def an_answer_without_a_chart_is_untouched():
+            # The field is REQUIRED by the output schema, so it has to be present
+            # and null rather than absent — an SDK client validates against that
+            # schema, and a missing required key is a validation failure on the
+            # ordinary case.
+            q = "a question that needs no chart"
+            original = ask.stream_agent
+            ask.stream_agent = fake_agent(sql="SELECT 5")
+            try:
+                r = call_ask(c, q, key)
+            finally:
+                ask.stream_agent = original
+            data = r["structuredContent"]
+            assert "chart" in data, list(data)
+            assert data["chart"] is None, data["chart"]
+            assert data["answer"] == "Ohio awarded **1,234** nursing degrees in 2023.", \
+                data["answer"]
+        check("an answer with no chart still carries the declared null field",
+              an_answer_without_a_chart_is_untouched)
+
+        def the_output_schema_declares_the_chart():
+            # The schema is the published contract; a field returned but not
+            # declared is one an SDK client may reject or ignore.
+            props = ask.OUTPUT_SCHEMA["properties"]
+            assert "chart" in props, list(props)
+            assert "chart" in ask.OUTPUT_SCHEMA["required"], ask.OUTPUT_SCHEMA["required"]
+            assert ask.TOOL.output_schema is ask.OUTPUT_SCHEMA or \
+                "chart" in (ask.TOOL.output_schema or {}).get("properties", {}), \
+                "the advertised tool's output_schema does not mention the chart"
+        check("the ask output schema declares the chart field",
+              the_output_schema_declares_the_chart)
 
         def a_cache_hit_does_not_run_the_agent():
             # The cache is SHARED with the web chat, so this also pins the thing
