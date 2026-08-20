@@ -574,7 +574,7 @@ check.
 
 ---
 
-## Step 4 — the front end
+## Step 4 — the front end — **DONE**
 
 **PR title:** `feat(ui): API keys page and admin Keys tab`
 
@@ -647,6 +647,39 @@ server-side and Origin-based.
 - Read `frontend/e2e/README.md`'s "Four traps" section before writing any of it.
   Use `fillStable()` for controlled inputs (`admin-lessons.spec.js:13-20`), and
   open any popover with `focus()`, never `click()`.
+
+### What Step 4 found that this plan had wrong
+
+**`copyText` existed once, not three times.** `Chat.jsx:105` is `copyHtml` and
+`Chart.jsx:263` is `copyChart` — different functions that share an `execCommand`
+fallback shape, not copies of the same one. So `frontend/src/clipboard.js` holds
+the single `copyText`, with `Chat.jsx` and the reveal dialog as its two callers;
+`copyHtml` and `copyChart` were left where they are, because things that merely
+look alike are not duplication.
+
+**One pure module, not two.** The plan put the DataTable config in
+`frontend/src/admin/keys.js`. Both screens need the masking and the ordering, and
+a top-level page importing out of `admin/` reads backwards, so it is all one
+`frontend/src/apikeys.js` — masking, `isRevoked`, the comparators, and the config
+— with `apikeys.test.js` beside it.
+
+**The admin table needed a sixth column and could not afford two 210px
+timestamps.** Owner · Label · Key · Created · Last used · Status leaves Owner and
+Label under 200px between them inside the 1000px panel. Both date columns
+therefore render DATE-ONLY through a new `fmtDay` (the full stamp stays in each
+cell's `title`); the user's own page, which has no table to fit, keeps
+`fmtDateTime`.
+
+**A real focus defect, caught by its own test.** The mint button was
+`disabled={minting}`, and disabling the focused control blurs it to `<body>` —
+so `KeyReveal` captured `<body>` as its opener and dismissing the dialog stranded
+a keyboard user at the top of the document. It is `aria-disabled` now, with
+`create()` early-returning while a mint is in flight; `ConfirmModal.jsx` already
+carried the same warning for the same reason.
+
+**The axe scan table is 23 scans, not 19,** and `/keys` is in it despite not
+being an admin path — the loop is the only place a page gets scanned at all, and
+`adminA11yMocks` signs in as an admin, for whom `/keys` renders identically.
 
 ---
 

@@ -63,11 +63,17 @@ test("the avatar shows initials derived from the email", async ({ page }) => {
   await expect(avatar(page)).toContainText("JD");
 });
 
-test("non-admin menu: About, theme toggle, Sign out — but no Admin item", async ({ page }) => {
+test("non-admin menu: API keys, About, theme toggle, Sign out — but no Admin item", async ({ page }) => {
   await signedIn(page);
   await page.goto("/");
 
   await avatar(page).click();
+  // API keys is every user's, not an admin capability — it must be here for a
+  // non-admin, and it must be a real anchor for the same middle/⌘-click reason
+  // the Admin item is.
+  const keysItem = page.getByRole("menuitem", { name: "API keys" });
+  await expect(keysItem).toBeVisible();
+  await expect(keysItem).toHaveAttribute("href", "/keys");
   await expect(page.getByRole("menuitem", { name: "About IPEDS Oracle" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: /Switch to (dark|light) mode/ })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
@@ -109,8 +115,8 @@ test("keyboard: opening focuses the first item; Escape closes and restores focus
   await page.goto("/");
 
   await avatar(page).click();
-  // First item (non-admin) is About.
-  await expect(page.getByRole("menuitem", { name: "About IPEDS Oracle" })).toBeFocused();
+  // First item (non-admin) is API keys — Admin, when present, sits above it.
+  await expect(page.getByRole("menuitem", { name: "API keys" })).toBeFocused();
 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);

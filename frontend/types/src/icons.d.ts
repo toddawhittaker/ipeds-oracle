@@ -21,6 +21,8 @@ export declare const IconUnlock: (p: IconProps) => React.JSX.Element;
 /** @param {IconProps} p */
 export declare const IconSend: (p: IconProps) => React.JSX.Element;
 /** @param {IconProps} p */
+export declare const IconKey: (p: IconProps) => React.JSX.Element;
+/** @param {IconProps} p */
 export declare const IconEdit: (p: IconProps) => React.JSX.Element;
 /** @param {IconProps} p */
 export declare const IconCopy: (p: IconProps) => React.JSX.Element;

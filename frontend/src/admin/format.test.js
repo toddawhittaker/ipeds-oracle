@@ -3,6 +3,7 @@ import {
   canonEmailForDisplay,
   fmtApprovalDate,
   fmtDateTime,
+  fmtDay,
   humanBytes,
   humanSeconds,
   money,
@@ -93,6 +94,27 @@ describe("fmtDateTime", () => {
     expect(fmtDateTime(null)).toBe("—");
     expect(fmtDateTime(0)).toBe("—");
     expect(fmtDateTime(undefined)).toBe("—");
+  });
+});
+
+describe("fmtDay", () => {
+  // Same seconds-not-ms contract and same null handling as fmtDateTime — the two
+  // sit in adjacent columns of the same table, and a helper that silently
+  // disagreed with its neighbour on either would be invisible in review.
+  it("reads its input as seconds", () => {
+    expect(fmtDay(1750000000)).toContain("2025");
+  });
+
+  it("renders an absent timestamp as an em dash, never 1970", () => {
+    expect(fmtDay(null)).toBe("—");
+    expect(fmtDay(0)).toBe("—");
+    expect(fmtDay(undefined)).toBe("—");
+  });
+
+  // The whole reason it exists: it has to be SHORTER than fmtDateTime, or the
+  // narrow column it was added for still overflows.
+  it("drops the time that fmtDateTime carries", () => {
+    expect(fmtDay(1750000000).length).toBeLessThan(fmtDateTime(1750000000).length);
   });
 });
 

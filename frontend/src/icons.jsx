@@ -59,6 +59,16 @@ export const IconUnlock = (p) => (
 /** @param {IconProps} p */
 export const IconSend = (p) => (<Svg {...p}><path d="M4 12h14M12 5l7 7-7 7" /></Svg>);
 
+// MCP API keys (the account menu item, the admin tab, the reveal dialog).
+/** @param {IconProps} p */
+export const IconKey = (p) => (
+  <Svg {...p}>
+    <circle cx="7.5" cy="15.5" r="4.5" />
+    <path d="M10.7 12.3 21 2" />
+    <path d="M17 6l3 3" />
+  </Svg>
+);
+
 /** @param {IconProps} p */
 export const IconEdit = (p) => (
   <Svg {...p}>

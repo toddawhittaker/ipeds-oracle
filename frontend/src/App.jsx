@@ -5,6 +5,7 @@ import { SERVER_UNREACHABLE, SESSION_EXPIRED } from "./authcopy.js";
 import Login from "./Login.jsx";
 import Chat from "./Chat.jsx";
 import { AdminRoute } from "./Admin.jsx";
+import Keys from "./Keys.jsx";
 import Verify from "./Verify.jsx";
 import { inflight } from "./inflight.js";
 import { ToastProvider } from "./Toast.jsx";
@@ -40,6 +41,7 @@ function routeAnnouncement(pathname) {
     // Current/Pending/Blocked isn't a silent navigation to a screen reader.
     return sub ? `Admin — ${cap(tab)} — ${cap(sub)}` : `Admin — ${cap(tab)}`;
   }
+  if (pathname === "/keys") return "API keys";
   return "Chat";
 }
 
@@ -297,6 +299,9 @@ function Shell() {
             v7_startTransition warning there. */}
         <Route path="/" element={<Chat key="chat" me={user} />} />
         <Route path="/chat/:id" element={<Chat key="chat" me={user} />} />
+        {/* The account menu's API-keys page. Not under /admin: these are the
+            SIGNED-IN USER's own keys, and every user has them. */}
+        <Route path="/keys" element={<Keys />} />
         {/* Code-review LOW: a no-data admin who clicks Chat then Admin must
             land back on Imports, not an empty Users tab -- Chat's own
             no-data CTA (Chat.jsx) tells them to go to Admin -> Imports. An
