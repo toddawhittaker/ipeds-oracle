@@ -4,8 +4,8 @@ This guide covers the **Admin** tools. It assumes you already know how to use th
 app day-to-day — if not, start with the [User guide](USER_GUIDE.md).
 
 As an administrator you can approve and manage who has access, load new IPEDS
-years, watch usage and cost, curate what the assistant has learned, and review
-server logs. Everything lives under **Admin**, reachable from your account menu
+years, watch usage and cost, curate what the assistant has learned, issue and
+revoke API keys, and review server logs. Everything lives under **Admin**, reachable from your account menu
 (the avatar in the top-right → **Admin**).
 
 > **Deploying** the app (Docker, configuration, email, backups) is a separate
@@ -20,6 +20,7 @@ server logs. Everything lives under **Admin**, reachable from your account menu
 - [Imports: loading IPEDS years](#imports-loading-ipeds-years)
 - [Usage: activity and cost](#usage-activity-and-cost)
 - [Skills: what the assistant has learned](#skills-what-the-assistant-has-learned)
+- [Keys: API access for other tools](#keys-api-access-for-other-tools)
 - [Logs](#logs)
 - [Keeping up to date](#keeping-up-to-date)
 
@@ -356,6 +357,60 @@ this again", so it lands in Rejected as well. And lessons that were already in
 the queue before this feature shipped have **no category**, so they show no pill
 and offer no **Reject & mute**; ordinary Delete still works, and the backlog
 clears itself as you work through it.
+
+---
+
+## Keys: API access for other tools
+
+The **Keys** tab lists every API key in the deployment. A key lets an outside
+program — Claude Code, a script, anything that speaks the Model Context Protocol
+— ask IPEDS Oracle questions **as the person it belongs to**, over the app's
+`/mcp` endpoint, instead of signing in through a browser.
+
+Users mint their own keys from the account menu → **API keys**. This tab is for
+the two things they can't do: seeing everybody's, and issuing one on someone's
+behalf.
+
+![The Keys tab: every user's keys with owner, label, masked value, and status](images/admin-keys.png)
+
+**Issuing a key.** Type the person's email, optionally a label, and select
+**Create key**. The address has to be allowlisted *and* have signed in at least
+once — a key attaches to an existing account, it doesn't create one. The key
+appears once, in a dialog; copy it and send it to its owner over a channel you
+trust, because nothing stores it and no one can look it up later.
+
+**Reading the table.** Owner, label, the masked key (its last four characters),
+the day it was created, the day it was last used, and its status. The masked
+value is what lets you trace a key seen in a log or a config file back to its
+owner. "Last used" is recorded at most once a minute, so it tells you the day,
+not the second.
+
+**Labels are the owner's.** You set one when you mint a key, and after that
+only the key's owner can rename it, from their own **API keys** page. This table
+shows whatever the label currently says.
+
+**Revoking.** The trash-can button on a row revokes that key immediately. Any
+client still using it stops working on its next call, and it can't be undone —
+issue a new key instead. The row stays in the table marked **Revoked**, so a
+withdrawn key is still there when you need to ask what it had access to. This
+table is the only place it stays: the owner's own **API keys** page lists live
+keys only, so a person who revokes a key sees it disappear.
+
+**Revoking several at once.** Tick the checkbox on each key you want to
+withdraw — or the header checkbox to take a whole page — and use **Revoke** in
+the toolbar that appears. The confirmation says how many will actually stop
+working, and separately how many of your selection were already revoked and will
+be left alone. Everything runs in one transaction, and the result tells you what
+happened to every row you picked. The rows stay selected afterwards, flipped to
+**Revoked**, so you can see the outcome of what you just did.
+
+Two things happen without you doing anything. Removing someone from the
+allowlist **also stops their keys**, so offboarding through Admin → Users is
+complete on its own. And an `ask` call through a key is a full-price question:
+it appears in Admin → Usage with everything else and counts against that
+person's usual per-question limit, so one person's spend is capped whichever way
+they ask. A key that is spending more than you expect is revoked here without
+touching that person's web access.
 
 ---
 

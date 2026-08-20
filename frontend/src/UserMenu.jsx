@@ -2,11 +2,11 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { initials } from "./initials.js";
 import { formatBadge } from "./attention.js";
-import { IconShield, IconInfo, IconSun, IconMoon, IconSignOut } from "./icons.jsx";
+import { IconShield, IconInfo, IconKey, IconSun, IconMoon, IconSignOut } from "./icons.jsx";
 
 // The top-bar account control: a round avatar (initials from the email) that opens
 // a menu holding everything that used to sit loose in the bar — Admin (admins
-// only), About, the light/dark toggle, and Sign out. Admin attention (the count of
+// only), API keys, About, the light/dark toggle, and Sign out. Admin attention (the count of
 // things needing an admin's attention) surfaces BOTH as a small pill on the avatar
 // corner and as a badge on the Admin menu item — Admin no longer has its own top-bar
 // link, so the avatar is where "something needs you" has to read at a glance.
@@ -65,6 +65,9 @@ export default function UserMenu({
       to: "/admin",
     });
   }
+  // Same `to:` form as Admin, and for the same reason: a real <Link> so
+  // middle/⌘/ctrl-click opens the page in a new tab.
+  items.push({ key: "keys", label: "API keys", Icon: IconKey, to: "/keys" });
   items.push({ key: "about", label: "About IPEDS Oracle", Icon: IconInfo, onSelect: onAbout });
   items.push({
     key: "theme",

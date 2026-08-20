@@ -1,10 +1,14 @@
-"""Sliding-window rate limiting for the magic-link endpoint.
+"""Sliding-window rate limiting, in one shape used three times.
 
-POST /api/auth/request triggers an email (to allowlisted users) or an admin
-access-request notification (otherwise). Without a limit it can be abused to
-email-bomb a known address or flood the admin. We cap requests per email and
-per client IP over a rolling window, backed by app.db so it survives across
-workers and restarts.
+Each limiter deletes rows well past the window, counts what is left inside it,
+refuses at the cap, and records the attempt. All three are backed by app.db so a
+limit survives across workers and restarts.
+
+  * the magic-link endpoint (POST /api/auth/request), per email and per client
+    IP — it sends mail, so without a cap it is an email bomb aimed at a known
+    address or at the admins;
+  * a chat turn, per user — it spends money upstream;
+  * an MCP call, per API key — likewise, and its callers are scripts.
 """
 from __future__ import annotations
 
@@ -105,6 +109,44 @@ def enforce_auth_rate_limit(email: str, ip: str) -> None:
         con.execute(
             "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
             (email, ip, now))
+        con.commit()
+    finally:
+        con.close()
+
+
+def enforce_mcp_rate_limit(key_id: int) -> None:
+    """Raise 429 if this API key has exceeded its budget over the rolling window;
+    otherwise record the call. The third instance of the shape above, keyed on
+    the api_keys row id.
+
+    Keyed on the KEY, not on its owner, on purpose: a user may hold one key for
+    a laptop and another for a scheduled job, and a runaway job should not be
+    able to lock its owner out of their own editor. It also means revoking a
+    leaked key ends its budget along with its access.
+
+    A non-positive `mcp_rate_max_per_key` DISABLES the limiter entirely (no
+    table writes), matching the chat limiter's off-switch.
+    """
+    s = get_settings()
+    if s.mcp_rate_max_per_key <= 0:
+        return
+    now = time.time()
+    cutoff = now - s.mcp_rate_window_seconds
+    con = connect()
+    try:
+        # Opportunistic cleanup of rows well past any window.
+        con.execute("DELETE FROM mcp_request_attempts WHERE created_at < ?",
+                    (cutoff - s.mcp_rate_window_seconds,))
+        recent = con.execute(
+            "SELECT COUNT(*) FROM mcp_request_attempts WHERE key_id=? AND created_at>=?",
+            (key_id, cutoff)).fetchone()[0]
+        if recent >= s.mcp_rate_max_per_key:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many requests — please slow down and try again in a moment.")
+        con.execute(
+            "INSERT INTO mcp_request_attempts(key_id, created_at) VALUES (?,?)",
+            (key_id, now))
         con.commit()
     finally:
         con.close()

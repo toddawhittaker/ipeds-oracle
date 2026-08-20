@@ -91,11 +91,16 @@ Ask a question in the box at the bottom and watch the answer stream in.
   conversation also removes the exchanges below it (they followed from it), so
   the app confirms first and says how many.
 - **Conversations** are saved in the sidebar (named automatically), and you can
-  rename or delete any of them. Collapse the sidebar for more room. A question
-  still running keeps working if you navigate away — come back and you'll see it
-  in progress, then the answer.
+  rename or delete any of them. **Search** them from the box above the list — it
+  looks inside the chats, your questions *and* the answers, so you can find one
+  by something you remember it saying. Every word has to appear somewhere in the
+  same chat; quote a phrase to keep it together. Collapse the sidebar for more
+  room. A question still running keeps working if you navigate away — come back
+  and you'll see it in progress, then the answer.
 - **Your account menu** — the avatar in the top-right holds **light/dark mode**
-  (remembered), **About**, **Sign out**, and **Admin** for administrators.
+  (remembered), **API keys** (for connecting another tool — see
+  [MCP access](#mcp-access)), **About**, **Sign out**, and **Admin** for
+  administrators.
 
 A repeat of a near‑identical question may return instantly from a cache, but the
 numbers are always re‑checked against the live data.
@@ -128,6 +133,9 @@ Signed‑in admins get an **Admin** entry in the account menu:
   the data‑integrity rates (how many answers' figures and table cells could be
   reproduced from the query results).
 - **Skills** — review and curate the lessons the assistant has learned.
+- **Keys** — every API key in the deployment, with its owner and whether it is
+  still live. Mint one on someone's behalf, revoke one, or revoke a selection in
+  one go (see [MCP access](#mcp-access)).
 - **Logs** — recent server activity.
 
 Wherever something is waiting — access requests, unverified lessons, new problems
@@ -140,7 +148,9 @@ The [Admin guide](docs/ADMIN_GUIDE.md) covers all of this in depth.
 
 A FastAPI backend runs an embedded, tool‑calling AI agent over a read‑only
 SQLite copy of the IPEDS data; a React front end renders the chat, tables, and
-charts. It's designed to be cheap to run and safe by construction — the model
+charts. The same agent and the same data are reachable over a **Model Context
+Protocol** endpoint, so an MCP client can ask the questions the web chat asks
+(see [MCP access](#mcp-access)). It's designed to be cheap to run and safe by construction — the model
 can only issue read‑only queries, bounded by a timeout, a row cap, and a
 per‑value size cap. Answers are additionally checked after the fact: a
 deterministic pass tries to reproduce each answer's hero figure and table cells
@@ -153,8 +163,8 @@ How the pieces fit together is written up under `docs/`:
 [Architecture](docs/ARCHITECTURE.md) (layout, stack, the three SQLite stores),
 [The agent loop](docs/AGENT_LOOP.md) (guards, grounding, self-learning),
 [Auth & security](docs/AUTH_AND_SECURITY.md), [Admin areas](docs/ADMIN.md),
-[The dataset](docs/DATASET.md), [Testing and the gates](docs/TESTING.md), and
-[Releasing](docs/RELEASING.md).
+[The dataset](docs/DATASET.md), [The MCP endpoint](docs/MCP.md),
+[Testing and the gates](docs/TESTING.md), and [Releasing](docs/RELEASING.md).
 
 ## Self-hosting
 
@@ -279,6 +289,15 @@ Give it TLS one of two ways:
    (uvicorn would otherwise trust the header itself whenever the proxy connects
    over loopback, letting a client spoof its own address past the per-IP limit).
    If you run the app outside the published image, pass that flag yourself.
+
+   **Keep query strings out of your proxy's access log.** The chat sidebar's
+   search sends the term as `?q=…` on `GET /api/chat/conversations`, and that is
+   the user's own private text — the chat where they asked about a named person,
+   a salary, a disciplinary matter. The app scrubs it from its *own* access log,
+   but a proxy logs the full request URI to a file the app never touches. In
+   nginx, use a `log_format` that writes `$uri` rather than `$request`; in
+   Caddy, the JSON logger records `request.uri` — filter it, or turn the access
+   log off for that path.
 2. **Direct HTTPS with a self‑signed cert** (handy on a LAN) — generate a cert and
    point the app at it:
 
@@ -294,6 +313,37 @@ Give it TLS one of two ways:
    you trust the cert.
 
 Either way keep `COOKIE_SECURE=true` — the session cookie is only sent over HTTPS.
+
+### MCP access
+
+The app also serves a **Model Context Protocol** endpoint at `POST /mcp`, so an
+MCP client can reach the same data and the same agent as the web chat. It is part
+of the same app on the same port — nothing extra to run — and it authenticates
+with a per-user API key, not the session cookie.
+
+Two things an operator has to get right:
+
+- **Forward `/mcp` through your proxy.** A proxy that forwards the whole site to
+  `:8000` already does; one that lists paths needs `/mcp` added alongside `/api`.
+- **MCP clients need a certificate they trust.** Option 2 above (a self-signed
+  cert) is a LAN convenience for browsers, which can be told to accept it; a
+  client library generally cannot, so serve MCP behind a real certificate.
+
+A user mints their own key from the account menu → **API keys**; an admin can
+mint one for somebody and revoke anyone's from **Admin → Keys**. The key is shown
+once and stored only as a hash, so a lost key is replaced, not recovered. Then:
+
+```bash
+claude mcp add --transport http ipeds https://<host>/mcp \
+  --header "Authorization: Bearer ipeds_mcp_…"
+```
+
+Every request is capped per key (`MCP_RATE_MAX_PER_KEY`, default 60/60s), and an
+`ask` call — the tool that runs the whole agent — also charges the caller's usual
+per-user question limit and counts in the Admin → Usage totals like any other
+question (the screen does not yet separate the two doors). Full detail,
+including why the endpoint serves no OAuth discovery, is in
+[docs/MCP.md](docs/MCP.md).
 
 ### Email
 
@@ -329,6 +379,7 @@ commented list. The essentials:
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `BIND_ADDR` | which host address compose publishes `:8000` on. Defaults to `127.0.0.1` (loopback only) so a reverse proxy is the only way in; set `0.0.0.0` only when the app terminates TLS itself (see [HTTPS](#https)) |
 | `CHAT_RATE_MAX_PER_USER` | per-user question cap per window (default 30/60s) — the guard against one runaway script burning your provider spend |
+| `MCP_RATE_MAX_PER_KEY` | per-key request cap per window on the MCP endpoint (default 60/60s); `ask` also charges `CHAT_RATE_MAX_PER_USER` |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
 

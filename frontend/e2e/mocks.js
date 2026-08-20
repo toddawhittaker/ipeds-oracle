@@ -159,13 +159,36 @@ export async function mockLogout(page) {
  * Returns a handle whose `setList` lets a spec change what's returned for
  * later requests (e.g. after a chat is saved), without re-registering the route.
  */
+/**
+ * GET /api/chat/conversations, with the sidebar's `?q=` search.
+ *
+ * The search is SERVER-side, so a mock that ignored `q` would let a client that
+ * never sends it pass every spec. This applies the same rules the endpoint does
+ * (backend/app/search.py): terms ANDed, a quoted run kept whole, matched
+ * against the title plus each row's optional `body` — the stand-in here for the
+ * message text the real query searches and the browser never sees.
+ *
+ * `queries` records every `q` the client asked for, in order, so a spec can
+ * assert what was actually sent rather than only what came back.
+ */
 export async function mockConversations(page, initial = []) {
   let list = initial;
-  await page.route("**/api/chat/conversations", async (route) => {
+  const queries = [];
+  const terms = (q) => (q.match(/"[^"]*"?|\S+/g) || [])
+    .map((s) => s.replace(/"/g, "").toLowerCase())
+    .filter(Boolean);
+  await page.route("**/api/chat/conversations*", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(list) });
+    const q = new URL(route.request().url()).searchParams.get("q") || "";
+    queries.push(q);
+    const want = terms(q);
+    const hay = (c) => `${c.title || ""} ${c.body || ""}`.toLowerCase();
+    const body = want.length
+      ? list.filter((c) => want.every((term) => hay(c).includes(term)))
+      : list;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
-  return { setList: (l) => { list = l; } };
+  return { setList: (l) => { list = l; }, queries };
 }
 
 /**
@@ -981,4 +1004,142 @@ export async function mockDeintegrate(page, { jobId = 1, status = "pending", htt
     }
   });
   return { calls };
+}
+
+/**
+ * A stateful /api/keys — the signed-in user's OWN MCP API keys.
+ *
+ * GET lists the LIVE rows; POST mints one and returns the raw `key` exactly
+ * once (the reveal dialog is the only place it ever appears, so a spec that
+ * reloads must not find it again); DELETE marks the row revoked rather than
+ * removing it.
+ *
+ * Both halves of that mirror the real endpoint, and the mismatch matters:
+ * app/apikeys.py KEEPS the revoked row — the admin table is where it stays
+ * visible — while GET /api/keys filters it out, because on the owner's own page
+ * it is a line with no action left. `getRows()` therefore returns EVERY row,
+ * revoked included, so a spec can still assert what the server holds.
+ *
+ * `secret` is the raw value the mint returns, so a spec can assert the dialog
+ * shows THAT string and that a later GET carries no trace of it.
+ */
+export async function mockApiKeys(page, initialRows = [], { secret = "ipeds_mcp_test-secret-value-1234", httpStatus = 200, detail, relabelStatus = 200 } = {}) {
+  let rows = [...initialRows];
+  let nextId = Math.max(0, ...rows.map((r) => r.id || 0)) + 1;
+  const mints = [];
+  const relabels = [];
+  await page.route("**/api/keys", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET") {
+      const live = rows.filter((r) => r.revoked_at == null);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(live) });
+    }
+    if (req.method() === "POST") {
+      if (httpStatus !== 200) {
+        return route.fulfill({ status: httpStatus, contentType: "application/json",
+          body: JSON.stringify({ detail: detail || "Couldn't create that key." }) });
+      }
+      const body = req.postDataJSON() || {};
+      const label = (body.label || "").trim() || null;
+      mints.push(label);
+      const row = { id: nextId++, last4: secret.slice(-4), label, created_at: 1_700_000_000,
+                    created_by: null, last_used_at: null, revoked_at: null };
+      rows = [row, ...rows];
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ key: secret, ...row }) });
+    }
+    return route.continue();
+  });
+  await page.route("**/api/keys/*", async (route) => {
+    const req = route.request();
+    const id = Number(new URL(req.url()).pathname.split("/").pop());
+    // PATCH relabels; the server trims and stores a blanked label as null, and
+    // a spec asserting "the label cleared" would otherwise pass on a mock that
+    // kept "".
+    if (req.method() === "PATCH") {
+      if (relabelStatus !== 200) {
+        return route.fulfill({ status: relabelStatus, contentType: "application/json",
+          body: JSON.stringify({ detail: "Key not found." }) });
+      }
+      const label = ((req.postDataJSON() || {}).label || "").trim() || null;
+      relabels.push({ id, label });
+      rows = rows.map((r) => (r.id === id ? { ...r, label } : r));
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify(rows.find((r) => r.id === id)) });
+    }
+    if (req.method() !== "DELETE") return route.continue();
+    rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
+  return { mints, relabels, getRows: () => rows };
+}
+
+/**
+ * A stateful /api/admin/keys — every user's keys, plus minting on someone's
+ * behalf. Same one-shot `key` contract as mockApiKeys; rows additionally carry
+ * the owner's `email`, which the admin table's Owner column and search need.
+ * The POST echoes the requested email back, so the reveal dialog can name who
+ * to hand the key to.
+ */
+export async function mockAdminKeys(page, initialRows = [], { secret = "ipeds_mcp_admin-secret-value-5678", httpStatus = 200, detail } = {}) {
+  let rows = [...initialRows];
+  let nextId = Math.max(0, ...rows.map((r) => r.id || 0)) + 1;
+  const mints = [];
+  const bulkCalls = [];
+  await page.route("**/api/admin/keys", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
+    if (req.method() === "POST") {
+      if (httpStatus !== 200) {
+        return route.fulfill({ status: httpStatus, contentType: "application/json",
+          body: JSON.stringify({ detail: detail || "That address has never signed in, so it has no account to attach a key to." }) });
+      }
+      const body = req.postDataJSON() || {};
+      const email = (body.email || "").trim().toLowerCase();
+      const label = (body.label || "").trim() || null;
+      mints.push({ email, label });
+      const row = { id: nextId++, last4: secret.slice(-4), label, email,
+                    created_at: 1_700_000_000, created_by: "admin@example.edu",
+                    last_used_at: null, revoked_at: null };
+      rows = [row, ...rows];
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ key: secret, ...row }) });
+    }
+    return route.continue();
+  });
+  await page.route("**/api/admin/keys/*", async (route) => {
+    const req = route.request();
+    if (req.method() !== "DELETE") return route.continue();
+    const id = Number(new URL(req.url()).pathname.split("/").pop());
+    rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
+  // POST /api/admin/keys/bulk-action. Registered AFTER the single-key route
+  // above because Playwright runs the most recently registered handler FIRST,
+  // and "keys/*" also matches "keys/bulk-action" — with the order reversed the
+  // single-key handler wins, sees a POST, and route.continue()s the bulk call
+  // into a network that is not there.
+  await page.route("**/api/admin/keys/bulk-action", async (route) => {
+    const body = route.request().postDataJSON() || {};
+    const ids = body.ids || [];
+    bulkCalls.push({ action: body.action, ids });
+    // The server RECOMPUTES eligibility per key rather than trusting the
+    // browser's list, so an already-revoked id comes back as a skip, not as
+    // work done. A mock that revoked everything asked of it would let a client
+    // bug that sends ineligible ids pass unnoticed.
+    let affected = 0;
+    const skipped = [];
+    for (const id of ids) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) { skipped.push({ id, reason: "no longer exists" }); continue; }
+      if (row.revoked_at != null) { skipped.push({ id, reason: "already revoked" }); continue; }
+      rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
+      affected += 1;
+    }
+    return route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, affected, skipped, failed: [] }) });
+  });
+  return { mints, bulkCalls, getRows: () => rows };
 }

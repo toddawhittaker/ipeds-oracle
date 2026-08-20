@@ -52,6 +52,12 @@ export const fmtDateTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : 
 // ("approved|added on <date> by <admin>").
 export const fmtApprovalDate = (d = new Date()) => d.toLocaleDateString();
 
+// Date only, no time — for a column that cannot afford fmtDateTime's 210px and
+// whose question is "which day", not "which minute" (Admin -> Keys carries two
+// such columns side by side, and the full stamp stays in each cell's title).
+// Same unix-SECONDS input and same em dash on null as fmtDateTime.
+export const fmtDay = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString() : "—");
+
 // Spend. Sub-dollar amounts need 4 places or a per-query cost rounds to $0.00
 // and the whole column reads as free.
 export const money = (v) => "$" + Number(v || 0).toFixed(Number(v) >= 1 ? 2 : 4);

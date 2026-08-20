@@ -22,9 +22,11 @@ import {
   mockUsage,
   mockSkillCategories,
   mockSkillRejections,
+  mockApiKeys,
+  mockAdminKeys,
 } from "./mocks.js";
 
-// Everything the five admin sections fetch on mount, with CONTENT rather than
+// Everything the six admin sections fetch on mount, with CONTENT rather than
 // empty lists: an empty table renders none of the elements whose contrast or
 // semantics could be wrong. The Logs fixture carries all three levels because
 // the WARNING one sat at 2.52:1 and no scan had ever rendered it.
@@ -42,7 +44,7 @@ async function adminA11yMocks(page) {
   await mockDeniedRequests(page, [
     // `emails` is REQUIRED by the Blocked table's Email renderer. Omitting it
     // threw, the error boundary swallowed the whole route, and all three
-    // Users paths x both themes -- 6 of the 19 scans -- silently scanned a
+    // Users paths x both themes -- 6 of these scans -- silently scanned a
     // three-element crash card and reported clean.
     { id: 2, email: "no@example.edu", canon_email: "no@example.edu",
       emails: ["no@example.edu", "no+tag@example.edu"], created_at: 1, denied_at: 2 },
@@ -66,8 +68,25 @@ async function adminA11yMocks(page) {
     { id: 5, headline: "Verify figures against the result", description: "…",
       category: "UNGROUNDED_NUMBER", was_verified: 0, hits: 2, created_at: 1 },
   ]);
+  // CONTENT, not an empty array, for the same reason as every list above: an
+  // empty keys list renders none of the elements whose contrast could be wrong
+  // — the masked-key code, the label, the row action. A revoked row is not worth
+  // adding here: /keys lists live keys only, and the "Revoked" pill it used to
+  // show now exists solely in the admin table below.
+  await mockApiKeys(page, [
+    { id: 1, last4: "9f2a", label: "Work laptop", created_at: 1,
+      created_by: null, last_used_at: 2, revoked_at: null },
+  ]);
+  await mockAdminKeys(page, [
+    { id: 1, email: "prof@example.edu", last4: "9f2a", label: "Work laptop",
+      created_at: 1, created_by: null, last_used_at: 2, revoked_at: null },
+    // A revoked row too, or the status pill and the missing-action cell are both
+    // outside the scan.
+    { id: 2, email: "dean@example.edu", last4: "2222", label: null,
+      created_at: 1, created_by: "admin@example.edu", last_used_at: null, revoked_at: 3 },
+  ]);
   // THE USAGE PAGE WAS NEVER ACTUALLY SCANNED. `mockUsage` was simply absent, so
-  // /api/admin/usage 404'd and both Usage scans (2 of the 19) measured the
+  // /api/admin/usage 404'd and both Usage scans measured the
   // load-FAILURE state: measured 0 `.stat` tiles, 0 `.errbound`, panel text
   // ending "Not Found". Neither existing guard caught it — the readiness wait
   // matches an unconditional `<h2 class="sr-only">Usage</h2>`, and `.errbound`
@@ -509,6 +528,45 @@ test.describe("axe smoke scan", () => {
     expect(found, JSON.stringify(found, null, 2)).toEqual([]);
   });
 
+  test("the one-shot key reveal has no critical or serious violations",
+    async ({ page }) => {
+      // Every scan below catches its page at REST. The reveal dialog is the one
+      // screen in a key's whole life where the secret is visible, it exists only
+      // for the moment after a mint, and no scan had ever seen it — the same
+      // shape of blind spot that made widening this loop find two `serious`
+      // violations on main.
+      await mockMe(page, { email: "user@example.edu", is_admin: false });
+      await mockConversations(page, []);
+      await mockApiKeys(page, []);
+      await page.goto("/keys");
+      await page.getByRole("button", { name: "Create key" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
+  test("the bulk-selection toolbar has no critical or serious violations",
+    async ({ page }) => {
+      // The BulkBar exists ONLY while rows are selected, so every resting-page
+      // scan in the loop below — including the four Allowlist tables that have
+      // had it far longer than this one — has always missed it. Scanned on the
+      // Keys table because that is where it was wired most recently; the
+      // component is shared, so this covers the toolbar itself for all of them.
+      await adminA11yMocks(page);
+      await page.goto("/admin/keys");
+      await expect(page.getByRole("heading", { name: "API keys" })).toBeVisible();
+      await page.getByRole("row", { name: /prof@example\.edu/ })
+        .getByRole("checkbox").check();
+      // Both states of the destructive action, in one scan: the live row's
+      // Revoke is enabled, and a disabled danger button is its own contrast
+      // question.
+      await expect(page.getByRole("button", { name: "Revoke", exact: true })).toBeVisible();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
   for (const [path, ready, content] of [
     ["/admin/users/current", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
     ["/admin/users/pending", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
@@ -519,7 +577,12 @@ test.describe("axe smoke scan", () => {
     ["/admin/imports", /Load IPEDS years/i, ".year-card-wrap"],
     ["/admin/usage", /Usage/i, ".stat"],
     ["/admin/skills", /Learned lessons/i, ".skill"],
+    ["/admin/keys", /API keys/i, ".grid.data.keys tbody tr"],
     ["/admin/logs", /Server logs/i, ".logmsg"],
+    // Not an admin page, but scanned in the same loop: /keys is reachable by
+    // every signed-in user and renders under the same shell. A page absent from
+    // this table is never scanned at all.
+    ["/keys", /API keys/i, ".keyrow"],
   ]) {
     for (const theme of ["light", "dark"]) {
       test(`${path} has no critical or serious violations (${theme})`, async ({ page }) => {

@@ -22,9 +22,26 @@ from app.config import get_settings
 # function is allowed while `REPLACE INTO` / `INSERT OR REPLACE` DML still
 # trip the `insert`/other alternatives (and are also blocked by the
 # must-start-with-SELECT/WITH gate).
+# `pragma\w*`, not `pragma`, and the trailing \b is dropped from that one
+# alternative: `_` is a word character, so `\bpragma\b` does NOT match
+# `pragma_table_list` — SQLite's table-valued function forms of the same
+# statements sailed straight through the filter this exists to be. Measured
+# through run_sql before the fix: `SELECT * FROM pragma_database_list` returned
+# the server's absolute path to ipeds.db, and `pragma_quick_check` read the
+# whole 2.2 GB file until the watchdog killed it, once per call. Read-only and
+# no escape (the handle is immutable + query_only), but disclosure and I/O
+# amplification, and precisely the case the keyword was written for.
+#
+# `pragma_table_info` is the ONE exception, and it is a product feature rather
+# than an oversight: `tools/schema.py::get_columns` is built on it, and that is
+# a first-class tool in the registry — it is how the agent (and an MCP client)
+# discovers a family's columns. It names columns of a table the caller can
+# already read. Written as a negative lookahead rather than a second allowed
+# alternative so that anything else beginning `pragma_table_info…` still trips.
 _FORBIDDEN = re.compile(
     r"\b(insert|update|delete|drop|alter|create|attach|detach|"
-    r"pragma|vacuum|reindex|analyze|begin|commit|rollback|savepoint)\b"
+    r"vacuum|reindex|analyze|begin|commit|rollback|savepoint)\b"
+    r"|\bpragma(?!_table_info\b)\w*"
     r"|\breplace\b(?!\s*\()",
     re.IGNORECASE,
 )

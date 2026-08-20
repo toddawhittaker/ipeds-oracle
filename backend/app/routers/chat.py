@@ -21,8 +21,9 @@ from starlette.concurrency import run_in_threadpool
 from app import feedback, guard, lessoncats, ratelimit, skills
 from app.auth import current_user
 from app.config import get_settings
-from app.db import connect
+from app.db import connect, record_usage
 from app.llm import cost_is_estimated, effective_cost, generate_title, stream_agent
+from app.search import like_pattern, parse_terms
 from app.tools.sql import (
     QueryResult,
     SQLResultTooLargeError,
@@ -947,22 +948,24 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              *(turn_values[c] for c in MESSAGE_TURN_COLUMNS), now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
-        usage_cur = con.execute(
-            "INSERT INTO usage_log(user_id, question, model_used, escalated, "
-            "prompt_tokens, completion_tokens, cached_prompt_tokens, "
-            "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, cost_estimated, figure_grounding, figure_derivation, "
-            "emit_mode, answer_leaked, table_grounding, table_cells_checked, "
-            "table_cells_matched, exhaustion, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (user_id, question, model, int(escalated), prompt_tokens,
-             completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
-             first_call_cached_prompt_tokens, int(ok), int(cached),
-             float(cost), int(bool(cost_estimated)),
-             figure_grounding or None, figure_derivation or None,
-             emit_mode or None, int(bool(leaked)), table_grounding or None,
-             int(table_cells_checked), int(table_cells_matched),
-             exhaustion or None, now))
+        # Inside THIS transaction, on THIS connection — the billing row and the
+        # messages it bills for commit together or not at all. `source` stays
+        # NULL: that column exists to mark the MCP door (app/mcpsrv/ask.py), and
+        # a chat turn is what every row without it has always been.
+        usage_id = record_usage(
+            con, user_id=user_id, question=question, model_used=model,
+            escalated=escalated, ok=ok, cached=cached,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            cached_prompt_tokens=cached_prompt_tokens,
+            first_call_prompt_tokens=first_call_prompt_tokens,
+            first_call_cached_prompt_tokens=first_call_cached_prompt_tokens,
+            cost=cost, cost_estimated=cost_estimated,
+            figure_grounding=figure_grounding, figure_derivation=figure_derivation,
+            emit_mode=emit_mode, answer_leaked=leaked,
+            table_grounding=table_grounding,
+            table_cells_checked=table_cells_checked,
+            table_cells_matched=table_cells_matched,
+            exhaustion=exhaustion, created_at=now)
         con.commit()
         # The usage_log id comes back so a probe that finishes AFTER this commit
         # (the title call, the detached feedback distiller) can add its spend with
@@ -970,7 +973,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         # too, so a caller can project the `done` event's extras
         # (_done_extras) from the SAME values just written, rather than a
         # second hand-typed copy.
-        return _PersistResult(user_msg_id, assistant_id, usage_cur.lastrowid,
+        return _PersistResult(user_msg_id, assistant_id, usage_id,
                               turn_values)
     finally:
         con.close()
@@ -986,12 +989,50 @@ def _update_title(conv_id: int, title: str) -> None:
 
 
 @router.get("/conversations")
-def list_conversations(user: sqlite3.Row = Depends(current_user)):
+def list_conversations(q: str | None = None,
+                       user: sqlite3.Row = Depends(current_user)):
+    """The caller's conversations, newest-updated first, optionally searched.
+
+    `q` is a plain text search over the caller's own history: the conversation
+    title and the text of every message in it, questions and answers alike. Its
+    terms are ANDed and a quoted run is one phrase — see app/search.py for the
+    rules and why they are those rules.
+
+    A term matches a conversation if it appears in the TITLE or in ANY of its
+    messages; the AND is across terms, not within one message. So `nursing 2023`
+    finds a chat that asked about nursing and mentioned 2023 two turns later,
+    which is how someone looking for a chat they half-remember actually thinks.
+
+    The LIMIT applies AFTER the search, so this returns the 100 most recently
+    updated MATCHING conversations rather than searching within the most recent
+    100 — the difference between finding an old chat and not. That is also why
+    this is a server query rather than a filter over the list the sidebar
+    already holds: the browser has titles, and the text being searched is in
+    messages it has never seen.
+
+    Not indexed, deliberately: one person's history is a few hundred message
+    rows, so the scan is cheaper than an FTS5 table plus the trigger and
+    migration that keeping it in sync would need.
+    """
+    terms = parse_terms(q)
+    # Each term is its own AND'd clause. The EXISTS is correlated to `c`, which
+    # is already scoped by user_id below, so a term can never reach another
+    # user's messages.
+    clauses = "".join(
+        " AND (c.title LIKE ? ESCAPE '\\' OR EXISTS ("
+        "SELECT 1 FROM messages m WHERE m.conversation_id = c.id "
+        "AND m.content LIKE ? ESCAPE '\\'))"
+        for _ in terms)
+    params: list = [user["id"]]
+    for term in terms:
+        pattern = like_pattern(term)
+        params += [pattern, pattern]
     con = connect()
     try:
         rows = con.execute(
-            "SELECT id, title, created_at, updated_at FROM conversations "
-            "WHERE user_id=? ORDER BY updated_at DESC LIMIT 100", (user["id"],)).fetchall()
+            "SELECT c.id, c.title, c.created_at, c.updated_at FROM conversations c "
+            f"WHERE c.user_id=?{clauses} ORDER BY c.updated_at DESC LIMIT 100",
+            params).fetchall()
         return [dict(r) for r in rows]
     finally:
         con.close()

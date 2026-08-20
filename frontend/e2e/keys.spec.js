@@ -1,0 +1,300 @@
+import { test, expect } from "@playwright/test";
+import { mockApiKeys, mockConversations, mockMe, mockVersion } from "./mocks.js";
+
+// Browser truth for a user's own API keys at /keys. The pure display + ordering
+// logic is unit-tested in frontend/src/apikeys.test.js (vitest); here we cover
+// what only a browser gives: reaching the page from the account menu, the
+// one-shot reveal dialog and the fact the value is gone after a reload, and the
+// revoke path through the shared confirm modal.
+
+const KEY = { id: 7, last4: "9f2a", label: "Work laptop", created_at: 1_700_000_000,
+              created_by: null, last_used_at: 1_700_000_400, revoked_at: null };
+
+async function openKeys(page, rows = [], opts) {
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
+  await mockVersion(page);
+  await mockConversations(page, []);
+  const api = await mockApiKeys(page, rows, opts);
+  await page.goto("/keys");
+  await expect(page.getByRole("heading", { name: "API keys" })).toBeVisible();
+  return api;
+}
+
+test("the account menu reaches /keys, and the page announces the navigation", async ({ page }) => {
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
+  await mockVersion(page);
+  await mockConversations(page, []);
+  await mockApiKeys(page, [KEY]);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("menuitem", { name: "API keys" }).click();
+
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/keys");
+  await expect(page.getByRole("heading", { name: "API keys" })).toBeVisible();
+  // Swapping the main content is a silent navigation without this — the same
+  // gap the announcer exists for on Chat <-> Admin.
+  await expect(page.getByTestId("route-announcer")).toContainText(/api keys/i);
+});
+
+test("a listed key shows only its last four characters", async ({ page }) => {
+  await openKeys(page, [KEY]);
+  // The identification aid, never the credential. The server sends four
+  // characters and this is the screen a user is most likely to be screen-sharing
+  // while asking for help.
+  await expect(page.getByText("ipeds_mcp_…9f2a")).toBeVisible();
+  await expect(page.getByText("Work laptop")).toBeVisible();
+});
+
+test("minting shows the raw key once, and a reload cannot get it back", async ({ page }) => {
+  const secret = "ipeds_mcp_only-shown-once-abcd";
+  const api = await openKeys(page, [], { secret });
+
+  await page.getByLabel("Label for the new key").fill("CI runner");
+  await page.getByRole("button", { name: "Create key" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("revealed-key")).toHaveValue(secret);
+  expect(api.mints).toEqual(["CI runner"]);
+
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // The row is there; the secret is not. This is the whole contract of the
+  // screen: nothing stores the raw key, so a UI that could re-render it would
+  // mean the server had kept it.
+  await expect(page.getByText("CI runner")).toBeVisible();
+  await expect(page.getByText(secret)).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.getByText("CI runner")).toBeVisible();
+  await expect(page.getByText(secret)).toHaveCount(0);
+});
+
+test("the reveal dialog opens on Copy, traps focus, and returns it on Done", async ({ page }) => {
+  await openKeys(page, []);
+  const create = page.getByRole("button", { name: "Create key" });
+  await create.click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  // Focus lands on COPY, not on Done. The regression this replaces: the dialog
+  // opened with the dismiss button focused, so a user who submitted the mint
+  // form with Enter and pressed Enter again — the ordinary reflex when a request
+  // feels slow — destroyed the one and only copy of an unrecoverable credential.
+  // Asserting the FOCUSED button's name is the whole point; "a button is
+  // focused" would have passed before and after.
+  await expect(dialog.getByRole("button", { name: "Copy key" })).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Done" })).toBeVisible();
+  // The background really is inert, so nothing behind it is reachable.
+  await expect(page.locator(".app")).toHaveAttribute("inert", "");
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".app")).not.toHaveAttribute("inert", "");
+  await expect(create).toBeFocused();
+});
+
+test("revoke goes through the confirm modal, toasts, and drops the row from the list",
+  async ({ page }) => {
+    // A second, untouched key: "the row went away" has to mean THAT row, not a
+    // list that emptied or failed to reload.
+    const other = { ...KEY, id: 8, last4: "1c40", label: "Desktop" };
+    const api = await openKeys(page, [KEY, other]);
+    await expect(page.locator(".keyrow")).toHaveCount(2);
+
+    await page.getByRole("button", { name: /^Revoke key ipeds_mcp_…9f2a$/ }).click();
+
+    const modal = page.getByRole("alertdialog");
+    await expect(modal).toBeVisible();
+    // Naming the key in the body is what makes the confirmation answerable —
+    // "revoke this key?" with three keys on screen is not.
+    await expect(modal).toContainText("ipeds_mcp_…9f2a");
+    await modal.getByRole("button", { name: "Revoke key" }).click();
+
+    await expect(page.locator(".toast-msg")).toHaveText("Key revoked.");
+    // Gone from the owner's list, and only that one.
+    await expect(page.locator(".keyrow-id")).toHaveText(["ipeds_mcp_…1c40"]);
+    // Revoked, NOT deleted: the server still holds the row, which is what keeps
+    // the admin table able to answer what the withdrawn key could reach.
+    expect(api.getRows().find((r) => r.id === KEY.id).revoked_at).not.toBe(null);
+    // Focus lands on the heading, because the button that opened the modal left
+    // with its row and ConfirmModal has nothing to return focus to.
+    await expect(page.getByRole("heading", { name: "API keys" })).toBeFocused();
+  });
+
+test("the pencil renames a key in place, and Escape leaves it alone",
+  async ({ page }) => {
+    const api = await openKeys(page, [KEY]);
+
+    await page.getByRole("button", { name: /^Rename key ipeds_mcp_…9f2a$/ }).click();
+    const input = page.getByRole("textbox", { name: /^Label for key/ });
+    // The existing label is pre-selected, so typing replaces it — the common
+    // case is fixing a name, not appending to one.
+    await expect(input).toHaveValue("Work laptop");
+    await input.fill("Home desktop");
+    await input.press("Escape");
+
+    await expect(input).toHaveCount(0);
+    await expect(page.locator(".keyrow-label")).toHaveText("Work laptop");
+    expect(api.relabels).toEqual([]);
+    // Escape must hand focus back to the pencil it came from, not to <body>.
+    await expect(page.getByRole("button", { name: /^Rename key/ })).toBeFocused();
+
+    await page.getByRole("button", { name: /^Rename key/ }).click();
+    await page.getByRole("textbox", { name: /^Label for key/ }).fill("Home desktop");
+    await page.getByRole("textbox", { name: /^Label for key/ }).press("Enter");
+
+    await expect(page.locator(".keyrow-label")).toHaveText("Home desktop");
+    expect(api.relabels).toEqual([{ id: KEY.id, label: "Home desktop" }]);
+    expect(api.getRows()[0].label).toBe("Home desktop");
+    // Committing unmounts the input too, so it needs the same focus hand-back
+    // Escape gets — asserted separately because they are two code paths.
+    await expect(page.getByRole("button", { name: /^Rename key/ })).toBeFocused();
+  });
+
+test("a rename the server refuses is put back, with a toast", async ({ page }) => {
+  // The commit is optimistic, so a silent failure would leave the user reading a
+  // label the server never accepted — and believing it.
+  const api = await openKeys(page, [KEY], { relabelStatus: 404 });
+
+  await page.getByRole("button", { name: /^Rename key/ }).click();
+  const input = page.getByRole("textbox", { name: /^Label for key/ });
+  await input.fill("Never lands");
+  await input.press("Enter");
+
+  await expect(page.locator(".toast-msg")).toHaveText("Couldn't rename that key. Try again.");
+  await expect(page.locator(".keyrow-label")).toHaveText("Work laptop");
+  expect(api.getRows()[0].label).toBe("Work laptop");
+});
+
+test("blanking a label clears it, rather than reading as an unchanged row",
+  async ({ page }) => {
+    const api = await openKeys(page, [KEY]);
+
+    await page.getByRole("button", { name: /^Rename key/ }).click();
+    const input = page.getByRole("textbox", { name: /^Label for key/ });
+    await input.fill("");
+    await input.press("Enter");
+
+    // Emptied is a real change, unlike unchanged — the row falls back to the
+    // placeholder and the server is told.
+    await expect(page.locator(".keyrow-label")).toHaveText("Unlabelled key");
+    expect(api.relabels).toEqual([{ id: KEY.id, label: null }]);
+  });
+
+test("cancelling the confirm modal revokes nothing", async ({ page }) => {
+  const api = await openKeys(page, [KEY]);
+
+  await page.getByRole("button", { name: /^Revoke key/ }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(api.getRows()[0].revoked_at).toBe(null);
+  await expect(page.getByRole("button", { name: /^Revoke key/ })).toBeVisible();
+});
+
+test("a failed load renders a visible error, never an empty-looking key list", async ({ page }) => {
+  await mockMe(page, { email: "user@example.edu", is_admin: false });
+  await mockVersion(page);
+  await mockConversations(page, []);
+  await page.route("**/api/keys", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({ status: 500, contentType: "application/json",
+      body: JSON.stringify({ detail: "The database is unavailable." }) });
+  });
+  await page.goto("/keys");
+
+  // "You don't have any API keys yet" would be a confirmed fact the app does not
+  // have — and it points the user at minting another key, the wrong fix.
+  await expect(page.getByRole("alert")).toContainText("The database is unavailable.");
+  await expect(page.getByText("You don’t have any API keys yet.")).toHaveCount(0);
+});
+
+test("a failed mint says so instead of opening an empty reveal dialog", async ({ page }) => {
+  await openKeys(page, [], { httpStatus: 429, detail: "Too many keys. Revoke one first." });
+
+  await page.getByRole("button", { name: "Create key" }).click();
+
+  await expect(page.locator(".toast-msg")).toHaveText("Too many keys. Revoke one first.");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+// The clipboard, both ways. This value is unrecoverable, so "the copy button
+// silently did nothing" is the one failure on this screen that costs the user
+// the key itself — and `navigator.clipboard` really is undefined in a non-secure
+// context, which is the documented self-host case (plain http on a LAN IP).
+async function stubClipboard(page, { succeed }) {
+  await page.addInitScript(({ ok }) => {
+    globalThis.__copied = [];
+    // Delete the real API so the execCommand fallback is the path under test,
+    // exactly as it is over plain http.
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    globalThis.document.execCommand = (cmd) => {
+      if (cmd === "copy") {
+        globalThis.__copied.push(globalThis.document.activeElement?.value ?? "");
+        return ok;
+      }
+      return false;
+    };
+  }, { ok: succeed });
+}
+
+test("the copy button reaches the clipboard through the non-secure-context fallback",
+  async ({ page }) => {
+    const secret = "ipeds_mcp_fallback-path-value-abcd";
+    await stubClipboard(page, { succeed: true });
+    await openKeys(page, [], { secret });
+
+    await page.getByRole("button", { name: "Create key" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Copy key" }).click();
+
+    expect(await page.evaluate(() => globalThis.__copied)).toEqual([secret]);
+    // Announced, not only shown: the button's own label change is not reliably
+    // announced and there is no toast on the success path.
+    await expect(dialog.locator("[aria-live=polite]")).toHaveText("API key copied.");
+    // And the confirmation HOLDS. It used to revert after 1.4s, so by the moment
+    // the user reached for Done the dialog showed no evidence the copy had ever
+    // happened — on the one screen where "did I get it?" is the only question
+    // that matters. 2s is past the old timer with margin; a timer that came back
+    // shorter would still be caught by the wait, and one that came back longer
+    // is a different bug this test would not claim to catch.
+    await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
+    await page.waitForTimeout(2000);
+    await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
+test("a keyboard user can select the key when the clipboard is refused", async ({ page }) => {
+  // The documented self-host case is plain http on a LAN, where
+  // navigator.clipboard does not exist and execCommand can be refused. The
+  // failure toast tells the user to "select the text and copy it manually" —
+  // which was impossible without a mouse, because the value was a <code>. It is
+  // a readonly input now: a tab stop that selects itself on focus.
+  await stubClipboard(page, { succeed: false });
+  await openKeys(page, [], { secret: "ipeds_mcp_selectable-by-keyboard-abcd" });
+  await page.getByRole("button", { name: "Create key" }).click();
+
+  const dialog = page.getByRole("dialog");
+  const field = dialog.getByTestId("revealed-key");
+  await field.focus();
+  await expect(field).toBeFocused();
+  const selected = await field.evaluate(
+    (el) => el.value.slice(el.selectionStart, el.selectionEnd));
+  expect(selected).toBe("ipeds_mcp_selectable-by-keyboard-abcd");
+});
+
+test("a refused copy says so instead of silently failing", async ({ page }) => {
+  await stubClipboard(page, { succeed: false });
+  await openKeys(page, []);
+
+  await page.getByRole("button", { name: "Create key" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Copy key" }).click();
+
+  // The wording names the escape hatch — select the text by hand — because the
+  // dialog is the only place this value will ever appear.
+  await expect(page.locator(".toast-msg")).toContainText("copy it manually");
+  // ...and the dialog stays open, so that escape hatch is still reachable.
+  await expect(page.getByRole("dialog")).toBeVisible();
+});

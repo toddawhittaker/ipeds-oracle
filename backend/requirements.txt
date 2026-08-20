@@ -13,3 +13,4 @@ resend>=2.35.0
 fastembed>=0.8.0
 numpy>=2.5.1
 email-validator>=2.3.0
+mcp>=2.0.0

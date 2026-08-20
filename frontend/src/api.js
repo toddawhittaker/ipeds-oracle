@@ -103,11 +103,25 @@ export const api = {
   verify: (token) => j("POST", "/api/auth/verify", { token }),
   logout: () => j("POST", "/api/auth/logout"),
 
-  conversations: () => j("GET", "/api/chat/conversations"),
+  // `q` searches the caller's own history — their questions, the assistant's
+  // replies, and conversation titles. Terms are ANDed and "a quoted run" is one
+  // phrase; the rules live in backend/app/search.py. Empty means no search.
+  conversations: (q) => j("GET", "/api/chat/conversations"
+    + (q ? `?q=${encodeURIComponent(q)}` : "")),
   conversation: (id) => j("GET", `/api/chat/conversations/${id}`),
   renameConversation: (id, title) => j("PATCH", `/api/chat/conversations/${id}`, { title }),
   deleteConversation: (id) => j("DELETE", `/api/chat/conversations/${id}`),
   csvUrl: (msgId) => `/api/chat/messages/${msgId}/download.csv`,
+
+  // The caller's own MCP API keys. createApiKey's response is the ONLY time the
+  // raw key exists outside the client — nothing stores it and no later request
+  // can return it, so whatever calls this has to show it once and say so.
+  apiKeys: () => j("GET", "/api/keys"),
+  createApiKey: (label) => j("POST", "/api/keys", { label }),
+  // The label is the only editable field on a key. A revoked key answers 404
+  // here exactly as somebody else's does — see app/routers/keys.py.
+  relabelApiKey: (id, label) => j("PATCH", `/api/keys/${id}`, { label }),
+  revokeApiKey: (id) => j("DELETE", `/api/keys/${id}`),
 
   // admin
   allowlist: () => j("GET", "/api/admin/allowlist"),
@@ -168,6 +182,16 @@ export const api = {
     j("GET", "/api/admin/import/catalog" + (refresh ? "?refresh=1" : "")),
   integrateYears: (years) => j("POST", "/api/admin/import/integrate", { years }),
   deintegrateYear: (startYear) => j("DELETE", `/api/admin/import/year/${startYear}`),
+  // Every user's keys, and minting one on somebody else's behalf. Same one-shot
+  // `key` contract as createApiKey above: the admin has to hand it over out of
+  // band, because nothing can read it back.
+  allKeys: () => j("GET", "/api/admin/keys"),
+  createKeyFor: (email, label) => j("POST", "/api/admin/keys", { email, label }),
+  // Bulk row-selection on the admin Keys table. Revoke is the only bulk action:
+  // minting needs a recipient per key, and a label belongs to the key's owner.
+  bulkKeyAction: (action, ids) =>
+    j("POST", "/api/admin/keys/bulk-action", { action, ids }),
+  revokeAnyKey: (id) => j("DELETE", `/api/admin/keys/${id}`),
   logs: (limit = 200, level = "", q = "", since = null, until = null) => {
     const p = new URLSearchParams({ limit: String(limit) });
     if (level) p.set("level", level);

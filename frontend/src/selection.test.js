@@ -117,6 +117,21 @@ describe("partitionEligibility", () => {
     expect(skipped).toEqual([{ row: rows[0], reason: "is an administrator — demote first" }]);
   });
 
+  it("revoke: skips an already-revoked key and keeps a live one", () => {
+    // The admin table lists revoked keys (they are the record of what a
+    // withdrawn key could reach), so a selection can contain both. A revoked
+    // row has nothing left to revoke, and the skip is what puts it in the
+    // confirm dialog's count instead of silently inflating the eligible one.
+    const keyRows = [
+      { id: 1, revoked_at: null },
+      { id: 2, revoked_at: 1_700_000_000 },
+      { id: 3, revoked_at: null },
+    ];
+    const { eligible, skipped } = partitionEligibility(keyRows, "revoke");
+    expect(eligible).toEqual([keyRows[0], keyRows[2]]);
+    expect(skipped).toEqual([{ row: keyRows[1], reason: "already revoked" }]);
+  });
+
   // approve/reject/unblock: the server is the ONLY authority on eligibility for
   // these three (the client has no live view of allowlist/denial state at
   // click time), so the client-side partition never invents a skip here --
@@ -271,6 +286,20 @@ describe("bulkConfirmSummary", () => {
     expect(bulkConfirmSummary("unblock", { selected: 1, eligible: 1, skipped: 0 })).toBe(
       "One blocked user is selected. One will be allowed to request access again "
       + "— this grants no access and sends no email.");
+  });
+  it("revoke: counts, the irreversibility, and a skip sentence only when needed", () => {
+    expect(bulkConfirmSummary("revoke", { selected: 3, eligible: 3, skipped: 0 })).toBe(
+      "Three keys are selected. Three keys will stop working immediately, "
+      + "and this can't be undone.",
+    );
+    expect(bulkConfirmSummary("revoke", { selected: 4, eligible: 3, skipped: 1 })).toBe(
+      "Four keys are selected. Three keys will stop working immediately, "
+      + "and this can't be undone. One is already revoked and will not be changed.",
+    );
+    expect(bulkConfirmSummary("revoke", { selected: 1, eligible: 1, skipped: 0 })).toBe(
+      "One key is selected. One key will stop working immediately, "
+      + "and this can't be undone.",
+    );
   });
 });
 
@@ -506,6 +535,17 @@ describe("retainedSelectionAfterBulk", () => {
       [{ email: "b@x.edu", reason: "could not be updated" }]);
     expect(retainedSelectionAfterBulk("promote", ids, result, "email")).toEqual(ids);
     expect(retainedSelectionAfterBulk("demote", ids, result, "email")).toEqual(ids);
+  });
+
+  it("revoke (in-place) keeps the entire selection — the rows stay in the table", () => {
+    // Revoking does not remove the key's row: it flips to Revoked and stays, so
+    // every selected id is still on screen and stays checked. Putting revoke in
+    // ACTIONS_THAT_REMOVE_ROWS would silently uncheck the rows the admin just
+    // acted on, exactly when they want to see what happened to them.
+    const ids = [3, 1, 2];
+    const result = R([{ id: 1, reason: "already revoked" }],
+      [{ id: 2, reason: "could not be revoked" }]);
+    expect(retainedSelectionAfterBulk("revoke", ids, result, "id")).toEqual(ids);
   });
 
   it("delete (removing) drops the fully-processed ids, keeps skipped + failed", () => {

@@ -38,6 +38,53 @@ step() { printf '%s\n' "${BOLD}${YEL}==> $*${RST}"; }
 fail() { printf '%s\n' "${BOLD}${RED}CI FAILED: $*${RST}" >&2; exit 1; }
 
 # =========================================================================
+# Precondition — this venv installs what the lockfile says
+# =========================================================================
+# CI and the Dockerfile install backend/requirements.lock; this script runs from
+# .venv, and nothing kept the two in step. A stale venv therefore runs every
+# suite against DIFFERENT packages than CI and still prints "All CI checks
+# passed" -- a false green, which is worse than a red one because there is
+# nothing to look at.
+#
+# Not hypothetical: adding the mcp SDK (#347) put httpx2 in the lock, and
+# starlette/testclient.py imports httpx2 in preference to httpx. A venv predating
+# that merge silently runs all ~30 TestClient suites on the OLD client while
+# GitHub runs them on the new one.
+#
+# Only packages the lock names are compared, so anything else you have installed
+# is ignored. Bypass the whole gate with `git push --no-verify`.
+step "Precondition: .venv matches backend/requirements.lock"
+"$PY" - "$REPO_ROOT/backend/requirements.lock" <<'PYCHECK' || fail "venv does not match requirements.lock -- run: pip install -r backend/requirements.lock"
+import re
+import sys
+from importlib.metadata import distributions
+
+lock = sys.argv[1]
+
+
+def norm(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+pinned = {}
+for line in open(lock):
+    m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;]+)", line)
+    if m:
+        pinned[norm(m.group(1))] = m.group(2)
+
+have = {norm(d.metadata["Name"]): d.version for d in distributions() if d.metadata["Name"]}
+bad = [(n, v, have.get(n)) for n, v in sorted(pinned.items()) if have.get(n) != v]
+
+if bad:
+    print(f"{len(bad)} of {len(pinned)} locked packages do not match this environment:")
+    for name, want, got in bad[:10]:
+        print(f"  {name}: lock has {want}, installed {got or '(missing)'}")
+    if len(bad) > 10:
+        print(f"  ... and {len(bad) - 10} more")
+    sys.exit(1)
+PYCHECK
+
+# =========================================================================
 # Job 0 — secret scan (gitleaks) — matches CI's "Secret scan (gitleaks)" job
 # =========================================================================
 # Runs only if gitleaks is on PATH; CI enforces it unconditionally, so a missing
@@ -66,6 +113,24 @@ if command -v semgrep >/dev/null 2>&1; then
     || fail "semgrep (SAST finding)"
 else
   printf '%s\n' "${YEL}Skipping SAST — semgrep not on PATH (CI still enforces it). Install: pipx install semgrep${RST}"
+fi
+
+# =========================================================================
+# Job 0c — dependency audit (pip-audit) — matches CI's "Dependency audit" job
+# =========================================================================
+# Audits backend/requirements.lock, the file the image and CI actually install
+# and the one GitHub's dependency graph does not read (its pip parser ignores a
+# .lock extension). Runs only if pip-audit is on PATH; CI enforces it
+# unconditionally, so a missing local binary downgrades to a warning rather than
+# a false green. Install (isolated from the app venv):
+#   uv tool install pip-audit   # or: pipx install pip-audit
+if command -v pip-audit >/dev/null 2>&1; then
+  step "Dependency audit: pip-audit (backend/requirements.lock)"
+  pip-audit --no-deps --strict --progress-spinner=off \
+    -r "$REPO_ROOT/backend/requirements.lock" \
+    || fail "pip-audit (vulnerable dependency)"
+else
+  printf '%s\n' "${YEL}Skipping dependency audit — pip-audit not on PATH (CI still enforces it). Install: uv tool install pip-audit${RST}"
 fi
 
 # =========================================================================

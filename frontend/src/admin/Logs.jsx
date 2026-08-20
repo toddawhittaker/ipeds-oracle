@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { loadErrorMessage } from "../authcopy.js";
 import { loadNotice } from "../loadstate.js";
+import SearchBox from "../SearchBox.jsx";
 
 export default function Logs({ onAttentionChanged }) {
   const [records, setRecords] = useState([]);
@@ -87,14 +88,13 @@ export default function Logs({ onAttentionChanged }) {
             <option value="ERROR">error</option>
           </select>
         </label>
-        <input
-          type="search"
-          className="logsearch"
-          placeholder="Search message text…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          aria-label="Search log messages"
-        />
+        {/* The SAME control the admin tables use (SearchBox.jsx). This used to
+            be a bare type="search" input leaning on the browser's own clear
+            affordance, which is a different glyph in a different colour, is not
+            a button any assistive tech can find, and is absent in Firefox. */}
+        <SearchBox value={q} onChange={setQ}
+                   placeholder="Search message text…"
+                   label="Search log messages" />
         <label className="chk">From:&nbsp;
           <input type="date" value={from} max={to || undefined}
             onChange={(e) => setFrom(e.target.value)} aria-label="From date" />

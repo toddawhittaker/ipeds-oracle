@@ -63,16 +63,31 @@ documents are:
 ## Stack & data stores
 - **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `security`, `mailer`,
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
-  `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
+  `logbuffer`, `ratelimit`, `apikeys`, `tools/*`, `routers/*`, `mcpsrv/*`).
+- **There are two front doors onto the same tools and the same agent.** The web
+  app is one. The other is an **MCP endpoint** at `POST /mcp` (`app/mcpsrv/`),
+  mounted in this same app rather than run as a second process, which lets any
+  MCP client — Claude Code, the Messages API connector — call the seven data
+  tools from `tools/registry.py` (one definition, so the two surfaces cannot
+  drift), read `SCHEMA.md`/`DATASET.md` as resources, and run the whole agent
+  through a stateless `ask` tool. It authenticates with a per-user API key
+  (`app/apikeys.py`) instead of the session cookie, since a client cannot carry
+  one. How it works, what it exposes, and why it serves no OAuth and no session
+  id: [`MCP.md`](MCP.md).
 - **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
-  routed** (react-router): `/`, `/chat/:id`, `/admin` → `/admin/users/current`,
-  `/admin/:tab`, `/admin/:tab/:sub`, `/verify`, catch-all → `/`. FastAPI's SPA
+  routed** (react-router): `/`, `/chat/:id`, `/keys`, `/admin` →
+  `/admin/users/current`, `/admin/:tab`, `/admin/:tab/:sub`, `/verify`,
+  catch-all → `/`. FastAPI's SPA
   catch-all serves `index.html` for all of them, so a hard refresh / deep link
-  never 404s. **`Admin.jsx` is a ~110-line SHELL** — route params (`AdminRoute`),
-  `ADMIN_TABS`, the alias/redirect rules, and the tab chrome. The five pages live
-  in **`src/admin/`** (`Allowlist` · `Imports` · `Usage` · `Skills` · `Logs`),
+  never 404s. `/keys` is the signed-in user's own MCP API keys (`src/Keys.jsx`,
+  reached from the account menu) — not an admin page, since every user has them;
+  the admin view of everybody's is a tab. **`Admin.jsx` is a ~110-line SHELL** —
+  route params (`AdminRoute`),
+  `ADMIN_TABS`, the alias/redirect rules, and the tab chrome. The six pages live
+  in **`src/admin/`** (`Allowlist` · `Imports` · `Usage` · `Skills` · `Keys` ·
+  `Logs`),
   props-only, plus the pure `admin/format.js` (`humanBytes`/`humanSeconds`/
-  `canonEmailForDisplay`/`fmtDateTime`/`fmtApprovalDate`/`money`/`ruleName`,
+  `canonEmailForDisplay`/`fmtDateTime`/`fmtDay`/`fmtApprovalDate`/`money`/`ruleName`,
   vitest-pinned — they were unreachable by the fast tier while trapped in a
   component file). Sub-tab session memory (`rememberedSubTab`/`rememberSubTab`)
   lives in `usertabs.js` next to `resolveSubTab`, NOT in the shell: `Allowlist`
@@ -125,12 +140,21 @@ documents are:
   so every desktop geometry above is byte-identical at 1280. Admin → Usage's
   **Top users** is not a `DataTable` and sets no column widths, but an email
   address is one unbreakable token (measured 526px), so it gets the same wrapper
-  and no `min-width`. Deliberately **NOT `tabIndex={0} role="region"`**: the
-  `Markdown.jsx` precedent for that is justified by "its rows hold no focusable
-  children", and these rows have a sort button in every header and action
-  buttons in every row, so both extremes are already keyboard-reachable and
-  focusing one scrolls it into view — a tab stop before each table would be
-  noise, and a region sharing the table's `aria-label` announces the name twice.
+  and no `min-width`. Whether the wrapper is **`tabIndex={0} role="region"`** is
+  DERIVED, not decided per table (`src/datatable-region.js`,
+  `needsScrollRegion(hasActions, columns)`): a region is a tab stop worth adding
+  only when the table's own contents are not already keyboard-reachable, which is
+  the `Markdown.jsx` precedent's real precondition ("its rows hold no focusable
+  children") rather than the table's identity. The three `Allowlist.jsx` tables
+  have a sort button in every header and action buttons in every row, so they get
+  **no** region — a tab stop before each of three mounted tables for no gain, and
+  a region sharing the table's `aria-label` announces the name twice. **Admin →
+  Keys is the first table to take the other branch**: its `Key` column (`last4`)
+  is unsortable, so that header holds no button and the wrapper becomes a
+  focusable region named `"API keys, scrollable"` — distinct from the table's own
+  name on purpose. `.grid.data.keys` also raises the floor to **900px** for its
+  six columns. Both branches are pinned in
+  `frontend/e2e/admin-table-reflow.spec.js`.
   **This was only shippable once the Actions tooltip stopped hanging outside the
   table**: `.tip::after` is absolutely positioned and centred on its button, and
   an abspos descendant counts toward an ancestor's scrollable overflow, so the
@@ -138,7 +162,8 @@ documents are:
   `overflow-x: auto` wrapper would have put a permanent 18px scrollbar under
   every admin table. The tip is now anchored to its button's **right** edge
   (left overflow does not enter `scrollWidth` in LTR). Note `src/DataTable.jsx`
-  is used by exactly the three `Allowlist.jsx` tables — `Markdown.jsx` has a
+  is used by the three `Allowlist.jsx` tables and by `admin/Keys.jsx` —
+  `Markdown.jsx` has a
   same-named LOCAL component that is a different thing entirely. Pinned in
   `frontend/e2e/admin-table-reflow.spec.js` + the Actions-column describe in
   `admin-users-tabs.spec.js`, both viewports load-bearing (at 320 the region
@@ -395,7 +420,28 @@ documents are:
   Conversations can be **renamed inline**
   (`PATCH /api/chat/conversations/{id}` — metadata-only by contract: it must
   never touch `updated_at`, or renaming an old chat would reorder the
-  recency-sorted sidebar). An answer's **Thinking / SQL traces are
+  recency-sorted sidebar). The sidebar list is a **query, not a cache**:
+  `GET /api/chat/conversations` takes an optional `q` that searches the caller's
+  own titles AND message text (`app/search.py` parses it — terms ANDed, a quoted
+  run kept whole, LIKE wildcards escaped to literals). Server-side because the
+  browser holds titles only, and the `LIMIT 100` applies **after** the match, so
+  it returns the 100 most recent *matching* chats rather than searching within
+  the most recent 100. Every refresh — after a send, a rename, a delete — has to
+  carry the active query, or the list silently stops agreeing with the search box
+  above it; `frontend/e2e/chat-search.spec.js` asserts that over the whole
+  request sequence, because a later correct refresh repairs the end state and
+  hides the bug. It carries the query through a **ref read at call time**, not
+  the state: `submit()` awaits the whole stream, so the refresh it runs when the
+  answer lands executes in the closure captured when Send was clicked, and
+  reading state there returns whatever was in the box a minute ago. The empty
+  states branch on the query the RENDERED list answers (`convosFor`) plus a
+  first-response flag, never on the live input — otherwise the first paint of
+  every page load tells a returning user they have no chats, and clearing a
+  no-match search flashes the same lie for the length of the debounce. A failed
+  refresh drops the rows rather than leaving them under the error, and a search
+  outcome is announced through one always-mounted live region (a region inserted
+  with its text already in it is announced unreliably). Not FTS5: one person's history is a few hundred message rows,
+  so the scan costs less than a second table plus the trigger to keep it in sync. An answer's **Thinking / SQL traces are
   mutually-exclusive disclosure toggles** whose panel opens **full-width below**
   the actions row (never as an inline `<details>` inside the flex row, which
   widened its own cell and shoved the copy buttons around); opening one closes

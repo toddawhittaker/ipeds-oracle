@@ -99,6 +99,15 @@ export CRITIC_ENABLED=true
 #     switch, so a dev box left at 0 after an A/B run is exactly where this
 #     lingers.
 export SKILLS_ENABLED=true
+#   * MCP_RATE_MAX_PER_KEY + MCP_RATE_WINDOW_SECONDS — config.py's own defaults,
+#     pinned for the same reason as APP_PUBLIC_URL and CRITIC_ENABLED above:
+#     reproducing CI (no .env) exactly. Unlike CHAT_RATE_MAX_PER_USER below,
+#     pinning here costs nothing — these ARE the defaults, so nothing is masked —
+#     and it stops a self-hoster's tightened production cap from failing
+#     test_mcp.py locally on a suite that is green in CI. test_mcp.py sets its own
+#     tight cap for the case that has to hit 429.
+export MCP_RATE_MAX_PER_KEY=60
+export MCP_RATE_WINDOW_SECONDS=60
 #   * GUARD_ENABLED — deliberately NOT pinned. guard.classify short-circuits on a
 #     blank LLM_API_KEY (already exported empty above) before it reads
 #     guard_enabled at all, so the setting's value changes nothing in this

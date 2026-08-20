@@ -70,7 +70,12 @@ spec that hovered-then-clicked failed 5/5), and **a test named for a scenario it
 cannot actually produce is worse than no test** — it reads as coverage.
 **The axe gate (`frontend/e2e/a11y.spec.js`) fails on `critical` AND `serious`,
 and now SCANS THE APP** — a rendered answer with its disclosures open, a
-MID-STREAM answer, and all seven admin paths in **both themes** (19 scans).
+MID-STREAM answer, all eight admin paths (Users' three sub-tabs counted
+separately) and the user-facing `/keys` page, in **both themes**, plus the
+one-shot key reveal dialog — the one screen in a key's life where the secret is
+visible, and a state no resting-page scan can reach — plus the bulk-selection
+toolbar, which exists only while rows are checked and had never been scanned on
+any table (25 scans).
 It previously saw only Login and the EMPTY Chat state, i.e. the two
 least-populated screens: every control the product is made of, and every
 admin page, sat outside the gate. That is a COVERAGE hole, not a threshold
@@ -170,8 +175,16 @@ regenerate that file against a moved base — #269/#273/#274 were combined into
 ## The local gate and static analysis
 
 **Run the full gate before pushing.** `scripts/run_ci_local.sh` reproduces all of
-CI (a **gitleaks** secret scan + a **semgrep** SAST pass, each when the binary is on
-`PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
+CI. It opens with a **precondition**: the packages `.venv` has installed must
+match every pin in `backend/requirements.lock`, which is what CI and the image
+install. Nothing else keeps those in step, and a stale venv runs every suite
+against different packages than CI while still printing "All CI checks passed" —
+the false green that adding the mcp SDK (#347) would otherwise have produced,
+since `starlette/testclient.py` picks `httpx2` over `httpx` when it is present.
+Only packages the lock names are compared, so anything else you install is
+ignored; the fix it prints is `pip install -r backend/requirements.lock`. Then
+the CI jobs themselves (a **gitleaks** secret scan, a **semgrep** SAST pass, and
+a **pip-audit** dependency audit, each when the binary is on `PATH`; ruff over `backend/app backend/tests scripts` + ESLint; the `frontend/`
 **vitest** unit tests; the `backend/tests/` backend suites against a fixture DB;
 Playwright e2e — run against a **prebuilt static bundle**, `E2E_PREVIEW=1`, which
 is 3.4× faster over a full run than the dev server that re-transforms modules per
@@ -203,6 +216,21 @@ the job) over `backend/app` · `frontend/src` · `scripts`. It is **NOT** a Code
 substitute — semgrep OSS does INTRA-file taint only, so cross-file flows stay
 CodeQL's job; the two overlap deliberately. Install semgrep isolated from the app
 venv (`pipx install semgrep`) so it never enters the app's runtime deps.
+
+**Composition analysis — the third layer, and the one nothing else covers.**
+CodeQL and semgrep both read code we wrote; **pip-audit** (the CI **Dependency
+audit (pip-audit)** job + the local gate) reads what we ship. It audits
+`backend/requirements.lock` — the file both CI and the Dockerfile install, and
+the one GitHub's dependency graph does **not** read, because its pip parser does
+not recognise a `.lock` extension. Everything in the image is transitive-only
+from GitHub's point of view, so Dependabot would never raise an alert on
+`cryptography` or `pyjwt`; `requirements.txt` (floors, no versions) and
+`requirements-dev.txt` (two pinned tools) are all it sees. `--no-deps` because
+the lock is already fully pinned, `--strict` so a dependency that cannot be
+audited fails rather than passing quietly. Install it isolated from the app venv
+too (`uv tool install pip-audit`). A finding fails the job; the fix is to
+regenerate the lock, and `--ignore-vuln` is the escape hatch for an advisory with
+no fixed version yet.
 
 ## Test-env bleed
 

@@ -139,27 +139,55 @@ probe_function_is_neutralized(
 probe_function_is_neutralized(
     "SELECT readfile('/etc/passwd')", "readfile()", "no such function")
 
-print("\n-- pragma_*() table-valued functions (regex requires a word boundary after 'pragma') --")
+print("\n-- pragma_*() table-valued functions --")
+# These used to be ACCEPTED, and this block used to assert that the gap was
+# harmless: `\bpragma\b` does not match `pragma_table_info`, because `_` is a
+# word character and so there is no boundary there. The old reasoning was that
+# it is read-only introspection on a query_only/immutable connection, so no
+# mutation is possible. That much was true and still is.
+#
+# What it missed, found by a pre-v0.5.0 security pass over the MCP endpoint --
+# the first place a HUMAN writes this SQL deliberately rather than an LLM
+# writing it by accident:
+#
+#   * `SELECT * FROM pragma_database_list` returns the server's ABSOLUTE
+#     filesystem path to ipeds.db. That is host layout disclosed to anyone
+#     holding an API key.
+#   * `SELECT * FROM pragma_quick_check` reads the WHOLE 2.2 GB database until
+#     the watchdog stops it -- a full-file I/O amplifier, once per call, eight
+#     of them concurrent under MCP_TOOL_CONCURRENCY.
+#
+# Neither is mutation, so the old conclusion was not wrong about what it
+# checked; it was answering a narrower question than the one that mattered. The
+# regex now says `pragma(?!_table_info\b)\w*`, and these must be REJECTED.
 for sql, label in [
-    ("SELECT * FROM pragma_table_info('hd')", "pragma_table_info() TVF"),
     ("SELECT * FROM pragma_database_list", "pragma_database_list TVF"),
+    ("SELECT * FROM pragma_quick_check", "pragma_quick_check TVF"),
+    ("SELECT * FROM pragma_compile_options", "pragma_compile_options TVF"),
+    ("SELECT * FROM pragma_table_list", "pragma_table_list TVF"),
+    # The carve-out is exact: a name that merely STARTS with the allowed one
+    # must not ride in on it.
+    ("SELECT * FROM pragma_table_infoX", "pragma_table_infoX (prefix of the allowed one)"),
 ]:
     try:
         validate_sql(sql)
-        gap = True
+        record(False, f"{label}: rejected by validator",
+               "ACCEPTED -- the pragma_ table-valued form is back through the filter")
     except SQLValidationError:
-        gap = False
-    if not gap:
         record(True, f"{label}: rejected by validator")
-        continue
-    # Known regex gap (no \b between 'pragma' and '_'). Confirm it's still
-    # harmless: it's a read-only introspection query on a query_only,
-    # read-only, immutable connection -- no mutation is possible.
-    r = run_sql(sql, timeout=5)
-    record(True,
-           f"{label}: validator gap (accepted) but query is read-only introspection "
-           f"on a query_only/immutable connection -- {len(r.rows)} row(s) returned, "
-           f"no mutation possible")
+
+# ...with ONE exception, which is a product feature rather than an oversight:
+# tools/schema.py::get_columns is built on pragma_table_info, and get_columns is
+# a first-class tool in the registry — it is how the agent and an MCP client
+# discover a family's columns. Blocking it outright broke the registry suite,
+# which is how this carve-out was found. It names columns of a table the caller
+# can already read.
+try:
+    validate_sql("SELECT name, type FROM pragma_table_info('hd')")
+    record(True, "pragma_table_info() TVF: allowed (get_columns is built on it)")
+except SQLValidationError as e:
+    record(False, "pragma_table_info() TVF: allowed (get_columns is built on it)",
+           f"REJECTED -- get_columns is now broken: {e}")
 
 print("\n-- Python sqlite3 driver itself refuses multi-statement `execute()` "
       "(defense-in-depth below our own ';' check) --")

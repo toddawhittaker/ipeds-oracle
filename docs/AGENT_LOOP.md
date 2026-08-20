@@ -28,6 +28,17 @@ saturate it — a higher ceiling, not the absence of one. Pinned by
 branch (dispatch blocks on an Event only a concurrent asyncio task can set)
 rather than timing a fast query: measured 2.39 s inline vs <1 s threadpooled.
 
+**TWO CALLERS RUN THIS LOOP.** `routers/chat.py` serves the web app and owns
+everything about a conversation — history, persistence, titling, the feedback
+distiller, cross-turn grounding. `mcpsrv/ask.py` serves the MCP `ask` tool and is
+**stateless**: same guard, same answer cache, same lessons, same tool loop,
+critic and grounding checks, in the same order, with no `conversations` or
+`messages` row at the end of it. Both charge the same per-user rate limiter and
+both bill `usage_log` through `db.record_usage`, which is what keeps one person's
+spend capped whichever door they came through. When you change the ORDER of the
+stages below, change both; `docs/ADMIN.md` covers how the two are told apart on
+Admin → Usage.
+
 The three guards:
 - a topical **guardrail** in front (off-topic questions never reach the DB) —
   `guard.py`'s `_SYSTEM` explicitly whitelists **corrective feedback and a

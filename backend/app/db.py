@@ -512,6 +512,54 @@ MIGRATIONS: list[tuple[int, str]] = [
     (36, "UPDATE usage_log SET figure_grounding='retry_suppressed' "
          "WHERE figure_grounding='ungrounded' "
          "AND figure_derivation='retry:suppressed';"),
+    # API keys for the MCP endpoint (v0.5.0). Three tables' worth of change,
+    # kept in one migration because none of it is useful without the rest.
+    #
+    # `api_keys` deliberately mirrors `sessions`: only the SHA-256 hash is
+    # stored, so a dump of app.db cannot be replayed as a credential, and the
+    # raw key exists exactly once — in the HTTP response that minted it. The
+    # input is 32 bytes from secrets.token_urlsafe, not a guessable password,
+    # so sha256 is the right primitive and a slow KDF would only add a cost to
+    # every MCP request while buying nothing against an attacker who cannot
+    # enumerate the space anyway.
+    #
+    # `last4` is for the UI. A user with three keys has to be able to tell
+    # which one they are revoking, and the label alone is not enough once
+    # someone names two keys "laptop". Four characters of a 43-character
+    # secret identifies without meaningfully narrowing a guess.
+    #
+    # Revocation sets `revoked_at` instead of deleting the row. A key that was
+    # used against the data and then withdrawn is exactly the thing an
+    # administrator needs to still be able to see afterwards.
+    #
+    # `mcp_request_attempts` mirrors `chat_request_attempts` (migration 28) so
+    # the per-key rate limiter can reuse the shape ratelimit.py already uses
+    # twice. No foreign key on key_id on purpose: the limiter writes on the
+    # request path and must not be able to fail a request because a key row
+    # was revoked and swept between the auth check and the insert.
+    #
+    # usage_log.source separates MCP spend from chat spend on Admin -> Usage.
+    # Nullable with no default so every historical row keeps reading as the
+    # chat traffic it actually was, rather than being retroactively relabelled.
+    (37, "CREATE TABLE api_keys (\n"
+         "    id           INTEGER PRIMARY KEY,\n"
+         "    user_id      INTEGER NOT NULL REFERENCES users(id),\n"
+         "    key_hash     TEXT NOT NULL UNIQUE,\n"
+         "    last4        TEXT NOT NULL,\n"
+         "    label        TEXT,\n"
+         "    created_at   REAL NOT NULL,\n"
+         "    created_by   TEXT,\n"
+         "    last_used_at REAL,\n"
+         "    revoked_at   REAL\n"
+         ");\n"
+         "CREATE INDEX ix_api_keys_user ON api_keys(user_id);\n"
+         "CREATE TABLE mcp_request_attempts (\n"
+         "    key_id     INTEGER NOT NULL,\n"
+         "    created_at REAL NOT NULL\n"
+         ");\n"
+         "CREATE INDEX ix_mcp_attempts_created "
+         "ON mcp_request_attempts(created_at);\n"
+         "ALTER TABLE usage_log ADD COLUMN source TEXT;"),
 ]
 
 
@@ -792,3 +840,68 @@ def set_meta(con: sqlite3.Connection, key: str, value: str) -> None:
 
 def data_version(con: sqlite3.Connection) -> int:
     return int(get_meta(con, "data_version", "1"))
+
+
+def record_usage(con: sqlite3.Connection, *, user_id: int, question: str,
+                 model_used: str, source: str | None = None,
+                 escalated: bool = False, ok: bool = True, cached: bool = False,
+                 prompt_tokens: int = 0, completion_tokens: int = 0,
+                 cached_prompt_tokens: int = 0, first_call_prompt_tokens: int = 0,
+                 first_call_cached_prompt_tokens: int = 0,
+                 cost: float = 0.0, cost_estimated: bool = False,
+                 figure_grounding: str | None = None,
+                 figure_derivation: str | None = None,
+                 emit_mode: str | None = None, answer_leaked: bool = False,
+                 table_grounding: str | None = None, table_cells_checked: int = 0,
+                 table_cells_matched: int = 0, exhaustion: str | None = None,
+                 created_at: float) -> int:
+    """Write one `usage_log` row and return its id. Takes an OPEN connection and
+    does NOT commit, so a caller can bill a turn inside the same transaction that
+    persists it (app/routers/chat.py `_persist`) or on its own (app/mcpsrv/ask.py).
+
+    Every door onto the agent bills through here. There are two now — the web
+    chat and the MCP `ask` tool — and a 22-column INSERT hand-copied into the
+    second is the exact failure this repo keeps having: every hand-maintained
+    duplicate list in it has drifted, and a billing list that drifts silently
+    under-reports somebody's spend. `source` is what tells the two apart on
+    Admin -> Usage; it stays NULL for chat so historical rows keep reading as the
+    chat traffic they were (migration 37).
+
+    Explicit keyword parameters rather than a values dict on purpose: a typo in a
+    kwarg is a TypeError here, while a typo in a dict key would be a silent NULL
+    in a column nobody reads until a spend report looks wrong.
+    """
+    # One mapping keyed by column name, the same device _persist uses for the
+    # messages INSERT: the column list and the values cannot drift out of step,
+    # and the `?` count is derived rather than counted by hand.
+    values = {
+        "user_id": user_id,
+        "question": question,
+        "model_used": model_used,
+        "escalated": int(escalated),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cached_prompt_tokens": cached_prompt_tokens,
+        "first_call_prompt_tokens": first_call_prompt_tokens,
+        "first_call_cached_prompt_tokens": first_call_cached_prompt_tokens,
+        "ok": int(ok),
+        "cached": int(cached),
+        "cost": float(cost),
+        "cost_estimated": int(bool(cost_estimated)),
+        "figure_grounding": figure_grounding or None,
+        "figure_derivation": figure_derivation or None,
+        "emit_mode": emit_mode or None,
+        "answer_leaked": int(bool(answer_leaked)),
+        "table_grounding": table_grounding or None,
+        "table_cells_checked": int(table_cells_checked),
+        "table_cells_matched": int(table_cells_matched),
+        "exhaustion": exhaustion or None,
+        "source": source or None,
+        "created_at": created_at,
+    }
+    cols = tuple(values)
+    cur = con.execute(
+        f"INSERT INTO usage_log({', '.join(cols)}) "
+        f"VALUES ({','.join('?' * len(cols))})",
+        tuple(values[c] for c in cols))
+    return cur.lastrowid

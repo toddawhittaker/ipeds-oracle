@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
 from app import version
 from app.auth import current_user
@@ -18,7 +19,9 @@ from app.bodylimit import BodyLimitMiddleware
 from app.config import PRODUCT_NAME, ROOT, get_settings
 from app.csrf import CSRFMiddleware
 from app.db import init_db
-from app.routers import admin, auth, chat
+from app.mcpsrv import MCP_PATH, start_mcp
+from app.mcpsrv import endpoint as mcp_endpoint
+from app.routers import admin, auth, chat, keys
 from app.secheaders import SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO,
@@ -155,8 +158,13 @@ async def lifespan(app: FastAPI):
             log.info("re-embedded %d skill(s) onto the headline+description embedding source", n)
     except Exception as e:  # noqa: BLE001
         log.warning("skill re-embed skipped: %s", e)
-    log.info("IPEDS Oracle API ready (db=%s)", get_settings().ipeds_db_path)
-    yield
+    # The MCP transport's session manager has to be started by SOMEBODY's
+    # lifespan, and Starlette never runs an adopted sub-app's — so it is started
+    # here, wrapping the yield, and torn down with the rest of the app. Until
+    # this runs, GET/POST /mcp answers 503 rather than failing inside the SDK.
+    async with start_mcp():
+        log.info("IPEDS Oracle API ready (db=%s)", get_settings().ipeds_db_path)
+        yield
 
 
 # docs_url/redoc_url/openapi_url are OFF. This is a private, allowlisted app,
@@ -182,7 +190,11 @@ app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan,
 app.add_middleware(BodyLimitMiddleware)
 # Origin-based CSRF guard (defense in depth over the SameSite=Lax session
 # cookie); pure-ASGI so it never buffers the chat SSE stream. See app/csrf.py.
-app.add_middleware(CSRFMiddleware)
+# MCP_PATH is exempt: it carries no cookie, so there is no ambient credential a
+# cross-origin page could borrow — and without the exemption a browser-hosted
+# MCP client is refused with a 403 about cross-origin requests before the bearer
+# gate ever runs.
+app.add_middleware(CSRFMiddleware, exempt_paths=(MCP_PATH,))
 # Security response headers (CSP + anti-framing + nosniff) on EVERY response —
 # added last so it's the OUTERMOST layer and stamps even the CSRF 403. See
 # app/secheaders.py.
@@ -190,6 +202,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(admin.router)
+app.include_router(keys.router)
 
 
 @app.get("/api/health")
@@ -203,6 +216,18 @@ def get_version(_=Depends(current_user)):
     only (the About dialog and Admin banner that consume it are both authed);
     the GitHub call is cached + fails open (see app/version.py)."""
     return version.version_info()
+
+
+# --- MCP endpoint -------------------------------------------------------------
+# Registered as a Route, never a Mount, and BEFORE the SPA block below. Two
+# reasons, and both fail silently:
+#   * Starlette compiles a Mount's pattern as `path + "/{path:path}"`, so
+#     `app.mount("/mcp", …)` does not match a bare `/mcp` at all.
+#   * Whatever /mcp does not match falls through to the catch-alls further down,
+#     where POST gets a 405 and GET gets served the React shell.
+# A Route whose endpoint is an ASGI instance rather than a function accepts every
+# method, which is what the transport needs.
+app.router.routes.append(Route(MCP_PATH, endpoint=mcp_endpoint))
 
 
 # --- Serve the built React app (production) -----------------------------------

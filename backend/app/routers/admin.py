@@ -1,4 +1,4 @@
-"""Admin API: allowlist, access requests, data imports, usage, skills."""
+"""Admin API: allowlist, access requests, data imports, usage, skills, API keys."""
 from __future__ import annotations
 
 import logging
@@ -14,11 +14,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 import app.nces as nces
-from app import estimate, importer, lessoncats, skills
-from app.auth import canon_email, require_admin
+from app import apikeys, estimate, importer, lessoncats, skills
+from app.auth import canon_email, is_allowlisted, require_admin
 from app.config import get_settings, resolve_tz
 from app.db import connect
 from app.mailer import send_access_approved
+from app.routers.keys import MAX_LABEL_LEN
 
 log = logging.getLogger("ipeds.admin")
 
@@ -329,16 +330,21 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
 
 
 def _remove_user(con: sqlite3.Connection, email: str) -> None:
-    """Drop `email` from the allowlist, zero their admin flag, and kill their
-    sessions. Shared by the single DELETE /allowlist/{email} endpoint and the
-    bulk delete path below. Does NOT check the still-admin invariant itself —
-    callers must skip a still-admin user BEFORE calling this (see both call
-    sites). The caller commits."""
+    """Drop `email` from the allowlist, zero their admin flag, kill their
+    sessions, and revoke their API keys. Shared by the single
+    DELETE /allowlist/{email} endpoint and the bulk delete path below. Does NOT
+    check the still-admin invariant itself — callers must skip a still-admin
+    user BEFORE calling this (see both call sites). The caller commits."""
     con.execute("DELETE FROM allowlist WHERE email=?", (email,))
     con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
     con.execute(
         "DELETE FROM sessions WHERE user_id IN "
         "(SELECT id FROM users WHERE email=?)", (email,))
+    # Their API keys go too, in this same transaction — a session and a key are
+    # two doors onto the same data, and closing one is not offboarding. See
+    # apikeys.revoke_for_email for why refusing them at verify time is not
+    # enough on its own.
+    apikeys.revoke_for_email(con, email)
 
 
 @router.delete("/allowlist/{email}")
@@ -1517,3 +1523,113 @@ def mark_logs_seen(admin: sqlite3.Row = Depends(require_admin)):
     finally:
         con.close()
     return {"logs": 0}
+
+
+# --- API keys -----------------------------------------------------------------
+class AdminKeyCreate(BaseModel):
+    email: EmailStr
+    label: str | None = Field(default=None, max_length=MAX_LABEL_LEN)
+
+
+@router.get("/keys")
+def list_all_keys():
+    """Every API key with its owner's email. Never carries a hash or a secret."""
+    return apikeys.list_all()
+
+
+@router.post("/keys")
+def create_key_for(body: AdminKeyCreate, admin: sqlite3.Row = Depends(require_admin)):
+    """Mint a key on someone else's behalf.
+
+    The recipient must already be an allowlisted user with a `users` row, i.e.
+    someone who has signed in at least once — a key is a credential for an
+    existing account, not a way to create one, and apikeys.verify would refuse
+    a key whose owner is not allowlisted anyway.
+
+    `key` is returned exactly once and is never recoverable, so the admin has to
+    hand it to its owner out of band.
+    """
+    email = str(body.email).strip().lower()
+    con = connect()
+    try:
+        row = con.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        allowed = is_allowlisted(con, email)
+    finally:
+        con.close()
+    if row is None:
+        raise HTTPException(400, "That address has never signed in, so it has no "
+                                 "account to attach a key to.")
+    if not allowed:
+        raise HTTPException(400, "That address is not on the allowlist.")
+    raw, key_row = apikeys.mint(int(row["id"]), label=(body.label or "").strip() or None,
+                                created_by=admin["email"])
+    return {"key": raw, "id": key_row["id"], "last4": key_row["last4"],
+            "label": key_row["label"], "email": email,
+            "created_at": key_row["created_at"]}
+
+
+@router.delete("/keys/{key_id}")
+def revoke_any_key(key_id: int):
+    """Revoke anyone's key. Idempotent: revoking an already-revoked or unknown
+    key still reports ok, matching delete_skill's contract above."""
+    apikeys.revoke(key_id)
+    return {"ok": True}
+
+
+# Bulk row-selection on the Keys table. Revoke is the only bulk action here:
+# minting needs a recipient per key, and the label belongs to the key's owner
+# (app/routers/keys.py), so neither has a batch form.
+class KeyBulkAction(BaseModel):
+    action: Literal["revoke"]
+    ids: list[int]
+
+
+@router.post("/keys/bulk-action")
+def keys_bulk_action(body: KeyBulkAction, admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk revoke over an explicit list of key ids — one connection, one commit.
+
+    Eligibility is RECOMPUTED per key against live DB state rather than trusted
+    from whatever the browser's list showed, exactly like allowlist_bulk_action
+    above: a key someone revoked from another tab lands in `skipped`, not in
+    `affected`, so the toast does not claim work that did not happen.
+
+    Unlike the single DELETE, which is deliberately idempotent, an already-
+    revoked key is reported rather than silently counted — the admin selected N
+    rows and is owed an accurate account of what N became.
+
+    No self-guard: revoking one's own key ends an MCP client's access, never the
+    browser session the admin is holding, so there is no lockout to protect
+    against (the allowlist's demote/delete guard exists because those DO end the
+    caller's own access).
+    """
+    if len(body.ids) > BULK_MAX_ITEMS:
+        raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} keys at a time.")
+
+    affected = 0
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    con = connect()
+    try:
+        # One outer transaction spanning every item's SAVEPOINT — same reason as
+        # allowlist_bulk_action: without it the first RELEASE would commit that
+        # item outright.
+        con.execute("BEGIN")
+        for key_id in body.ids:
+            row = con.execute("SELECT revoked_at FROM api_keys WHERE id = ?",
+                              (key_id,)).fetchone()
+            if row is None:
+                skipped.append({"id": key_id, "reason": "no longer exists"})
+                continue
+            if row["revoked_at"] is not None:
+                skipped.append({"id": key_id, "reason": "already revoked"})
+                continue
+            ok, _value = _run_item(
+                con, lambda i=key_id: apikeys.revoke_by_id(con, i), key_id)
+            if not ok:
+                failed.append({"id": key_id, "reason": "could not be revoked"})
+                continue
+            affected += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}

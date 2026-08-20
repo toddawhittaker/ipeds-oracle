@@ -57,5 +57,7 @@ without re-deriving your reasoning.
 - Prefer the smallest design that fully satisfies the requirement. Match existing
   patterns and conventions in the codebase rather than importing new ones.
 - Honor the locked project decisions: keep SQLite (WAL + read-only + atomic
-  swap), embedded tool-calling (not a standalone MCP server), no secrets in code,
+  swap), embedded tool-calling — the same `tools/registry.py` specs serve both the
+  chat loop and the MCP endpoint mounted in this app (`app/mcpsrv/`, `docs/MCP.md`),
+  never a second process — no secrets in code,
   any OpenAI-compatible provider (operator-chosen model, with escalation).
