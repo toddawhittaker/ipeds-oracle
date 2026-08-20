@@ -88,7 +88,7 @@ from app.config import get_settings  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.llm import AgentResult  # noqa: E402
 from app.main import app  # noqa: E402
-from app.mcpsrv import ask, resources  # noqa: E402
+from app.mcpsrv import ask, resources, server  # noqa: E402
 from app.tools import registry  # noqa: E402
 from app.tools.sql import QueryResult  # noqa: E402
 
@@ -275,6 +275,158 @@ def run():
             assert spa.status_code == 200, spa.status_code
         check("GET /mcp reaches the MCP endpoint and GET / still serves the app",
               get_mcp_is_the_endpoint_not_the_spa)
+
+        def only_post_is_served():
+            """A GET used to reach the SDK's transport, which answers it by
+            opening an SSE stream that lives until the client goes away. This
+            server pushes nothing — stateless, no session id, no notifications —
+            so the stream carries nothing, and the rate limiter charges it once
+            when it OPENS and never sees the hold. Measured before this refusal
+            existed: 40 concurrent GETs from one key, all 200, all still open
+            after 20s. A key holder could park 60 sockets a minute for free.
+
+            The route still has to accept every method to be registered at all
+            (a Mount does not match a bare /mcp), so the refusal is ours to make.
+            """
+            for method in ("GET", "DELETE", "PUT"):
+                r = c.request(method, "/mcp", headers={"Authorization": f"Bearer {key}"})
+                assert r.status_code == 405, \
+                    f"{method} /mcp answered {r.status_code}, not 405"
+                assert r.headers.get("allow") == "POST", dict(r.headers)
+            # And the refusal does not depend on the key: an anonymous GET must
+            # not open a stream just to have its credential rejected afterwards.
+            assert c.get("/mcp").status_code == 405, "an anonymous GET was not refused"
+        check("every method but POST is refused with 405", only_post_is_served)
+
+        def tool_calls_cannot_flood_the_shared_worker_pool():
+            """The regression, measured on a running instance before the bound
+            existed: 55 concurrent `run_sql` calls from ONE key — no 429, since
+            55 is inside the 60/minute ceiling — took an unauthenticated
+            `/api/health` from 0.01s to 22.28s. `run_in_threadpool` is the
+            process-wide 40-thread pool every synchronous route shares, the rate
+            limiter counts requests STARTED per minute rather than requests in
+            flight, and no crafted query is needed: `SELECT * FROM c_a ORDER BY
+            ctotalt DESC` runs 7s and spills ~0.7GB of temp per call.
+
+            Driven at the HANDLER, not over HTTP, and that is deliberate. The
+            first version of this check fired 20 concurrent POSTs through
+            TestClient and passed with the semaphore DELETED: something in that
+            stack — portal, transport, or client — never let more than 8 calls
+            run at once anyway, so the check could not see a flood and was
+            measuring the harness. `on_call_tool` is where the bound lives, so
+            that is where it is observed, with a semaphore built in this loop
+            (an asyncio primitive refuses a second event loop once used, which
+            is why the real one is per-lifespan too).
+
+            Two-sided on purpose: `high <= LIMIT` alone is satisfied by breaking
+            parallelism altogether, which would be a different bug that still
+            passed. So it also asserts the bound is REACHED.
+            """
+            import asyncio as aio
+            import threading
+
+            limit = 4                     # smaller than the shipped 8, so the
+            calls = limit * 3             # ambient pool can never be the cap
+            lock = threading.Lock()
+            state = {"cur": 0, "high": 0}
+            at_limit = threading.Event()
+            released = threading.Event()
+            real_dispatch = registry.dispatch
+
+            class _Params:                # what on_call_tool actually reads
+                name, arguments = "list_families", {}
+
+            def blocking_dispatch(*a, **k):
+                with lock:
+                    state["cur"] += 1
+                    state["high"] = max(state["high"], state["cur"])
+                    if state["cur"] >= limit:
+                        at_limit.set()
+                released.wait(timeout=15.0)
+                with lock:
+                    state["cur"] -= 1
+                return "OK — 1 row(s)"
+
+            async def drive():
+                prev = server._current["slots"]
+                server._current["slots"] = aio.Semaphore(limit)
+                try:
+                    async def releaser():
+                        # Frees the blocked workers once the bound is hit (or
+                        # once it is clear it never will be).
+                        await aio.to_thread(at_limit.wait, 10.0)
+                        released.set()
+                    rel = aio.ensure_future(releaser())
+                    await aio.gather(*(server.on_call_tool(None, _Params())
+                                       for _ in range(calls)))
+                    await rel
+                finally:
+                    server._current["slots"] = prev
+
+            registry.dispatch = blocking_dispatch
+            try:
+                aio.run(drive())
+            finally:
+                released.set()
+                registry.dispatch = real_dispatch
+
+            assert at_limit.is_set(), \
+                (f"only {state['high']} of {limit} slots were ever busy — the "
+                 "calls are serialized somewhere, so this check can no longer "
+                 "see a flood")
+            assert state["high"] <= limit, \
+                (f"{state['high']} tool calls held pool threads at once, over the "
+                 f"{limit} bound — MCP can starve chat and the web UI again")
+        check("concurrent tool calls are bounded to MCP_TOOL_CONCURRENCY",
+              tool_calls_cannot_flood_the_shared_worker_pool)
+
+        def a_nested_lifespan_does_not_blank_the_endpoint():
+            """`start_mcp` used to set `_current["app"] = None` on the way out
+            unconditionally, so an inner `TestClient(app)` — which
+            `backend/tests/test_api_keys.py` opens three times inside its outer
+            one — left the OUTER client's /mcp answering 503 "The MCP endpoint is
+            not running" for the rest of the file. Latent only because no test
+            called /mcp after a nested block, and the 503 names exactly the wrong
+            cause.
+            """
+            with TestClient(app):
+                pass
+            r = mcp_post(c, "tools/list", key=key)
+            assert r.status_code != 503, \
+                "a nested lifespan tore down the outer client's MCP endpoint"
+            assert result_of(r)["tools"], r.text
+        check("a nested TestClient lifespan leaves the outer endpoint running",
+              a_nested_lifespan_does_not_blank_the_endpoint)
+
+        def a_cross_origin_header_still_reaches_the_gate():
+            """CSRFMiddleware wraps every route, and it refuses any
+            state-changing request whose Origin matches neither Host nor
+            APP_PUBLIC_URL. That caught /mcp: a browser-hosted client — the MCP
+            Inspector on localhost:6274 is the first thing anyone points at a new
+            server — got a 403 about cross-origin requests before the bearer gate
+            ran, on an endpoint that carries no cookie and therefore has no
+            ambient credential for a cross-origin page to borrow.
+
+            Asserts a real 200 result, not merely 'not 403': the exemption has to
+            let the request through to the tool, not just past the middleware.
+            """
+            # A FOREIGN origin, not the Inspector's own localhost:6274: this
+            # file runs the dev posture (COOKIE_SECURE=false), where csrf.py
+            # accepts loopback origins anyway, so a localhost origin here would
+            # pass with the exemption deleted.
+            r = mcp_post(c, "tools/list", key=key,
+                         headers={"Origin": "https://inspector.example"})
+            assert r.status_code != 403, \
+                f"a browser-hosted client was refused as cross-origin: {r.text}"
+            assert result_of(r)["tools"], r.text
+            # The exemption is one exact path, not a prefix: everything else
+            # still gets the CSRF layer it had before.
+            other = c.post("/api/keys", json={"label": "x"},
+                           headers={"Origin": "https://inspector.example"})
+            assert other.status_code == 403, \
+                f"the exemption leaked to /api/keys ({other.status_code})"
+        check("a cross-origin Origin reaches the bearer gate, and only on /mcp",
+              a_cross_origin_header_still_reaches_the_gate)
 
         def the_public_hostname_is_accepted():
             host = "ipeds.example.edu"

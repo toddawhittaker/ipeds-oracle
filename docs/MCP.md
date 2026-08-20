@@ -28,7 +28,15 @@ way to create one.
 
 A key carries its owner's access in full. There are **no per-key scopes** —
 every key can call every tool as its owner. The way to take one back is to
-revoke it, which leaves the person's web access untouched.
+revoke it, which leaves the person's web access untouched. Removing someone from
+the allowlist revokes their keys too, in the same transaction that ends their
+sessions: a session and a key are two doors onto the same data, and closing one
+is not offboarding.
+
+One user may hold **ten live keys** (`routers/keys.py::MAX_ACTIVE_KEYS`);
+revoked ones do not count. Minting is otherwise free and charges no rate limit,
+and each key carries its own request budget, so an uncapped mint loop is an
+uncapped multiple of that budget from one person.
 
 | Endpoint | Who | What |
 |---|---|---|
@@ -65,11 +73,14 @@ client.beta.messages.create(
 Anything else that speaks streamable HTTP works the same way: one URL, one
 `Authorization: Bearer` header. The scheme name is matched case-insensitively.
 
-Three refusals a client can see before any tool runs: **401** for a key that is
+Four refusals a client can see before any tool runs: **401** for a key that is
 unknown, revoked, or whose owner has left the allowlist (all three are worded
-identically on purpose — probing tells an attacker nothing); **429** when a
-rate limit is hit; **503** while the app is starting, before the transport's
-lifespan has built the server.
+identically on purpose — probing tells an attacker nothing); **405** for any
+method other than POST (see *Operating it*); **429** when a rate limit is hit;
+**503** while the app is starting, before the transport's lifespan has built the
+server. A browser-hosted client sending an `Origin` header is **not** refused —
+`/mcp` is exempt from the app's CSRF layer, because a bearer-authenticated
+endpoint has no ambient credential for a cross-origin page to borrow.
 
 ## What the endpoint exposes
 
@@ -181,6 +192,14 @@ Two limiters, and they stack:
 A non-positive maximum disables either limiter, which is the off-switch tests
 and self-hosters use.
 
+Neither of those is a bound on **concurrency**, so there is a third limit that
+is not a rate at all: at most `MCP_TOOL_CONCURRENCY` (8) data-tool calls occupy
+the shared worker-thread pool at once. The rate limiters count requests started
+per minute, not requests in flight, and the pool they would otherwise flood is
+the same 40 threads every synchronous web route runs in — 55 concurrent
+`run_sql` calls, comfortably inside the 60/minute ceiling, took `/api/health`
+from 0.01s to 22.28s before this existed.
+
 An `ask` turn is a full-price turn and appears in every Admin → Usage total
 alongside chat. The data tools cost no provider spend at all — they are SQLite
 queries — but they still charge the per-key limit.
@@ -275,8 +294,21 @@ transport state. Not a session id.
   nothing here: a rebinding attack borrows a victim's *ambient* credentials, and
   this endpoint has none to borrow — every call needs a bearer header an
   attacker's page cannot produce.
-- **No CSRF concern, for the same reason.** There is no cookie and no ambient
-  credential, so a cross-origin page cannot make an authenticated call.
+- **`/mcp` is exempt from the CSRF layer, deliberately** (`app/main.py` passes
+  the path to `CSRFMiddleware`). There is no cookie and no ambient credential, so
+  a cross-origin page cannot make an authenticated call and there is nothing for
+  that layer to defend. Without the exemption every browser-hosted client — the
+  MCP Inspector included — was refused with a 403 about cross-origin requests
+  before the bearer gate ran, which is neither true of the request nor
+  diagnosable from the client's side.
+- **POST only; anything else is a 405.** The route has to accept every method to
+  be registered at all (see below), and the SDK's transport answers a GET by
+  opening an SSE stream that lives until the client leaves. This server pushes
+  nothing, so that stream carries nothing — but the rate limiter charges it once
+  when it opens and never sees the hold, which made parked connections free.
+- **MCP tool calls are bounded to `MCP_TOOL_CONCURRENCY` at a time**, so MCP
+  traffic cannot starve the web app of the shared worker pool. See the rate-limit
+  section above.
 - **The body cap follows the app-wide one** (`MAX_REQUEST_BODY_MB`, 10 MB), so
   the transport and `app/bodylimit.py` cannot disagree about how big a request
   may be.

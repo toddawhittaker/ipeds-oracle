@@ -142,10 +142,27 @@
   `ask` additionally charges the per-user chat limiter above. No cookie means no
   CSRF surface and no ambient credential to borrow — which is also why the SDK's
   DNS-rebinding protection is deliberately **off** (it would 421 every request
-  behind the proxy while defending nothing). No OAuth: no `WWW-Authenticate`, no
+  behind the proxy while defending nothing). **`/mcp` is also exempt from
+  `CSRFMiddleware`** (`main.py` passes the path in): with no cookie there is no
+  ambient credential for a cross-origin page to borrow, and without the exemption
+  every browser-hosted MCP client — the MCP Inspector among them — was refused
+  with a 403 about cross-origin requests *before* the bearer gate ran. The
+  endpoint is **POST-only** (405 otherwise): the route must accept every method
+  to be registered at all, and the SDK answers GET with an SSE stream that the
+  rate limiter charges once at open and then never sees again, so parked
+  connections were free. No OAuth: no `WWW-Authenticate`, no
   `/.well-known/oauth-protected-resource`, on purpose — see
-  [`MCP.md`](MCP.md). Pinned by `backend/tests/test_api_keys.py` +
-  `backend/tests/test_mcp.py`.
+  [`MCP.md`](MCP.md).
+  **Removal revokes keys.** `admin._remove_user` revokes the user's API keys in
+  the same transaction that drops the allowlist row and deletes their sessions.
+  `verify`'s allowlist re-check already refuses those keys while the user is off
+  the list, so this is not what stops them today — it is what stops them if the
+  address is ever re-added: without it, every key that person ever minted comes
+  back to life with the allowlist row, including the leaked one that prompted the
+  removal, with no admin action and no signal. A user may hold at most
+  `keys.MAX_ACTIVE_KEYS` (10) live keys, because minting charges no limiter and
+  each key carries its own MCP request budget. Pinned by
+  `backend/tests/test_api_keys.py` + `backend/tests/test_mcp.py`.
 - **A question is capped at `MAX_QUESTION_LEN` (4,000 chars).** `BodyLimitMiddleware`
   bounds the whole request at 10 MB, but under that ceiling an unbounded question is
   still written to `app.db` **twice** (the user message + `usage_log.question`) and

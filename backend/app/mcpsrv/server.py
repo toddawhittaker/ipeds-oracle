@@ -39,6 +39,7 @@ it in a worker thread would mean running an event loop inside one. See
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -58,6 +59,31 @@ from app.tools import registry
 log = logging.getLogger("ipeds.mcp")
 
 MCP_PATH = "/mcp"
+
+# How many MCP tool calls may occupy the shared worker-thread pool at once.
+#
+# `run_in_threadpool` is the PROCESS-WIDE anyio limiter (40 threads by default),
+# the same one every synchronous FastAPI route runs in, and the rate limiter in
+# app/ratelimit.py bounds requests STARTED per minute (60), not requests in
+# flight. Measured before this existed: 55 concurrent `run_sql` calls from one
+# valid key — no 429, since 55 < 60 — took `/api/health` from 0.01s to 22.28s,
+# and `/api/health` is what the container's healthcheck polls. No crafted query
+# is needed; `SELECT * FROM c_a ORDER BY ctotalt DESC` runs 7s and spills ~0.7GB
+# of SQLite temp per call.
+#
+# 8 of 40 leaves the web app four fifths of the pool no matter what MCP is
+# doing, and still lets a handful of clients query in parallel. A module
+# constant rather than a setting: it is a property of the pool it shares, not
+# something a deployment tunes (so `scripts/ci_env.sh` needs no entry).
+#
+# This bounds the DATA tools. `ask` is bounded elsewhere and differently — it
+# holds no pool thread of its own (it awaits the agent loop, which hops per
+# blocking step) and is capped per user by the chat rate limiter it charges.
+# The semaphore itself is built per lifespan, in `start_mcp`, NOT here: an
+# asyncio primitive caches the running loop the first time it is awaited and
+# refuses a second one, and this repo's tests stand up dozens of TestClients,
+# each with its own loop. Same reason the transport app is built there.
+MCP_TOOL_CONCURRENCY = 8
 
 # Prefixes `registry.dispatch` returns instead of raising. They are the tool's
 # way of saying "your call was wrong, here is why" — surfaced with is_error so a
@@ -153,7 +179,11 @@ async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallTo
             return await ask.run_ask(arguments)
         except Exception as e:  # noqa: BLE001 -- a tool failure is a RESULT, not a crash
             return _tool_error(params.name, e)
-    return await run_in_threadpool(_call, params.name, arguments)
+    # Bounded, so MCP traffic cannot starve chat and the web UI of the shared
+    # pool — see MCP_TOOL_CONCURRENCY. Acquired around the hop, not inside
+    # `_call`, because it is the THREAD that is scarce.
+    async with _current["slots"]:
+        return await run_in_threadpool(_call, params.name, arguments)
 
 
 async def on_list_resources(ctx, params) -> types.ListResourcesResult:
@@ -223,14 +253,29 @@ def _body_cap() -> int:
 # construct `TestClient(app)` dozens of times in one process. Building inside the
 # lifespan gives each startup its own manager, which is both correct and the only
 # thing the suite tolerates.
-_current: dict[str, Any] = {"app": None}
+_current: dict[str, Any] = {"app": None, "slots": None}
 
 
 class _Endpoint:
     """The route registered at import time. Delegates to whatever the current
     lifespan built, and answers 503 when nothing has — which is what a bare
     `TestClient(app)` (no context manager, so no lifespan) gets, rather than an
-    AttributeError three frames into the SDK."""
+    AttributeError three frames into the SDK.
+
+    POST ONLY. The route has to be registered as an any-method Route (a Mount
+    does not match a bare `/mcp` — see app/main.py), and the SDK's transport
+    answers a GET by opening an SSE stream that stays open until the client goes
+    away. This server never pushes anything: it is stateless, issues no session
+    id, and sends no notifications, so that stream carries nothing and is only a
+    held socket, a task in the manager's group, and its buffers. The rate
+    limiter charges one unit when the stream OPENS and never sees the hold, so a
+    key holder could park 60 of them a minute, indefinitely. Measured: 40
+    concurrent GETs from one key, all 200, all still open after 20s.
+
+    Refusing here also makes the code agree with what three documents already
+    say — the transport comment below, `docs/MCP.md`, and
+    `docs/AUTH_AND_SECURITY.md` all describe a POST-only endpoint.
+    """
 
     async def __call__(self, scope, receive, send):
         app = _current["app"]
@@ -238,6 +283,14 @@ class _Endpoint:
             await JSONResponse(
                 {"detail": "The MCP endpoint is not running."},
                 status_code=503)(scope, receive, send)
+            return
+        if scope.get("method") != "POST":
+            # Before the bearer gate on purpose: which methods exist is not a
+            # secret, and an unauthenticated GET should not open a stream just
+            # to have its key rejected afterwards.
+            await JSONResponse(
+                {"detail": "The MCP endpoint accepts POST only."},
+                status_code=405, headers={"Allow": "POST"})(scope, receive, send)
             return
         await app(scope, receive, send)
 
@@ -268,10 +321,18 @@ async def start_mcp():
         transport_security=_transport_security(),
         max_request_body_size=_body_cap(),
     )
+    # Saved and RESTORED rather than blanked, because these lifespans nest:
+    # `backend/tests/test_api_keys.py` opens a second `TestClient(app)` inside an
+    # outer one, and an unconditional `= None` on the inner exit would leave the
+    # outer client's `/mcp` answering 503 "not running" for the rest of the file
+    # — pointing at exactly the wrong cause.
+    prev_app, prev_slots = _current["app"], _current["slots"]
     _current["app"] = RequireApiKey(transport)
+    # Built here, in the running loop, for the reason at MCP_TOOL_CONCURRENCY.
+    _current["slots"] = asyncio.Semaphore(MCP_TOOL_CONCURRENCY)
     try:
         async with server.session_manager.run():
             log.info("MCP endpoint ready at %s", MCP_PATH)
             yield
     finally:
-        _current["app"] = None
+        _current["app"], _current["slots"] = prev_app, prev_slots

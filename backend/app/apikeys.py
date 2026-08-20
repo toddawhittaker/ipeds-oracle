@@ -109,6 +109,38 @@ def touch(key_id: int) -> None:
         con.close()
 
 
+def revoke_for_email(con: sqlite3.Connection, email: str) -> int:
+    """Revoke every live key belonging to `email`. Returns how many were revoked.
+
+    Takes an OPEN connection and does not commit, so it can join the same
+    transaction that drops someone from the allowlist (app/routers/admin.py's
+    `_remove_user`) rather than being a second write that can half-succeed.
+
+    Removing someone has to end every way they can reach the data. `verify`
+    already refuses a key whose owner is off the allowlist, so this is not what
+    stops them today — it is what stops them TOMORROW: the allowlist row can be
+    added back (a contractor returns, a removal is undone, an address is re-added
+    for an unrelated reason) and every key that person ever minted would come
+    back to life with it, including the leaked one that prompted the removal. The
+    admin sees "sessions ended" and reasonably reads that as "access ended".
+    """
+    cur = con.execute(
+        "UPDATE api_keys SET revoked_at = ? WHERE revoked_at IS NULL AND user_id IN "
+        "(SELECT id FROM users WHERE email = ?)", (time.time(), email))
+    return cur.rowcount
+
+
+def active_count(user_id: int) -> int:
+    """How many of `user_id`'s keys are still usable."""
+    con = connect()
+    try:
+        return con.execute(
+            "SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+            (user_id,)).fetchone()[0]
+    finally:
+        con.close()
+
+
 def list_for_user(user_id: int) -> list[dict]:
     """One user's keys, newest first. Never carries a hash or a raw key."""
     con = connect()
