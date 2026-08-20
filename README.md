@@ -321,7 +321,8 @@ claude mcp add --transport http ipeds https://<host>/mcp \
 
 Every request is capped per key (`MCP_RATE_MAX_PER_KEY`, default 60/60s), and an
 `ask` call — the tool that runs the whole agent — also charges the caller's usual
-per-user question limit and shows up in Admin → Usage as MCP spend. Full detail,
+per-user question limit and counts in the Admin → Usage totals like any other
+question (the screen does not yet separate the two doors). Full detail,
 including why the endpoint serves no OAuth discovery, is in
 [docs/MCP.md](docs/MCP.md).
 
