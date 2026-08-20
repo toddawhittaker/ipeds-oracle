@@ -11,6 +11,89 @@ detail.
 
 ---
 
+## v0.5.1
+
+A tidy-up release. Nothing here changes how you ask a question — it makes three
+things that were already there easier to read: search results now say *why* they
+matched, Admin → Usage can tell the two doors onto the assistant apart, and every
+form control has a border you can actually see.
+
+### Read this before upgrading
+
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot on a new release clears it and repeat questions are
+  answered fresh instead of returning instantly. Expected, one time, no action.
+- **No schema change.** `app.db` stays at migration 37, so this upgrades and
+  rolls back cleanly.
+- **Upgrading from before v0.4.0?** That release's one-time
+  `sudo chown -R 10001:10001 ./srv-data` still applies.
+
+### Search results explain themselves
+
+The sidebar search reads message text, not just conversation names — which meant
+a chat could appear in the results with nothing on screen saying why, and the
+only way to find out was to open it. Each result now carries a line of the text
+that matched, underneath the name. A chat that matched on its name alone has
+nothing extra to show and doesn't get one.
+
+The snippet puts the matched words near the front rather than in the middle,
+which sounds like a detail and is the whole feature: a sidebar row shows about
+forty characters, so a match centred in the quote lands past the ellipsis and
+the word you searched for is the one thing you cannot see.
+
+### Admin → Usage separates web traffic from MCP
+
+`usage_log.source` has recorded which door a turn arrived by since v0.5.0, and
+nothing read it — so the tab showed one blended total and a runaway script on the
+MCP endpoint looked exactly like people using the app.
+
+A **Source** filter (All / Web chat / MCP) now narrows the totals, the chart and
+Top users together. If spend jumps, you can see which door it came through, and
+if it was a key, Top users names whose it was so you can revoke it from
+Admin → Keys without touching that person's web access.
+
+Web chat means everything the MCP endpoint did not do, which includes all
+activity from before the endpoint existed. Nothing lands in an "unknown" bucket,
+so the two halves always add up to All.
+
+### Controls you can see
+
+Inputs, selects and outline buttons drew their border from the same near-invisible
+hairline as table rules and panel edges — 1.33:1 against a panel in the light
+theme, and as little as 1.14:1 in dark, against the 3:1 that
+[WCAG 1.4.11](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)
+asks for. On an empty text field that border is the only thing saying a control
+is there at all.
+
+Interactive controls now use their own colour, verified at 3:1 or better against
+every surface they sit on in both themes. The soft hairlines stay soft: the rules
+and edges around them identify nothing, and darkening those would have been a
+redesign rather than a fix.
+
+### Also
+
+- The `nanoid` dependency moves off a HIGH advisory. It was dev-only and nothing
+  in the app called it, but the frontend audits at zero and that is only a useful
+  signal if it stays there.
+
+### For developers
+
+- **ESLint 9 → 10.** `eslint-plugin-react` has not published since April 2025 and
+  its peer range is honest, not stale — ESLint 10 removes an API its React
+  version detection calls. Two documented workarounds cover it (a pinned
+  `settings.react.version` and one `overrides` entry), both marked to come out
+  when the plugin ships a release that peers at ESLint 10.
+- **Prettier is gone.** Nothing ever ran it: no CI job, no gate step, and
+  `format:check` had never passed — it disagreed with 144 of the 169 files in its
+  own globs, because the codebase is written compactly by hand. Removing it also
+  re-enables `no-unexpected-multiline`, a real ASI check that
+  `eslint-config-prettier` had been switching off for a formatter that never ran.
+- **`e2e/contrast.js` gains `borderContrast()`**, measuring resolved pixels like
+  its two neighbours. axe has no rule for 1.4.11, so control-boundary contrast is
+  otherwise unchecked at any threshold.
+
+---
+
 ## v0.5.0
 
 The release that lets something other than a browser ask. IPEDS Oracle now
