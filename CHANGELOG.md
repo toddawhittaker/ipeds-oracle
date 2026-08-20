@@ -11,6 +11,139 @@ detail.
 
 ---
 
+## v0.5.0
+
+The release that lets something other than a browser ask. IPEDS Oracle now
+serves a **Model Context Protocol** endpoint, so Claude Code — or any MCP client
+— can reach the same data, the same agent, and the same checked numbers the web
+chat does, using a per-user API key instead of a session cookie. The web app
+gains the two things that implies: a page to mint and manage your keys, and an
+admin tab that shows every key in the deployment.
+
+The other half of the release is smaller and more likely to be used daily: the
+chat sidebar can now **search your history** — inside the conversations, not
+just their names.
+
+### Read this before upgrading
+
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot on a new release clears it and repeat questions are
+  answered fresh instead of returning instantly. Expected, one time, no action.
+- **`app.db` moves to migration 37** (the `api_keys` table). As always, rolling
+  *back* across a schema bump refuses to start — the `app.db.pre-vN` snapshot
+  the upgrade writes is the escape hatch.
+- **Upgrading from before v0.4.0?** That release's one-time
+  `sudo chown -R 10001:10001 ./srv-data` still applies; the container runs as a
+  non-root uid and Docker never chowns a bind mount.
+- **Behind a reverse proxy, three things need attention** if you want MCP:
+  forward `/mcp` (a proxy that forwards the whole site already does); give that
+  path a **long read timeout**, because a single `ask` can run longer than
+  nginx's 60-second default and would otherwise 504; and — new for everyone,
+  MCP or not — **keep query strings out of your access log**, because the
+  sidebar search sends its terms in the URL. The app scrubs its own log; a proxy
+  writes to a file the app never touches. The README's HTTPS section has the
+  nginx and Caddy specifics.
+- **MCP needs a certificate the client trusts.** A browser can be told to accept
+  a self-signed certificate; an MCP client library generally cannot.
+
+### Ask from another tool
+
+`POST /mcp` speaks Streamable HTTP and exposes the dataset tools directly, plus
+an **`ask`** tool that runs the whole agent loop — question in, checked answer
+out, with the chart returned as a declared field rather than JSON smuggled
+through the prose.
+
+A few things are deliberate, and are written up with their reasoning in
+[docs/MCP.md](docs/MCP.md) because they are what a reader asks first:
+
+- **Static bearer keys, not OAuth.** For a private deployment with a known user
+  list, an authorization server is machinery without a job.
+- **A key carries its owner's access in full**, with no per-key scopes. The way
+  to take one back is to revoke it.
+- **`ask` is stateless** — it writes no conversation and no messages. Spend is
+  still recorded and still counts against that person's usual per-question
+  limit, so one user's cost is capped whichever door they come through.
+- **`ask` records no lesson.** The chat agent learns from its own mistakes via
+  the critic; letting a key holder feed that queue would let them steer what an
+  administrator is asked to review.
+
+Every request is capped per key (`MCP_RATE_MAX_PER_KEY`, 60 per 60s), tool calls
+are bounded to eight at a time so MCP traffic cannot starve the web app of
+worker threads, and a call that cannot get a slot within thirty seconds is
+**refused with a retry message** rather than queued indefinitely.
+
+### API keys
+
+Mint them from the account menu → **API keys**. Give a key a label, copy the
+value **once** — nothing stores it and no later request can return it — and give
+it to your client.
+
+- **Ten live keys** per person. Revoked ones don't count.
+- **Rename** a key in place if you typed the label in a hurry.
+- **Revoking** stops any client using it immediately and can't be undone. The
+  key then leaves your list; your administrator still sees it, which is what
+  lets them answer later what a withdrawn key had access to.
+- **Only the SHA-256 hash is stored**, so a dump of `app.db` mints nothing, and
+  a key's owner leaving the allowlist kills their keys in the same transaction
+  that ends their sessions.
+
+Administrators get a **Keys** tab: every key with its owner and status, minting
+on someone's behalf, and revoking one — or a whole selection at once, using the
+same row-selection the Users tables have.
+
+### Search your conversations
+
+The box above the sidebar list searches your own history — your questions, the
+assistant's answers, and the conversation titles. Every word has to appear
+somewhere in the same chat, so `nursing 2023` finds the one where you asked
+about nursing and 2023 came up two answers later; quote a phrase to keep it
+together, and everything is matched literally, so `50%` looks for `50%`.
+
+It searches your whole history and returns the hundred most recently updated
+matches — not "search within the most recent hundred", which is the difference
+between finding an old chat and not.
+
+### Fixed
+
+- The one-shot key reveal is **about copying**, not dismissing: it opens focused
+  on a filled Copy button, holds "Copied" until you close it, and puts the value
+  in a read-only field so a keyboard user can select it if the clipboard is
+  refused.
+- Admin → Logs got the same in-field search-clear control every other table has.
+- Sorting the Keys table by "Last used" was a **no-op on every fresh
+  deployment** — comparing two nulls yields NaN, which short-circuited the
+  tiebreak.
+
+### Security
+
+- **`pragma_*` table-valued functions passed the SQL sandbox's keyword filter.**
+  `_` is a word character, so the pattern that blocks `PRAGMA` never matched
+  `pragma_database_list` — which returns the server's absolute path to the
+  database — or `pragma_quick_check`, which reads the entire file. Read-only and
+  no escape, but disclosure and I/O amplification, and it had been recorded as
+  harmless on the narrower question of whether it could *write*.
+- Search terms are **redacted from the application's access log**.
+- The MCP endpoint is POST-only, its CSRF exemption is an exact path, and an
+  unauthenticated request can never reach a tool handler.
+
+### For developers
+
+- **`CLAUDE.md` is now a 149-line process file with a stated ceiling**, and
+  everything it used to explain about how subsystems work moved into `docs/`,
+  one file per kind.
+- **CI audits the shipped lockfile with `pip-audit`.** GitHub's dependency graph
+  reads `requirements.txt` (floors, no versions) and does not recognise a
+  `.lock` extension, so everything the image actually installs was
+  transitive-only from its point of view and would never have raised an alert.
+- **The local gate fails fast when `.venv` disagrees with the lockfile**, which
+  is the difference between a confusing test failure and a one-line fix.
+- The documentation screenshots are regenerated by one committed command, and
+  now include the two new screens. One of them publishes the MCP endpoint the
+  app prints for itself — which first came out as the capture harness's own dev
+  port, so the run serves the page under a deployment-shaped hostname.
+
+---
+
 ## v0.4.0
 
 The hardening release. Nothing here changes what the app is for — it is seventy
