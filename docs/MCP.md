@@ -46,7 +46,7 @@ uncapped multiple of that budget from one person.
 
 | Endpoint | Who | What |
 |---|---|---|
-| `GET /api/keys` | any signed-in user | the caller's own keys (never a secret) |
+| `GET /api/keys` | any signed-in user | the caller's own LIVE keys (never a secret) |
 | `POST /api/keys` | any signed-in user | mint; the response is the only copy of the key |
 | `DELETE /api/keys/{id}` | any signed-in user | revoke one of the caller's own — someone else's answers 404, not 403 |
 | `GET /api/admin/keys` | admin | every key, with its owner's email |
@@ -241,7 +241,10 @@ minted it for somebody, `last_used_at`, and `revoked_at`.
   they forgot they had, which needs day resolution; without the floor every call
   would write to `app.db` purely to record that it happened.
 - **Revocation sets `revoked_at`; the row survives.** An administrator asking
-  what a withdrawn key had access to needs it to still be there.
+  what a withdrawn key had access to needs it to still be there. It survives
+  where that question gets asked: **Admin → Keys** keeps the row marked
+  *Revoked*, while `GET /api/keys` filters it out, because on the owner's own
+  page a revoked key is a line with no action left on it.
 - **Verification re-checks the allowlist**, the same check
   `auth._user_from_request` makes on a session. Removing someone from the
   allowlist has to end every way they can reach the data, not just the browser

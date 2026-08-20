@@ -1766,7 +1766,6 @@ td.actions .icon-btn + .icon-btn { margin-left: 6px; }
 /* The action spans both rows of the grid so the trash button centres against the
    whole card rather than sitting against the label line. */
 .keyrow-actions { grid-column: 2; grid-row: 1 / span 2; }
-.keyrow.revoked .keyrow-label { color: var(--muted); }
 /* A status word, not a colour: "revoked" is a fact to read, and a red pill here
    would read as an error the viewer has to fix. Muted text on the row's own
    background is a token pair already used throughout. */

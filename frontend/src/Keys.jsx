@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { loadErrorMessage } from "./authcopy.js";
-import { KEY_PREFIX, isRevoked, maskedKey, sortByNewest } from "./apikeys.js";
+import { KEY_PREFIX, maskedKey, sortByNewest } from "./apikeys.js";
 import { fmtDateTime } from "./admin/format.js";
 import { IconCopy, IconTrash } from "./icons.jsx";
 import { copyText } from "./clipboard.js";
@@ -69,18 +69,19 @@ export default function Keys() {
     confirm({
       variant: "danger",
       title: "Revoke this key?",
-      body: `Any MCP client still using ${maskedKey(row)} stops working immediately. `
-        + "This can't be undone — create a new key instead.",
+      body: `Any MCP client still using ${maskedKey(row)} stops working immediately, `
+        + "and the key leaves this list. This can't be undone — create a new key "
+        + "instead.",
       details: row.label || undefined,
       confirmLabel: "Revoke key",
       busyLabel: "Revoking…",
       successToast: "Key revoked.",
       errorToast: "Couldn't revoke that key.",
       onConfirm: () => api.revokeApiKey(row.id),
-      // The revoked row STAYS in the list (it just loses its Revoke button), so
-      // there is no removed-row hole to fall into — but the button that opened
-      // the modal is gone, and ConfirmModal hands post-success focus to the
-      // feature. The heading is the stable landing spot.
+      // The row leaves this list on the next load (GET /api/keys returns live
+      // keys only), taking the button that opened the modal with it — so there
+      // is nothing for ConfirmModal to hand post-success focus back to. The
+      // heading is the stable landing spot.
       onSuccess: () => { load(); headingRef.current?.focus?.(); },
     });
   }
@@ -128,20 +129,11 @@ export default function Keys() {
         ) : (
           <ul className="keylist" role="list">
             {sortByNewest(rows).map((k) => {
-              const revoked = isRevoked(k);
               return (
-                <li key={k.id} className={"keyrow" + (revoked ? " revoked" : "")}>
+                <li key={k.id} className="keyrow">
                   <div className="keyrow-main">
                     <span className="keyrow-label">{k.label || "Unlabelled key"}</span>
                     <code className="keyrow-id">{maskedKey(k)}</code>
-                    {revoked && (
-                      // The stamp answers the question that always follows
-                      // "this key was revoked": for how long was it live?
-                      <span className="keyrow-state"
-                            title={`Revoked ${fmtDateTime(k.revoked_at)}`}>
-                        Revoked
-                      </span>
-                    )}
                   </div>
                   <div className="keyrow-meta muted small">
                     Created {fmtDateTime(k.created_at)}
@@ -150,16 +142,14 @@ export default function Keys() {
                     {k.last_used_at ? fmtDateTime(k.last_used_at) : "never"}
                   </div>
                   <div className="keyrow-actions">
-                    {!revoked && (
-                      // The address is in the accessible name: a screen reader's
-                      // element list would otherwise show N identical "Revoke"
-                      // buttons on a destructive action.
-                      <button type="button" className="icon-btn danger tip" data-tip="Revoke key"
-                              aria-label={`Revoke key ${maskedKey(k)}`}
-                              onClick={() => revoke(k)}>
-                        <IconTrash />
-                      </button>
-                    )}
+                    {/* The address is in the accessible name: a screen reader's
+                        element list would otherwise show N identical "Revoke"
+                        buttons on a destructive action. */}
+                    <button type="button" className="icon-btn danger tip" data-tip="Revoke key"
+                            aria-label={`Revoke key ${maskedKey(k)}`}
+                            onClick={() => revoke(k)}>
+                      <IconTrash />
+                    </button>
                   </div>
                 </li>
               );

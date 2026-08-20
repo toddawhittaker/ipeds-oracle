@@ -386,7 +386,9 @@ not the second.
 **Revoking.** The trash-can button on a row revokes that key immediately. Any
 client still using it stops working on its next call, and it can't be undone —
 issue a new key instead. The row stays in the table marked **Revoked**, so a
-withdrawn key is still there when you need to ask what it had access to.
+withdrawn key is still there when you need to ask what it had access to. This
+table is the only place it stays: the owner's own **API keys** page lists live
+keys only, so a person who revokes a key sees it disappear.
 
 Two things happen without you doing anything. Removing someone from the
 allowlist **also stops their keys**, so offboarding through Admin → Users is

@@ -305,7 +305,9 @@ you.
 The page lists your keys with their label, their last four characters, when each
 was created, and when it was last used — enough to spot one you've forgotten
 about. The trash-can button revokes a key, which stops any tool still using it
-immediately and can't be undone.
+immediately and can't be undone. A revoked key drops off your list; your
+administrator still sees it in the Admin console, which is what lets them answer
+later what that key had access to.
 
 To connect a client, give it the endpoint and the key as a bearer token. For
 Claude Code that is one command:

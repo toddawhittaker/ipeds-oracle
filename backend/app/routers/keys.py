@@ -45,7 +45,11 @@ class KeyCreate(BaseModel):
 
 @router.get("")
 def list_keys(user: sqlite3.Row = Depends(current_user)):
-    """The caller's keys. Carries `last4` for identification, never a secret."""
+    """The caller's LIVE keys. Carries `last4` for identification, never a secret.
+
+    Revoked keys are absent — see `apikeys.list_for_user`. Admin -> Keys is where
+    the withdrawn ones are still visible.
+    """
     return apikeys.list_for_user(int(user["id"]))
 
 

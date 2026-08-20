@@ -96,9 +96,13 @@ test("the reveal dialog opens on Copy, traps focus, and returns it on Done", asy
   await expect(create).toBeFocused();
 });
 
-test("revoke goes through the confirm modal, toasts, and leaves the row listed as revoked",
+test("revoke goes through the confirm modal, toasts, and drops the row from the list",
   async ({ page }) => {
-    const api = await openKeys(page, [KEY]);
+    // A second, untouched key: "the row went away" has to mean THAT row, not a
+    // list that emptied or failed to reload.
+    const other = { ...KEY, id: 8, last4: "1c40", label: "Desktop" };
+    const api = await openKeys(page, [KEY, other]);
+    await expect(page.locator(".keyrow")).toHaveCount(2);
 
     await page.getByRole("button", { name: /^Revoke key ipeds_mcp_…9f2a$/ }).click();
 
@@ -110,11 +114,14 @@ test("revoke goes through the confirm modal, toasts, and leaves the row listed a
     await modal.getByRole("button", { name: "Revoke key" }).click();
 
     await expect(page.locator(".toast-msg")).toHaveText("Key revoked.");
-    // Revoked, not removed: the row is the record of what the withdrawn key
-    // could reach, and its Revoke action is gone.
-    await expect(page.locator(".keyrow-state")).toHaveText("Revoked");
-    await expect(page.getByRole("button", { name: /^Revoke key/ })).toHaveCount(0);
-    expect(api.getRows()[0].revoked_at).not.toBe(null);
+    // Gone from the owner's list, and only that one.
+    await expect(page.locator(".keyrow-id")).toHaveText(["ipeds_mcp_…1c40"]);
+    // Revoked, NOT deleted: the server still holds the row, which is what keeps
+    // the admin table able to answer what the withdrawn key could reach.
+    expect(api.getRows().find((r) => r.id === KEY.id).revoked_at).not.toBe(null);
+    // Focus lands on the heading, because the button that opened the modal left
+    // with its row and ConfirmModal has nothing to return focus to.
+    await expect(page.getByRole("heading", { name: "API keys" })).toBeFocused();
   });
 
 test("cancelling the confirm modal revokes nothing", async ({ page }) => {
