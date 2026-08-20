@@ -29,7 +29,7 @@ import {
   mockConversation, mockAllowlist, mockAccessRequests, mockDeniedRequests,
   mockSkills, mockSkillCategories, mockSkillRejections,
   mockLogs, mockMarkLogsSeen, mockImportJobs, mockImportCatalog,
-  mockUsage, gotoAdmin,
+  mockUsage, mockApiKeys, mockAdminKeys, gotoAdmin,
 } from "./mocks.js";
 
 const OUT = "../docs/images";        // relative to frontend/
@@ -118,17 +118,42 @@ const CONVOS = [
   { id: 9, title: "CS bachelor's in California", updated_at: 1_759_800_000 },
 ];
 
+// One person's MCP keys. `last4` only — the server never returns more, and a
+// screenshot is the last place a whole credential should be able to appear.
+const USER_KEYS = [
+  { id: 1, last4: "9f2a", label: "Work laptop", created_at: 1_757_000_000,
+    created_by: null, last_used_at: 1_759_990_000, revoked_at: null },
+  { id: 2, last4: "1c40", label: "Weekly enrollment report", created_at: 1_755_400_000,
+    created_by: "admin@example.edu", last_used_at: 1_759_600_000, revoked_at: null },
+];
+
+// The admin table also carries the owner, and a revoked row — the status column
+// reads as an absence without one, which is the thing the column exists to say.
+const ALL_KEYS = [
+  { id: 1, email: "taylor.rivera@example.edu", last4: "9f2a", label: "Work laptop",
+    created_at: 1_757_000_000, created_by: null, last_used_at: 1_759_990_000, revoked_at: null },
+  { id: 2, email: "taylor.rivera@example.edu", last4: "1c40", label: "Weekly enrollment report",
+    created_at: 1_755_400_000, created_by: "admin@example.edu", last_used_at: 1_759_600_000, revoked_at: null },
+  { id: 3, email: "jordan.avery@example.edu", last4: "77b1", label: "Desktop",
+    created_at: 1_754_100_000, created_by: null, last_used_at: null, revoked_at: null },
+  { id: 4, email: "sam.okafor@example.edu", last4: "0e63", label: "Old laptop",
+    created_at: 1_752_000_000, created_by: null, last_used_at: 1_753_000_000,
+    revoked_at: 1_756_000_000 },
+];
+
 async function userMocks(page) {
   await mockMe(page, { email: "taylor.rivera@example.edu", is_admin: false });
   await mockVersion(page);
   await mockConversations(page, CONVOS);
   await mockConversation(page, 7, NURSING_TURN);
   await mockConversation(page, 8, BY_STATE_TURN);
+  await mockApiKeys(page, USER_KEYS);
 }
 
 async function adminMocks(page) {
   await mockMe(page, { email: "admin@example.edu", is_admin: true });
   await mockVersion(page);
+  await mockAdminKeys(page, ALL_KEYS);
   await mockAttention(page, { users: 2, skills: 3, logs: 1 });
   await mockConversations(page, CONVOS);
   // The user-menu shot is taken over a real answer, so this admin needs the
@@ -362,6 +387,17 @@ test("compare", async ({ page }) => {
   await shot(page, `${OUT}/compare.png`);
 });
 
+test("keys", async ({ page }) => {
+  await userMocks(page);
+  await page.goto("/keys");
+  // Readiness on real CONTENT, not just the heading: this page renders its load
+  // failure as a paragraph rather than an error boundary, so `shot`'s
+  // "Something went wrong" check cannot see a missing mock — it would publish a
+  // picture of an error message instead.
+  await expect(page.getByText("Work laptop")).toBeVisible();
+  await shot(page, `${OUT}/keys.png`);
+});
+
 test("user-menu", async ({ page }) => {
   await adminMocks(page);
   await page.goto("/chat/7");
@@ -409,6 +445,16 @@ test("admin-skills", async ({ page }) => {
   await page.goto("/admin/skills");
   await expect(page.getByRole("heading", { name: /Learned lessons/i })).toBeVisible();
   await shot(page, `${OUT}/admin-skills.png`);
+});
+
+test("admin-keys", async ({ page }) => {
+  await adminMocks(page);
+  await page.goto("/admin/keys");
+  // Same reason as the /keys shot: a failed load here is a paragraph, not the
+  // error boundary. Wait for a row.
+  await expect(page.getByRole("cell", { name: "taylor.rivera@example.edu", exact: true }).first())
+    .toBeVisible();
+  await shot(page, `${OUT}/admin-keys.png`);
 });
 
 test("admin-logs", async ({ page }) => {
