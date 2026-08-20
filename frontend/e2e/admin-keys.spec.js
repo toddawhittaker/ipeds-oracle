@@ -4,7 +4,10 @@ import { mockAdminKeys, mockConversations, mockMe, mockVersion } from "./mocks.j
 // Browser truth for Admin → Keys. The pure table config (what the search covers,
 // how never-used rows sort) is unit-tested in frontend/src/apikeys.test.js; this
 // covers the tab existing at all, the mint-for-someone-else form, the shared
-// reveal dialog naming the recipient, and revoke through the confirm modal.
+// reveal dialog naming the recipient, revoke through the confirm modal, and the
+// bulk revoke over a row selection (the selection MODEL itself is pinned in
+// src/selection.test.js and e2e/admin-bulk-actions.spec.js — what is tested here
+// is this table's own wiring into it).
 
 const ROWS = [
   { id: 1, email: "prof@example.edu", last4: "1111", label: "Laptop",
@@ -123,3 +126,84 @@ test("a failed load renders a visible error, never an empty key table", async ({
   await expect(page.getByRole("alert")).toContainText("The database is unavailable.");
   await expect(page.getByText("No API keys yet.")).toHaveCount(0);
 });
+
+// --- bulk revoke -------------------------------------------------------------
+
+function rowCheckbox(page, email) {
+  return page.getByRole("row", { name: new RegExp(email.replace(/\./g, "\\.")) })
+    .getByRole("checkbox");
+}
+
+test("bulk revoke acts on every selected live key, and says what it did",
+  async ({ page }) => {
+    const api = await openKeys(page);
+
+    await rowCheckbox(page, "prof@example.edu").check();
+    await rowCheckbox(page, "dean@example.edu").check();
+    await expect(page.locator("[aria-live]").filter({ hasText: "Two keys selected" }))
+      .toBeVisible();
+
+    await page.getByRole("button", { name: "Revoke", exact: true }).click();
+    const modal = page.getByRole("alertdialog");
+    // The count in the dialog is what makes a bulk destructive action
+    // answerable — "revoke these?" with a selection off screen is not.
+    await expect(modal).toContainText("Two keys are selected.");
+    await expect(modal).toContainText("can't be undone");
+    await modal.getByRole("button", { name: "Revoke 2 keys" }).click();
+
+    await expect(page.locator(".toast-msg")).toHaveText("Two keys revoked.");
+    expect(api.bulkCalls).toEqual([{ action: "revoke", ids: [1, 2] }]);
+    expect(api.getRows().every((r) => r.revoked_at != null)).toBe(true);
+    // The rows STAY, flipped to Revoked — this table is the record of what a
+    // withdrawn key could reach.
+    await expect(page.getByRole("row", { name: /prof@example\.edu/ })).toContainText("Revoked");
+  });
+
+test("an already-revoked key is not sent, and the dialog says why",
+  async ({ page }) => {
+    // One live, one already revoked: selecting both must send ONE id, not two,
+    // and account for the other rather than silently dropping it.
+    const api = await openKeys(page, [
+      ROWS[0],
+      { ...ROWS[1], revoked_at: 1_699_500_000 },
+    ]);
+
+    await rowCheckbox(page, "prof@example.edu").check();
+    await rowCheckbox(page, "dean@example.edu").check();
+
+    await page.getByRole("button", { name: "Revoke", exact: true }).click();
+    const modal = page.getByRole("alertdialog");
+    await expect(modal).toContainText("Two keys are selected.");
+    await expect(modal).toContainText("One key will stop working immediately");
+    await expect(modal).toContainText("One is already revoked and will not be changed.");
+    await modal.getByRole("button", { name: "Revoke key" }).click();
+
+    await expect(page.locator(".toast-msg")).toHaveText("One key revoked.");
+    expect(api.bulkCalls).toEqual([{ action: "revoke", ids: [1] }]);
+  });
+
+test("with only revoked keys selected, the action is disabled rather than dead",
+  async ({ page }) => {
+    await openKeys(page, [{ ...ROWS[0], revoked_at: 1_699_500_000 }]);
+
+    await rowCheckbox(page, "prof@example.edu").check();
+
+    const revoke = page.getByRole("button", { name: "Revoke", exact: true });
+    await expect(revoke).toBeDisabled();
+    await expect(revoke).toHaveAttribute("title", "Selected keys are already revoked.");
+  });
+
+test("changing the search clears the selection instead of acting on rows "
+  + "the admin can no longer see", async ({ page }) => {
+    await openKeys(page);
+
+    await rowCheckbox(page, "prof@example.edu").check();
+    await expect(page.locator("[aria-live]").filter({ hasText: "One key selected" }))
+      .toBeVisible();
+
+    await page.getByLabel("Search email, label or key").fill("dean");
+
+    await expect(page.getByRole("button", { name: "Revoke", exact: true })).toHaveCount(0);
+    await expect(page.locator(".toast-msg"))
+      .toHaveText("Selection cleared because the search changed.");
+  });

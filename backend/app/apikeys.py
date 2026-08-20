@@ -214,6 +214,19 @@ def set_label(key_id: int, user_id: int, label: str | None) -> sqlite3.Row | Non
         con.close()
 
 
+def revoke_by_id(con: sqlite3.Connection, key_id: int) -> bool:
+    """Revoke one key on an OPEN connection, without committing.
+
+    The sibling of `revoke_for_email`, and open for the same reason: the admin
+    table's bulk revoke runs every key in one transaction, so it cannot use a
+    helper that opens and commits its own.
+    """
+    cur = con.execute(
+        "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        (time.time(), key_id))
+    return cur.rowcount > 0
+
+
 def revoke(key_id: int) -> bool:
     """Mark `key_id` unusable. True if this call is what revoked it.
 
@@ -222,10 +235,8 @@ def revoke(key_id: int) -> bool:
     """
     con = connect()
     try:
-        cur = con.execute(
-            "UPDATE api_keys SET revoked_at = ? WHERE id = ? "
-            "AND revoked_at IS NULL", (time.time(), key_id))
+        did = revoke_by_id(con, key_id)
         con.commit()
-        return cur.rowcount > 0
+        return did
     finally:
         con.close()

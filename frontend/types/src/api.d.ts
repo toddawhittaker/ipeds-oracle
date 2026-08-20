@@ -54,6 +54,7 @@ export declare const api: {
     deintegrateYear: (startYear: any) => Promise<any>;
     allKeys: () => Promise<any>;
     createKeyFor: (email: any, label: any) => Promise<any>;
+    bulkKeyAction: (action: any, ids: any) => Promise<any>;
     revokeAnyKey: (id: any) => Promise<any>;
     logs: (limit?: number, level?: string, q?: string, since?: any, until?: any) => Promise<any>;
 };

@@ -1574,3 +1574,62 @@ def revoke_any_key(key_id: int):
     key still reports ok, matching delete_skill's contract above."""
     apikeys.revoke(key_id)
     return {"ok": True}
+
+
+# Bulk row-selection on the Keys table. Revoke is the only bulk action here:
+# minting needs a recipient per key, and the label belongs to the key's owner
+# (app/routers/keys.py), so neither has a batch form.
+class KeyBulkAction(BaseModel):
+    action: Literal["revoke"]
+    ids: list[int]
+
+
+@router.post("/keys/bulk-action")
+def keys_bulk_action(body: KeyBulkAction, admin: sqlite3.Row = Depends(require_admin)):
+    """Bulk revoke over an explicit list of key ids — one connection, one commit.
+
+    Eligibility is RECOMPUTED per key against live DB state rather than trusted
+    from whatever the browser's list showed, exactly like allowlist_bulk_action
+    above: a key someone revoked from another tab lands in `skipped`, not in
+    `affected`, so the toast does not claim work that did not happen.
+
+    Unlike the single DELETE, which is deliberately idempotent, an already-
+    revoked key is reported rather than silently counted — the admin selected N
+    rows and is owed an accurate account of what N became.
+
+    No self-guard: revoking one's own key ends an MCP client's access, never the
+    browser session the admin is holding, so there is no lockout to protect
+    against (the allowlist's demote/delete guard exists because those DO end the
+    caller's own access).
+    """
+    if len(body.ids) > BULK_MAX_ITEMS:
+        raise HTTPException(400, f"Send at most {BULK_MAX_ITEMS} keys at a time.")
+
+    affected = 0
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    con = connect()
+    try:
+        # One outer transaction spanning every item's SAVEPOINT — same reason as
+        # allowlist_bulk_action: without it the first RELEASE would commit that
+        # item outright.
+        con.execute("BEGIN")
+        for key_id in body.ids:
+            row = con.execute("SELECT revoked_at FROM api_keys WHERE id = ?",
+                              (key_id,)).fetchone()
+            if row is None:
+                skipped.append({"id": key_id, "reason": "no longer exists"})
+                continue
+            if row["revoked_at"] is not None:
+                skipped.append({"id": key_id, "reason": "already revoked"})
+                continue
+            ok, _value = _run_item(
+                con, lambda i=key_id: apikeys.revoke_by_id(con, i), key_id)
+            if not ok:
+                failed.append({"id": key_id, "reason": "could not be revoked"})
+                continue
+            affected += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "affected": affected, "skipped": skipped, "failed": failed}

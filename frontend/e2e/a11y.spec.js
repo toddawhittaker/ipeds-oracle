@@ -546,6 +546,27 @@ test.describe("axe smoke scan", () => {
       expect(found, JSON.stringify(found, null, 2)).toEqual([]);
     });
 
+  test("the bulk-selection toolbar has no critical or serious violations",
+    async ({ page }) => {
+      // The BulkBar exists ONLY while rows are selected, so every resting-page
+      // scan in the loop below — including the four Allowlist tables that have
+      // had it far longer than this one — has always missed it. Scanned on the
+      // Keys table because that is where it was wired most recently; the
+      // component is shared, so this covers the toolbar itself for all of them.
+      await adminA11yMocks(page);
+      await page.goto("/admin/keys");
+      await expect(page.getByRole("heading", { name: "API keys" })).toBeVisible();
+      await page.getByRole("row", { name: /prof@example\.edu/ })
+        .getByRole("checkbox").check();
+      // Both states of the destructive action, in one scan: the live row's
+      // Revoke is enabled, and a disabled danger button is its own contrast
+      // question.
+      await expect(page.getByRole("button", { name: "Revoke", exact: true })).toBeVisible();
+
+      const found = gatedViolations(await new AxeBuilder({ page }).analyze());
+      expect(found, JSON.stringify(found, null, 2)).toEqual([]);
+    });
+
   for (const [path, ready, content] of [
     ["/admin/users/current", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],
     ["/admin/users/pending", /Users/i, "[role=tabpanel]:not([hidden]) .grid.data tbody tr"],

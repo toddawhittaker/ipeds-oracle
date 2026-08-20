@@ -81,6 +81,12 @@ const ELIGIBILITY_RULES = {
   promote: { skipIf: (row) => !!row.is_admin, reason: "already an administrator" },
   demote: { skipIf: (row) => !row.is_admin, reason: "not an administrator" },
   delete: { skipIf: (row) => !!row.is_admin, reason: "is an administrator — demote first" },
+  // Keys: a revoked key stays in the admin table (it is the record of what the
+  // withdrawn key could reach), so it can be SELECTED but has nothing left to
+  // revoke. Reported as a skip rather than silently no-op'd — the admin
+  // selected it and is owed an account of it. Matches the server's own
+  // recomputation in admin.keys_bulk_action.
+  revoke: { skipIf: (row) => row.revoked_at != null, reason: "already revoked" },
 };
 
 export function partitionEligibility(selectedRows, action) {
@@ -143,6 +149,7 @@ export function bulkConfirmSummary(action, counts) {
   const ADMINS = { one: "administrator", many: "administrators" };
   const REQUESTS = { one: "request", many: "requests" };
   const BLOCKED = { one: "blocked user", many: "blocked users" };
+  const KEYS = { one: "key", many: "keys" };
 
   switch (action) {
     case "promote": {
@@ -200,6 +207,18 @@ export function bulkConfirmSummary(action, counts) {
       ];
       return parts.join(" ");
     }
+    case "revoke": {
+      const parts = [
+        `${numWord(selected, true)} ${nounFor(selected, KEYS)} ${isAre(selected)} selected.`,
+        `${numWord(eligible, true)} ${nounFor(eligible, KEYS)} will stop working `
+          + `immediately, and this can't be undone.`,
+      ];
+      if (skipped > 0) {
+        parts.push(`${numWord(skipped, true)} ${isAre(skipped)} already revoked `
+          + `and will not be changed.`);
+      }
+      return parts.join(" ");
+    }
     default:
       return "";
   }
@@ -226,6 +245,8 @@ function baseClause(action, affected) {
     case "unblock":
       return `${numWord(n, true)} `
         + `${nounFor(n, { one: "blocked user", many: "blocked users" })} allowed to request access again.`;
+    case "revoke":
+      return `${numWord(n, true)} ${nounFor(n, { one: "key", many: "keys" })} revoked.`;
     default:
       return "";
   }
@@ -290,6 +311,7 @@ function skipClauses(skipped) {
 const FAIL_VERB = {
   promote: "promoted", demote: "demoted", delete: "removed",
   approve: "approved", reject: "rejected", unblock: "unblocked",
+  revoke: "revoked",
 };
 
 export function bulkResultToast(action, result) {
@@ -304,10 +326,11 @@ export function bulkResultToast(action, result) {
   return { text: parts.join(" "), kind };
 }
 
-// The six bulk actions split by whether they REMOVE the acted row from its own
+// The bulk actions split by whether they REMOVE the acted row from its own
 // table. delete/approve/reject/unblock make the row disappear (deleted, or moved
-// to another table); promote/demote leave the row in place (only its admin flag
-// changes). retainedSelectionAfterBulk keys off this set.
+// to another table); promote/demote/revoke leave the row in place (only a flag
+// or a status changes — a revoked key stays in the admin table by design).
+// retainedSelectionAfterBulk keys off this set.
 const ACTIONS_THAT_REMOVE_ROWS = new Set(["delete", "approve", "reject", "unblock"]);
 
 // Which of the just-acted ids stay selected after a bulk action commits. The
