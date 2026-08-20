@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from app import feedback, guard, lessoncats, ratelimit, skills
 from app.auth import current_user
 from app.config import get_settings
-from app.db import connect
+from app.db import connect, record_usage
 from app.llm import cost_is_estimated, effective_cost, generate_title, stream_agent
 from app.tools.sql import (
     QueryResult,
@@ -947,22 +947,24 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
              *(turn_values[c] for c in MESSAGE_TURN_COLUMNS), now))
         assistant_id = cur.lastrowid
         con.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
-        usage_cur = con.execute(
-            "INSERT INTO usage_log(user_id, question, model_used, escalated, "
-            "prompt_tokens, completion_tokens, cached_prompt_tokens, "
-            "first_call_prompt_tokens, first_call_cached_prompt_tokens, "
-            "ok, cached, cost, cost_estimated, figure_grounding, figure_derivation, "
-            "emit_mode, answer_leaked, table_grounding, table_cells_checked, "
-            "table_cells_matched, exhaustion, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (user_id, question, model, int(escalated), prompt_tokens,
-             completion_tokens, cached_prompt_tokens, first_call_prompt_tokens,
-             first_call_cached_prompt_tokens, int(ok), int(cached),
-             float(cost), int(bool(cost_estimated)),
-             figure_grounding or None, figure_derivation or None,
-             emit_mode or None, int(bool(leaked)), table_grounding or None,
-             int(table_cells_checked), int(table_cells_matched),
-             exhaustion or None, now))
+        # Inside THIS transaction, on THIS connection — the billing row and the
+        # messages it bills for commit together or not at all. `source` stays
+        # NULL: that column exists to mark the MCP door (app/mcpsrv/ask.py), and
+        # a chat turn is what every row without it has always been.
+        usage_id = record_usage(
+            con, user_id=user_id, question=question, model_used=model,
+            escalated=escalated, ok=ok, cached=cached,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            cached_prompt_tokens=cached_prompt_tokens,
+            first_call_prompt_tokens=first_call_prompt_tokens,
+            first_call_cached_prompt_tokens=first_call_cached_prompt_tokens,
+            cost=cost, cost_estimated=cost_estimated,
+            figure_grounding=figure_grounding, figure_derivation=figure_derivation,
+            emit_mode=emit_mode, answer_leaked=leaked,
+            table_grounding=table_grounding,
+            table_cells_checked=table_cells_checked,
+            table_cells_matched=table_cells_matched,
+            exhaustion=exhaustion, created_at=now)
         con.commit()
         # The usage_log id comes back so a probe that finishes AFTER this commit
         # (the title call, the detached feedback distiller) can add its spend with
@@ -970,7 +972,7 @@ def _persist(user_id, conv_id, question, answer, *, sql_log, model, tokens,
         # too, so a caller can project the `done` event's extras
         # (_done_extras) from the SAME values just written, rather than a
         # second hand-typed copy.
-        return _PersistResult(user_msg_id, assistant_id, usage_cur.lastrowid,
+        return _PersistResult(user_msg_id, assistant_id, usage_id,
                               turn_values)
     finally:
         con.close()

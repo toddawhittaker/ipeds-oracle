@@ -22,14 +22,20 @@ bare `sqlite3.OperationalError` — so `_call` catches everything as well. This
 was found by running the suite against the CI fixture database, not by reading;
 the plan for this step assumed dispatch covered it.
 
-EVERY HANDLER RUNS ITS WORK IN A THREAD POOL. This is not optional at this tier.
-The high-level `MCPServer` hops sync tool functions onto a worker thread for
-you; low-level handlers are awaited directly on the event loop, and the tool
+NO BLOCKING WORK RUNS ON THE EVENT LOOP. This is not optional at this tier. The
+high-level `MCPServer` hops sync tool functions onto a worker thread for you;
+low-level handlers are awaited directly on the event loop, and the tool
 functions use blocking `sqlite3`. An unwrapped handler stalls every live chat
 stream in the process for the length of the query. `run_in_threadpool` is the
 same call the agent loop already makes (app/llm.py), so MCP traffic and chat
 traffic share one anyio thread limiter — which also means llm.py's note about a
 burst of heavy queries saturating that pool now covers this path too.
+
+The `ask` tool is the one handler that stays on the loop, and for the same
+reason rather than in spite of it: it awaits the agent loop, which is an async
+generator that already hands each of its own blocking steps to the pool. Putting
+it in a worker thread would mean running an event loop inside one. See
+`app/mcpsrv/ask.py`.
 """
 from __future__ import annotations
 
@@ -44,7 +50,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.config import PRODUCT_NAME, get_settings
-from app.mcpsrv import resources
+from app.mcpsrv import ask, resources
 from app.mcpsrv.auth import RequireApiKey
 from app.mcpsrv.results import RUN_SQL_OUTPUT_SCHEMA, structured_result
 from app.tools import registry
@@ -59,15 +65,23 @@ MCP_PATH = "/mcp"
 ERROR_PREFIXES = ("ERROR", "SQL REJECTED", "SQL TIMEOUT", "SQL TOO LARGE", "SQL ERROR")
 
 INSTRUCTIONS = (
-    "Query the IPEDS higher-education dataset. Read the `schema-guide` resource "
-    "before writing SQL — it carries the aggregation rules (award-level nesting, "
-    "CIP rollups) that silently produce wrong totals — then use `run_sql` for "
-    "data and the lookup tools to find the right table, column, or code."
+    "Query the IPEDS higher-education dataset. For a written answer, call `ask` "
+    "with a plain-language question and the deployment's own agent will do the "
+    "work. To drive the queries yourself, read the `schema-guide` resource first "
+    "— it carries the aggregation rules (award-level nesting, CIP rollups) that "
+    "silently produce wrong totals — then use `run_sql` for data and the lookup "
+    "tools to find the right table, column, or code."
 )
 
 
 def _tools() -> list[types.Tool]:
-    """`registry.tool_specs()`, renamed into MCP's shape. No second list."""
+    """`registry.tool_specs()`, renamed into MCP's shape, plus `ask`. No second
+    list of the data tools.
+
+    `ask` is appended HERE rather than added to the registry, and that is the
+    whole reason it is safe: the registry is what the chat agent's own tool loop
+    is handed, so a tool declared there would let the agent call the agent.
+    """
     out = []
     for spec in registry.tool_specs():
         fn = spec["function"]
@@ -77,7 +91,23 @@ def _tools() -> list[types.Tool]:
             name=fn["name"], description=fn["description"],
             input_schema=fn["parameters"],
             output_schema=RUN_SQL_OUTPUT_SCHEMA if fn["name"] == "run_sql" else None))
+    out.append(ask.TOOL)
     return out
+
+
+def _tool_error(name: str, e: Exception) -> types.CallToolResult:
+    """An escaped exception, as a failed TOOL rather than a failed CALL.
+
+    One definition for both handlers below. At this tier an exception out of a
+    handler becomes a JSON-RPC protocol error, which a client can neither read,
+    retry, nor show its user — so nothing may escape, and both paths have to say
+    so the same way.
+    """
+    log.warning("MCP tool %s failed: %s", name, e)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text",
+                                   text=f"ERROR calling {name}: {type(e).__name__}: {e}")],
+        is_error=True)
 
 
 def _call(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
@@ -96,11 +126,7 @@ def _call(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
     try:
         text = registry.dispatch(name, arguments, result_sink=sink)
     except Exception as e:  # noqa: BLE001 -- a tool failure is a RESULT, not a crash
-        log.warning("MCP tool %s failed: %s", name, e)
-        return types.CallToolResult(
-            content=[types.TextContent(type="text",
-                                       text=f"ERROR calling {name}: {type(e).__name__}: {e}")],
-            is_error=True)
+        return _tool_error(name, e)
     is_error = text.startswith(ERROR_PREFIXES)
     structured = None
     result = sink.get("result")
@@ -115,7 +141,19 @@ async def on_list_tools(ctx, params) -> types.ListToolsResult:
 
 
 async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
-    return await run_in_threadpool(_call, params.name, params.arguments or {})
+    arguments = params.arguments or {}
+    if params.name == ask.TOOL_NAME:
+        # `ask` runs on the event loop, not in the pool the data tools use: it
+        # awaits the agent loop, an async generator that does its own thread
+        # hops for every blocking step. (The plan for this step said `ask` would
+        # go through `_call` and inherit its try/except; it cannot — `_call` is
+        # synchronous. It shares the error SHAPE instead, via `_tool_error`,
+        # which is what that instruction was actually protecting.)
+        try:
+            return await ask.run_ask(arguments)
+        except Exception as e:  # noqa: BLE001 -- a tool failure is a RESULT, not a crash
+            return _tool_error(params.name, e)
+    return await run_in_threadpool(_call, params.name, arguments)
 
 
 async def on_list_resources(ctx, params) -> types.ListResourcesResult:
