@@ -330,16 +330,21 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
 
 
 def _remove_user(con: sqlite3.Connection, email: str) -> None:
-    """Drop `email` from the allowlist, zero their admin flag, and kill their
-    sessions. Shared by the single DELETE /allowlist/{email} endpoint and the
-    bulk delete path below. Does NOT check the still-admin invariant itself —
-    callers must skip a still-admin user BEFORE calling this (see both call
-    sites). The caller commits."""
+    """Drop `email` from the allowlist, zero their admin flag, kill their
+    sessions, and revoke their API keys. Shared by the single
+    DELETE /allowlist/{email} endpoint and the bulk delete path below. Does NOT
+    check the still-admin invariant itself — callers must skip a still-admin
+    user BEFORE calling this (see both call sites). The caller commits."""
     con.execute("DELETE FROM allowlist WHERE email=?", (email,))
     con.execute("UPDATE users SET is_admin=0 WHERE email=?", (email,))
     con.execute(
         "DELETE FROM sessions WHERE user_id IN "
         "(SELECT id FROM users WHERE email=?)", (email,))
+    # Their API keys go too, in this same transaction — a session and a key are
+    # two doors onto the same data, and closing one is not offboarding. See
+    # apikeys.revoke_for_email for why refusing them at verify time is not
+    # enough on its own.
+    apikeys.revoke_for_email(con, email)
 
 
 @router.delete("/allowlist/{email}")
