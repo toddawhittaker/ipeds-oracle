@@ -73,6 +73,29 @@ def create_key(body: KeyCreate, user: sqlite3.Row = Depends(current_user)):
             "label": row["label"], "created_at": row["created_at"]}
 
 
+@router.patch("/{key_id}")
+def relabel_key(key_id: int, body: KeyCreate,
+                user: sqlite3.Row = Depends(current_user)):
+    """Change the label on one of the caller's live keys.
+
+    The label is the only editable field on a key: everything else is either the
+    credential itself or a record of what happened to it. Reuses `KeyCreate`
+    because the field and its cap are identical, and a second one-field model
+    would be a second place for MAX_LABEL_LEN to drift.
+
+    Answers 404 for someone else's key AND for the caller's own revoked one —
+    the same rule the list follows, so what a user can see is what a user can
+    edit.
+    """
+    label = (body.label or "").strip() or None
+    row = apikeys.set_label(key_id, int(user["id"]), label)
+    if row is None:
+        raise HTTPException(404, "Key not found.")
+    return {"id": row["id"], "last4": row["last4"], "label": row["label"],
+            "created_at": row["created_at"], "created_by": row["created_by"],
+            "last_used_at": row["last_used_at"], "revoked_at": row["revoked_at"]}
+
+
 @router.delete("/{key_id}")
 def revoke_key(key_id: int, user: sqlite3.Row = Depends(current_user)):
     """Revoke one of the caller's keys.

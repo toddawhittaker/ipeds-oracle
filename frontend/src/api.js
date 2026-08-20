@@ -114,6 +114,9 @@ export const api = {
   // can return it, so whatever calls this has to show it once and say so.
   apiKeys: () => j("GET", "/api/keys"),
   createApiKey: (label) => j("POST", "/api/keys", { label }),
+  // The label is the only editable field on a key. A revoked key answers 404
+  // here exactly as somebody else's does — see app/routers/keys.py.
+  relabelApiKey: (id, label) => j("PATCH", `/api/keys/${id}`, { label }),
   revokeApiKey: (id) => j("DELETE", `/api/keys/${id}`),
 
   // admin

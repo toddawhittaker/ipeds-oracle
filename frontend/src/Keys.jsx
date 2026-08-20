@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { loadErrorMessage } from "./authcopy.js";
 import { KEY_PREFIX, maskedKey, sortByNewest } from "./apikeys.js";
 import { fmtDateTime } from "./admin/format.js";
-import { IconCopy, IconTrash } from "./icons.jsx";
+import { IconCopy, IconEdit, IconTrash } from "./icons.jsx";
 import { copyText } from "./clipboard.js";
 import { COPY_FAILED } from "./announce.js";
 import { USER_GUIDE_URL } from "./links.js";
@@ -35,6 +35,13 @@ export default function Keys() {
   // reveal dialog. Never persisted anywhere — see KeyReveal.jsx.
   const [minted, setMinted] = useState(null);
   const headingRef = useRef(null);
+  // Inline relabel: which key id is being edited (null = none) + the draft text.
+  // Same shape as the chat sidebar's rename (Chat.jsx), including the
+  // done-guard: Enter and Escape both settle the edit, and the blur that
+  // follows must not commit a second time.
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const editDone = useRef(false);
   // window.location.origin, not a setting: this page is being SERVED from the
   // host the client has to reach, so the address is already known here — which
   // is exactly what the guides cannot say.
@@ -63,6 +70,43 @@ export default function Keys() {
       })
       .catch((e2) => toast(e2?.detail || "Couldn't create that key.", "error"))
       .finally(() => setMinting(false));
+  }
+
+  // --- Inline relabel --------------------------------------------------------
+  // Pencil -> the row's label swaps to an input. Enter/blur commit, Escape
+  // cancels. The commit is optimistic: the label is cosmetic, so showing it
+  // immediately and putting it back with a toast if the PATCH fails beats
+  // holding the row in a spinner.
+  function startEdit(row) {
+    editDone.current = false;
+    setEditingId(row.id);
+    setEditText(row.label || "");
+  }
+  // The input unmounts on commit, and focus would drop to <body> (WCAG 2.4.3).
+  // Hand it back to the row's own pencil once React has put it back.
+  const refocusRow = (id) => requestAnimationFrame(() =>
+    document.getElementById(`keyedit-${id}`)?.focus());
+  function cancelEdit(row) {
+    if (editDone.current) return;
+    editDone.current = true;
+    setEditingId(null); setEditText("");
+    refocusRow(row.id);
+  }
+  function commitEdit(row) {
+    if (editDone.current) return;
+    editDone.current = true;
+    const label = editText.trim();
+    setEditingId(null); setEditText("");
+    refocusRow(row.id);
+    // Unchanged is a cancel, not an edit — don't round-trip a no-op. Emptied is
+    // NOT: clearing a label is a real change the server stores as NULL.
+    if (label === (row.label || "")) return;
+    const prev = row.label;
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, label: label || null } : r)));
+    api.relabelApiKey(row.id, label).catch(() => {
+      setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, label: prev } : r)));
+      toast("Couldn't rename that key. Try again.", "error");
+    });
   }
 
   function revoke(row) {
@@ -132,7 +176,22 @@ export default function Keys() {
               return (
                 <li key={k.id} className="keyrow">
                   <div className="keyrow-main">
-                    <span className="keyrow-label">{k.label || "Unlabelled key"}</span>
+                    {editingId === k.id ? (
+                      <input
+                        className="keyrow-rename" value={editText} autoFocus
+                        maxLength={80}
+                        aria-label={`Label for key ${maskedKey(k)}`}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { e.preventDefault(); commitEdit(k); }
+                          else if (e.key === "Escape") cancelEdit(k);
+                        }}
+                        onBlur={() => commitEdit(k)}
+                      />
+                    ) : (
+                      <span className="keyrow-label">{k.label || "Unlabelled key"}</span>
+                    )}
                     <code className="keyrow-id">{maskedKey(k)}</code>
                   </div>
                   <div className="keyrow-meta muted small">
@@ -142,9 +201,15 @@ export default function Keys() {
                     {k.last_used_at ? fmtDateTime(k.last_used_at) : "never"}
                   </div>
                   <div className="keyrow-actions">
-                    {/* The address is in the accessible name: a screen reader's
-                        element list would otherwise show N identical "Revoke"
-                        buttons on a destructive action. */}
+                    {/* The address is in each accessible name: a screen reader's
+                        element list would otherwise show N identical "Rename"
+                        and "Revoke" buttons, one of them destructive. */}
+                    <button type="button" id={`keyedit-${k.id}`}
+                            className="icon-btn tip" data-tip="Rename key"
+                            aria-label={`Rename key ${maskedKey(k)}`}
+                            onClick={() => startEdit(k)}>
+                      <IconEdit />
+                    </button>
                     <button type="button" className="icon-btn danger tip" data-tip="Revoke key"
                             aria-label={`Revoke key ${maskedKey(k)}`}
                             onClick={() => revoke(k)}>

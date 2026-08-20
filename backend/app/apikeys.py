@@ -188,6 +188,32 @@ def get(key_id: int) -> sqlite3.Row | None:
         con.close()
 
 
+def set_label(key_id: int, user_id: int, label: str | None) -> sqlite3.Row | None:
+    """Relabel one of `user_id`'s LIVE keys. Returns the new row, or None.
+
+    The owner check and the live check are in the UPDATE rather than in a read
+    the caller makes first, so there is no window between "this key is yours and
+    usable" and the write — and one None covers both refusals, which is what
+    lets the route answer 404 without saying which of the two it was.
+
+    A revoked key is not editable for the same reason it is not listed
+    (`list_for_user`): its label is part of the record an administrator reads
+    later, and the owner can no longer see the row to know what they changed.
+    """
+    con = connect()
+    try:
+        cur = con.execute(
+            "UPDATE api_keys SET label = ? WHERE id = ? AND user_id = ? "
+            "AND revoked_at IS NULL", (label, key_id, user_id))
+        con.commit()
+        if cur.rowcount == 0:
+            return None
+        return con.execute("SELECT * FROM api_keys WHERE id = ?",
+                           (key_id,)).fetchone()
+    finally:
+        con.close()
+
+
 def revoke(key_id: int) -> bool:
     """Mark `key_id` unusable. True if this call is what revoked it.
 

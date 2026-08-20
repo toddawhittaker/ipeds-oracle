@@ -383,6 +383,10 @@ value is what lets you trace a key seen in a log or a config file back to its
 owner. "Last used" is recorded at most once a minute, so it tells you the day,
 not the second.
 
+**Labels are the owner's.** You set one when you mint a key, and after that
+only the key's owner can rename it, from their own **API keys** page. This table
+shows whatever the label currently says.
+
 **Revoking.** The trash-can button on a row revokes that key immediately. Any
 client still using it stops working on its next call, and it can't be undone —
 issue a new key instead. The row stays in the table marked **Revoked**, so a

@@ -20,6 +20,7 @@ export declare const api: {
     csvUrl: (msgId: any) => string;
     apiKeys: () => Promise<any>;
     createApiKey: (label: any) => Promise<any>;
+    relabelApiKey: (id: any, label: any) => Promise<any>;
     revokeApiKey: (id: any) => Promise<any>;
     allowlist: () => Promise<any>;
     addAllow: (email: any, note: any, is_admin: any) => Promise<any>;

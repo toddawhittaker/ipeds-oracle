@@ -48,6 +48,7 @@ uncapped multiple of that budget from one person.
 |---|---|---|
 | `GET /api/keys` | any signed-in user | the caller's own LIVE keys (never a secret) |
 | `POST /api/keys` | any signed-in user | mint; the response is the only copy of the key |
+| `PATCH /api/keys/{id}` | any signed-in user | relabel one of the caller's own LIVE keys; the label is the only editable field |
 | `DELETE /api/keys/{id}` | any signed-in user | revoke one of the caller's own — someone else's answers 404, not 403 |
 | `GET /api/admin/keys` | admin | every key, with its owner's email |
 | `POST /api/admin/keys` | admin | mint for an allowlisted user, recording `created_by` |
@@ -235,6 +236,14 @@ space anyway.
 The `api_keys` row (migration 37) also holds `last4` so a user can tell three
 keys apart when revoking one, an optional `label`, `created_by` when an admin
 minted it for somebody, `last_used_at`, and `revoked_at`.
+
+- **The `label` is the only editable field.** Everything else is either the
+  credential or a record of what happened to it. `PATCH /api/keys/{id}` puts the
+  owner check and the live check in the UPDATE itself rather than in a read
+  first, so there is no window between "yours and usable" and the write, and one
+  refusal covers both — a revoked key answers 404 exactly as somebody else's
+  does. There is no admin relabel: a withdrawn key's label is part of the record
+  an administrator reads later.
 
 - **`last_used_at` is best-effort** and written at most once a minute
   (`apikeys.TOUCH_INTERVAL_SECONDS`). The column exists so a user can spot a key
