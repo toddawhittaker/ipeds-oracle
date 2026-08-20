@@ -25,6 +25,7 @@ tools — see the [Admin guide](ADMIN_GUIDE.md).)
 - [Refining and following up](#refining-and-following-up)
 - [Conversations](#conversations)
 - [Your account menu](#your-account-menu)
+- [API keys, for other tools](#api-keys-for-other-tools)
 - [Getting good answers](#getting-good-answers)
 
 ---
@@ -276,11 +277,49 @@ menu:
   *The whole app follows, charts included — and a chart you copy as an image
   pastes cleanly on a white background either way.*
 
+- **API keys** — for connecting another tool to IPEDS Oracle; see the next
+  section.
 - **About** — what the app is, plus links to these guides.
 - **Sign out**.
 
 (Administrators also see an **Admin** entry here — see the
 [Admin guide](ADMIN_GUIDE.md).)
+
+---
+
+## API keys, for other tools
+
+You can let another program ask IPEDS Oracle the same questions you do. The app
+speaks the **Model Context Protocol** (MCP), which is how tools like Claude Code
+connect to a data source, and an **API key** is what identifies you to it.
+
+Open the account menu → **API keys**. Give the key a label you'll recognize later
+("work laptop", "the weekly report script"), select **Create key**, and copy the
+value it shows you.
+
+**You only see the key once.** Nothing stores it, so if you lose it you revoke
+that key and create another — there is no way to look it up again. Treat it like
+a password: it carries your access, and anyone holding it can ask questions as
+you.
+
+The page lists your keys with their label, their last four characters, when each
+was created, and when it was last used — enough to spot one you've forgotten
+about. The trash-can button revokes a key, which stops any tool still using it
+immediately and can't be undone.
+
+To connect a client, give it the endpoint and the key as a bearer token. For
+Claude Code that is one command:
+
+```bash
+claude mcp add --transport http ipeds https://<your-ipeds-host>/mcp \
+  --header "Authorization: Bearer ipeds_mcp_…"
+```
+
+The connected tool gets the same data you do, and the same limits: it can only
+read, questions still count against your usual per-question limit, and answers
+still go through the same checks. Ask your administrator if you're not sure of
+your deployment's address, or if a key you were given stops working — keys can
+also be issued and revoked from the Admin console.
 
 ---
 

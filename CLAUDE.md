@@ -4,12 +4,11 @@ This file holds process only: how work is done in this repo. It does not hold
 architecture, feature behavior, rationale, or history.
 
 - What the system does → `docs/ARCHITECTURE.md`, `docs/AGENT_LOOP.md`,
-  `docs/AUTH_AND_SECURITY.md`, `docs/ADMIN.md`
+  `docs/AUTH_AND_SECURITY.md`, `docs/ADMIN.md`, `docs/MCP.md`
 - The data model, and how to query it → `docs/SCHEMA.md`, `docs/DATASET.md`
 - How to run, lint, and test it locally → `CONTRIBUTING.md`
 - What each gate runs, and what has slipped past one → `docs/TESTING.md`
-- How a release is published and deployed → `docs/RELEASING.md`, README →
-  **Self-hosting**
+- How a release is published and deployed → `docs/RELEASING.md`, README → **Self-hosting**
 - What the app looks like to its users → `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`
 
 Before adding a line here, ask whether it would still be true if the process
@@ -31,6 +30,7 @@ summary of it, including this one.
 | a persisted message field, or the chat / admin frontend | `docs/ARCHITECTURE.md` |
 | a test, a gate, or a coverage floor | `docs/TESTING.md` |
 | anything an operator sees — image, compose, ports, uid | `docs/RELEASING.md` |
+| the MCP endpoint, an API key, or the `ask` tool | `docs/MCP.md` |
 
 ## Choosing the path
 

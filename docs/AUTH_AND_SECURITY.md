@@ -117,6 +117,35 @@
   the modules that fire many turns pin `CHAT_RATE_MAX_PER_USER=0` at import
   (`test_chat_router`/`test_guard`/`test_security`); `test_rate_limit.py` sets a tight
   cap and owns the 429 contract.
+- **API keys are the MCP endpoint's only credential, and they are stored like
+  session tokens.** An MCP client cannot carry a cookie, so `POST /mcp` is gated
+  by a static bearer key (`app/apikeys.py`, `api_keys` in **migration 37**) minted
+  from `/keys` by its owner or from Admin → Keys by an admin. The key is 32 bytes
+  from `secrets.token_urlsafe` behind an `ipeds_mcp_` prefix (recognizable on
+  sight in a log or a secret scanner), and **only its SHA-256 hash is stored** —
+  the raw value exists exactly once, in the response that minted it, so a dump of
+  `app.db` mints nothing and a lost key is replaced, never recovered. Random input,
+  not a password, so sha256 is the right primitive: a slow KDF would tax every MCP
+  request and buy nothing against an attacker who cannot enumerate the space.
+  **`apikeys.verify` re-checks the allowlist**, the same check
+  `auth._user_from_request` makes on a session — leaving the allowlist has to end
+  every way in, and a key that outlived that check would be a standing grant to
+  someone an admin believes they removed. Unknown key, revoked key, and
+  de-allowlisted owner are **indistinguishable** to the caller (one 401, one
+  wording), so probing cannot map which keys exist; revoking someone else's key
+  answers **404, not 403**, for the same reason. Revocation sets `revoked_at` and
+  **keeps the row** — "what did that withdrawn key have access to" is exactly the
+  question an admin asks afterwards. The gate is an ASGI wrapper around the
+  transport app (`app/mcpsrv/auth.py`), not a path-scoped middleware that a later
+  route could slip past, and it charges a **per-key** rate limit
+  (`MCP_RATE_MAX_PER_KEY`, 60/60s over `mcp_request_attempts`) before delegating;
+  `ask` additionally charges the per-user chat limiter above. No cookie means no
+  CSRF surface and no ambient credential to borrow — which is also why the SDK's
+  DNS-rebinding protection is deliberately **off** (it would 421 every request
+  behind the proxy while defending nothing). No OAuth: no `WWW-Authenticate`, no
+  `/.well-known/oauth-protected-resource`, on purpose — see
+  [`MCP.md`](MCP.md). Pinned by `backend/tests/test_api_keys.py` +
+  `backend/tests/test_mcp.py`.
 - **A question is capped at `MAX_QUESTION_LEN` (4,000 chars).** `BodyLimitMiddleware`
   bounds the whole request at 10 MB, but under that ceiling an unbounded question is
   still written to `app.db` **twice** (the user message + `usage_log.question`) and

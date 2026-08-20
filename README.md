@@ -153,8 +153,8 @@ How the pieces fit together is written up under `docs/`:
 [Architecture](docs/ARCHITECTURE.md) (layout, stack, the three SQLite stores),
 [The agent loop](docs/AGENT_LOOP.md) (guards, grounding, self-learning),
 [Auth & security](docs/AUTH_AND_SECURITY.md), [Admin areas](docs/ADMIN.md),
-[The dataset](docs/DATASET.md), [Testing and the gates](docs/TESTING.md), and
-[Releasing](docs/RELEASING.md).
+[The dataset](docs/DATASET.md), [The MCP endpoint](docs/MCP.md),
+[Testing and the gates](docs/TESTING.md), and [Releasing](docs/RELEASING.md).
 
 ## Self-hosting
 
@@ -295,6 +295,36 @@ Give it TLS one of two ways:
 
 Either way keep `COOKIE_SECURE=true` — the session cookie is only sent over HTTPS.
 
+### MCP access
+
+The app also serves a **Model Context Protocol** endpoint at `POST /mcp`, so an
+MCP client can reach the same data and the same agent as the web chat. It is part
+of the same app on the same port — nothing extra to run — and it authenticates
+with a per-user API key, not the session cookie.
+
+Two things an operator has to get right:
+
+- **Forward `/mcp` through your proxy.** A proxy that forwards the whole site to
+  `:8000` already does; one that lists paths needs `/mcp` added alongside `/api`.
+- **MCP clients need a certificate they trust.** Option 2 above (a self-signed
+  cert) is a LAN convenience for browsers, which can be told to accept it; a
+  client library generally cannot, so serve MCP behind a real certificate.
+
+A user mints their own key from the account menu → **API keys**; an admin can
+mint one for somebody and revoke anyone's from **Admin → Keys**. The key is shown
+once and stored only as a hash, so a lost key is replaced, not recovered. Then:
+
+```bash
+claude mcp add --transport http ipeds https://<host>/mcp \
+  --header "Authorization: Bearer ipeds_mcp_…"
+```
+
+Every request is capped per key (`MCP_RATE_MAX_PER_KEY`, default 60/60s), and an
+`ask` call — the tool that runs the whole agent — also charges the caller's usual
+per-user question limit and shows up in Admin → Usage as MCP spend. Full detail,
+including why the endpoint serves no OAuth discovery, is in
+[docs/MCP.md](docs/MCP.md).
+
 ### Email
 
 The app sends one‑time sign‑in links, access‑request notices, and approval
@@ -329,6 +359,7 @@ commented list. The essentials:
 | `COOKIE_SECURE` / `TRUSTED_PROXY_COUNT` | HTTPS + proxy posture (see above) |
 | `BIND_ADDR` | which host address compose publishes `:8000` on. Defaults to `127.0.0.1` (loopback only) so a reverse proxy is the only way in; set `0.0.0.0` only when the app terminates TLS itself (see [HTTPS](#https)) |
 | `CHAT_RATE_MAX_PER_USER` | per-user question cap per window (default 30/60s) — the guard against one runaway script burning your provider spend |
+| `MCP_RATE_MAX_PER_KEY` | per-key request cap per window on the MCP endpoint (default 60/60s); `ask` also charges `CHAT_RATE_MAX_PER_USER` |
 | `IPEDS_TAG` | which published image to run (`latest`, or a pinned `X.Y.Z` — note the Docker tag drops the `v`, e.g. `0.1.0`) |
 | `UPDATE_CHECK_ENABLED` | whether the app checks GitHub for a newer release (shown on the About dialog + an Admin banner). On by default; set `false` for zero outbound calls |
 

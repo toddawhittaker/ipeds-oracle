@@ -63,7 +63,17 @@ documents are:
 ## Stack & data stores
 - **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `security`, `mailer`,
   `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
-  `logbuffer`, `ratelimit`, `tools/*`, `routers/*`).
+  `logbuffer`, `ratelimit`, `apikeys`, `tools/*`, `routers/*`, `mcpsrv/*`).
+- **There are two front doors onto the same tools and the same agent.** The web
+  app is one. The other is an **MCP endpoint** at `POST /mcp` (`app/mcpsrv/`),
+  mounted in this same app rather than run as a second process, which lets any
+  MCP client — Claude Code, the Messages API connector — call the seven data
+  tools from `tools/registry.py` (one definition, so the two surfaces cannot
+  drift), read `SCHEMA.md`/`DATASET.md` as resources, and run the whole agent
+  through a stateless `ask` tool. It authenticates with a per-user API key
+  (`app/apikeys.py`) instead of the session cookie, since a client cannot carry
+  one. How it works, what it exposes, and why it serves no OAuth and no session
+  id: [`MCP.md`](MCP.md).
 - **Frontend** — a Vite/React SPA (`frontend/`) with SSE-streamed chat, **client-side
   routed** (react-router): `/`, `/chat/:id`, `/keys`, `/admin` →
   `/admin/users/current`, `/admin/:tab`, `/admin/:tab/:sub`, `/verify`,
