@@ -476,10 +476,23 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 .convo-row:hover, .convo-row:focus-within { background: var(--bg); }
 .convo-row.on, .convo-row.on:hover, .convo-row.on:focus-within { background: var(--user); }
 .convo {
-  flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; color: var(--muted);
+  flex: 1; min-width: 0; padding: 8px 10px; font-size: 14px;
+  overflow: hidden; color: var(--muted);
   text-align: left; background: none; border: none; border-radius: 8px;
   text-decoration: none;
+}
+/* The truncation moved from the link onto each LINE, because the link holds two
+   of them while searching: the title, and the snippet saying why this row
+   matched. Both clip independently, so a long title cannot push the snippet out
+   of view and a long snippet cannot widen the row. */
+.convo-t, .convo-snip {
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Muted and smaller than the title, and explicitly coloured rather than
+   inherited: .convo-row.on .convo repaints the link --text, which would promote
+   the snippet to look like a second title. */
+.convo-snip {
+  margin-top: 2px; font-size: 12px; color: var(--muted); font-style: italic;
 }
 /* Inset (negative) offset -- .convo-list is overflow:auto, and a positive
    offset on this full-width child gets clipped by the scroll container. */

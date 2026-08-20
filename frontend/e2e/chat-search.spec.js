@@ -28,7 +28,10 @@ async function openChat(page, rows = CONVOS) {
   return convos;
 }
 
-const titles = (page) => page.locator(".convo-row .convo");
+// The TITLE line specifically. The link also holds the search snippet now,
+// so locating `.convo` would fold both lines into one toHaveText.
+const titles = (page) => page.locator(".convo-row .convo-t");
+const snippets = (page) => page.locator(".convo-row .convo-snip");
 // The empty/failed states, and the always-mounted live region that mirrors
 // them. Addressed separately because the two carry the same sentence, and a
 // getByText would match both.
@@ -315,4 +318,44 @@ test("New chat ends the search", async ({ page }) => {
 
   await expect(box).toHaveValue("");
   await expect(titles(page)).toHaveCount(3);
+});
+
+test("a hit whose title does not contain the words says why it matched", async ({ page }) => {
+  await openChat(page);
+
+  // "headcount" appears only in this conversation's MESSAGES. Its title says
+  // "Engineering enrollment", so without a snippet the row is in the list with
+  // nothing on screen explaining why -- the bug this closes.
+  await page.getByRole("searchbox", { name: "Search chats and messages" }).fill("headcount");
+
+  await expect(titles(page)).toHaveText(["Engineering enrollment"]);
+  await expect(snippets(page)).toHaveCount(1);
+  await expect(snippets(page)).toContainText("headcount");
+});
+
+test("the snippet is only there while searching", async ({ page }) => {
+  await openChat(page);
+  const box = page.getByRole("searchbox", { name: "Search chats and messages" });
+
+  await box.fill("headcount");
+  await expect(snippets(page)).toHaveCount(1);
+
+  // Clearing restores plain browsing, where there is no match to explain. A
+  // stale second line here would claim the row matched a search that is over.
+  await box.fill("");
+  await expect(titles(page)).toHaveCount(3);
+  await expect(snippets(page)).toHaveCount(0);
+});
+
+test("a search hit is announced with its explanation, not just its title", async ({ page }) => {
+  await openChat(page);
+  await page.getByRole("searchbox", { name: "Search chats and messages" }).fill("headcount");
+
+  // The snippet sits INSIDE the link, so it joins the link's accessible name.
+  // Moving it outside would leave a screen-reader user with the bare title --
+  // exactly the unexplained hit, for the people least able to go and look.
+  await expect(titles(page)).toHaveText(["Engineering enrollment"]);
+  const link = page.locator(".convo-row .convo");
+  await expect(link).toHaveAccessibleName(/Engineering enrollment/);
+  await expect(link).toHaveAccessibleName(/headcount/);
 });

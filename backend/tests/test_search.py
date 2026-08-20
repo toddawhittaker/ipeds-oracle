@@ -19,7 +19,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.search import MAX_TERM_LEN, MAX_TERMS, like_pattern, parse_terms  # noqa: E402
+from app.search import (  # noqa: E402
+    MAX_TERM_LEN,
+    MAX_TERMS,
+    SNIPPET_LEAD,
+    SNIPPET_TRAIL,
+    like_pattern,
+    parse_terms,
+    snippet_for,
+)
 
 FAILURES = []
 
@@ -134,6 +142,76 @@ def run():
         assert like_pattern("plain") == "%plain%"
     check("LIKE wildcards in a term are escaped to literals",
           wildcards_are_escaped)
+
+    def snippet_keeps_the_match_near_the_front():
+        # THE REGRESSION, and it shipped once: a CENTRED match renders invisible.
+        # The sidebar row clips at one line -- about 40 characters at the default
+        # width -- so an equal radius either side pushes the matched word past
+        # the ellipsis and the reader sees lead-in only. The searched word is
+        # then the one thing guaranteed off screen.
+        #
+        # The bound is what the row can actually show, not the constant: asserting
+        # `<= SNIPPET_LEAD` would pass at a lead of 200 if someone widened it.
+        left, right = "a" * 200, "z" * 200
+        out = snippet_for(f"{left} nursing {right}", ["nursing"])
+        assert out.startswith("\u2026") and out.endswith("\u2026"), out
+        at = out.index("nursing")
+        assert at <= 20, f"match starts at {at}, past a clipped sidebar row"
+        # Still a run-up, though: starting AT the match reads as a fragment.
+        assert at > 1, out
+        # And trailing context, which is where the rest of the sentence lives.
+        after = out[at + len("nursing"):].strip("\u2026")
+        assert len(after) > SNIPPET_LEAD, out
+        assert len(after) <= SNIPPET_TRAIL + 1, len(after)
+    check("a snippet keeps the match near the front, where a clipped row shows it",
+          snippet_keeps_the_match_near_the_front)
+
+    def snippet_is_not_ellipsed_when_nothing_was_cut():
+        # A short message needs no ellipsis; adding one unconditionally claims
+        # text was trimmed that never existed.
+        out = snippet_for("nursing degrees", ["nursing"])
+        assert out == "nursing degrees", out
+    check("a snippet short enough to show whole carries no ellipsis",
+          snippet_is_not_ellipsed_when_nothing_was_cut)
+
+    def snippet_collapses_whitespace_to_one_line():
+        # Message content is Markdown. A match inside a table is surrounded by
+        # newlines and pipes, and passing that through raw puts a broken block
+        # into a sidebar row that has one line to give it.
+        table = "Here:\n\n| Year | Awards |\n| --- | --- |\n| 2023 | nursing |\n"
+        out = snippet_for(table, ["nursing"])
+        assert "\n" not in out, repr(out)
+        assert "  " not in out, repr(out)
+    check("a snippet collapses whitespace, so a table fragment is one line",
+          snippet_collapses_whitespace_to_one_line)
+
+    def snippet_uses_the_earliest_match_not_the_first_term():
+        # Iterating terms and returning the first one found is the obvious
+        # implementation and is wrong: it quotes wherever the caller's FIRST
+        # term happens to sit, which can be the far end of a long answer.
+        text = "ohio comes first here, and nursing appears much later on"
+        out = snippet_for(text, ["nursing", "ohio"])
+        assert out.startswith("ohio"), out
+    check("a snippet quotes the earliest match, not the first term listed",
+          snippet_uses_the_earliest_match_not_the_first_term)
+
+    def snippet_matches_regardless_of_case():
+        # The search itself is case-insensitive (LIKE), so a snippet that is not
+        # would return None for a row the search had just matched -- a hit with
+        # no explanation, which is the whole bug being fixed.
+        out = snippet_for("Nursing Degrees In Ohio", ["nursing"])
+        assert out == "Nursing Degrees In Ohio", out
+    check("a snippet matches case-insensitively, like the search that found it",
+          snippet_matches_regardless_of_case)
+
+    def snippet_is_none_when_no_term_appears():
+        # A conversation can match entirely on its TITLE, leaving no message
+        # worth quoting. That is a normal outcome, not an error.
+        assert snippet_for("nothing relevant in here", ["nursing"]) is None
+        assert snippet_for("", ["nursing"]) is None
+        assert snippet_for("nursing", []) is None
+    check("no matching text yields no snippet, rather than a misleading one",
+          snippet_is_none_when_no_term_appears)
 
     print()
     if FAILURES:

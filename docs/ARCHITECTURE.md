@@ -426,7 +426,14 @@ documents are:
   run kept whole, LIKE wildcards escaped to literals). Server-side because the
   browser holds titles only, and the `LIMIT 100` applies **after** the match, so
   it returns the 100 most recent *matching* chats rather than searching within
-  the most recent 100. Every refresh — after a send, a rename, a delete — has to
+  the most recent 100. While searching, each row also carries a `snippet` — one
+  line quoting the first matching message, so a hit whose title contains none of
+  the typed words explains itself. It is absent when browsing and null when the
+  match was in the title alone. Its context is **lopsided on purpose**
+  (`SNIPPET_LEAD`/`SNIPPET_TRAIL`): a sidebar row clips at about 40 characters,
+  so a match centred in the string renders past the ellipsis and the searched
+  word is the one thing not shown — which passed every test and was caught by
+  looking at a screenshot. Every refresh — after a send, a rename, a delete — has to
   carry the active query, or the list silently stops agreeing with the search box
   above it; `frontend/e2e/chat-search.spec.js` asserts that over the whole
   request sequence, because a later correct refresh repairs the end state and

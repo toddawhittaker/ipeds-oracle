@@ -23,7 +23,7 @@ from app.auth import current_user
 from app.config import get_settings
 from app.db import connect, record_usage
 from app.llm import cost_is_estimated, effective_cost, generate_title, stream_agent
-from app.search import like_pattern, parse_terms
+from app.search import like_pattern, parse_terms, snippet_for
 from app.tools.sql import (
     QueryResult,
     SQLResultTooLargeError,
@@ -1010,6 +1010,12 @@ def list_conversations(q: str | None = None,
     already holds: the browser has titles, and the text being searched is in
     messages it has never seen.
 
+    Each returned row carries a `snippet` while searching: a one-line extract of
+    the first message that matches, so a hit whose TITLE contains none of the
+    typed words explains itself instead of sitting in the list unaccounted for.
+    It is null when nothing matched in the messages, which happens when the
+    conversation matched on its title alone.
+
     Not indexed, deliberately: one person's history is a few hundred message
     rows, so the scan is cheaper than an FTS5 table plus the trigger and
     migration that keeping it in sync would need.
@@ -1033,7 +1039,27 @@ def list_conversations(q: str | None = None,
             "SELECT c.id, c.title, c.created_at, c.updated_at FROM conversations c "
             f"WHERE c.user_id=?{clauses} ORDER BY c.updated_at DESC LIMIT 100",
             params).fetchall()
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        if terms:
+            # One extra query per returned row, each scoped to that
+            # conversation's messages by an indexed column and stopping at the
+            # first hit. At most 100 of them, over a history of a few hundred
+            # rows -- the same reasoning that makes the search itself a LIKE
+            # scan rather than an FTS5 table. If a history ever grows enough for
+            # this to matter, the search above will hurt first.
+            #
+            # ANY term rather than all: the AND is across the conversation, so
+            # the term that explains a row may well sit in a different message
+            # from the one that explains its neighbour.
+            any_term = " OR ".join("content LIKE ? ESCAPE '\\'" for _ in terms)
+            patterns = [like_pattern(t) for t in terms]
+            for conv in out:
+                hit = con.execute(
+                    f"SELECT content FROM messages WHERE conversation_id=? "
+                    f"AND ({any_term}) ORDER BY id LIMIT 1",
+                    [conv["id"], *patterns]).fetchone()
+                conv["snippet"] = snippet_for(hit["content"] if hit else None, terms)
+        return out
     finally:
         con.close()
 
