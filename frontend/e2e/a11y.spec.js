@@ -69,8 +69,10 @@ async function adminA11yMocks(page) {
       category: "UNGROUNDED_NUMBER", was_verified: 0, hits: 2, created_at: 1 },
   ]);
   // CONTENT, not an empty array, for the same reason as every list above: an
-  // empty keys table renders none of the elements whose contrast could be wrong
-  // — the masked-key code, the "Revoked" status pill, the row action.
+  // empty keys list renders none of the elements whose contrast could be wrong
+  // — the masked-key code, the label, the row action. A revoked row is not worth
+  // adding here: /keys lists live keys only, and the "Revoked" pill it used to
+  // show now exists solely in the admin table below.
   await mockApiKeys(page, [
     { id: 1, last4: "9f2a", label: "Work laptop", created_at: 1,
       created_by: null, last_used_at: 2, revoked_at: null },

@@ -142,12 +142,22 @@ def active_count(user_id: int) -> int:
 
 
 def list_for_user(user_id: int) -> list[dict]:
-    """One user's keys, newest first. Never carries a hash or a raw key."""
+    """One user's LIVE keys, newest first. Never carries a hash or a raw key.
+
+    Revoked keys are left out. The row itself survives — `revoke` keeps it, and
+    `list_all` still shows it in the admin table — but on the owner's own page a
+    revoked key is a line they can no longer do anything with, and the audit
+    question it answers ("what could that withdrawn key reach?") is an
+    administrator's, not theirs.
+
+    `revoked_at` stays in the SELECT: every row it returns carries it as None,
+    and the two lists then have one shape for the UI that renders both.
+    """
     con = connect()
     try:
         rows = con.execute(
             "SELECT id, last4, label, created_at, created_by, last_used_at, "
-            "revoked_at FROM api_keys WHERE user_id = ? "
+            "revoked_at FROM api_keys WHERE user_id = ? AND revoked_at IS NULL "
             "ORDER BY created_at DESC", (user_id,)).fetchall()
     finally:
         con.close()

@@ -186,6 +186,26 @@ def run():
         check("a revoked key stops verifying and its row survives for audit",
               revoked_key_stops_verifying_but_row_survives)
 
+        def a_revoked_key_leaves_the_owners_list_but_not_the_admins():
+            r2 = c.post("/api/keys", json={"label": "retired"})
+            gone_id = r2.json()["id"]
+            assert any(k["id"] == gone_id for k in c.get("/api/keys").json()), \
+                "setup failed: the new key is not in its owner's list"
+            assert c.delete(f"/api/keys/{gone_id}").status_code == 200
+            mine = c.get("/api/keys").json()
+            assert all(k["id"] != gone_id for k in mine), \
+                "a revoked key is still listed on its owner's own page"
+            assert all(k["revoked_at"] is None for k in mine), \
+                "GET /api/keys returned a revoked key"
+            theirs = c.get("/api/admin/keys").json()
+            assert any(k["id"] == gone_id and k["revoked_at"] is not None
+                       for k in theirs), \
+                ("the admin table lost the revoked row — that row is the record "
+                 "of what a withdrawn key could reach, and hiding it from its "
+                 "owner must not delete it")
+        check("a revoked key drops off its owner's list and stays in the admin's",
+              a_revoked_key_leaves_the_owners_list_but_not_the_admins)
+
         # --- the allowlist re-check, the one that fails silently -------------
         def de_allowlisting_kills_the_key():
             with TestClient(app) as u:

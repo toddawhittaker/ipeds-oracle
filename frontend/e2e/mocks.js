@@ -986,11 +986,16 @@ export async function mockDeintegrate(page, { jobId = 1, status = "pending", htt
 /**
  * A stateful /api/keys — the signed-in user's OWN MCP API keys.
  *
- * GET lists the current rows; POST mints one and returns the raw `key` exactly
+ * GET lists the LIVE rows; POST mints one and returns the raw `key` exactly
  * once (the reveal dialog is the only place it ever appears, so a spec that
  * reloads must not find it again); DELETE marks the row revoked rather than
- * removing it, which is what the real endpoint does — the row is the record of
- * what a withdrawn key could reach.
+ * removing it.
+ *
+ * Both halves of that mirror the real endpoint, and the mismatch matters:
+ * app/apikeys.py KEEPS the revoked row — the admin table is where it stays
+ * visible — while GET /api/keys filters it out, because on the owner's own page
+ * it is a line with no action left. `getRows()` therefore returns EVERY row,
+ * revoked included, so a spec can still assert what the server holds.
  *
  * `secret` is the raw value the mint returns, so a spec can assert the dialog
  * shows THAT string and that a later GET carries no trace of it.
@@ -1002,7 +1007,8 @@ export async function mockApiKeys(page, initialRows = [], { secret = "ipeds_mcp_
   await page.route("**/api/keys", async (route) => {
     const req = route.request();
     if (req.method() === "GET") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+      const live = rows.filter((r) => r.revoked_at == null);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(live) });
     }
     if (req.method() === "POST") {
       if (httpStatus !== 200) {
