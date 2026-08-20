@@ -183,6 +183,10 @@ export const api = {
   // band, because nothing can read it back.
   allKeys: () => j("GET", "/api/admin/keys"),
   createKeyFor: (email, label) => j("POST", "/api/admin/keys", { email, label }),
+  // Bulk row-selection on the admin Keys table. Revoke is the only bulk action:
+  // minting needs a recipient per key, and a label belongs to the key's owner.
+  bulkKeyAction: (action, ids) =>
+    j("POST", "/api/admin/keys/bulk-action", { action, ids }),
   revokeAnyKey: (id) => j("DELETE", `/api/admin/keys/${id}`),
   logs: (limit = 200, level = "", q = "", since = null, until = null) => {
     const p = new URLSearchParams({ limit: String(limit) });

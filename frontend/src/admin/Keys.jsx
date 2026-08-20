@@ -2,6 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { loadErrorMessage } from "../authcopy.js";
 import { KEY_CONFIG, isRevoked, maskedKey } from "../apikeys.js";
+import { bulkConfirmSummary, bulkResultToast, partitionEligibility,
+         retainedSelectionAfterBulk } from "../selection.js";
+import { useTableSelection } from "../useTableSelection.js";
+import BulkBar from "../BulkBar.jsx";
 import { fmtDateTime, fmtDay } from "./format.js";
 import { IconTrash } from "../icons.jsx";
 import DataTable from "../DataTable.jsx";
@@ -30,6 +34,10 @@ export default function Keys() {
   const [minted, setMinted] = useState(null);
   const tableRef = useRef(null);
   const headingRef = useRef(null);
+  // Bulk row-selection for this one table. Revoke is its only bulk action:
+  // minting needs a recipient per key, and a label belongs to the key's owner
+  // (app/routers/keys.py), so neither has a batch form.
+  const sel = useTableSelection();
 
   // A failed load must render a visible error, never an empty table — "nobody
   // has a key" is a dangerous thing to tell an admin auditing access when the
@@ -81,6 +89,52 @@ export default function Keys() {
     });
   }
 
+  // The search changed: clear this table's selection and say why, but only when
+  // there was something to clear — an empty-selection keystroke must not
+  // allocate a new Set and re-render on every character. Same rule as the
+  // Allowlist tables.
+  function onSearchChange() {
+    if (sel.mode !== "all" && sel.selectedIds.size === 0) return;
+    sel.clear();
+    toast("Selection cleared because the search changed.");
+  }
+
+  // Bulk revoke: confirm with a count the admin can check, then act. Eligibility
+  // is computed here for the DIALOG's wording only — the server recomputes it
+  // per key against live state, so a key revoked from another tab lands in
+  // `skipped` rather than being counted as revoked.
+  function bulkRevoke(selectedRows, eligible, skipped) {
+    let result = null;
+    confirm({
+      variant: "danger",
+      title: eligible.length === 1 ? "Revoke this key?" : `Revoke ${eligible.length} keys?`,
+      body: bulkConfirmSummary("revoke", {
+        selected: selectedRows.length, eligible: eligible.length, skipped: skipped.length,
+      }),
+      confirmLabel: eligible.length === 1 ? "Revoke key" : `Revoke ${eligible.length} keys`,
+      busyLabel: "Revoking…",
+      errorToast: "Couldn't revoke those keys.",
+      onConfirm: async () => {
+        const res = await api.bulkKeyAction("revoke", eligible.map((r) => r.id));
+        if (!res?.ok) throw new Error(JSON.stringify({ detail: "That didn't work. Please try again." }));
+        result = res;
+      },
+      onSuccess: async () => {
+        const { text, kind } = bulkResultToast("revoke", result);
+        toast(text, kind);
+        // Revoked keys STAY in this table, so the whole selection is retained —
+        // the admin can see what happened to every row they acted on.
+        sel.selectExplicit(retainedSelectionAfterBulk(
+          "revoke", selectedRows.map((r) => r.id), result, "id"));
+        await load();
+        // The heading, not the search box: a failed reload swaps the table for a
+        // role="alert" and would unmount whatever held focus. Same reason as the
+        // single-row revoke above.
+        headingRef.current?.focus?.();
+      },
+    });
+  }
+
   return (
     <div className="panel">
       <h2 ref={headingRef} tabIndex={-1}>API keys</h2>
@@ -128,6 +182,44 @@ export default function Keys() {
           emptyNoData="No API keys yet."
           emptyNoMatch="No keys match your search."
           initialSort={{ key: "created_at", dir: "desc" }}
+          selectable
+          selectionId={(r) => r.id}
+          selectionMode={sel.mode}
+          selectedIds={sel.selectedIds}
+          rowSelectLabel={(r) => `Select key ${maskedKey(r)} for ${r.email}`}
+          onToggleRow={(r, checked) => sel.toggleRow(r.id, checked)}
+          onTogglePage={(pageRows, checked) =>
+            sel.togglePage(pageRows.map((r) => r.id), checked)}
+          onSearchChange={onSearchChange}
+          renderSelectionBar={({ pageEligibleRows, filteredEligibleRows }) => {
+            const effIds = sel.effectiveIds(new Set(filteredEligibleRows.map((r) => r.id)));
+            const selectedRows = filteredEligibleRows.filter((r) => effIds.has(r.id));
+            const { eligible, skipped } = partitionEligibility(selectedRows, "revoke");
+            return (
+              <BulkBar
+                nouns={KEY_CONFIG.nouns}
+                mode={sel.mode}
+                count={sel.count(new Set(filteredEligibleRows.map((r) => r.id)))}
+                totalEligible={filteredEligibleRows.length}
+                pageEligibleCount={pageEligibleRows.length}
+                pageSelectedCount={sel.count(new Set(pageEligibleRows.map((r) => r.id)))}
+                onSelectAllMatching={sel.selectAllMatching}
+                onClear={sel.clear}
+                onFocusFallback={() => tableRef.current?.focusSearch()}
+                actions={[{
+                  key: "revoke",
+                  label: "Revoke",
+                  icon: IconTrash,
+                  variant: "danger",
+                  // Every selected key is already revoked — there is nothing to
+                  // do, and the reason says so rather than leaving a dead button.
+                  disabled: eligible.length === 0,
+                  title: "Selected keys are already revoked.",
+                  onClick: () => bulkRevoke(selectedRows, eligible, skipped),
+                }]}
+              />
+            );
+          }}
           sortLabels={{ email: "owner", label: "label", created_at: "created",
                         last_used_at: "last used", status: "status" }}
           columns={[

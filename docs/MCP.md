@@ -53,6 +53,7 @@ uncapped multiple of that budget from one person.
 | `GET /api/admin/keys` | admin | every key, with its owner's email |
 | `POST /api/admin/keys` | admin | mint for an allowlisted user, recording `created_by` |
 | `DELETE /api/admin/keys/{id}` | admin | revoke anyone's; idempotent |
+| `POST /api/admin/keys/bulk-action` | admin | revoke a selection of keys in one transaction; reports what it skipped |
 
 ## Connecting a client
 

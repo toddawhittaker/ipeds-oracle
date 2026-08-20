@@ -394,6 +394,14 @@ withdrawn key is still there when you need to ask what it had access to. This
 table is the only place it stays: the owner's own **API keys** page lists live
 keys only, so a person who revokes a key sees it disappear.
 
+**Revoking several at once.** Tick the checkbox on each key you want to
+withdraw — or the header checkbox to take a whole page — and use **Revoke** in
+the toolbar that appears. The confirmation says how many will actually stop
+working, and separately how many of your selection were already revoked and will
+be left alone. Everything runs in one transaction, and the result tells you what
+happened to every row you picked. The rows stay selected afterwards, flipped to
+**Revoked**, so you can see the outcome of what you just did.
+
 Two things happen without you doing anything. Removing someone from the
 allowlist **also stops their keys**, so offboarding through Admin → Users is
 complete on its own. And an `ask` call through a key is a full-price question:

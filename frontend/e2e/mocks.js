@@ -1062,6 +1062,7 @@ export async function mockAdminKeys(page, initialRows = [], { secret = "ipeds_mc
   let rows = [...initialRows];
   let nextId = Math.max(0, ...rows.map((r) => r.id || 0)) + 1;
   const mints = [];
+  const bulkCalls = [];
   await page.route("**/api/admin/keys", async (route) => {
     const req = route.request();
     if (req.method() === "GET") {
@@ -1092,5 +1093,30 @@ export async function mockAdminKeys(page, initialRows = [], { secret = "ipeds_mc
     rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
-  return { mints, getRows: () => rows };
+  // POST /api/admin/keys/bulk-action. Registered AFTER the single-key route
+  // above because Playwright runs the most recently registered handler FIRST,
+  // and "keys/*" also matches "keys/bulk-action" — with the order reversed the
+  // single-key handler wins, sees a POST, and route.continue()s the bulk call
+  // into a network that is not there.
+  await page.route("**/api/admin/keys/bulk-action", async (route) => {
+    const body = route.request().postDataJSON() || {};
+    const ids = body.ids || [];
+    bulkCalls.push({ action: body.action, ids });
+    // The server RECOMPUTES eligibility per key rather than trusting the
+    // browser's list, so an already-revoked id comes back as a skip, not as
+    // work done. A mock that revoked everything asked of it would let a client
+    // bug that sends ineligible ids pass unnoticed.
+    let affected = 0;
+    const skipped = [];
+    for (const id of ids) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) { skipped.push({ id, reason: "no longer exists" }); continue; }
+      if (row.revoked_at != null) { skipped.push({ id, reason: "already revoked" }); continue; }
+      rows = rows.map((r) => (r.id === id ? { ...r, revoked_at: 1_700_000_500 } : r));
+      affected += 1;
+    }
+    return route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ok: true, affected, skipped, failed: [] }) });
+  });
+  return { mints, bulkCalls, getRows: () => rows };
 }

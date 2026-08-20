@@ -46,6 +46,7 @@ mailer.send_access_approved = lambda to: captured.__setitem__("approved", to) or
 from app import apikeys  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.main import app  # noqa: E402
+from app.routers import admin as admin_router  # noqa: E402
 from app.routers import keys as keys_router  # noqa: E402
 from app.security import hash_token  # noqa: E402
 
@@ -287,6 +288,51 @@ def run():
             assert after and after[0]["label"] == "short", after
         check("an over-long relabel is refused rather than written",
               an_over_long_relabel_is_refused)
+
+        # --- bulk revoke (Admin -> Keys row selection) ------------------------
+        def bulk_revoke_reports_what_it_actually_did():
+            live = [c.post("/api/keys", json={"label": f"bulk{i}"}).json()
+                    for i in range(3)]
+            already = live[2]["id"]
+            assert c.delete(f"/api/keys/{already}").status_code == 200
+            ids = [k["id"] for k in live] + [999_999]
+            r2 = c.post("/api/admin/keys/bulk-action",
+                        json={"action": "revoke", "ids": ids})
+            assert r2.status_code == 200, r2.text
+            body = r2.json()
+            # Two live keys revoked; the already-revoked one and the unknown id
+            # are REPORTED, not counted. An admin who selected four rows is owed
+            # an account of what those four became.
+            assert body["affected"] == 2, body
+            reasons = sorted(s["reason"] for s in body["skipped"])
+            assert reasons == ["already revoked", "no longer exists"], body
+            assert body["failed"] == [], body
+            for k in live[:2]:
+                assert apikeys.verify(k["key"]) is None, \
+                    f"key {k['id']} still verifies after a bulk revoke"
+        check("bulk revoke revokes the live keys and reports the rest",
+              bulk_revoke_reports_what_it_actually_did)
+
+        def bulk_revoke_is_capped():
+            r2 = c.post("/api/admin/keys/bulk-action",
+                        json={"action": "revoke",
+                              "ids": list(range(admin_router.BULK_MAX_ITEMS + 1))})
+            assert r2.status_code == 400, \
+                f"an over-long bulk revoke was accepted (got {r2.status_code})"
+        check("bulk revoke refuses a batch over the shared cap",
+              bulk_revoke_is_capped)
+
+        def bulk_revoke_is_admin_only():
+            k = c.post("/api/keys", json={"label": "not yours"}).json()
+            with TestClient(app) as o:
+                sign_in(o, "other@example.edu")
+                r2 = o.post("/api/admin/keys/bulk-action",
+                            json={"action": "revoke", "ids": [k["id"]]})
+                assert r2.status_code == 403, \
+                    f"a non-admin reached the bulk revoke (got {r2.status_code})"
+            assert apikeys.verify(k["key"]) is not None, \
+                "the key was revoked by a caller who got a 403"
+        check("a non-admin cannot bulk revoke", bulk_revoke_is_admin_only)
 
         # --- the allowlist re-check, the one that fails silently -------------
         def de_allowlisting_kills_the_key():
