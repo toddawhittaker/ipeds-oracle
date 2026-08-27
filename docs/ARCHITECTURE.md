@@ -321,7 +321,41 @@ documents are:
   surviving an empty fetch is safe: the next fetch carrying the answer clears it,
   and "settled but genuinely empty" can't really occur — a turn that persisted
   nothing either had its NEW conversation removed by `_delete_if_empty` (so the
-  load 404s into the `.catch`) or left the earlier messages in place. The unload guard keys on the registry, **not `busy`** — `busy` is
+  load 404s into the `.catch`) or left the earlier messages in place.
+  **The loader's skip guard is a PAIR — `loadedFor` (which conversation is
+  loaded) and `loadedSeq` (the reload counter it last synced) — and they move
+  together.** The `conversation` SSE handler used to set only `loadedFor`, so if
+  any earlier conversation had a nonzero reload counter (an abandoned turn had
+  settled there, or "Check now"), the guard failed on a brand-new chat's
+  `/ → /chat/:id` flip and the loader refetched MID-STREAM: the fetch came back
+  `[]` (nothing persists until the stream ends) and wiped the streaming pair;
+  the registry placeholder covered the gap, then `settleTurn` was told
+  `rendered: true` (the turn token still matched) and deleted it with no reload,
+  and the finalize wrote positionally into an empty array — a spinner that
+  stopped over a **blank thread, with the answer on disk** (found live
+  2026-08-27; the same race, via a concurrent turn's settle bumping the open
+  conversation's counter, explains the July recurrence that #241/#242 could not).
+  Two guards now. The handler syncs `loadedSeq` alongside `loadedFor` — for a
+  **brand-new chat only** (on an existing conversation the sync could only
+  swallow a pending reload whose effect hasn't run yet), and it READS the
+  counter rather than assuming a fresh id means zero: `conversations(id)` has
+  no AUTOINCREMENT, so deleting the top-id chat (or `_delete_if_empty`
+  reversing one) frees that exact id for the next insert, and the registry's
+  reload map is never pruned. And the loader's `.then` **keeps, on the tail,
+  any `_turn`-stamped pair whose ids the fetch didn't return** when it
+  replaces `messages` — one rule, no liveness or timing to reason about: a
+  streaming, stopped-but-draining, or failed pair has no server ids yet and
+  survives; a settled pair the fetch already contains is dropped for the
+  server copy; server rows carry no `_turn`, so an ordinary load keeps
+  nothing. Accepted rarity, stated: a fetch handled after `_persist` committed
+  but before `done` delivered the ids returns rows the view cannot yet
+  recognize as its own turn, so that turn shows twice until the next load —
+  irreducible, and a transient duplicate beats any wipe path.
+  Pinned by two cases in `frontend/e2e/inflight-pending.spec.js`: the
+  stale-loadedSeq case (the handler sync, via its no-refetch `calls === 0`
+  assertion) and the concurrent-settle-reload case (the tail-keep on its own —
+  the sync never fires for an existing conversation), both mutation-verified.
+  The unload guard keys on the registry, **not `busy`** — `busy` is
   cleared by the render-time reset the instant the route changes, so it is false
   in exactly the situation the guard is for. Ceiling, stated: **a refresh still
   loses the turn** (the request is torn down, the generator cancelled, and
