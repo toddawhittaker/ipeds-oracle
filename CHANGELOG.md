@@ -11,6 +11,70 @@ detail.
 
 ---
 
+## v0.5.2
+
+A hotfix. One live bug is gone — the answer that streamed to completion and
+then wasn't there — and the one admin table that still forced the whole page
+to scroll sideways on a narrow window now scrolls in place like the others.
+
+### Read this before upgrading
+
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot on a new release clears it and repeat questions are
+  answered fresh instead of returning instantly. Expected, one time, no action.
+- **No schema change.** `app.db` stays at migration 37, so this upgrades and
+  rolls back cleanly.
+- **Upgrading from before v0.4.0?** That release's one-time
+  `sudo chown -R 10001:10001 ./srv-data` still applies.
+
+### The answer that vanished
+
+Ask a question in a brand-new chat and, under the right history, the spinner
+stopped on a blank thread — the answer was saved, and clicking away and back
+proved it, but the screen you were watching never showed it. The window opened
+whenever you had once left a conversation while its question was still running:
+that left a reload counter stale, so the jump from `/` to the new chat's URL
+triggered a refetch *while the answer was still streaming*. Nothing is saved
+until a stream finishes, so the refetch returned an empty list and quietly
+wiped the very turn being written to the screen.
+
+Two guards close it, each pinned by its own end-to-end test: the counter is
+synced when a new chat gets its id, and the loader now keeps any still-live
+turn a refetch didn't return, whatever the timing. The same wipe was the root
+cause of a "completion order matters" oddity patched around in July; both are
+gone at the source. One accepted trade, noted in the code: in a narrow race a
+just-finished turn can show twice until the next load — a transient duplicate
+beats any path that loses your answer.
+
+### Recent jobs scrolls in place
+
+v0.5.0 gave every admin table its own horizontal scroll region on narrow
+windows — except Admin → Imports' **Recent jobs**, which had been measured as
+fitting. It was measured empty. With any real row in it (an IPEDS zip filename
+is one unbreakable token), reaching the Status column dragged the page heading
+and section nav off-screen with it. It now scrolls inside its own region,
+keyboard-reachable, and the test that guards it is required to see actual rows
+— the empty-table blind spot that hid this is what the test now forbids
+([WCAG 1.4.10](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html)).
+
+### Also
+
+- Routine dependency updates: `numpy`, `uvicorn`, and `resend` floors moved in
+  the backend, `ruff` and the frontend dev-dependency group bumped, and the
+  CodeQL action updated. The frontend audits at zero before and after.
+
+### For developers
+
+- The table scroll-region wrapper is now one component, `src/TableScroll.jsx`,
+  instead of three hand-rolled copies — copying it is how a keyboard-unreachable
+  region shipped once already. `focusable` is an explicit prop a caller must
+  answer; `DataTable` derives it as before, byte-identical output.
+- `midstream-nav.spec.js` widens a 100ms timing margin to 600ms. It paces a
+  mock's fixed delay, not a real race; CI's retries were hiding the flake from
+  everyone except the local pre-push hook.
+
+---
+
 ## v0.5.1
 
 A tidy-up release. Nothing here changes how you ask a question — it makes three
