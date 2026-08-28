@@ -173,8 +173,13 @@ test.describe("mid-stream navigation", () => {
     await gotoAdmin(page);
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/users/current");
 
-    // Let the abandoned stream finish landing while Chat is unmounted.
-    await page.waitForTimeout(700);
+    // Let the abandoned stream finish landing while Chat is unmounted. This
+    // wait paces the MOCK's fixed 600ms delay (it isn't standing in for
+    // anything a real user waits on) -- 700ms left only a 100ms margin over
+    // that delay, which flaked once locally when gotoAdmin()'s own work (menu
+    // open/close, an admin-page mount with three more mocked fetches) ate into
+    // it. 1200ms leaves 600ms of headroom instead.
+    await page.waitForTimeout(1200);
 
     // The answer is now persisted server-side -- a fresh Chat mount shows it.
     await mockConversation(page, 3, [
