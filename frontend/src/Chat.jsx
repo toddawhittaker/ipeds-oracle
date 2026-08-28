@@ -621,7 +621,29 @@ export default function Chat({ me }) {
     api.conversation(routeId)
       .then((msgs) => {
         if (cancelled) return;
-        setMessages(hydrate(msgs));
+        // Keep, on the tail, any turn THIS VIEW appended (it carries `_turn`;
+        // server rows never do) whose rows the server doesn't have yet. That
+        // one rule covers every racing shape without asking about liveness or
+        // timing: a streaming or stopped-but-draining pair has no ids and is
+        // kept (a refetch must not wipe the pair the finalize will write into
+        // positionally — the loadedSeq hole above was one such refetch, a
+        // concurrent turn's settle bumping the open conversation's counter is
+        // another — and a stopped note must not have the answer yanked in
+        // under it); a turn that settled with ids the fetch already returned
+        // is dropped in favor of the server copy (no duplicate); a FAILED
+        // turn's error bubble (no ids, nothing persisted) survives a refetch
+        // another turn triggered. `cur` can only hold this conversation's
+        // rows — the render-time reset empties `messages` on every
+        // non-self-nav route change.
+        //
+        // Accepted rarity, stated: a fetch handled after _persist committed
+        // but before `done` delivered the ids returns rows this view cannot
+        // yet recognize as its own turn, so the pair shows twice until the
+        // next load. Irreducible — before `done` there is nothing to dedupe
+        // on — and a transient duplicate beats any wipe path.
+        const serverIds = new Set(msgs.map((r) => r.id));
+        setMessages((cur) => [...hydrate(msgs),
+                              ...cur.filter((m) => m._turn && !serverIds.has(m.id))]);
         setLoadingConvo(false);
         // ONLY a fetch that came back with something may supersede the
         // placeholder — there is nothing in an empty one to replace it WITH.
@@ -1117,6 +1139,29 @@ export default function Chat({ me }) {
           // flip settles. Do NOT assume navigate() is synchronous (it isn't in v7),
           // and do NOT drop the marker. Regression pinned by routing-chat + a11y.
           loadedFor.current = String(ev.id);
+          // loadedFor and loadedSeq are a PAIR — the loader effect skips its
+          // refetch only when BOTH match. Setting the id without syncing the
+          // counter left loadedSeq holding the PREVIOUS conversation's reload
+          // count; any nonzero history there (an abandoned turn had settled, or
+          // "Check now") failed the guard on the / -> /chat/:id flip, and the
+          // resulting MID-STREAM refetch came back [] and wiped the streaming
+          // pair — spinner over a blank thread, answer on disk (found live
+          // 2026-08-27; pinned by the stale-loadedSeq case in
+          // e2e/inflight-pending.spec.js).
+          //
+          // Brand-new chats ONLY: on an existing conversation this line could
+          // only do harm — loadedFor already equals routeId there, and if an
+          // earlier abandoned turn's settle has bumped the counter but the
+          // loader effect hasn't run yet, syncing here would swallow that
+          // pending reload and strand its placeholder forever. And it must
+          // READ the counter, not assume 0: conversations(id) has no
+          // AUTOINCREMENT, so deleting the top-id chat (or _delete_if_empty
+          // reversing one) frees that exact id for the next insert, and the
+          // registry's reloads map is never pruned — a "new" id can carry a
+          // dead conversation's history.
+          if (convId === null) {
+            loadedSeq.current = inflight.getSnapshot().reloads[ev.id] ?? 0;
+          }
           setOpenId(String(ev.id));
           // Only a brand-new conversation (convId === null) actually flips
           // routeId here -- an existing-conversation turn's routeId is

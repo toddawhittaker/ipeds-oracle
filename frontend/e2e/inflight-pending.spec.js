@@ -250,6 +250,79 @@ test.describe("a running turn stays visible across navigation", () => {
       await expect(pending(page)).toHaveCount(0);
     });
 
+  test("a concurrent turn's settle-reload does not wipe the turn being streamed",
+    async ({ page }) => {
+      // The OTHER door into the same wipe (the July 2026 "completion order
+      // matters" mystery): turn A is abandoned mid-stream in conversation 3,
+      // the user returns and asks turn B, and A settles WHILE B streams. A's
+      // settle bumps the open conversation's reload counter, the loader
+      // legitimately refetches — and before the tail-keep, that refetch
+      // replaced `messages` wholesale: B's streaming pair vanished, and B's
+      // finalize then wrote its answer POSITIONALLY onto the tail of the
+      // refetched rows — A's persisted answer row — leaving A's answer
+      // overwritten and B's question gone.
+      //
+      // This is the case that pins the loader's tail-keep on its own: the
+      // loadedFor/loadedSeq sync is for brand-new chats and never fires here.
+      await mockMe(page, USER);
+      await mockVersion(page);
+      await mockAttention(page);
+      await mockConversations(page, [{ id: 3, title: "First chat", updated_at: 2 }]);
+      await mockConversation(page, 3, [
+        { id: 1, role: "user", content: "an older question" },
+        { id: 2, role: "assistant", content: "an older answer" },
+      ]);
+      await mockStreamChatDripped(page, [
+        [{ atMs: 100, event: { type: "conversation", id: 3 } },
+         { atMs: 2900, event: { type: "answer", text: "Turn A answer." } },
+         { atMs: 3000, event: { type: "done", message_id: 42, user_message_id: 41 } }],
+        [{ atMs: 100, event: { type: "conversation", id: 3 } },
+         { atMs: 4500, event: { type: "answer", text: "Turn B answer." } },
+         { atMs: 4600, event: { type: "done", message_id: 44, user_message_id: 43 } }],
+      ]);
+
+      // Turn A: ask, abandon mid-stream, come straight back.
+      await page.goto("/chat/3");
+      await ask(page, "turn A question");
+      await page.getByRole("link", { name: "New chat" }).click({ force: true });
+      await page.getByRole("link", { name: /First chat/ }).click();
+      await expect(pending(page)).toBeVisible();   // A abandoned, still running
+
+      // Turn B, in the same conversation, while A drains.
+      await ask(page, "turn B question");
+      // The precondition, PROVEN (same discipline as the stale-loadedSeq
+      // case): A must not have settled before B started, or the reload never
+      // races B's stream and the tail-keep is never exercised. A's answer
+      // reaching the view later (asserted below) additionally proves the
+      // reload ran AFTER this point, because only the re-mock below carries it.
+      await expect(page.getByText("turn B question")).toBeVisible();
+      expect(await page.getByText("Turn A answer.").count()).toBe(0);
+      // The rows A's settle-scheduled reload will find — its turn persisted.
+      await mockConversation(page, 3, [
+        { id: 1, role: "user", content: "an older question" },
+        { id: 2, role: "assistant", content: "an older answer" },
+        { id: 41, role: "user", content: "turn A question" },
+        { id: 42, role: "assistant", content: "Turn A answer." },
+      ]);
+
+      // A settles at ~3s and its reload lands while B is still streaming. The
+      // refetched thread and B's own live pair must COEXIST: A's answer from
+      // the server, B's question still in the view it is streaming into.
+      await expect(page.getByText("Turn A answer.")).toBeVisible({ timeout: 8000 });
+      // Synchronous (a retrying matcher would wait B out): B's pair survived
+      // the reload, so the registry placeholder stays suppressed and B's
+      // question is exactly once in the thread.
+      expect(await pending(page).count()).toBe(0);
+      expect(await page.getByText("turn B question").count()).toBe(1);
+
+      // B finishes: its answer lands on ITS OWN pair, not over A's row.
+      await expect(page.getByText("Turn B answer.")).toBeVisible({ timeout: 8000 });
+      await expect(page.getByText("Turn A answer.")).toBeVisible();
+      await expect(page.getByText("turn B question")).toHaveCount(1);
+      await expect(page.getByText("turn A question")).toHaveCount(1);
+      await expect(pending(page)).toHaveCount(0);
+    });
+
   test("survives Chat unmounting entirely (Admin and back)", async ({ page }) => {
     // An ADMIN, because gotoAdmin goes through the account menu's Admin item —
     // which only exists for one.
@@ -331,6 +404,91 @@ test.describe("a brand-new chat's first turn", () => {
       await page.getByRole("link", { name: /my brand new question/ }).click();
       await expect(pending(page)).toBeVisible();
       await expect(page.getByText("my brand new question")).toHaveCount(2); // sidebar + bubble
+    });
+
+  test("renders its answer even after an earlier conversation's reload (stale loadedSeq)",
+    async ({ page }) => {
+      // FOUND LIVE (2026-08-27): spinner stopped, blank thread on /chat/:id,
+      // answer on disk; clicking away and back rendered it. Root cause: the
+      // loader guard is a PAIR — loadedFor (which conversation is loaded) and
+      // loadedSeq (the reload counter it last synced). The `conversation` SSE
+      // handler set loadedFor to the new chat's id but never touched loadedSeq,
+      // so if ANY earlier conversation had settled an abandoned turn (its
+      // reload counter is nonzero, and viewing it synced loadedSeq to that),
+      // the guard failed on the / -> /chat/:id flip and the loader refetched
+      // MID-STREAM. Nothing persists until the stream ends, so the fetch came
+      // back [] and wiped the streaming pair; the registry placeholder covered
+      // the gap, then settleTurn was told rendered:true (the turn token still
+      // matched), which deleted it WITHOUT scheduling a reload, and the
+      // finalize wrote positionally into an empty array — a silent no-op.
+      //
+      // Turn 1 manufactures the precondition exactly the way a real session
+      // does: ask in a conversation, leave mid-stream, come back, let it settle
+      // — the scheduled reload syncs loadedSeq to 1. Turn 2 is the victim.
+      await mockMe(page, USER);
+      await mockVersion(page);
+      await mockAttention(page);
+      await mockConversations(page, [{ id: 26, title: "grad rate", updated_at: 9 }]);
+      await mockConversation(page, 26, []);
+      await mockStreamChatDripped(page, [
+        [{ atMs: 100, event: { type: "conversation", id: 26 } },
+         { atMs: 4000, event: { type: "answer", text: "First answer." } },
+         { atMs: 4100, event: { type: "done", message_id: 2, user_message_id: 1 } }],
+        [{ atMs: 150, event: { type: "conversation", id: 77 } },
+         { atMs: 2500, event: { type: "answer", text: "The eventual answer." } },
+         { atMs: 2550, event: { type: "done", message_id: 12, user_message_id: 11 } }],
+      ]);
+
+      // Turn 1: abandon mid-stream, return, let the settle-scheduled reload run.
+      await page.goto("/chat/26");
+      await ask(page, "grad rate question");
+      await page.getByRole("link", { name: "New chat" }).click({ force: true });
+      // The turn's rows as _persist will write them — re-mocked BEFORE the
+      // return so the return load is deterministic.
+      const conv26 = await mockConversation(page, 26, [
+        { id: 1, role: "user", content: "grad rate question" },
+        { id: 2, role: "assistant", content: "First answer." },
+      ]);
+      await page.getByRole("link", { name: /grad rate/ }).click();
+      // The precondition must be PROVEN, not hoped for: the placeholder shows
+      // the turn was genuinely abandoned mid-stream (a slow runner that missed
+      // the mid-stream window would settle it rendered:true, never bump the
+      // counter, and every later assertion would pass without the bug ever
+      // being possible — a silent false green).
+      await expect(pending(page)).toBeVisible();
+      await expect(page.getByText("First answer.")).toBeVisible({ timeout: 8000 });
+      // The placeholder clearing is the signal that turn 1 has SETTLED and its
+      // scheduled reload ran — which is what syncs loadedSeq to the bumped
+      // counter. Starting turn 2 before this point misses the precondition.
+      await expect(pending(page)).toHaveCount(0, { timeout: 8000 });
+      // ...and the reload really was a SECOND fetch (return load + settle
+      // reload), i.e. the counter really did bump.
+      expect(conv26.calls).toBe(2);
+
+      // Turn 2: a brand-new chat. Its conversation reads [] until the stream
+      // ends, which is the server truth _persist creates.
+      const conv77 = await mockConversation(page, 77, []);
+      await page.getByRole("link", { name: "New chat" }).click({ force: true });
+      await ask(page, "my brand new question");
+      await expect(page).toHaveURL(/\/chat\/77$/);
+
+      // Mid-stream, SYNCHRONOUSLY (a retrying matcher would wait the bug out):
+      // the owner draws its own pending bubble, so the registry placeholder
+      // must stay suppressed. With the wipe, the pair is gone and the
+      // placeholder takes its place.
+      await page.waitForTimeout(800);
+      expect(await pending(page).count()).toBe(0);
+      expect(await page.getByText("my brand new question").count()).toBe(1);
+
+      // THE HEADLINE: the answer must actually render when the stream ends —
+      // not a stopped spinner over a blank thread.
+      await expect(page.getByText("The eventual answer.")).toBeVisible({ timeout: 5000 });
+      await expect(pending(page)).toHaveCount(0);
+      await expect(page.getByText("What would you like to know")).toHaveCount(0);
+      // ...and a turn the owner rendered itself must not have refetched the
+      // conversation it just created (the midstream-nav conv7.calls === 0
+      // contract; the buggy path fired exactly this fetch).
+      expect(conv77.calls).toBe(0);
     });
 });
 

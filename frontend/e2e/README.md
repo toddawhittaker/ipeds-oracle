@@ -55,7 +55,9 @@ suggests:
   shot after a delay; **`mockStreamChatDripped`** patches `window.fetch` and
   enqueues into a `ReadableStream` on timers, which is the only way to observe a
   *partially delivered* stream (with the one-shot mock, a brand-new chat's id
-  never arrives until the turn is over).
+  never arrives until the turn is over). It takes one event script for every
+  call, or an array of scripts consumed one per call (the last repeats; the
+  counter resets on any full page load) for multi-turn scenarios.
 - **`a11y.spec.js`** — the axe gate. Fails on `critical` **and `serious`**, and
   scans the app as it actually renders: a full answer with its disclosures open,
   a mid-stream answer, all six admin paths (Users' three sub-tabs counted
