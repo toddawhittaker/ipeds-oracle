@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api } from "../api.js";
 import { estimateIntegrate } from "../estimate.js";
 import { useConfirm } from "../ConfirmModal.jsx";
+import TableScroll from "../TableScroll.jsx";
 import { humanBytes, humanSeconds } from "./format.js";
 
 // Backend _set_status (app/importer.py) only ever emits running/checks/
@@ -797,7 +798,22 @@ export default function Imports({ onDataChanged }) {
       )}
 
       <h3>Recent jobs</h3>
-      <table className="grid">
+      {/* The same reflow scroll region the other admin tables use (WCAG
+          1.4.10). This one was measured as FITTING when #315 swept the rest —
+          against fixtures whose filenames are a few characters long. A real
+          IPEDS upload is not: `IPEDS_2023-24_Provisional_All_Data.zip` is one
+          unbreakable token, and the localised timestamp beside it does not wrap
+          either, so the table came to 440px at a 320px viewport and the whole
+          `.admin` column scrolled sideways — heading and section nav with it.
+          No `min-width`: like Top users this table is otherwise fluid, so it
+          only scrolls when its own content is genuinely too wide.
+          FOCUSABLE, by the same rule `needsScrollRegion` applies to a
+          DataTable: the one thing a keyboard can land on in here is the "view"
+          button in the last column, and no header is a sort button, so tabbing
+          in scrolls the region to its RIGHT edge with nothing to bring File and
+          Status back. */}
+      <TableScroll focusable label="Recent jobs">
+      <table className="grid" aria-label="Recent jobs">
         <thead><tr><th scope="col">#</th><th scope="col">File</th><th scope="col">Status</th><th scope="col">When</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {jobs.map((jb) => (
@@ -810,6 +826,7 @@ export default function Imports({ onDataChanged }) {
           ))}
         </tbody>
       </table>
+      </TableScroll>
     </div>
   );
 }

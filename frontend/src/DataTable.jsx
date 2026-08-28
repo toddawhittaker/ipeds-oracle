@@ -3,6 +3,7 @@ import { filterRows, viewRows } from "./datatable.js";
 import { needsScrollRegion } from "./datatable-region.js";
 import { pageHeaderState } from "./selection.js";
 import SearchBox from "./SearchBox.jsx";
+import TableScroll from "./TableScroll.jsx";
 
 // Reusable admin data table: search + sortable headers + pagination + a polite
 // aria-live status + focus management, driven by a column config and the
@@ -198,13 +199,11 @@ const DataTable = forwardRef(function DataTable({
         && renderSelectionBar({ pageEligibleRows, filteredEligibleRows, query: q })}
 
       {/* WCAG 1.4.10 Reflow. The fixed columns come to 478px before Email/Note
-          get any width at all, `html, body { overflow: hidden }` means the page
-          cannot scroll sideways, and the nearest scroller was the whole `.admin`
-          column — so at 320px the only way to reach the Actions button was to
-          scroll the entire page in two directions. This wrapper gives the table
-          a scroll region of its own; `min-width` on `.grid.data` is what it
-          scrolls.
-          Whether it needs `tabIndex={0} role="region"` is DERIVED, not
+          get any width at all, so at 320px this table has to scroll inside a
+          region of its own rather than dragging the whole `.admin` column
+          sideways; `min-width` on `.grid.data` is what it scrolls, and
+          TableScroll.jsx owns the region (and the reason it is a component).
+          Whether it needs `tabIndex={0} role="region"` is DERIVED here, not
           decided once in a comment. A scroll region is only keyboard-reachable
           if something inside it can take focus: with a sort button in every
           header and action buttons in every row, both horizontal extremes are
@@ -218,11 +217,7 @@ const DataTable = forwardRef(function DataTable({
           reach (WCAG 2.1.1). So the precondition is now a predicate. A table
           with no actions column, or with any non-sortable column, gets a named
           focusable region; one whose extremes are already reachable does not. */}
-      <div className={"table-scroll" + (needsRegion ? " table-scroll-region" : "")}
-           {...(needsRegion
-             ? { tabIndex: 0, role: "region",
-                 "aria-label": `${ariaLabel || "Table"}, scrollable` }
-             : {})}>
+      <TableScroll focusable={needsRegion} label={ariaLabel}>
       <table className={tableClass} aria-label={ariaLabel}>
         <colgroup>
           {selectable && <col className="col-select" />}
@@ -323,7 +318,7 @@ const DataTable = forwardRef(function DataTable({
           ))}
         </tbody>
       </table>
-      </div>
+      </TableScroll>
 
       <div className="pager">
         <span className="pager-range">{view.label}</span>

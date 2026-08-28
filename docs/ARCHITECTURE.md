@@ -133,14 +133,25 @@ documents are:
   `html, body { overflow: hidden }`, so the page cannot scroll sideways and the
   nearest scroller was the whole `.admin` column — at 320px the only way to
   reach an Actions button was to scroll the entire page in two directions,
-  taking the heading and section nav with it. `DataTable.jsx` wraps its
-  `<table>` in **`.table-scroll` (`overflow-x: auto`)** and `.grid.data` carries
-  **`min-width: 720px`** — the floor Blocked actually needs (556px of fixed
-  columns before its Email gets anything). `width: 100%` still wins above that,
-  so every desktop geometry above is byte-identical at 1280. Admin → Usage's
-  **Top users** is not a `DataTable` and sets no column widths, but an email
-  address is one unbreakable token (measured 526px), so it gets the same wrapper
-  and no `min-width`. Whether the wrapper is **`tabIndex={0} role="region"`** is
+  taking the heading and section nav with it. **`src/TableScroll.jsx` is that
+  region** — one component for every table that needs one. It owns
+  **`.table-scroll` (`overflow-x: auto`)** and the three attributes that make a
+  region keyboard-reachable, so a new caller has to answer the focusable
+  question instead of copying a `<div>` and getting it wrong, which is exactly
+  how Usage once shipped a region no keyboard could reach. `DataTable.jsx` wraps
+  its `<table>` in it, and `.grid.data` carries **`min-width: 720px`** — the
+  floor Blocked actually needs (556px of fixed columns before its Email gets
+  anything). `width: 100%` still wins above that, so every desktop geometry
+  above is byte-identical at 1280. Two hand-rolled tables use it directly, both
+  fluid and so with no `min-width`: Admin → Usage's **Top users**, where an
+  email address is one unbreakable token (measured 526px), and Admin → Imports'
+  **Recent jobs**, where the filename is one
+  (`IPEDS_2023-24_Provisional_All_Data.zip`) and the localised timestamp beside
+  it will not wrap either — 440px inside a 238px column. Recent jobs was
+  measured as *fitting* when the others were swept; the measurement was of an
+  **empty** jobs array, which is what nearly every Imports fixture passes. With
+  any row at all it never fitted, short filename included.
+  Whether the wrapper is **`tabIndex={0} role="region"`** is
   DERIVED, not decided per table (`src/datatable-region.js`,
   `needsScrollRegion(hasActions, columns)`): a region is a tab stop worth adding
   only when the table's own contents are not already keyboard-reachable, which is
@@ -153,8 +164,10 @@ documents are:
   is unsortable, so that header holds no button and the wrapper becomes a
   focusable region named `"API keys, scrollable"` — distinct from the table's own
   name on purpose. `.grid.data.keys` also raises the floor to **900px** for its
-  six columns. Both branches are pinned in
-  `frontend/e2e/admin-table-reflow.spec.js`.
+  six columns. Recent jobs takes the same branch for the same reason from the
+  other side — no header there is a sort button, so tabbing lands on the `view`
+  button at the far right and nothing brings File and Status back. Both branches
+  are pinned in `frontend/e2e/admin-table-reflow.spec.js`.
   **This was only shippable once the Actions tooltip stopped hanging outside the
   table**: `.tip::after` is absolutely positioned and centred on its button, and
   an abspos descendant counts toward an ancestor's scrollable overflow, so the
