@@ -123,7 +123,9 @@ test("no refresh drops the active search, not even a transient one",
 
     await page.getByRole("textbox", { name: /Ask/i }).fill("another nursing question");
     await page.getByRole("button", { name: /^Send/ }).click();
-    await expect(page.getByText("42")).toBeVisible();
+    // exact — a bare "42" also matches the message timestamp whenever the
+    // wall clock reads :42 past the hour (strict-mode collision, found live).
+    await expect(page.getByText("42", { exact: true })).toBeVisible();
 
     // Wait for the send's own re-list to have happened before judging the
     // sequence, or this passes on a sequence that has not been written yet.
@@ -196,7 +198,9 @@ test("a turn that lands AFTER you start searching does not wipe the search",
     await page.getByRole("searchbox", { name: "Search chats and messages" }).fill("nursing");
     await expect(titles(page)).toHaveCount(2);
 
-    await expect(page.getByText("42")).toBeVisible();
+    // exact — a bare "42" also matches the message timestamp whenever the
+    // wall clock reads :42 past the hour (strict-mode collision, found live).
+    await expect(page.getByText("42", { exact: true })).toBeVisible();
     await expect.poll(() => convos.queries.at(-1)).toBe("nursing");
     // Ordering, not counting: the mount load and the mid-stream re-list both
     // legitimately ask for "" — they happen before anything is typed. What must
