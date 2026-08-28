@@ -60,13 +60,13 @@ async function openUsers(page, path = "/admin/users/current") {
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
 }
 
-// clientWidth/scrollWidth of a scroll region plus the page scroller behind it.
-// Read together in one evaluate so they describe the same layout pass.
 // The admin column on its own, for a case that has to fail on GEOMETRY when the
 // wrapper is gone rather than on the wrapper's own locator not resolving.
 const adminGeometry = (page) => page.locator(".admin").evaluate((el) => (
   { client: el.clientWidth, scroll: el.scrollWidth }));
 
+// clientWidth/scrollWidth of a scroll region plus the page scroller behind it.
+// Read together in one evaluate so they describe the same layout pass.
 const geometry = (locator) => locator.evaluate((el) => {
   const admin = globalThis.document.querySelector(".admin");
   return {
@@ -221,7 +221,8 @@ test.describe("admin tables reflow into their own scroll region", () => {
       // with it.
       //
       // Both assertions are load-bearing, in opposite directions: `.admin` must
-      // not scroll, which IS the defect (measured 320/481 before the fix); and
+      // not scroll, which IS the defect (320 against 503 with the wrapper
+      // removed, on this fixture, mutation-verified); and
       // the region must genuinely overflow, or this passes against a table with
       // no rows. `.admin` is measured FIRST and on its own locator, so removing
       // the wrapper fails this on geometry rather than on a missing element —
