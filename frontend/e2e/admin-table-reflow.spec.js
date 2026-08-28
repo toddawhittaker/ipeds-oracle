@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   mockMe, mockConversations, mockAllowlist, mockAccessRequests, mockDeniedRequests,
   mockAttention, mockMarkLogsSeen, mockUsage, mockAdminKeys,
+  mockImportJobs, mockImportCatalog,
 } from "./mocks.js";
 
 // WCAG 1.4.10 Reflow, for the admin tables.
@@ -33,6 +34,22 @@ const PENDING = [{ id: 1, email: "p1@example.edu", status: "pending", created_at
 const DENIED = [{ id: 9, canon_email: "blocked@example.edu", emails: ["blocked@example.edu"],
   created_at: 1_700_000_000, denied_at: 1_700_000_500 }];
 
+// A filename the product actually produces. The short fixtures every other
+// Imports spec uses are exactly why this table's overflow went unmeasured.
+const JOBS = [{ id: 1, filename: "IPEDS_2023-24_Provisional_All_Data.zip",
+  status: "swapped", updated_at: 1_700_000_000 }];
+
+async function openImports(page, jobs) {
+  await mockMe(page, ADMIN);
+  await mockConversations(page, []);
+  await mockAttention(page, { users: 0, skills: 0, logs: 0 });
+  await mockMarkLogsSeen(page);
+  await mockImportJobs(page, jobs);
+  await mockImportCatalog(page, { probed_at: 1_700_000_000, partial: false, years: [] });
+  await page.goto("/admin/imports");
+  await expect(page.getByRole("table", { name: "Recent jobs" })).toBeVisible();
+}
+
 async function openUsers(page, path = "/admin/users/current") {
   await mockMe(page, ADMIN);
   await mockConversations(page, []);
@@ -42,6 +59,11 @@ async function openUsers(page, path = "/admin/users/current") {
   await page.goto(path);
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
 }
+
+// The admin column on its own, for a case that has to fail on GEOMETRY when the
+// wrapper is gone rather than on the wrapper's own locator not resolving.
+const adminGeometry = (page) => page.locator(".admin").evaluate((el) => (
+  { client: el.clientWidth, scroll: el.scrollWidth }));
 
 // clientWidth/scrollWidth of a scroll region plus the page scroller behind it.
 // Read together in one evaluate so they describe the same layout pass.
@@ -186,6 +208,82 @@ test.describe("admin tables reflow into their own scroll region", () => {
       // scrollbar is the failure mode this file's other half exists to catch.
       const geo = await region.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
       expect(geo.scroll).toBe(geo.client);
+    });
+
+  test("Recent jobs scrolls itself rather than dragging the admin column sideways",
+    async ({ page }) => {
+      // The regression: Admin -> Imports' "Recent jobs" was the one admin table
+      // #315 measured as FITTING and so left without a wrapper. A real upload
+      // does not fit — `IPEDS_2023-24_Provisional_All_Data.zip` is a single
+      // unbreakable token and the localised timestamp beside it will not wrap
+      // either — so the table came to 440px at a 320px viewport and the
+      // `.admin` column scrolled sideways instead, heading and section nav
+      // with it.
+      //
+      // Both assertions are load-bearing, in opposite directions: `.admin` must
+      // not scroll, which IS the defect (320 against 503 with the wrapper
+      // removed, on this fixture, mutation-verified); and
+      // the region must genuinely overflow, or this passes against a table with
+      // no rows. `.admin` is measured FIRST and on its own locator, so removing
+      // the wrapper fails this on geometry rather than on a missing element —
+      // a test that only proves "a region exists" would still pass if the
+      // region stopped scrolling.
+      await openImports(page, JOBS);
+      await page.setViewportSize({ width: 320, height: 900 });
+
+      const admin = await adminGeometry(page);
+      expect(admin.scroll, "the admin column must not scroll sideways").toBe(admin.client);
+
+      const geo = await geometry(page.getByRole("region", { name: /Recent jobs/ }));
+      expect(geo.scroll).toBeGreaterThan(geo.client);
+
+      // ...and it was never the filename length that decided it. Even a
+      // seven-character name overflows (measured 336 into 238), so what #315
+      // measured as fitting was the EMPTY jobs array almost every Imports spec
+      // passes — the same "mock admin lists with CONTENT, not empty arrays"
+      // trap docs/TESTING.md records for the axe scans. Re-measured here so a
+      // future reader does not repeat the measurement and get the old answer.
+      await openImports(page, [{ id: 1, filename: "a.accdb", status: "swapped",
+        updated_at: 1_700_000_000 }]);
+      await page.setViewportSize({ width: 320, height: 900 });
+      const shortAdmin = await adminGeometry(page);
+      expect(shortAdmin.scroll).toBe(shortAdmin.client);
+      const short = await geometry(page.getByRole("region", { name: /Recent jobs/ }));
+      expect(short.scroll).toBeGreaterThan(short.client);
+    });
+
+  test("Recent jobs gets no scrollbar at 1280 that it does not need",
+    async ({ page }) => {
+      // The over-broad-fix guard. `overflow-x: auto` with no `min-width` has to
+      // leave a fluid table alone at desktop, or the wrapper just parks a
+      // permanent horizontal scrollbar under the table — which is why this one
+      // gets no blanket `min-width` the way `.grid.data` does.
+      await openImports(page, JOBS);
+      const wide = await geometry(page.getByRole("region", { name: /Recent jobs/ }));
+      expect(wide.scroll, "must not scroll at 1280").toBe(wide.client);
+    });
+
+  test("the Recent jobs region is focusable, because tabbing lands at its far edge",
+    async ({ page }) => {
+      // WCAG 2.1.1, and the reason `needsScrollRegion` returns true for this
+      // shape: no header here is a sort button, so the only thing a keyboard
+      // can land on is the "view" button in the LAST column. Tabbing to it
+      // scrolls the region hard right, and without a tab stop of its own there
+      // is then nothing to bring File and Status back into view.
+      await openImports(page, JOBS);
+      await page.setViewportSize({ width: 320, height: 900 });
+
+      const region = page.getByRole("region", { name: /Recent jobs/ });
+      await region.focus();
+      await expect(region).toBeFocused();
+      // Tabbing to the row action really does strand the left-hand columns —
+      // the condition the tab stop exists for, asserted rather than assumed.
+      await page.getByRole("button", { name: "view" }).first().focus();
+      expect(await region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+      // And the region's name is not the table's own, or it announces twice.
+      expect(await region.getAttribute("aria-label"))
+        .not.toBe(await page.getByRole("table", { name: "Recent jobs" })
+          .getAttribute("aria-label"));
     });
 
   test("a table whose rows are already keyboard-reachable gets NO extra tab stop",

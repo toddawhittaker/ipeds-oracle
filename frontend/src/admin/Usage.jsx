@@ -7,6 +7,7 @@ import Chart from "../Chart.jsx";
 import { shortZone } from "../datetime.js";
 import { IconInfo } from "../icons.jsx";
 import HelpPopover from "../HelpPopover.jsx";
+import TableScroll from "../TableScroll.jsx";
 import { STAT_INFO, directionHint } from "../usageinfo.js";
 import {
   exhaustionLabel,
@@ -189,11 +190,8 @@ export default function Usage() {
               made the Tokens/Spend columns unreachable by keyboard the moment
               a long address pushed them out (WCAG 2.1.1) -- axe's
               scrollable-region-focusable, invisible to our gate only because
-              the scans run at 1280x2600 where a fluid table never overflows.
-              The name differs from the table's own so it is not announced
-              twice. */}
-          <div className="table-scroll table-scroll-region" tabIndex={0}
-               role="region" aria-label="Top users, scrollable">
+              the scans run at 1280x2600 where a fluid table never overflows. */}
+          <TableScroll focusable label="Top users">
           <table className="grid" aria-label="Top users">
             <thead><tr>
               <th scope="col">User</th><th scope="col">Queries</th>
@@ -206,7 +204,7 @@ export default function Usage() {
               </tr>
             ))}</tbody>
           </table>
-          </div>
+          </TableScroll>
         </div>
       )}
     </div>
