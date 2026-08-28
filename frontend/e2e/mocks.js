@@ -403,16 +403,31 @@ export async function mockStreamChat(page, {
  * one — and it closes a standing blind spot: nothing in this suite had ever
  * observed a partially-delivered stream.
  *
+ * `events` is ONE script (an array of `{atMs, event}`) replayed for every stream
+ * call, OR an array of such scripts consumed one per call — the last script
+ * repeats once they run out — for scenarios that stream several turns with
+ * different events. The per-call counter lives in the init script, which re-runs
+ * on every document creation: a spec that reloads the page (or `goto`s a second
+ * time) starts again from script 0.
+ *
  * Returns `{ calls }` — request bodies, readable from the page at any time.
  */
 export async function mockStreamChatDripped(page, events) {
-  await page.addInitScript((script) => {
+  await page.addInitScript((raw) => {
+    // `events` is either ONE script ([{atMs, event}, ...]) replayed for every
+    // stream call, or an array of scripts consumed one per call (the last one
+    // repeats) — for specs whose scenario streams more than one turn and needs
+    // them to differ (e.g. a conversation turn followed by a brand-new chat).
+    const perCall = Array.isArray(raw[0]) ? raw : [raw];
+    let call = 0;
     const real = globalThis.fetch.bind(globalThis);
     globalThis.__streamCalls = [];
     globalThis.fetch = (input, init) => {
       const url = typeof input === "string" ? input : input?.url || "";
       if (!url.includes("/api/chat/stream")) return real(input, init);
       try { globalThis.__streamCalls.push(JSON.parse(init?.body || "{}")); } catch { /* ignore */ }
+      const script = perCall[Math.min(call, perCall.length - 1)];
+      call += 1;
       const enc = new TextEncoder();
       const body = new ReadableStream({
         start(controller) {
