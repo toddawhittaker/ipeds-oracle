@@ -258,9 +258,59 @@ def peek_login(token: str) -> dict:
     return {"email": row["email"]}
 
 
+def create_session(con: sqlite3.Connection, email: str) -> tuple[str, sqlite3.Row]:
+    """Upsert the user for `email` and mint one session row for them.
+
+    THE ONLY PLACE A SESSION ROW IS EVER WRITTEN. Every way in converges here:
+    whatever proves the address -- a consumed magic-link token today, an OIDC
+    id_token or an LDAP bind later -- does its own proving and then calls this,
+    so there is one definition of what being signed in means.
+
+    Takes an OPEN connection and deliberately does NOT commit, so it joins the
+    caller's transaction. That is what stops a session existing for a magic-link
+    token that was never marked used: the UPDATE and this INSERT commit together
+    or not at all.
+
+    Only the SHA-256 hash reaches `sessions` -- the raw token is returned and
+    never stored, so a dump of app.db mints nothing.
+    """
+    now = time.time()
+    con.execute("INSERT INTO users(email, created_at, last_login) VALUES (?,?,?) "
+                "ON CONFLICT(email) DO UPDATE SET last_login=excluded.last_login",
+                (email, now, now))
+    user = con.execute("SELECT id, email, is_admin FROM users WHERE email=?",
+                       (email,)).fetchone()
+    sess = new_token()
+    con.execute(
+        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) "
+        "VALUES (?,?,?,?)",
+        (hash_token(sess), user["id"], now, session_expiry()))
+    return sess, user
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    """THE ONLY PLACE THE SESSION COOKIE IS SET.
+
+    Kept separate from `create_session` because the two halves run at different
+    moments: the DB write joins the caller's transaction, while the cookie is
+    applied AFTER the connection closes and -- for a redirect-based sign-in --
+    onto a RedirectResponse the handler builds for itself. Folding them into one
+    function would force such a caller to construct its response before opening
+    the database, purely to satisfy a signature.
+
+    `samesite="lax"` is load-bearing rather than a default worth tightening:
+    `strict` would drop this cookie on the cross-site top-level GET that an
+    external identity provider redirects back with, landing the user signed out
+    with no error to read.
+    """
+    s = get_settings()
+    response.set_cookie(
+        s.cookie_name, token, max_age=s.session_ttl_days * 86400,
+        httponly=True, secure=s.cookie_secure, samesite="lax", path="/")
+
+
 def verify_login(token: str, response: Response) -> dict:
     """Consume a magic-link token, upsert the user, and set a session cookie."""
-    s = get_settings()
     th = hash_token(token)
     con = connect()
     try:
@@ -276,24 +326,11 @@ def verify_login(token: str, response: Response) -> dict:
         email = row["email"]
         con.execute("UPDATE login_tokens SET used_at=? WHERE token_hash=?",
                     (time.time(), th))
-        # upsert user
-        con.execute("INSERT INTO users(email, created_at, last_login) VALUES (?,?,?) "
-                    "ON CONFLICT(email) DO UPDATE SET last_login=excluded.last_login",
-                    (email, time.time(), time.time()))
-        user = con.execute("SELECT id, email, is_admin FROM users WHERE email=?",
-                           (email,)).fetchone()
-        # create session
-        sess = new_token()
-        con.execute(
-            "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) "
-            "VALUES (?,?,?,?)",
-            (hash_token(sess), user["id"], time.time(), session_expiry()))
+        sess, user = create_session(con, email)
         con.commit()
     finally:
         con.close()
-    response.set_cookie(
-        s.cookie_name, sess, max_age=s.session_ttl_days * 86400,
-        httponly=True, secure=s.cookie_secure, samesite="lax", path="/")
+    set_session_cookie(response, sess)
     return {"email": email, "is_admin": bool(user["is_admin"])}
 
 
