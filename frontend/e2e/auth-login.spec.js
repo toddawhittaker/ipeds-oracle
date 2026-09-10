@@ -116,3 +116,21 @@ test.describe("auth / login", () => {
     await expect(page.getByPlaceholder("you@yourschool.edu")).toBeVisible();
   });
 });
+
+test("the magic-link door is unchanged when the config call fails", async ({ page }) => {
+  // BEHAVIOUR-NEUTRALITY PIN for the multi-method work. Adding OIDC introduced a
+  // branch on `auth_method`, and the failure mode nobody would notice is the
+  // fallback going the wrong way: a deployment whose /api/auth/config is
+  // unreachable must still get the magic-link form, not an SSO button pointing
+  // at a provider it has not configured.
+  await mockMe(page, null);
+  await page.route("**/api/auth/config", (route) => route.fulfill({
+    status: 500, contentType: "application/json", body: JSON.stringify({ detail: "boom" }),
+  }));
+  await page.goto("/");
+
+  await expect(page.getByPlaceholder("you@yourschool.edu")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Email me a sign-in link" }))
+    .toBeVisible();
+  await expect(page.getByText(/single sign-on/i)).toHaveCount(0);
+});

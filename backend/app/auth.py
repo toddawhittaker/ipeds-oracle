@@ -115,7 +115,8 @@ def may_request_access(email: str) -> bool:
 
 def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
     """Delete auth rows the code can never accept again: consumed or expired
-    magic-link tokens, and sessions past their expiry. The caller commits.
+    magic-link tokens, sessions past their expiry, and spent or expired OIDC
+    login states. The caller commits.
 
     Behaviour-preserving by construction — `peek_login`/`verify_login` already
     reject a token whose `used_at` is set or whose `expires_at` has passed, and
@@ -134,6 +135,12 @@ def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at < ?",
                 (now,))
     con.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+    # Same argument as login_tokens above: `oidc.complete_login` already refuses
+    # a state whose `used_at` is set or whose `expires_at` has passed, so
+    # removing those rows changes no outcome -- the lookup misses instead of
+    # failing the check, and both raise invalid_state.
+    con.execute("DELETE FROM oidc_logins WHERE used_at IS NOT NULL OR expires_at < ?",
+                (now,))
 
 
 def mint_login_link(con: sqlite3.Connection, email: str) -> str:
@@ -256,6 +263,65 @@ def peek_login(token: str) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "This sign-in link is invalid or expired.")
     return {"email": row["email"]}
+
+
+def idp_identity_conflicts(con: sqlite3.Connection, email: str,
+                           issuer: str, subject: str) -> bool:
+    """True when `email` is already bound to a DIFFERENT provider subject.
+
+    The account key in this app is the email address, and at several providers
+    the `email` claim is neither verified nor immutable -- see migration 39 for
+    the takeover this prevents. `sub` is the identifier a provider does promise
+    is stable, so the first OIDC sign-in for an address records the pair and
+    every later one has to match it.
+
+    Trust on first use: an unbound account (never signed in via OIDC, or created
+    before migration 39) does not conflict -- it binds on this sign-in.
+    """
+    row = con.execute("SELECT oidc_iss, oidc_sub FROM users WHERE email=?",
+                      (email,)).fetchone()
+    if not row or not row["oidc_sub"]:
+        return False
+    return row["oidc_iss"] != issuer or row["oidc_sub"] != subject
+
+
+def bind_idp_identity(con: sqlite3.Connection, email: str,
+                      issuer: str, subject: str) -> None:
+    """Record the provider identity for `email`, if it has none yet.
+
+    Only ever fills a blank: an established binding is what
+    `idp_identity_conflicts` checks against, so overwriting it here would undo
+    the guard the moment an attacker got one sign-in through. Does NOT commit.
+    """
+    con.execute(
+        "UPDATE users SET oidc_iss=?, oidc_sub=? WHERE email=? AND oidc_sub IS NULL",
+        (issuer, subject, email))
+
+
+def provision_from_idp(con: sqlite3.Connection, email: str, added_by: str) -> None:
+    """Grant `email` access on the strength of an external provider's word.
+
+    What this writes is an ALLOWLIST row, and that is the whole design. The
+    allowlist is re-checked on EVERY authenticated request
+    (`_user_from_request`) and on every MCP call (`apikeys.verify`), and those
+    two checks are the app's only per-request kill switch. Provisioning by
+    writing the row keeps them -- and Admin -> Users, offboarding, and API-key
+    revocation -- working exactly as they already do. The alternative, making
+    those checks method-aware, would leave a removed user's 30-day session
+    cookie and their API keys alive until they happened to expire.
+
+    `ON CONFLICT DO NOTHING`, never `DO UPDATE`: a row from the ADMIN_EMAILS
+    bootstrap, or one an admin added by hand, carries a note and an `added_by`
+    recording where that access came from. Somebody's first SSO sign-in must not
+    overwrite that with "auto-provisioned".
+
+    Does NOT commit -- it joins the caller's sign-in transaction, so a login that
+    fails after this point grants nothing.
+    """
+    con.execute(
+        "INSERT INTO allowlist(email, note, added_by, added_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(email) DO NOTHING",
+        (email, "auto-provisioned on first sign-in", added_by, time.time()))
 
 
 def create_session(con: sqlite3.Connection, email: str) -> tuple[str, sqlite3.Row]:

@@ -19,6 +19,7 @@ top of it must not quietly break:
 """
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import tempfile
@@ -107,29 +108,58 @@ def test_create_session_does_not_commit_on_its_own():
         "the same transaction)")
 
 
+# Every `set_cookie` call in backend/app, as (module, what it names). Keyed on
+# the ARGUMENT, not just the file: a per-file allowlist passes when a module
+# already on the list quietly adds a second call that sets the SESSION cookie,
+# which is precisely the regression this exists to catch (verified -- the
+# file-level version did not catch it).
+EXPECTED_COOKIE_SETTERS = [
+    ("auth.py", "s.cookie_name"),        # the session itself
+    ("oidc.py", "state_cookie_name()"),  # the short-lived OIDC state binding
+]
+
+
+def _cookie_setters() -> list[tuple[str, str]]:
+    found = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "set_cookie"
+                    and node.args):
+                found.append((str(path.relative_to(APP_DIR)),
+                              ast.unparse(node.args[0])))
+    return sorted(found)
+
+
 def test_only_one_place_in_the_app_mints_a_session():
     """The regression this catches is a SECOND session minter.
 
     Every new sign-in method is a fresh temptation to write its own INSERT and
     its own set_cookie -- at which point the cookie flags, the TTL and the user
-    upsert exist twice and drift, which is exactly how the persisted-answer field
-    list rotted. Keep both in auth.py and this stays green.
+    upsert exist twice and drift, which is exactly how the persisted-answer
+    field list rotted.
+
+    A sign-in method may legitimately need a cookie of its OWN (OIDC binds its
+    `state` to the browser that started the login), so this pins WHICH cookie
+    each call sets rather than merely how many calls there are.
     """
-    insert_files, cookie_files = [], []
-    n_insert = n_cookie = 0
+    insert_files, n_insert = [], 0
     for path in sorted(APP_DIR.rglob("*.py")):
         text = path.read_text(encoding="utf-8")
-        rel = str(path.relative_to(APP_DIR))
         if "INSERT INTO sessions" in text:
-            insert_files.append(rel)
+            insert_files.append(str(path.relative_to(APP_DIR)))
             n_insert += text.count("INSERT INTO sessions")
-        if "set_cookie(" in text:
-            cookie_files.append(rel)
-            n_cookie += text.count("set_cookie(")
     assert insert_files == ["auth.py"], f"session INSERT escaped auth.py: {insert_files}"
-    assert cookie_files == ["auth.py"], f"set_cookie escaped auth.py: {cookie_files}"
     assert n_insert == 1, f"expected one session INSERT, found {n_insert}"
-    assert n_cookie == 1, f"expected one set_cookie call, found {n_cookie}"
+
+    setters = _cookie_setters()
+    assert setters == sorted(EXPECTED_COOKIE_SETTERS), (
+        f"cookie setters changed.\n  found:    {setters}\n  expected: "
+        f"{sorted(EXPECTED_COOKIE_SETTERS)}\nA new entry needs a reason in "
+        f"EXPECTED_COOKIE_SETTERS; anything setting the SESSION cookie belongs "
+        f"in auth.set_session_cookie.")
 
 
 def test_a_minted_session_is_still_gated_by_the_allowlist():

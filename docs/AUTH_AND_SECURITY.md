@@ -1,4 +1,208 @@
 # Auth & access control
+
+## Sign-in methods
+
+`AUTH_METHOD` picks exactly one door: **`magic_link`** (the default) or
+**`oidc`**. `app/authmethod.py` resolves it, following `mailer._resolve_backend`
+— a string setting, a pure resolver, and an unknown or incompletely-configured
+value that degrades rather than raising.
+
+**The fallback is always `magic_link`, and the direction is the point.** It is
+the one method that cannot auto-provision: its gate is the manually curated
+allowlist, so falling back can only ever narrow who gets in. A misconfiguration
+logs a CRITICAL at boot naming the exact missing keys
+(`main.lifespan` → `authmethod.boot_warning`) and the app still starts, on the
+same terms as the cookie-posture and missing-model checks. The only hard refusal
+in this app protects `app.db` from corruption; a typo'd issuer corrupts nothing,
+and crashing a `restart: unless-stopped` container would lock the operator out
+of the console they would fix it from.
+
+**Both sets of routes are gated, not just the new ones.** The OIDC routes 404
+unless OIDC is in force — and `POST /api/auth/request`, `POST /api/auth/verify`,
+`POST /api/auth/verify-info` and the legacy `GET /api/auth/verify` bounce 404
+unless magic link is. Without that second half, "exactly one method" is what
+this document says and not what the code does: auto-provisioning gives every
+SSO user an allowlist row, and `request_login` checks the allowlist FIRST, so
+anyone the provider had deactivated, removed from the required group, or put
+behind MFA could ask for an email link and walk straight past all of it. The
+browser hides the form, which makes that door invisible to everyone except
+somebody looking for it. Bootstrapping is unaffected — `ADMIN_EMAILS` still
+grants the first admin, and an operator whose provider breaks changes
+`AUTH_METHOD` back, which is also what happens automatically when the config is
+incomplete.
+
+The routes are registered **unconditionally** and each re-checks the
+resolved method, answering 404 otherwise. Registration that depended on an env
+read at import time would make any test that flips `AUTH_METHOD` tell a lie, and
+without the check a magic-link deployment would leave a half-working OIDC entry
+point exposed. Because it consults the *resolved* method, a deployment whose OIDC
+settings are incomplete closes those routes too.
+
+`GET /api/auth/config` carries the active method's NAME and its button label so
+the login form knows which door to draw. That widens an endpoint whose comment
+says "expose NOTHING else", deliberately: the method is unavoidably public — any
+visitor learns it by loading the page — exactly as the email domain always was.
+What must never cross is the issuer URL, the client id, the client secret, and
+every group/domain fence, each of which is a credential or free reconnaissance
+about the institution. `test_access_gate.py` pins the exact key set.
+
+## OIDC (authorization code + PKCE)
+
+**The protocol is Authlib's, not ours.** `prepare_grant_uri` and
+`prepare_token_request` build the two requests, `create_s256_code_challenge` does
+PKCE, `joserfc` verifies the signature, and `authlib.oidc.core.CodeIDToken`
+validates the claims — nonce included. Hand-rolling any of that is how
+`alg: none` and audience-confusion bugs get written.
+
+**We do the HTTP ourselves, and that is not an oversight.** Authlib's
+`OAuth2Client` binds **httpx2** whenever that package is importable, and it is —
+the MCP SDK pulls it in. Using it would run sign-in on a different HTTP library
+from every other outbound call here, pinned by nothing in `requirements.txt`, and
+switching underneath us the day `mcp` drops that dependency. This repo has
+already been bitten once by httpx2's mere presence changing what Starlette's
+TestClient used. So the token exchange is a form POST through the same `httpx`
+`nces.py` and `llmhttp.py` use, with a transport tests can substitute.
+
+**The discovery document is validated before it is trusted.** Authlib will use
+whatever `token_endpoint` a document names, so a doctored one would make this
+server POST its client secret to a host of the attacker's choosing. The issuer
+must be `https://`, the document must claim the issuer we asked for (RFC 8414,
+which defuses a mix-up attack), and `authorization_endpoint` / `token_endpoint` /
+`jwks_uri` must all sit on the issuer's own origin — checked **before** any
+request is issued to them, the same per-hop rule `nces.py` applies to NCES.
+
+**Failure is CLOSED.** Deliberately not `version.py`, whose outbound check fails
+open because the worst case there is a missing update banner; here the worst case
+is signing somebody in unverified. A TTL cache serving a still-valid JWKS through
+a brief outage is fine — that is what a TTL is for — but no path skips
+verification because a key could not be fetched.
+
+**The algorithm allowlist is load-bearing, and the test proves it.** `joserfc`
+refuses an HS256 token against an RSA-only key set — but for the *wrong reason*
+(no key matches the kid), which evaporates the moment a provider publishes a
+symmetric key alongside its RSA one, as some do. `oidc._ALLOWED_ALGS` is what
+refuses on algorithm policy. `test_oidc.py` makes RS→HS confusion genuinely
+reachable by having the fake provider publish that symmetric key, and the case is
+mutation-verified: passing `algorithms=None` signs the caller in as whoever the
+forged token names.
+
+**`redirect_uri` is built from `app_public_url`, never from the request**, and no
+caller may pass one — it is the same Host-header trap `mint_login_link`
+documents, and against a provider configured with a wildcard redirect it is
+account takeover.
+
+**The `state` is bound to the browser that started the login, and the row alone
+is not enough.** `oidc_start` sets a short-lived httponly `<cookie>_oidc` cookie
+holding the raw state, and the callback refuses unless it matches. The database
+row proves a login was started *here*; the cookie proves it was started by *this
+browser*. Without it the state is a global bearer ticket: an attacker starts a
+login himself, authenticates as himself, and feeds the victim's browser the
+resulting callback URL — a GET, so the CSRF layer skips it — and the victim is
+signed in **as the attacker**, with everything they type afterwards landing in
+his account. `samesite="lax"` is required rather than chosen: the provider
+returns with a cross-site top-level GET, which `strict` would drop, and an
+absent cookie is exactly what the callback refuses.
+
+**No app.db transaction spans a provider round trip.** `claim_state` validates
+and burns the row in one short transaction that commits and closes; the token
+exchange and verification then run holding no connection; a second short
+transaction records the outcome. Holding the write lock across the exchange
+makes every other writer in the app fail on `busy_timeout` whenever the provider
+is slow, which is routine for a cold tenant — the same rule
+`admin._approve_allowlist` states for a mail round trip. The burn itself is a
+conditional `UPDATE … WHERE used_at IS NULL` with a rowcount check, so single
+use is enforced by the database rather than by the gap between a read and a
+write.
+
+**`POST /api/auth/oidc/start` is rate-limited per IP.** It needs no credential,
+writes a row, and can issue an outbound discovery request from a threadpool
+worker — so unlimited it is both unbounded growth in `app.db` and a way to park
+every synchronous route's thread behind a slow provider. It shares
+`auth_request_attempts` and the per-IP cap with the magic-link limiter, under a
+sentinel email that cannot collide with a real address's budget.
+
+**The state, nonce and PKCE verifier live in `oidc_logins` (migration 38)**, not
+in a signed cookie. Only the state's HASH is stored, the rule `login_tokens`
+already follows. A cookie was genuinely available (`itsdangerous` is a declared
+dependency nothing imports) and was rejected for three reasons: single-use needs
+a server-side record anyway; the PKCE verifier is a secret and would be handed to
+the very browser PKCE protects the exchange from; and a cookie needs a signing
+key, a rotation story and a `SameSite` puzzle none of which exist. The rows are
+swept by `auth.purge_expired_auth_rows` on the same argument it already makes for
+`login_tokens`.
+
+**The callback is a GET, so `CSRFMiddleware` skips it** (`csrf.SAFE_METHODS`).
+That is correct rather than a gap: the single-use `state` row IS that leg's CSRF
+defence, and an Origin check could not apply to a request arriving from the
+provider's redirect. `POST /api/auth/oidc/start` is state-changing and does go
+through the origin check, which is one of the reasons it is a POST returning JSON
+rather than a GET that redirects.
+
+**Errors come from a closed set** (`oidc.AUTH_ERRORS`) and ride back as
+`/?auth_error=<code>`. Never a provider-supplied string: the redirect target is
+otherwise somewhere to reflect attacker text, which is the `py/url-redirection`
+shape the magic-link bounce already had to close. The browser half
+(`authcopy.authErrorMessage`) maps the code through a closed table, so an
+unrecognised one renders our wording.
+
+**⚠ The OIDC callback is the one credential that cannot move to a URL fragment**
+— a provider's `redirect_uri` has to be a real URL — so `?code=…&state=…` genuinely
+reaches uvicorn's access log, exactly the way `?token=` used to.
+`logbuffer._ACCESS_CODE_RE` scrubs it, access-log-scoped (in an ordinary log
+message `code=` is usually an HTTP status). PKCE means a bare code is not
+redeemable alone, so this is defence in depth rather than a live hole — but the
+standard here is that credentials do not land in `docker logs`.
+
+## Auto-provisioning (oidc only)
+
+**The provider is the authority on identity; the app still decides access.** On a
+first successful sign-in `auth.provision_from_idp` writes the **`allowlist`
+row** (the `users` row comes from `create_session`, as it does for every method).
+Writing that allowlist row is the whole design: the allowlist is
+re-checked on every authenticated request (`_user_from_request`) and every MCP
+call (`apikeys.verify`), and those two checks are the app's only per-request kill
+switch. Making them method-aware instead would leave a removed user's 30-day
+cookie and their API keys alive. `ON CONFLICT DO NOTHING`, never `DO UPDATE`, so a
+bootstrap or admin-curated row is not relabelled by someone's first sign-in.
+
+**An account is bound to the provider SUBJECT that first signed into it**
+(`users.oidc_iss`/`oidc_sub`, migration 39). Without that, the account key is
+the `email` claim alone — and at several providers that claim is neither
+verified nor immutable. Entra ID lets a guest or personal account set it and
+emits no `email_verified`, so the "is it false?" check never fires; a guest who
+sets theirs to an existing admin's address would inherit `is_admin=1`. That is
+the published nOAuth pattern, and **neither fence defends against it**, because
+the forged claim is inside the allowed domain. Trust on first use: the first
+OIDC sign-in for an address records the pair, every later one must match, and an
+unbound account (any magic-link account, anything predating the migration)
+binds rather than being refused. Residual, stated: an attacker who forges an
+address that has *never* signed in via OIDC still binds it first —
+`OIDC_REQUIRED_GROUP` is the fence for that, since a guest is not in the group.
+
+**An OIDC deployment with no fence logs a CRITICAL at boot.** Neither
+`OIDC_ALLOWED_DOMAINS` nor `OIDC_REQUIRED_GROUP` set means anyone the provider
+authenticates gets an account. That is a legitimate choice for a single-tenant
+issuer, so it is not a config *problem* and does not fall back — but pointed at
+a consumer issuer it is the internet, so it must not be silent.
+
+Two consequences an operator has to know:
+
+- **`is_denied` still blocks — but the allowlist wins, exactly as it does for
+  magic link.** `auth.is_denied`'s own docstring states that invariant, and
+  `request_login` honours it. Checking the denial unconditionally locks out
+  anyone re-added through the CSV bulk import, which deliberately does not clear
+  a denial: the admin sees them listed as a user while sign-in refuses them,
+  with no signal anywhere. Order in the callback is browser binding → id_token →
+  fences → allowlist/denied → subject binding → provision → session, so a
+  blocked or mismatched address is never provisioned on its way to being
+  refused.
+- **Removing a user in Admin → Users also BLOCKS them** under an external
+  provider (`admin._block_canonical`). Without it Remove is a no-op: the next
+  sign-in re-provisions the row. The Blocked-users tab's existing unblock control
+  is the undo, so this adds no new concept. It keys on the method the operator
+  *asked* for, not the resolved one, so a deployment whose OIDC config is
+  temporarily broken still blocks rather than silently going back to a no-op.
+
 - Passwordless **magic link**, manual **allowlist**, email via a **pluggable
   backend** (`mail_backend`: `auto`/`resend`/`smtp`/`console`) — Resend (hosted API,
   easy pilot) or the institution's own **SMTP** (Google/Microsoft/relay, stdlib

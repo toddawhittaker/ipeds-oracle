@@ -101,6 +101,27 @@ def run():
     check("access-log search line still usable",
           "/api/chat/conversations" in search_line and "200" in search_line)
 
+    # The OIDC callback is the one credential that CANNOT move to a URL fragment
+    # -- a provider's redirect_uri has to be a real URL it can redirect to -- so
+    # `?code=...&state=...` genuinely reaches uvicorn's access log, exactly the
+    # way `?token=` used to. PKCE means a bare code is not redeemable alone, so
+    # this is defence in depth rather than a live hole; the standard is that
+    # credentials do not land in `docker logs`, which a self-hoster reads.
+    oidc_rec = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:52015", "GET",
+         "/api/auth/oidc/callback?code=LIVEAUTHCODE1234&state=LIVESTATE5678",
+         "1.1", 303),
+        None)
+    for f in access.filters:
+        f.filter(oidc_rec)
+    oidc_line = oidc_rec.getMessage()
+    check("access-log oidc code redacted", "LIVEAUTHCODE1234" not in oidc_line)
+    check("access-log oidc state redacted", "LIVESTATE5678" not in oidc_line)
+    check("access-log oidc line still usable",
+          "/api/auth/oidc/callback" in oidc_line and "303" in oidc_line)
+
     # Idempotent: install() runs at import time and may run again in tests; a
     # second filter would double-substitute and is a leak of a different kind.
     before = len(access.filters)

@@ -1,18 +1,26 @@
-"""Auth routes: request a magic link, verify it, whoami, logout."""
+"""Auth routes: request a magic link or start an OIDC login, verify either,
+whoami, logout."""
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 
 from app import auth
+from app import oidc as oidc_mod
 from app.auth import current_user
-from app.config import get_settings
-from app.ratelimit import client_ip, enforce_auth_rate_limit
+from app.authmethod import MAGIC_LINK, OIDC, resolve_auth_method
+from app.config import _log_safe, get_settings
+from app.db import connect
+from app.ratelimit import client_ip, enforce_auth_ip_rate_limit, enforce_auth_rate_limit
 from app.tools.sql import ipeds_years
+
+log = logging.getLogger("ipeds.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -27,14 +35,45 @@ class VerifyRequest(BaseModel):
 
 @router.get("/config")
 def public_config():
-    # Unauthenticated on purpose: the login form renders before any session exists
-    # and needs the domain to build its placeholder hint. Expose NOTHING else here —
-    # the institution's email domain is public, the rest of the settings are not.
-    return {"email_domain": get_settings().email_domain}
+    # Unauthenticated on purpose: the login form renders before any session
+    # exists and has to know which door to draw.
+    #
+    # The rule for this endpoint is the METHOD'S NAME and a display label, never
+    # an endpoint, a credential, or a directory detail. The active method is
+    # unavoidably public — any visitor sees which form they got — and the email
+    # domain always was. The issuer URL, client id, client secret and every
+    # group/domain fence are either credentials or free reconnaissance about the
+    # institution, and none of them belong in an unauthenticated response.
+    s = get_settings()
+    return {"email_domain": s.email_domain,
+            "auth_method": resolve_auth_method(s),
+            "oidc_button_label": s.oidc_button_label}
+
+
+def _require_magic_link() -> None:
+    """404 unless the magic link is the method actually in force.
+
+    Without this, "exactly one method" is what the docs say and not what the
+    code does. Under an identity provider every SSO user has an allowlist row
+    (auto-provisioning writes one), and `request_login` checks the allowlist
+    FIRST -- so anyone the provider has since deactivated, removed from
+    OIDC_REQUIRED_GROUP, or put behind MFA could simply ask for an email link
+    and walk straight past all of it. The browser hid the form, which made the
+    open door invisible to everyone except somebody looking for it.
+
+    It also closes the access-request flood surface on a deployment whose docs
+    say that door is shut.
+
+    Bootstrapping is unaffected: ADMIN_EMAILS still grants the first admin, and
+    an operator whose provider breaks changes AUTH_METHOD back in .env -- which
+    is also what happens automatically when the OIDC config is incomplete."""
+    if resolve_auth_method(get_settings()) != MAGIC_LINK:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
 
 
 @router.post("/request")
 def request_link(body: LoginRequest, request: Request, tasks: BackgroundTasks):
+    _require_magic_link()
     email = str(body.email).strip().lower()
     enforce_auth_rate_limit(email, client_ip(request))
     # The sign-in link is built from the canonical `app_public_url` inside
@@ -54,6 +93,7 @@ _TOKEN_SHAPE = re.compile(r"^[A-Za-z0-9_-]{16,256}$")
 
 @router.get("/verify")
 def verify_get(token: str):
+    _require_magic_link()
     # A GET never consumes the token — email link-scanners / prefetchers that
     # follow the link must not burn a single-use sign-in link. Bounce to the
     # SPA confirmation page, which shows a button that POSTs to consume it.
@@ -86,6 +126,7 @@ def verify_get(token: str):
 
 @router.post("/verify-info")
 def verify_info(body: VerifyRequest):
+    _require_magic_link()
     # Non-consuming lookup so the confirmation page can name the account.
     #
     # POST, not GET, for the same reason the token moved to the fragment: a
@@ -97,6 +138,7 @@ def verify_info(body: VerifyRequest):
 
 @router.post("/verify")
 def verify_post(body: VerifyRequest, response: Response):
+    _require_magic_link()
     # Only a deliberate POST (the user clicking "Sign in") consumes the token
     # and sets the session cookie.
     return auth.verify_login(body.token, response)
@@ -133,3 +175,161 @@ def me(user: sqlite3.Row = Depends(current_user)):
 def logout(request: Request, response: Response):
     auth.logout(request, response)
     return {"ok": True}
+
+
+def _require_oidc() -> None:
+    """404 unless OIDC is the method actually in force.
+
+    The two routes below are registered UNCONDITIONALLY, because route
+    registration that depends on an env read at import time makes any test which
+    flips AUTH_METHOD tell a lie. This check is what stops a magic-link
+    deployment leaving a half-working OIDC entry point exposed -- and it uses the
+    RESOLVED method, so a deployment whose OIDC config is incomplete (and which
+    is therefore serving magic link) closes these routes too."""
+    if resolve_auth_method(get_settings()) != OIDC:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+
+
+def _oidc_failure(code: str) -> RedirectResponse:
+    """Send the browser back to the door carrying a code from the CLOSED set.
+
+    Never a provider-supplied string. This is a redirect target, and reflecting
+    text into one is exactly the py/url-redirection shape the magic-link bounce
+    (`verify_get` above) already had to close."""
+    if code not in oidc_mod.AUTH_ERRORS:
+        code = "provider_error"
+    resp = RedirectResponse(f"/?auth_error={code}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+    # The attempt is over either way, so the binding cookie goes with it --
+    # otherwise a stale one sits in the browser until its TTL and the next
+    # failure is harder to read.
+    oidc_mod.clear_state_cookie(resp)
+    return resp
+
+
+@router.post("/oidc/start")
+def oidc_start(request: Request, response: Response):
+    """Mint a pending login and hand the SPA the URL to send the browser to.
+
+    A POST returning JSON rather than a GET that 302s, for three reasons: the
+    door keeps its layout and can render a failure inline instead of bouncing
+    the visitor somewhere; a GET redirecting from our origin to a foreign one is
+    the redirection shape this repo already fought once; and a POST passes
+    through CSRFMiddleware's origin check, so a foreign page cannot make a
+    browser mint state rows here."""
+    _require_oidc()
+    # Unauthenticated, so it is rate-limited per IP. Each call writes a row AND
+    # can issue an outbound discovery request from a threadpool worker, so an
+    # unlimited burst is both unbounded growth in app.db and a way to park every
+    # sync route's thread behind a slow provider.
+    enforce_auth_ip_rate_limit(client_ip(request))
+    con = connect()
+    try:
+        url, state = oidc_mod.begin_login(con)
+        con.commit()
+    except oidc_mod.OidcError as e:
+        log.warning("OIDC start failed (%s): %s", e.code, _log_safe(e.detail))
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Single sign-on is unavailable right now. Try again, or contact "
+            "your administrator.") from e
+    finally:
+        con.close()
+    oidc_mod.set_state_cookie(response, state)
+    return {"authorization_url": url}
+
+
+@router.get("/oidc/callback")
+def oidc_callback(request: Request, code: str | None = None,
+                  state: str | None = None, error: str | None = None):
+    """Finish the login the provider is redirecting back from.
+
+    A GET, so CSRFMiddleware skips it (`csrf.SAFE_METHODS`) -- which is correct
+    rather than a gap: the single-use `state` row IS this leg's CSRF defence, and
+    an Origin check could not work here anyway because the request comes from the
+    provider's redirect, not from our own page.
+
+    Order matters and is the security property: the browser binding, the
+    id_token and the domain/group fences are checked inside `complete_login`,
+    THEN the local block list, THEN the provider-identity binding, THEN
+    provisioning, THEN the session. A blocked or mismatched address must never
+    be provisioned on its way to being refused."""
+    _require_oidc()
+    cookie_state = request.cookies.get(oidc_mod.state_cookie_name())
+    if error or not code or not state:
+        # The provider refused (consent declined, and so on), or something
+        # arrived here without the two parameters a real callback carries.
+        # `error` is provider-controlled text and is logged, never echoed.
+        if error:
+            log.warning("OIDC provider returned an error at the callback: %r",
+                        _log_safe(error)[:200])
+        return _oidc_failure("provider_error" if error else "invalid_state")
+
+    # THREE PHASES, and the split is deliberate: no app.db transaction may span
+    # a provider round trip. Holding the write lock across the token exchange
+    # makes every other writer in the app fail on busy_timeout when the provider
+    # is slow, which is routine for a cold tenant.
+    con = connect()
+    try:
+        try:
+            nonce, verifier = oidc_mod.claim_state(con, state, cookie_state)
+        finally:
+            # Burn the row whatever happened. Single-use has to mean a single
+            # ATTEMPT, or a replayed callback URL simply gets another go.
+            con.commit()
+    except oidc_mod.OidcError as e:
+        log.warning("OIDC sign-in failed (%s): %s", e.code, _log_safe(e.detail))
+        return _oidc_failure(e.code)
+    finally:
+        con.close()
+
+    # Phase 2: the network, holding no connection at all.
+    try:
+        identity = oidc_mod.exchange_code(code, nonce, verifier)
+    except oidc_mod.OidcError as e:
+        log.warning("OIDC sign-in failed (%s): %s", e.code, _log_safe(e.detail))
+        return _oidc_failure(e.code)
+
+    # Phase 3: decide and record, in one short transaction.
+    email = identity.email
+    con = connect()
+    try:
+        # The allowlist is checked FIRST, exactly as `request_login` does it --
+        # `auth.is_denied`'s docstring states the invariant: allowlisting a
+        # denied person always wins. Getting this order wrong locks out anyone
+        # re-added through the CSV bulk import, which deliberately does not clear
+        # a denial: the admin sees them listed as a user while sign-in refuses
+        # them, with no signal anywhere.
+        if not auth.is_allowlisted(con, email) and auth.is_denied(con, email):
+            # The provider is the authority on identity, not on access to this
+            # application. A directory keeps departed staff and alumni for years,
+            # so the block list is the only local revocation lever there is.
+            log.warning("OIDC sign-in refused: %s is blocked in this deployment",
+                        _log_safe(email))
+            return _oidc_failure("denied")
+
+        # The account is keyed on the email claim, and at several providers that
+        # claim is neither verified nor immutable -- so an address already bound
+        # to a different provider subject is somebody else. See migration 39.
+        if auth.idp_identity_conflicts(con, email, identity.issuer, identity.subject):
+            log.warning("OIDC sign-in refused: %s is bound to a different provider "
+                        "subject than the one presented", _log_safe(email))
+            return _oidc_failure("not_authorized")
+
+        # The only sweep that runs on this path. `verify_login` carries it for
+        # magic link, and an OIDC deployment never reaches that -- so without
+        # this, oidc_logins, sessions and login_tokens are swept once per
+        # restart, fed by an unauthenticated endpoint.
+        auth.purge_expired_auth_rows(con)
+        issuer_host = (urlsplit(get_settings().oidc_issuer.strip()).hostname or "?").lower()
+        auth.provision_from_idp(con, email, f"oidc:{issuer_host}")
+        sess, _user = auth.create_session(con, email)
+        auth.bind_idp_identity(con, email, identity.issuer, identity.subject)
+        con.commit()
+    finally:
+        con.close()
+
+    resp = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+    auth.set_session_cookie(resp, sess)
+    oidc_mod.clear_state_cookie(resp)
+    return resp

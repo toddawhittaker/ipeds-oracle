@@ -560,6 +560,59 @@ MIGRATIONS: list[tuple[int, str]] = [
          "CREATE INDEX ix_mcp_attempts_created "
          "ON mcp_request_attempts(created_at);\n"
          "ALTER TABLE usage_log ADD COLUMN source TEXT;"),
+
+    # OIDC sign-in keeps one row per login ATTEMPT, between the redirect out to
+    # the provider and the redirect back. It is the same shape as login_tokens
+    # for the same reasons: single-use, short-lived, hash-keyed, and swept by
+    # auth.purge_expired_auth_rows.
+    #
+    # Only the state's HASH is stored. The raw state travels in a query string
+    # and is what the callback proves it holds, so it is a credential, and the
+    # rule that only hashes reach app.db applies to it exactly as it does to a
+    # magic-link token.
+    #
+    # `nonce` and `code_verifier` are stored raw because they are never sent to
+    # the browser at all: the nonce is compared against the id_token's claim and
+    # the verifier goes straight back to the provider's token endpoint. Keeping
+    # them server-side is precisely why this is a table and not a signed cookie
+    # -- a cookie would hand the PKCE verifier to the very browser PKCE exists
+    # to protect the exchange from, and could not be made single-use without a
+    # server-side record anyway.
+    #
+    # `used_at` is the replay guard: a callback URL sitting in someone's history
+    # or a proxy log must not start a second exchange.
+    (38, "CREATE TABLE oidc_logins (\n"
+         "    state_hash    TEXT PRIMARY KEY,\n"
+         "    nonce         TEXT NOT NULL,\n"
+         "    code_verifier TEXT NOT NULL,\n"
+         "    created_at    REAL NOT NULL,\n"
+         "    expires_at    REAL NOT NULL,\n"
+         "    used_at       REAL\n"
+         ");\n"
+         "CREATE INDEX ix_oidc_logins_expires ON oidc_logins(expires_at);"),
+
+    # Bind an account to the provider SUBJECT that first signed into it.
+    #
+    # Without this, an account is keyed on the `email` claim alone -- and at
+    # several major providers that claim is neither verified nor immutable. In
+    # Entra ID a guest or personal account can set it freely, and Entra emits no
+    # `email_verified` at all, so the "is it false?" check never fires. Someone
+    # who can be invited as a guest sets their email to an existing admin's
+    # address, signs in, and `create_session` matches that admin's users row --
+    # is_admin included. That is the published nOAuth pattern, and neither
+    # OIDC_ALLOWED_DOMAINS nor OIDC_REQUIRED_GROUP defends against it, because
+    # the forged claim IS in the allowed domain.
+    #
+    # `sub` is the identifier a provider guarantees is stable and unique. Trust
+    # on first use: the first OIDC sign-in for an address records the pair, and
+    # every later one must match it. Nullable, so accounts that predate this --
+    # and every magic-link account -- simply bind on their next SSO sign-in.
+    #
+    # The residual, stated: an attacker who forges an address that has NEVER
+    # signed in via OIDC still binds it first. OIDC_REQUIRED_GROUP is the fence
+    # for that, since a guest is not in the group.
+    (39, "ALTER TABLE users ADD COLUMN oidc_iss TEXT;\n"
+         "ALTER TABLE users ADD COLUMN oidc_sub TEXT;"),
 ]
 
 

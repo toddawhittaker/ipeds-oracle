@@ -56,3 +56,36 @@ export function turnErrorMessage(status, detail) {
 export function loadErrorMessage(what, detail) {
   return detail || `Couldn't load ${what}. Try again in a moment.`;
 }
+
+// Why an SSO sign-in bounced back to the door. The server redirects with
+// `?auth_error=<code>` from a CLOSED set (app/oidc.py's AUTH_ERRORS), never with
+// text a provider supplied — and this map is the second half of that guarantee:
+// anything unrecognised falls through to generic copy, so a code that somehow
+// arrives from outside the set renders our words rather than an attacker's.
+//
+// Wording rule: say what the reader can DO. "not_authorized" is the one that
+// actually happens to real people (they authenticated fine and are outside the
+// configured group or domain), and telling them to contact an administrator is
+// the only useful thing there is to say.
+const AUTH_ERROR_COPY = {
+  invalid_state:
+    "That sign-in link had expired. Start again — it only takes a moment.",
+  provider_error:
+    "Your identity provider couldn't complete the sign-in. Try again, or contact your administrator.",
+  provider_unreachable:
+    "We couldn't reach your identity provider. Try again in a moment.",
+  not_authorized:
+    "Your account isn't authorised for this application. Contact your administrator.",
+  denied:
+    "Your access to this application has been withdrawn. Contact your administrator.",
+};
+
+// Exported so a test iterates the map's OWN keys rather than a second hand-kept
+// copy of them. The Python side (app/oidc.py's AUTH_ERRORS) is pinned against
+// this file by a backend test, since nothing else can compare the two.
+export const AUTH_ERROR_CODES = Object.keys(AUTH_ERROR_COPY);
+
+export function authErrorMessage(code) {
+  return AUTH_ERROR_COPY[code]
+    || "Sign-in didn't complete. Try again, or contact your administrator.";
+}

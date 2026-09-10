@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { authErrorMessage } from "./authcopy.js";
+import { loginMethod, ssoButtonLabel } from "./loginmethod.js";
 import Wordmark from "./Wordmark.jsx";
 import { IconChevronLeft, IconChevronRight, IconPause, IconPlay } from "./icons.jsx";
 
@@ -26,6 +28,10 @@ const DOOR_FIGURES = [
     value: "+5.4%", source: "change in the median published price · IPEDS" },
 ];
 const ROTATE_MS = 5000;
+// How long to wait for /api/auth/config before drawing the magic-link door
+// anyway. Long enough that a slow-but-working server still picks the right
+// form; short enough that a hung one does not strand a visitor.
+const CONFIG_TIMEOUT_MS = 8000;
 
 // The door's hero statistic as an auto-advancing gallery (5s each) with manual
 // ‹ ··· › controls and an explicit pause/play toggle. Rotation stops while the
@@ -108,26 +114,97 @@ function DoorFigures({ externalPaused = false }) {
 // indistinguishable from "I signed out" and from "the backend is down".
 export default function Login({ notice = "" }) {
   const [email, setEmail] = useState("");
-  const [msg, setMsg] = useState(notice || null);
+  // An SSO failure comes back as ?auth_error=<code> on the door. Read it during
+  // the FIRST render rather than in an effect, so the message is on screen in
+  // the first paint instead of appearing a frame later. The code is looked up in
+  // a closed map; an unrecognised one renders OUR generic wording, never text
+  // that arrived in the query string.
+  const [msg, setMsg] = useState(() => {
+    const code = new URLSearchParams(window.location.search).get("auth_error");
+    return code ? authErrorMessage(code) : (notice || null);
+  });
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState(FALLBACK_HINT);
+  // null until /api/auth/config answers. The form slot stays EMPTY until then --
+  // rendering the magic-link form first and swapping it for an SSO button a
+  // moment later is a flash of the wrong door, and on a slow connection it is
+  // long enough to type an email into a field that is about to vanish.
+  const [method, setMethod] = useState(null);
+  // No default string here: `ssoButtonLabel` owns the fallback and runs before
+  // the button can render, so a second copy could only ever drift from it.
+  const [ssoLabel, setSsoLabel] = useState("");
+  const [ssoBusy, setSsoBusy] = useState(false);
   // Pause the gallery while the sign-in card holds focus — the input autoFocuses
   // on load, so the specimens don't slide in the user's peripheral vision at the
   // exact moment they're reading the instructions and typing their email.
   const [cardFocused, setCardFocused] = useState(false);
   const noticeRef = useRef(null);
 
+  // An `?auth_error=` message is present in the FIRST paint, and a role="alert"
+  // whose text is already there when the region mounts is announced
+  // unreliably. Move focus to it instead, which is also where a keyboard user
+  // needs to be — the SSO card's only other control is the button they are
+  // about to press again.
+  const [arrivedWithError] = useState(
+    () => !!new URLSearchParams(window.location.search).get("auth_error"));
   useEffect(() => {
-    if (ok) noticeRef.current?.focus();
-  }, [ok]);
+    if (ok || arrivedWithError) noticeRef.current?.focus();
+  }, [ok, arrivedWithError]);
 
   useEffect(() => {
-    // A hint only — the field stays usable if this never resolves.
+    // The domain is a hint only. The METHOD decides which form renders, and a
+    // failure here falls back to magic_link — the door that still works when the
+    // server is half-reachable, and the only one gated by the allowlist.
+    // Raced against a timeout because the form slot renders NOTHING until this
+    // resolves, and `api.js`'s fetch has no timeout of its own — a proxy holding
+    // the connection open would otherwise leave a wordmark, some marketing copy
+    // and no way to sign in, indefinitely and with no error. Losing the race
+    // falls back to magic_link, the same direction as an outright failure.
+    let settled = false;
+    const fallback = setTimeout(() => {
+      if (!settled) { settled = true; setMethod("magic_link"); }
+    }, CONFIG_TIMEOUT_MS);
     api.publicConfig()
-      .then((c) => { if (c.email_domain) setHint(`you@${c.email_domain}`); })
-      .catch(() => {});
+      .then((c) => {
+        clearTimeout(fallback);
+        if (settled) return;
+        settled = true;
+        if (c.email_domain) setHint(`you@${c.email_domain}`);
+        setMethod(loginMethod(c));
+        setSsoLabel(ssoButtonLabel(c));
+      })
+      .catch(() => {
+        clearTimeout(fallback);
+        if (!settled) { settled = true; setMethod("magic_link"); }
+      });
+    return () => clearTimeout(fallback);
   }, []);
+
+  // Strip the code from the URL once it has been read — the same hygiene
+  // Verify.jsx does for its token, so a reload or a copied link doesn't re-raise
+  // an error that has already been dealt with.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("auth_error")) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  async function startSso() {
+    if (ssoBusy) return;   // the aria-disabled half — see the button
+    setSsoBusy(true);
+    try {
+      const r = await api.oidcStart();
+      // Leaving the app entirely, so `ssoBusy` is deliberately not reset — the
+      // button must not flick back to enabled while the browser navigates.
+      window.location.assign(r.authorization_url);
+    } catch (e) {
+      setMsg(e?.detail
+        || "Single sign-on is unavailable right now. Try again in a moment.");
+      setOk(false);
+      setSsoBusy(false);
+    }
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -164,15 +241,32 @@ export default function Login({ notice = "" }) {
              onFocusCapture={() => setCardFocused(true)}
              onBlurCapture={() => setCardFocused(false)}>
           <h1><Wordmark /></h1>
-          <p className="muted">
-            Access is by invitation. We&apos;ll email a one-time sign-in link —
-            no password to remember.
-          </p>
+          {method === "oidc" && (
+            <p className="muted">
+              Access is managed by your institution&apos;s single sign-on.
+            </p>
+          )}
+          {method === "magic_link" && (
+            <p className="muted">
+              Access is by invitation. We&apos;ll email a one-time sign-in link —
+              no password to remember.
+            </p>
+          )}
           {msg && (
             <div className={"notice " + (ok ? "ok" : "error")} role="alert"
                  tabIndex={-1} ref={noticeRef}>{msg}</div>
           )}
-          {!ok && (
+          {!ok && method === "oidc" && (
+            // aria-disabled + an early return, never `disabled`: disabling the
+            // control the user just activated moves focus to <body>, and on a
+            // failure this is the card's only control — a keyboard user would
+            // have to Tab from the top of the document, past the figure
+            // gallery, to try again. Same pattern as Keys.jsx and Chat.jsx.
+            <button type="button" onClick={startSso} aria-disabled={ssoBusy}>
+              {ssoBusy ? "Redirecting…" : ssoLabel}
+            </button>
+          )}
+          {!ok && method === "magic_link" && (
             <form onSubmit={submit}>
               <label htmlFor="login-email" className="sr-only">Email</label>
               <input
@@ -186,10 +280,17 @@ export default function Login({ notice = "" }) {
               </button>
             </form>
           )}
-          <p className="door-fineprint muted small">
-            Not on the list? Request access with your institution email and an
-            administrator will review it.
-          </p>
+          {method === "oidc" && (
+            <p className="door-fineprint muted small">
+              Trouble signing in? Your administrator manages who has access.
+            </p>
+          )}
+          {method === "magic_link" && (
+            <p className="door-fineprint muted small">
+              Not on the list? Request access with your institution email and an
+              administrator will review it.
+            </p>
+          )}
         </div>
       </div>
     </div>

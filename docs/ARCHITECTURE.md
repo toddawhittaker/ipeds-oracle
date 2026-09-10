@@ -7,8 +7,9 @@ documents are:
 - [`AGENT_LOOP.md`](AGENT_LOOP.md) — the LLM agent loop, its three guards,
   grounding, structured emission, the figure/brief, and the self-learning
   lessons + answer cache.
-- [`AUTH_AND_SECURITY.md`](AUTH_AND_SECURITY.md) — magic-link auth, the
-  allowlist, rate limits, CSRF/CSP/body limits.
+- [`AUTH_AND_SECURITY.md`](AUTH_AND_SECURITY.md) — the sign-in methods
+  (magic link, OIDC) and how one is chosen, auto-provisioning, the allowlist,
+  rate limits, CSRF/CSP/body limits.
 - [`ADMIN.md`](ADMIN.md) — the Imports and Usage admin areas.
 - [`DATASET.md`](DATASET.md) — `ipeds.db` itself and the query gotchas.
 - [`SCHEMA.md`](SCHEMA.md) — the authoritative data model and query guide.
@@ -61,9 +62,16 @@ documents are:
   actionable half of a warning. Details in `CONTRIBUTING.md` → *Design system sync*.
 
 ## Stack & data stores
-- **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `security`, `mailer`,
-  `llm`, `prompt`, `guard`, `critic`, `skills`, `seeds`, `importer`, `nces`,
-  `logbuffer`, `ratelimit`, `apikeys`, `tools/*`, `routers/*`, `mcpsrv/*`).
+- **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `authmethod`,
+  `oidc`, `security`, `mailer`, `llm`, `prompt`, `guard`, `critic`, `skills`,
+  `seeds`, `importer`, `nces`, `logbuffer`, `ratelimit`, `apikeys`, `tools/*`,
+  `routers/*`, `mcpsrv/*`).
+- **There is more than one way in.** `AUTH_METHOD` selects exactly one sign-in
+  method — the passwordless magic link, or an OIDC provider — and every one of
+  them converges on `auth.create_session` + `auth.set_session_cookie`, the only
+  place a session row is written or a cookie set. `authmethod.py` resolves the
+  method and falls back to magic link, never toward a method that auto-provisions.
+  Details, and the traps, in [`AUTH_AND_SECURITY.md`](AUTH_AND_SECURITY.md).
 - **There are two front doors onto the same tools and the same agent.** The web
   app is one. The other is an **MCP endpoint** at `POST /mcp` (`app/mcpsrv/`),
   mounted in this same app rather than run as a second process, which lets any

@@ -16,6 +16,7 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 import app.nces as nces
 from app import apikeys, estimate, importer, lessoncats, skills
 from app.auth import canon_email, is_allowlisted, require_admin
+from app.authmethod import MAGIC_LINK, requested_method
 from app.config import get_settings, resolve_tz
 from app.db import connect
 from app.mailer import send_access_approved
@@ -331,7 +332,9 @@ def set_allowlist_admin(email: str, body: AllowlistAdminPatch,
 
 def _remove_user(con: sqlite3.Connection, email: str) -> None:
     """Drop `email` from the allowlist, zero their admin flag, kill their
-    sessions, and revoke their API keys. Shared by the single
+    sessions, revoke their API keys, and -- under an external identity provider
+    -- record a standing block so their next sign-in cannot simply re-provision
+    them. Shared by the single
     DELETE /allowlist/{email} endpoint and the bulk delete path below. Does NOT
     check the still-admin invariant itself — callers must skip a still-admin
     user BEFORE calling this (see both call sites). The caller commits."""
@@ -345,6 +348,15 @@ def _remove_user(con: sqlite3.Connection, email: str) -> None:
     # apikeys.revoke_for_email for why refusing them at verify time is not
     # enough on its own.
     apikeys.revoke_for_email(con, email)
+    # Under an external identity provider, dropping the allowlist row is not
+    # enough on its own: the next sign-in AUTO-PROVISIONS the row straight back,
+    # so Remove would silently do nothing. Blocking is what makes it stick.
+    # `requested_method`, not the RESOLVED one: a deployment whose OIDC config
+    # is temporarily broken is serving magic link, and if Remove skipped the
+    # block there it would silently become a no-op again the moment the config
+    # was fixed. What the operator ASKED for is what decides.
+    if requested_method(get_settings()) != MAGIC_LINK:
+        _block_canonical(con, email)
 
 
 @router.delete("/allowlist/{email}")
@@ -565,6 +577,36 @@ def access_requests_denied():
         ]
     finally:
         con.close()
+
+
+def _block_canonical(con: sqlite3.Connection, email: str) -> None:
+    """Record a standing block on `email`'s canonical address.
+
+    `_deny_group` below flips PENDING requests to denied, which is the right
+    move when someone applied and was turned down. An auto-provisioned user
+    never applied — there is no row to flip — so removing them has to CREATE the
+    denial, or `auth.is_denied` has nothing to find and the OIDC callback
+    re-provisions them on their next visit.
+
+    Idempotent: a second removal of an address already blocked adds nothing.
+    Canonical (+tag-stripped, lower-cased) to match `is_denied`, so the block
+    covers every variant that reaches the same mailbox rather than only the
+    exact string an admin happened to click.
+
+    Undone by the existing DELETE /access-requests/{email}/denial, which is what
+    the Blocked-users tab's unblock control already calls — so this introduces no
+    new concept for an admin to learn. The caller commits."""
+    canon = canon_email(email)
+    already = con.execute(
+        "SELECT 1 FROM access_requests WHERE status='denied' "
+        "AND COALESCE(canon_email, LOWER(email))=? LIMIT 1", (canon,)).fetchone()
+    if already:
+        return
+    now = time.time()
+    con.execute(
+        "INSERT INTO access_requests(email, reason, status, created_at, canon_email, denied_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (email, "removed by an administrator", "denied", now, canon, now))
 
 
 def _deny_group(con: sqlite3.Connection, canon: str) -> int:

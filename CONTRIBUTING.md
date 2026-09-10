@@ -33,6 +33,11 @@ backend/              the Python side (all Python tooling runs from here)
     llm.py            the tool-calling agent loop
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
+    authmethod.py     which sign-in door is active (magic_link | oidc), resolved
+                      the way mailer._resolve_backend picks a mail transport
+    oidc.py           OpenID Connect sign-in: Authlib builds the requests and
+                      verifies the id_token; the HTTP and the SSRF checks are
+                      ours (see docs/AUTH_AND_SECURITY.md for why)
     guard.py          topical guardrail in FRONT of the agent (off-topic never hits the DB)
     critic.py         post-answer review that can force one revision round
     feedback.py       distills a user's corrective feedback into a lesson
@@ -247,6 +252,17 @@ More generally, **when a flake has a candidate mechanism, force the bad branch
 instead of counting runs.** Repetition could not settle that one; a throwaway
 spec that hovered, awaited the popover visible, then clicked failed 5/5 while the
 fix passed 5/5 — seconds, and conclusive.
+
+**There is no identity provider to test against, so one is faked in-process.**
+`backend/tests/fakeidp.py` is a HELPER, not a suite (both runners glob
+`test_*.py`, so the filename keeps it from being executed as one). It serves
+discovery, JWKS and the token endpoint over an `httpx.MockTransport` — the same
+shape `test_nces.py` uses for NCES — and signs REAL RS256 id_tokens with a real
+key, so `app/oidc.py` runs its actual verification path. `app/oidc.py` exposes one
+seam for this, the module-level `_TRANSPORT`; every function also takes an
+explicit `transport` for direct unit tests. Be clear about what that buys: it
+proves the app's own logic, not interoperability with Entra ID or Okta. Real
+providers need a real provider.
 
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
