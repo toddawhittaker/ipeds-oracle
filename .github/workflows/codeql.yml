@@ -2,13 +2,13 @@ name: CodeQL
 
 # Static security analysis for the auth / SQL-execution surfaces (and the SPA).
 # Free on public repositories; results appear under the Security tab. Runs on PRs
-# and pushes to main and to the release epic branch, plus a weekly sweep for
+# and pushes to main and to the epic branch listed below, plus a weekly sweep for
 # newly-published queries.
 on:
   push:
-    branches: [main]
+    branches: [main, "epic/auth-methods"]
   pull_request:
-    branches: [main]
+    branches: [main, "epic/auth-methods"]
   schedule:
     - cron: "27 4 * * 1"
 

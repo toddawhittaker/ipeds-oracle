@@ -16,10 +16,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "epic/auth-methods"]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, "epic/auth-methods"]
   workflow_dispatch:
 
 # A newer commit on the same branch/PR cancels the in-flight run.
