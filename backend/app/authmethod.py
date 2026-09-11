@@ -38,6 +38,15 @@ def requested_method(s) -> str:
     return (s.auth_method or MAGIC_LINK).strip().lower()
 
 
+def _secure_issuer(issuer: str, s) -> bool:
+    """Imported lazily: app/oidc.py pulls in Authlib and joserfc, and this module
+    is deliberately dependency-free so `main` can call it at boot and tests can
+    drive it with a SimpleNamespace. The settings object is threaded through for
+    the same reason -- so this stays pure over whatever it was handed."""
+    from app.oidc import is_secure_url
+    return is_secure_url(issuer, s)
+
+
 def oidc_config_problems(s) -> list[str]:
     """Reasons OIDC cannot run, phrased for an operator reading a boot log.
     Empty list = usable. Pure: no network, no DB, no import of the OIDC stack."""
@@ -45,9 +54,12 @@ def oidc_config_problems(s) -> list[str]:
     issuer = s.oidc_issuer.strip()
     if not issuer:
         problems.append("OIDC_ISSUER is blank")
-    elif not issuer.lower().startswith("https://"):
+    elif not _secure_issuer(issuer, s):
         # Not pedantry: the id_token's signing keys are fetched from this origin,
-        # so plain http means anyone on the path chooses who you are.
+        # so plain http means anyone on the path chooses who you are. A LOOPBACK
+        # http issuer is allowed in the dev posture only (insecure cookies) --
+        # see oidc.is_secure_url, which this defers to so the boot check and the
+        # sign-in path can never disagree about what is acceptable.
         problems.append(f"OIDC_ISSUER must start with https:// (got {issuer!r})")
     if not s.oidc_client_id.strip():
         problems.append("OIDC_CLIENT_ID is blank")

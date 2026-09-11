@@ -83,6 +83,23 @@ def _tls(s) -> ldap3.Tls:
                      version=ssl.PROTOCOL_TLS_CLIENT)
 
 
+def _timeout(s) -> int:
+    """ldap3 wants an INTEGER, and will not say so politely.
+
+    `ldap_timeout_seconds` is a float, like its `oidc_http_timeout_seconds`
+    sibling. Handing that float to ldap3 raises `error: required argument is not
+    an integer` the moment it opens a real socket -- which `authenticate` then
+    converts into "the directory could not be reached", so every sign-in on
+    every real directory failed with a neutral 401 and a misleading log line.
+
+    Nothing in the test suite could catch it: MOCK_SYNC never opens a socket, so
+    the value is never used. It took running the thing against a real server.
+    Floored at 1 so a sub-second setting cannot round down to 0, which ldap3
+    reads as "no timeout".
+    """
+    return max(1, round(s.ldap_timeout_seconds))
+
+
 def _server(s) -> ldap3.Server:
     """The directory, as ldap3 sees it. A module-level function so a test can
     substitute it and inspect the Tls object it was handed -- the only way to
@@ -92,7 +109,7 @@ def _server(s) -> ldap3.Server:
     uri = s.ldap_server_uri.strip()
     use_ssl = uri.lower().startswith("ldaps://")
     return ldap3.Server(uri, use_ssl=use_ssl, tls=_tls(s),
-                        connect_timeout=s.ldap_timeout_seconds,
+                        connect_timeout=_timeout(s),
                         # Belt and braces with auto_referrals=False: even if a
                         # referral were followed, no host is trusted with this
                         # connection's credentials. ldap3's default here is
@@ -124,7 +141,7 @@ def _connection(server, *, user=None, password=None, **kw) -> ldap3.Connection:
     return ldap3.Connection(server, user=user, password=password,
                             raise_exceptions=False, auto_bind=False,
                             auto_referrals=False,
-                            receive_timeout=get_settings().ldap_timeout_seconds,
+                            receive_timeout=_timeout(get_settings()),
                             **kw)
 
 

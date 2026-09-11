@@ -1,0 +1,64 @@
+# Seed directory for compose.test.yaml. Three people, one group, one fence.
+#
+# `memberOf` is written as a REAL attribute here (via extensibleObject) rather
+# than produced by slapd's memberof overlay. A production directory supplies it
+# from the overlay; the app cannot tell the difference, because it just reads the
+# attribute off the entry. Doing it this way keeps the fixture to one mounted
+# LDIF with no slapd module configuration to get wrong.
+#
+# Passwords are plaintext in this file on purpose: it is a throwaway directory
+# on loopback, and a hashed value would make the fixture harder to read and edit
+# for no benefit. Never point the app at anything seeded from this file.
+
+dn: ou=people,dc=example,dc=edu
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=edu
+objectClass: organizationalUnit
+ou: groups
+
+# In the fence AND in the allowed domain — this one should get in.
+dn: uid=staff,ou=people,dc=example,dc=edu
+objectClass: inetOrgPerson
+objectClass: extensibleObject
+uid: staff
+cn: Sam Staff
+sn: Staff
+mail: staff@example.edu
+userPassword: staff-password
+memberOf: cn=ipeds-users,ou=groups,dc=example,dc=edu
+
+# Authenticates fine, but is NOT in the group — the fence should refuse them.
+dn: uid=student,ou=people,dc=example,dc=edu
+objectClass: inetOrgPerson
+objectClass: extensibleObject
+uid: student
+cn: Stevie Student
+sn: Student
+mail: student@example.edu
+userPassword: student-password
+memberOf: cn=everyone,ou=groups,dc=example,dc=edu
+
+# In the group, but their address is outside LDAP_ALLOWED_DOMAINS — the domain
+# fence should refuse them even though the group fence would admit them.
+dn: uid=outsider,ou=people,dc=example,dc=edu
+objectClass: inetOrgPerson
+objectClass: extensibleObject
+uid: outsider
+cn: Olly Outsider
+sn: Outsider
+mail: outsider@elsewhere.test
+userPassword: outsider-password
+memberOf: cn=ipeds-users,ou=groups,dc=example,dc=edu
+
+dn: cn=ipeds-users,ou=groups,dc=example,dc=edu
+objectClass: groupOfNames
+cn: ipeds-users
+member: uid=staff,ou=people,dc=example,dc=edu
+member: uid=outsider,ou=people,dc=example,dc=edu
+
+dn: cn=everyone,ou=groups,dc=example,dc=edu
+objectClass: groupOfNames
+cn: everyone
+member: uid=student,ou=people,dc=example,dc=edu

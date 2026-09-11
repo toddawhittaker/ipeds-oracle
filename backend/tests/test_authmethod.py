@@ -35,7 +35,8 @@ from app.authmethod import (  # noqa: E402
 
 
 def _s(**kw):
-    base = {"auth_method": MAGIC_LINK, "oidc_issuer": "", "oidc_client_id": "",
+    base = {"auth_method": MAGIC_LINK, "cookie_secure": True,
+            "oidc_issuer": "", "oidc_client_id": "",
             "oidc_client_secret": "", "oidc_allowed_domains": "",
             "oidc_required_group": "",
             "ldap_server_uri": "", "ldap_start_tls": False,
@@ -109,11 +110,28 @@ def test_a_blank_client_id_falls_back_and_names_the_key():
 
 def test_a_plain_http_issuer_is_refused():
     """The id_token's signing keys are fetched from the issuer's origin, so http
-    means anyone on the path chooses who you are."""
-    s = _good_oidc(oidc_issuer="http://idp.example.test")
-    assert resolve_auth_method(s) == MAGIC_LINK
-    msg = boot_warning(s)
-    assert msg and "https" in msg, msg
+    means anyone on the path chooses who you are. Refused even in the dev
+    posture, because the host is not loopback."""
+    for secure in (True, False):
+        s = _good_oidc(oidc_issuer="http://idp.example.test", cookie_secure=secure)
+        assert resolve_auth_method(s) == MAGIC_LINK, f"cookie_secure={secure}"
+        msg = boot_warning(s)
+        assert msg and "https" in msg, msg
+
+
+def test_a_loopback_http_issuer_is_allowed_only_in_the_dev_posture():
+    """The local Keycloak in compose.test.yaml serves plain http on localhost,
+    so without this the one provider a developer can actually stand up is the
+    one this app refuses. Gated exactly like csrf.py's loopback exception:
+    insecure cookies only, which is never a production posture."""
+    dev = _good_oidc(oidc_issuer="http://localhost:8081/realms/ipeds-test",
+                     cookie_secure=False)
+    assert resolve_auth_method(dev) == OIDC, ldap_config_problems(dev) or boot_warning(dev)
+
+    prod = _good_oidc(oidc_issuer="http://localhost:8081/realms/ipeds-test",
+                      cookie_secure=True)
+    assert resolve_auth_method(prod) == MAGIC_LINK, (
+        "a plain-http issuer was accepted with secure cookies")
 
 
 def test_a_missing_secret_is_not_a_problem():
@@ -259,6 +277,8 @@ def run():
     check("a blank client id falls back and names the key",
           test_a_blank_client_id_falls_back_and_names_the_key)
     check("a plain http issuer is refused", test_a_plain_http_issuer_is_refused)
+    check("a loopback http issuer is allowed only in the dev posture",
+          test_a_loopback_http_issuer_is_allowed_only_in_the_dev_posture)
     check("a missing secret is not a problem", test_a_missing_secret_is_not_a_problem)
     check("resolving is silent", test_resolving_is_silent)
 

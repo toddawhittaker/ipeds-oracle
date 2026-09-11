@@ -451,6 +451,27 @@ def test_referrals_are_never_followed():
     assert conn.receive_timeout, "no recv deadline: a slow server holds a worker"
 
 
+def test_the_timeouts_handed_to_ldap3_are_integers():
+    """ldap3 raises `error: required argument is not an integer` on a FLOAT
+    timeout, the moment it opens a real socket.
+
+    `ldap_timeout_seconds` is a float (as its OIDC sibling is), so the unfixed
+    version turned every sign-in against every real directory into "the
+    directory could not be reached" -- a neutral 401 and a log line blaming the
+    network. MOCK_SYNC never opens a socket, so no amount of testing here could
+    have found it; it took running against a real server. Asserted on the values
+    ldap3 is actually handed."""
+    server = ldapauth._server(get_settings())
+    conn = ldapauth._connection(server, user="cn=probe", password="x")
+    assert isinstance(server.connect_timeout, int), (
+        f"connect_timeout is {type(server.connect_timeout).__name__}, "
+        f"ldap3 needs int")
+    assert isinstance(conn.receive_timeout, int), (
+        f"receive_timeout is {type(conn.receive_timeout).__name__}, "
+        f"ldap3 needs int")
+    assert server.connect_timeout >= 1 and conn.receive_timeout >= 1
+
+
 def test_certificates_are_always_verified_on_the_sign_in_path():
     """⚠ ldap3's own `Tls()` default is `validate=CERT_NONE`, so an ldaps:// URI
     built with it accepts ANY certificate — on the one connection in this app
@@ -661,6 +682,8 @@ def run():
 
     print("\n5. transport posture")
     check("referrals are never followed", test_referrals_are_never_followed)
+    check("the timeouts handed to ldap3 are integers",
+          test_the_timeouts_handed_to_ldap3_are_integers)
     check("certificates are always verified on the sign-in path",
           test_certificates_are_always_verified_on_the_sign_in_path)
     check("StartTLS runs on a plain ldap deployment",
