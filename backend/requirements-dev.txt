@@ -1,4 +1,4 @@
 # Dev/CI-only tooling (not needed to run the app). Kept separate from
 # requirements.txt so the runtime image stays lean.
-ruff==0.16.4
-coverage==7.15.4
+ruff==0.16.5
+coverage==7.16.0
