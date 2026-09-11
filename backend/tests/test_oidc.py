@@ -614,19 +614,45 @@ def test_the_magic_link_routes_404_under_oidc():
 
 # --- the provider's own answers ---------------------------------------------
 
-def test_discovery_naming_an_offhost_endpoint_is_refused_before_use():
-    """A doctored discovery document is how a server gets talked into POSTing its
-    client secret somewhere else. The endpoint must be rejected BEFORE any
-    request is issued to it."""
+def test_discovery_may_name_endpoints_on_another_host():
+    """GOOGLE'S ACTUAL SHAPE, and the regression that cost us it.
+
+    Google's issuer is accounts.google.com while its token_endpoint lives on
+    oauth2.googleapis.com and its jwks_uri on www.googleapis.com. The first
+    version of `discover` required every endpoint to share the issuer's origin,
+    which is stricter than RFC 8414 and rejected Google Workspace outright --
+    a provider the README lists as supported.
+
+    No in-process fake could have caught this: it took reading a real provider's
+    discovery document."""
+    idp = _fresh()
+    idp.discovery = {
+        "issuer": fakeidp.ISSUER,
+        "authorization_endpoint": f"{fakeidp.ISSUER}/authorize",
+        "token_endpoint": "https://oauth2.example-cdn.test/token",
+        "jwks_uri": "https://www.example-cdn.test/jwks",
+    }
+    with TestClient(app) as c:
+        q = _start(c, idp)
+        r = _callback(c, q["state"])
+    assert _signed_in(r), "a conforming multi-host provider was refused"
+    assert any("example-cdn.test" in u for u in idp.seen_urls), idp.seen_urls
+
+
+def test_discovery_naming_a_non_https_endpoint_is_refused_before_use():
+    """What survived the same-origin rule's removal. An http endpoint is a
+    downgrade -- the client secret would cross the wire in clear -- and it is
+    also how a document would name an internal, non-TLS address. Refused BEFORE
+    any request reaches it."""
     idp = _fresh()
     idp.discovery = {"issuer": fakeidp.ISSUER,
                      "authorization_endpoint": f"{fakeidp.ISSUER}/authorize",
-                     "token_endpoint": "https://evil.test/token",
+                     "token_endpoint": "http://oauth2.example-cdn.test/token",
                      "jwks_uri": f"{fakeidp.ISSUER}/jwks"}
     with TestClient(app) as c:
         r = c.post("/api/auth/oidc/start")
     assert r.status_code == 502, r.text
-    assert not any("evil.test" in u for u in idp.seen_urls), idp.seen_urls
+    assert not any("example-cdn.test" in u for u in idp.seen_urls), idp.seen_urls
 
 
 def test_discovery_claiming_another_issuer_is_refused():
@@ -845,8 +871,10 @@ def run():
           test_the_magic_link_routes_404_under_oidc)
 
     print("\n6. what the provider says")
-    check("discovery naming an off-host endpoint is refused before use",
-          test_discovery_naming_an_offhost_endpoint_is_refused_before_use)
+    check("discovery may name endpoints on another host (Google's shape)",
+          test_discovery_may_name_endpoints_on_another_host)
+    check("discovery naming a non-https endpoint is refused before use",
+          test_discovery_naming_a_non_https_endpoint_is_refused_before_use)
     check("discovery claiming another issuer is refused",
           test_discovery_claiming_another_issuer_is_refused)
     check("a JWKS failure fails closed", test_a_jwks_failure_fails_closed)

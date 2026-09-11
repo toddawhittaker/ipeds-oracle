@@ -9,13 +9,19 @@ bugs get written, and none of it is this project's problem to solve.
 Two things ARE ours, and both are guards on top of the library rather than
 reimplementations of it:
 
-**1. The discovery document is validated before it is trusted.** Authlib will use
-whatever `token_endpoint` a discovery document names -- so a malicious or
-MITM'd document would make this server POST its client secret to a host of the
-attacker's choosing. Every endpoint must therefore sit on the issuer's own
-origin, checked BEFORE any request is issued to it, and the document must claim
-the issuer we asked for (RFC 8414, which is what defuses a mix-up attack). This
-mirrors `nces.py`, where the same reasoning already applies to NCES.
+**1. The discovery document is validated before it is trusted.** The issuer must
+be https, the document must claim that same issuer (RFC 8414 -- the mix-up
+defence), no redirect is followed on the way, and every endpoint it names must
+be an https URL, checked BEFORE any request is issued to it.
+
+What it does NOT do is require those endpoints to share the issuer's host. That
+was the first version, and it rejected Google Workspace -- whose issuer is
+`accounts.google.com` while its token endpoint lives on `oauth2.googleapis.com`
+-- a provider this app's README lists as supported. Same-origin was stricter
+than the spec, and the security it appeared to add was illusory: the document
+arrives over verified TLS from a host the operator configured, so an attacker
+able to change what it says is the provider, and a provider can assert any
+identity it likes wherever its endpoints sit.
 
 **2. Failure is CLOSED.** This is deliberately not `version.py`, whose outbound
 check fails open because the worst case there is a missing update banner. Here
@@ -188,12 +194,13 @@ def redirect_uri() -> str:
     return f"{base}{CALLBACK_PATH}"
 
 
-def _origin(url: str) -> tuple[str, str, int]:
-    """(scheme, host, port) with the default port made explicit, so that
-    https://idp.example.edu and https://idp.example.edu:443 compare equal."""
-    p = urlsplit(url)
-    scheme = (p.scheme or "").lower()
-    return scheme, (p.hostname or "").lower(), p.port or (443 if scheme == "https" else 80)
+def _is_https(url: str) -> bool:
+    """True for an absolute https URL with a host.
+
+    Every endpoint the discovery document names has to clear this. It is
+    deliberately NOT a same-origin check against the issuer -- see `discover`."""
+    parts = urlsplit(url)
+    return parts.scheme.lower() == "https" and bool(parts.hostname)
 
 
 def _get_json(url: str, transport: httpx.BaseTransport | None) -> dict:
@@ -229,16 +236,28 @@ def discover(transport: httpx.BaseTransport | None = None) -> dict:
         raise OidcError("provider_error",
                         f"discovery names issuer {claimed!r}, expected {issuer!r}")
 
-    # Every endpoint must be on the issuer's own origin, checked BEFORE anything
-    # is sent to it. This is the check that stops a doctored document collecting
-    # the client secret at the token endpoint.
+    # Every endpoint must be present and https, checked BEFORE anything is sent
+    # to it. Deliberately NOT a same-origin check against the issuer: that is
+    # stricter than RFC 8414 ever required, and it breaks conforming providers.
+    # Google is the one that matters -- its issuer is accounts.google.com while
+    # its token_endpoint is on oauth2.googleapis.com and its jwks_uri on
+    # www.googleapis.com, so a same-origin rule rejects Google Workspace
+    # outright, which this app's own README lists as supported.
+    #
+    # What actually defends the client secret is the chain around this: the
+    # document is fetched over verified TLS from an https issuer the OPERATOR
+    # configured, no redirect is followed on the way, and the document must
+    # claim that same issuer (above). An attacker who can alter what that host
+    # returns IS the provider, and a provider can assert any identity it likes
+    # regardless of which host its endpoints sit on. The https requirement is
+    # the part still doing work: it stops a downgrade to http, and stops a
+    # document naming a file:// or an internal non-TLS address.
     for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
         value = doc.get(key)
         if not value:
             raise OidcError("provider_error", f"discovery is missing {key}")
-        if _origin(str(value)) != _origin(issuer):
-            raise OidcError("provider_error",
-                            f"{key} {value!r} is not on the issuer's origin")
+        if not _is_https(str(value)):
+            raise OidcError("provider_error", f"{key} {value!r} is not an https URL")
 
     _cache["discovery"], _cache["discovery_at"] = doc, now
     return doc

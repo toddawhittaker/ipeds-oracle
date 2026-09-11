@@ -63,13 +63,29 @@ already been bitten once by httpx2's mere presence changing what Starlette's
 TestClient used. So the token exchange is a form POST through the same `httpx`
 `nces.py` and `llmhttp.py` use, with a transport tests can substitute.
 
-**The discovery document is validated before it is trusted.** Authlib will use
-whatever `token_endpoint` a document names, so a doctored one would make this
-server POST its client secret to a host of the attacker's choosing. The issuer
-must be `https://`, the document must claim the issuer we asked for (RFC 8414,
-which defuses a mix-up attack), and `authorization_endpoint` / `token_endpoint` /
-`jwks_uri` must all sit on the issuer's own origin — checked **before** any
-request is issued to them, the same per-hop rule `nces.py` applies to NCES.
+**The discovery document is validated before it is trusted.** The issuer must be
+`https://`, the document must claim that same issuer (RFC 8414 — the mix-up
+defence), no redirect is followed on the way, and `authorization_endpoint` /
+`token_endpoint` / `jwks_uri` must each be an **https URL**, checked *before* any
+request is issued to them.
+
+**It does not require those endpoints to share the issuer's host, and that is a
+correction.** The first version did, and it rejected **Google Workspace** — whose
+issuer is `accounts.google.com` while its token endpoint is on
+`oauth2.googleapis.com` and its JWKS on `www.googleapis.com` — a provider this
+repo's README lists as supported. Same-origin was stricter than the spec ever
+required, and the safety it appeared to add was illusory: the document arrives
+over verified TLS from a host the *operator* configured, so anyone able to change
+what it says is the provider, and a provider can assert whatever identity it
+likes regardless of where its endpoints sit. The https requirement is the part
+still doing work — it stops a downgrade to cleartext and stops a document naming
+an internal non-TLS address.
+
+Worth noting how this was found: not by review and not by any in-process test,
+but by reading a real provider's discovery document while answering "how would I
+try this live?". Entra ID, Okta, Keycloak and Auth0 all happen to use same-host
+endpoints, so every fake and every reviewer agreed with each other and with the
+code. `test_oidc.py` now pins Google's actual shape.
 
 **Failure is CLOSED.** Deliberately not `version.py`, whose outbound check fails
 open because the worst case there is a missing update banner; here the worst case
