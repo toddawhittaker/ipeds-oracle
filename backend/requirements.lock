@@ -1094,9 +1094,9 @@ requests==2.34.2 \
     # via
     #   fastembed
     #   resend
-resend==2.42.0 \
-    --hash=sha256:2d759b180b43fb95563ad8923b341906c524e38633949f1f289e7447694e9bf4 \
-    --hash=sha256:a65e7f4dba8b3908298026f204264d2f2333e63e86dfce75212f85a2ee192c09
+resend==2.44.0 \
+    --hash=sha256:695c3cb75c4c2f169fd3ee31db6bc49814e449978f8c1b33b94eeb7b093cedbc \
+    --hash=sha256:832c15a44c7ca9a7c8501316f48ffcbdce328ec1711b6695b741b0e354be9aff
     # via -r requirements.txt
 rpds-py==2026.6.3 \
     --hash=sha256:0be972be84cfcaf46c8c6edf690ca0f154ac17babf1f6a955a51579b34ad2dc5 \
