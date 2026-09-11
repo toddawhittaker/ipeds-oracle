@@ -65,6 +65,7 @@ from joserfc import jwt as jose_jwt
 from joserfc.jwk import KeySet
 
 from app.config import get_settings
+from app.csrf import LOOPBACK_HOSTS
 from app.security import hash_token, new_token
 
 log = logging.getLogger("ipeds.oidc")
@@ -194,13 +195,33 @@ def redirect_uri() -> str:
     return f"{base}{CALLBACK_PATH}"
 
 
-def _is_https(url: str) -> bool:
-    """True for an absolute https URL with a host.
+def is_secure_url(url: str, s=None) -> bool:
+    """True for an https URL -- or a LOOPBACK http one in the dev posture.
 
-    Every endpoint the discovery document names has to clear this. It is
-    deliberately NOT a same-origin check against the issuer -- see `discover`."""
+    Every endpoint the discovery document names has to clear this, and so does
+    the issuer itself. It is deliberately NOT a same-origin check against the
+    issuer (see `discover`).
+
+    The carve-out exists because a local identity provider -- the Keycloak in
+    `compose.test.yaml` -- serves plain http on localhost, so without it the one
+    configuration a developer can actually stand up is the one configuration
+    this app refuses. It is gated exactly the way `csrf.py`'s loopback exception
+    is: only when `cookie_secure` is false, which is the documented dev posture
+    and is never true of a production deployment (the boot check screams if an
+    https public URL is served with insecure cookies). And only for a loopback
+    host, so it can never admit a remote http issuer.
+    """
     parts = urlsplit(url)
-    return parts.scheme.lower() == "https" and bool(parts.hostname)
+    scheme = parts.scheme.lower()
+    if scheme == "https" and parts.hostname:
+        return True
+    if scheme != "http" or not parts.hostname:
+        return False
+    # `s` is threaded in by authmethod, whose whole contract is purity over a
+    # settings object it is handed -- reading get_settings() here would make its
+    # boot check consult the real environment while its tests pass a namespace.
+    s = s if s is not None else get_settings()
+    return not s.cookie_secure and parts.hostname.lower() in LOOPBACK_HOSTS
 
 
 def _get_json(url: str, transport: httpx.BaseTransport | None) -> dict:
@@ -256,7 +277,7 @@ def discover(transport: httpx.BaseTransport | None = None) -> dict:
         value = doc.get(key)
         if not value:
             raise OidcError("provider_error", f"discovery is missing {key}")
-        if not _is_https(str(value)):
+        if not is_secure_url(str(value)):
             raise OidcError("provider_error", f"{key} {value!r} is not an https URL")
 
     _cache["discovery"], _cache["discovery_at"] = doc, now

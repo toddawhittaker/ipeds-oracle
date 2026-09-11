@@ -87,6 +87,14 @@ try this live?". Entra ID, Okta, Keycloak and Auth0 all happen to use same-host
 endpoints, so every fake and every reviewer agreed with each other and with the
 code. `test_oidc.py` now pins Google's actual shape.
 
+**A loopback `http://` issuer is accepted in the dev posture only** — when
+`COOKIE_SECURE` is false, which is never a production deployment (the boot check
+screams if an https public URL is served with insecure cookies). It is the same
+carve-out `csrf.py` already makes for the Vite dev proxy, and it exists so the
+local Keycloak in `compose.test.yaml` — which serves plain http on localhost —
+is not the one provider this app refuses. `oidc.is_secure_url` is the single
+rule, so the boot check and the sign-in path cannot disagree about it.
+
 **Failure is CLOSED.** Deliberately not `version.py`, whose outbound check fails
 open because the worst case there is a missing update banner; here the worst case
 is signing somebody in unverified. A TTL cache serving a still-valid JWKS through
@@ -246,6 +254,16 @@ exactly like a real refusal.
 one. A second connection costs an extra TCP connect and TLS handshake, and only
 when the username *exists* — tens of milliseconds of wall clock that turn the
 deliberately identical 401 into a username oracle.
+
+**⚠ The timeouts handed to ldap3 must be INTEGERS.** `ldap_timeout_seconds` is a
+float, like its OIDC sibling, and ldap3 answers a float with
+`error: required argument is not an integer` the moment it opens a real socket —
+which `authenticate` converts into "the directory could not be reached". So the
+unfixed version returned a neutral 401 for *every* sign-in against *every* real
+directory, with a log line blaming the network. `MOCK_SYNC` never opens a socket,
+so no test here could have found it: it took running against the OpenLDAP in
+`compose.test.yaml`. `_timeout()` coerces, and a test asserts the types ldap3 is
+handed.
 
 **Not built, and why:** LDAP accounts are not bound to a directory identity the
 way OIDC accounts are bound to a provider `sub` (migration 39). The nOAuth

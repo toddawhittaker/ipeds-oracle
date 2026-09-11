@@ -1,0 +1,71 @@
+{
+  "realm": "ipeds-test",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "groups": [
+    { "name": "ipeds-users" },
+    { "name": "everyone-else" }
+  ],
+  "clients": [
+    {
+      "clientId": "ipeds-oracle",
+      "name": "IPEDS Oracle (local test)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "local-test-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:8000/api/auth/oidc/callback"],
+      "webOrigins": ["http://localhost:8000"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "staff",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "staff@example.edu",
+      "firstName": "Sam",
+      "lastName": "Staff",
+      "credentials": [{ "type": "password", "value": "staff-password", "temporary": false }],
+      "groups": ["/ipeds-users"]
+    },
+    {
+      "username": "student",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "student@example.edu",
+      "firstName": "Stevie",
+      "lastName": "Student",
+      "credentials": [{ "type": "password", "value": "student-password", "temporary": false }],
+      "groups": ["/everyone-else"]
+    },
+    {
+      "username": "outsider",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "outsider@elsewhere.test",
+      "firstName": "Olly",
+      "lastName": "Outsider",
+      "credentials": [{ "type": "password", "value": "outsider-password", "temporary": false }],
+      "groups": ["/ipeds-users"]
+    }
+  ]
+}
