@@ -9,11 +9,11 @@ pydantic-settings>=2.15.0
 httpx>=0.28.1
 python-multipart>=0.0.32
 itsdangerous>=2.2
-resend>=2.42.0
+resend>=2.43.0
 fastembed>=0.8.0
 numpy>=2.5.2
 email-validator>=2.3.0
-mcp>=2.1.1
+mcp>=2.2.0
 authlib>=1.8.0
 # Imported directly by app/oidc.py (JWKS parsing + id_token signature) and by
 # tests/fakeidp.py. They arrive via authlib today, but "we import it" is what
