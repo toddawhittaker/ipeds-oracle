@@ -135,6 +135,8 @@ export default function Login({ notice = "" }) {
   // the button can render, so a second copy could only ever drift from it.
   const [ssoLabel, setSsoLabel] = useState("");
   const [ssoBusy, setSsoBusy] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   // Pause the gallery while the sign-in card holds focus — the input autoFocuses
   // on load, so the specimens don't slide in the user's peripheral vision at the
   // exact moment they're reading the instructions and typing their email.
@@ -189,6 +191,32 @@ export default function Login({ notice = "" }) {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
+
+  async function submitLdap(e) {
+    e.preventDefault();
+    if (busy) return;
+    // Clear the previous message FIRST. The server answers every rejection with
+    // the same sentence by design, so on a second wrong password setMsg would
+    // receive a string equal to current state, React would bail out, and the
+    // role="alert" text would never change — announcing nothing to a screen
+    // reader on the one door where repeated failures are the ordinary case.
+    setMsg(null);
+    setBusy(true);
+    try {
+      await api.ldapSignIn(username, password);
+      // Full reload rather than a state update, so the Shell re-runs api.me()
+      // and every downstream view sees a signed-in user — the same thing
+      // Verify.jsx does after consuming a magic link.
+      window.location.assign("/");
+    } catch (err) {
+      // The server answers every rejection identically on purpose (a varying
+      // message is a directory enumeration oracle), so this shows its sentence
+      // rather than inventing a more specific one.
+      setMsg(err?.detail || "Sign-in failed. Check your username and password.");
+      setOk(false);
+      setBusy(false);
+    }
+  }
 
   async function startSso() {
     if (ssoBusy) return;   // the aria-disabled half — see the button
@@ -246,6 +274,11 @@ export default function Login({ notice = "" }) {
               Access is managed by your institution&apos;s single sign-on.
             </p>
           )}
+          {method === "ldap" && (
+            <p className="muted">
+              Sign in with your institution directory username and password.
+            </p>
+          )}
           {method === "magic_link" && (
             <p className="muted">
               Access is by invitation. We&apos;ll email a one-time sign-in link —
@@ -266,6 +299,25 @@ export default function Login({ notice = "" }) {
               {ssoBusy ? "Redirecting…" : ssoLabel}
             </button>
           )}
+          {method === "ldap" && (
+            <form onSubmit={submitLdap}>
+              <label htmlFor="ldap-username" className="sr-only">Username</label>
+              <input
+                id="ldap-username" type="text" required autoComplete="username"
+                placeholder="Username" autoFocus
+                value={username} onChange={(e) => setUsername(e.target.value)}
+              />
+              <label htmlFor="ldap-password" className="sr-only">Password</label>
+              <input
+                id="ldap-password" type="password" required
+                autoComplete="current-password" placeholder="Password"
+                value={password} onChange={(e) => setPassword(e.target.value)}
+              />
+              <button type="submit" aria-disabled={busy}>
+                {busy ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          )}
           {!ok && method === "magic_link" && (
             <form onSubmit={submit}>
               <label htmlFor="login-email" className="sr-only">Email</label>
@@ -280,7 +332,7 @@ export default function Login({ notice = "" }) {
               </button>
             </form>
           )}
-          {method === "oidc" && (
+          {(method === "oidc" || method === "ldap") && (
             <p className="door-fineprint muted small">
               Trouble signing in? Your administrator manages who has access.
             </p>

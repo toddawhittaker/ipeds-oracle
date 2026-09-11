@@ -104,6 +104,9 @@ async def lifespan(app: FastAPI):
     _warning = authmethod.fence_warning(get_settings())
     if _warning:
         log.critical(_warning)
+    _warning = authmethod.insecure_ldap_warning(get_settings())
+    if _warning:
+        log.critical(_warning)
     init_db()
     try:
         from app.auth import purge_expired_auth_rows

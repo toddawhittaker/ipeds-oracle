@@ -7,7 +7,7 @@
 // the magic-link form is the one that still works when it does — it is also the
 // only method gated by the manually curated allowlist, so guessing it is the
 // conservative guess in both directions.
-export const METHODS = ["magic_link", "oidc"];
+export const METHODS = ["magic_link", "oidc", "ldap"];
 
 export function loginMethod(cfg) {
   const raw = cfg && typeof cfg.auth_method === "string" ? cfg.auth_method.trim() : "";

@@ -108,6 +108,11 @@ export const api = {
   // of bouncing the visitor somewhere, and so the request passes the CSRF origin
   // check on the way out.
   oidcStart: () => j("POST", "/api/auth/oidc/start"),
+  // Directory sign-in. The password is posted once and never stored client-side;
+  // on success the server sets the session cookie and the page reloads, exactly
+  // as the magic-link verify does.
+  ldapSignIn: (username, password) =>
+    j("POST", "/api/auth/ldap", { username, password }),
 
   // `q` searches the caller's own history — their questions, the assistant's
   // replies, and conversation titles. Terms are ANDed and "a quoted run" is one

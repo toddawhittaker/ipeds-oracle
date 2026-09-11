@@ -46,9 +46,10 @@ to. Imports and Usage never badge — there's nothing to "clear" there.
 
 ## Users: allowlist and access requests
 
-> **If your deployment signs people in through an identity provider (SSO), read
-> this first.** Under `AUTH_METHOD=oidc` the provider decides who can sign in, and
-> anyone it authenticates gets an account here on their first visit. That changes
+> **If your deployment signs people in through an identity provider (SSO) or a
+> directory (LDAP), read this first.** Under `AUTH_METHOD=oidc` or `ldap` the
+> provider decides who can sign in, and anyone it authenticates gets an account
+> here on their first visit. That changes
 > what this screen means:
 >
 > - It becomes a **record of who has signed in**, not a gate on who may. Adding
@@ -59,8 +60,8 @@ to. Imports and Usage never badge — there's nothing to "clear" there.
 > - **Pending requests will stay empty** — nobody can file one, because nobody
 >   reaches the request form.
 >
-> The fences on who your provider may admit are `OIDC_ALLOWED_DOMAINS` and
-> `OIDC_REQUIRED_GROUP` in `.env`, not this screen. Everything below describes the
+> The fences on who your provider may admit are `OIDC_ALLOWED_DOMAINS` /
+> `OIDC_REQUIRED_GROUP` (or `LDAP_REQUIRED_GROUP_DN`) in `.env`, not this screen. Everything below describes the
 > default (magic-link) deployment.
 
 The **allowlist is the sole authority on who can sign in.** The Users section has

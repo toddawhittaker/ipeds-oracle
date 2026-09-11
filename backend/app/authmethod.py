@@ -27,7 +27,8 @@ from __future__ import annotations
 
 MAGIC_LINK = "magic_link"
 OIDC = "oidc"
-METHODS = (MAGIC_LINK, OIDC)
+LDAP = "ldap"
+METHODS = (MAGIC_LINK, OIDC, LDAP)
 
 
 def requested_method(s) -> str:
@@ -53,11 +54,72 @@ def oidc_config_problems(s) -> list[str]:
     return problems
 
 
+def ldap_bind_mode(s) -> str:
+    """"direct", "search", or "" when neither is configured.
+
+    Direct bind needs only a DN template and no service account, which suits a
+    simple tree. Search-then-bind is what Active Directory deployments actually
+    run (a username is not a DN there) and is the only mode that can read a
+    group, so the group fence requires it. Pure."""
+    if s.ldap_user_dn_template.strip():
+        return "direct"
+    if s.ldap_bind_dn.strip() and s.ldap_base_dn.strip():
+        return "search"
+    return ""
+
+
+def ldap_config_problems(s) -> list[str]:
+    """Reasons LDAP cannot run, phrased for an operator reading a boot log.
+    Empty list = usable. Pure: no network, no DB, no import of ldap3."""
+    problems: list[str] = []
+    uri = s.ldap_server_uri.strip()
+    if not uri:
+        problems.append("LDAP_SERVER_URI is blank")
+    elif not uri.lower().startswith(("ldap://", "ldaps://")):
+        problems.append(f"LDAP_SERVER_URI must start with ldaps:// or ldap:// (got {uri!r})")
+    elif uri.lower().startswith("ldap://") and not (
+            s.ldap_start_tls or s.ldap_allow_insecure):
+        # A simple bind sends the password. Refusing here rather than at sign-in
+        # means the operator finds out at boot, not from a user who cannot log in.
+        problems.append("LDAP_SERVER_URI is plain ldap:// — set LDAP_START_TLS=true "
+                        "(or LDAPS), since a simple bind sends the user's password")
+    mode = ldap_bind_mode(s)
+    if not mode:
+        problems.append("neither LDAP_USER_DN_TEMPLATE (direct bind) nor "
+                        "LDAP_BIND_DN + LDAP_BASE_DN (search-then-bind) is set")
+    elif mode == "search" and not s.ldap_bind_password:
+        # Fails closed either way (ldap3 refuses an empty simple bind), but
+        # without this the symptom is every user being told to check a password
+        # that was never the problem, and a boot log that says nothing.
+        problems.append("LDAP_BIND_DN is set but LDAP_BIND_PASSWORD is blank")
+    # A template that lost its placeholder binds EVERY sign-in as one fixed DN,
+    # so whoever knows that one password signs in under any username and gets
+    # that entry's email. Fail-open in the worst way, and invisible.
+    if mode == "direct" and "{username}" not in s.ldap_user_dn_template:
+        problems.append("LDAP_USER_DN_TEMPLATE has no {username} placeholder")
+    if mode == "search" and "{username}" not in s.ldap_user_filter:
+        problems.append("LDAP_USER_FILTER has no {username} placeholder")
+    if s.ldap_required_group_dn.strip() and ldap_bind_mode(s) == "direct":
+        # Direct bind never reads the entry's attributes, so it cannot check a
+        # group. Silently ignoring the fence would be the worst outcome.
+        # Names the key to CLEAR, not the ones to set: a deployment with all
+        # four set has already set LDAP_BIND_DN and LDAP_BASE_DN, and being told
+        # to set them again is a dead end -- the template is what wins the mode
+        # check, so unsetting it is the fix.
+        problems.append("LDAP_REQUIRED_GROUP_DN needs search-then-bind, but "
+                        "LDAP_USER_DN_TEMPLATE is set and selects direct bind, "
+                        "which cannot read groups — clear LDAP_USER_DN_TEMPLATE "
+                        "to use LDAP_BIND_DN + LDAP_BASE_DN instead")
+    return problems
+
+
 def config_problems(s, method: str) -> list[str]:
     """Reasons `method` cannot run. magic_link needs no configuration at all,
     which is exactly why it is the fallback."""
     if method == OIDC:
         return oidc_config_problems(s)
+    if method == LDAP:
+        return ldap_config_problems(s)
     return []
 
 
@@ -72,22 +134,47 @@ def resolve_auth_method(s) -> str:
 
 
 def fence_warning(s) -> str | None:
-    """A CRITICAL for an OIDC deployment with no domain and no group fence.
+    """A CRITICAL for an auto-provisioning method with no fence configured.
 
     Not a config PROBLEM -- it does not fall back, because "everyone my provider
-    authenticates" is a legitimate choice for a single-tenant issuer and is the
-    model the operator opted into. But it is the difference between "our staff"
-    and a whole shared tenant, and pointed at a consumer issuer it is the
-    internet, so it must not be a silent default.
+    authenticates" is a legitimate choice for a single-tenant issuer or a staff
+    directory, and is the model the operator opted into. But it is the
+    difference between "our staff" and a whole shared tenant or a whole campus,
+    so it must not be a silent default.
     """
-    if resolve_auth_method(s) != OIDC:
+    method = resolve_auth_method(s)
+    if method == OIDC and not (s.oidc_allowed_domains.strip()
+                               or s.oidc_required_group.strip()):
+        return ("AUTH_METHOD=oidc with NO fence: neither OIDC_ALLOWED_DOMAINS nor "
+                "OIDC_REQUIRED_GROUP is set, so anyone your provider can authenticate "
+                "gets an account here on first sign-in. Set one of them unless your "
+                "issuer serves only people who should have access.")
+    if method == LDAP and not (s.ldap_required_group_dn.strip()
+                               or s.ldap_allowed_domains.strip()):
+        return ("AUTH_METHOD=ldap with NO fence: neither LDAP_REQUIRED_GROUP_DN nor "
+                "LDAP_ALLOWED_DOMAINS is set, so anyone who can bind to the "
+                "directory gets an account here on first sign-in — students and "
+                "former staff included, if the directory holds them. Set one of "
+                "them unless every account in the directory should have access.")
+    return None
+
+
+def insecure_ldap_warning(s) -> str | None:
+    """A CRITICAL for a directory reached over plain, unencrypted LDAP.
+
+    `ldap_config_problems` already refuses that combination, so reaching this
+    means the operator set `LDAP_ALLOW_INSECURE` deliberately. It is still the
+    one method where a password crosses the wire, so the escape hatch says so on
+    every boot rather than being a line in a .env nobody re-reads."""
+    if resolve_auth_method(s) != LDAP:
         return None
-    if s.oidc_allowed_domains.strip() or s.oidc_required_group.strip():
+    if not s.ldap_allow_insecure:
         return None
-    return ("AUTH_METHOD=oidc with NO fence: neither OIDC_ALLOWED_DOMAINS nor "
-            "OIDC_REQUIRED_GROUP is set, so anyone your provider can authenticate "
-            "gets an account here on first sign-in. Set one of them unless your "
-            "issuer serves only people who should have access.")
+    if s.ldap_server_uri.strip().lower().startswith("ldaps://") or s.ldap_start_tls:
+        return None
+    return ("LDAP_ALLOW_INSECURE is set and the directory is plain ldap:// — every "
+            "sign-in sends the user's password unencrypted. Use ldaps:// or "
+            "LDAP_START_TLS=true for anything but a local test directory.")
 
 
 def boot_warning(s) -> str | None:

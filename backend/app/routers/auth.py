@@ -1,5 +1,10 @@
-"""Auth routes: request a magic link or start an OIDC login, verify either,
-whoami, logout."""
+"""Auth routes: one sign-in door per deployment (magic link, OIDC or LDAP),
+plus whoami and logout.
+
+Each door's routes are registered unconditionally and gated at request time by
+the RESOLVED method -- see `_require_magic_link` / `_require_oidc` and
+docs/AUTH_AND_SECURITY.md for why both halves have to be gated, not just the
+new ones."""
 from __future__ import annotations
 
 import logging
@@ -9,15 +14,20 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, SecretStr
 
-from app import auth
+from app import auth, ldapauth
 from app import oidc as oidc_mod
 from app.auth import current_user
-from app.authmethod import MAGIC_LINK, OIDC, resolve_auth_method
+from app.authmethod import LDAP, MAGIC_LINK, OIDC, resolve_auth_method
 from app.config import _log_safe, get_settings
 from app.db import connect
-from app.ratelimit import client_ip, enforce_auth_ip_rate_limit, enforce_auth_rate_limit
+from app.ratelimit import (
+    client_ip,
+    enforce_auth_ip_rate_limit,
+    enforce_auth_rate_limit,
+    record_auth_attempt,
+)
 from app.tools.sql import ipeds_years
 
 log = logging.getLogger("ipeds.auth")
@@ -31,6 +41,16 @@ class LoginRequest(BaseModel):
 
 class VerifyRequest(BaseModel):
     token: str
+
+
+class LdapLoginRequest(BaseModel):
+    # SecretStr so the password is masked in FastAPI's own 422 echo and in every
+    # repr — a validation error on this endpoint would otherwise quote it back.
+    username: str = Field(max_length=256)
+    # Bounded like the username: without it the app-wide 10 MB body cap is the
+    # only limit, and in direct-bind mode a multi-megabyte password is forwarded
+    # verbatim to the directory.
+    password: SecretStr = Field(max_length=1024)
 
 
 @router.get("/config")
@@ -333,3 +353,68 @@ def oidc_callback(request: Request, code: str | None = None,
     auth.set_session_cookie(resp, sess)
     oidc_mod.clear_state_cookie(resp)
     return resp
+
+
+# One sentence for EVERY LDAP rejection — wrong password, unknown user, not in
+# the group, locally blocked, directory unreachable. Anything that varies by
+# cause is a directory enumeration oracle; the reason goes to the log, which
+# only an admin reads.
+_LDAP_REFUSED = "Sign-in failed. Check your username and password."
+
+
+@router.post("/ldap")
+def ldap_login(body: LdapLoginRequest, request: Request, response: Response):
+    """Bind a username and password against the directory and sign in.
+
+    Rate-limited BEFORE the directory is touched: this is the one method where
+    online password guessing is possible, and an unlimited endpoint would also
+    let an attacker use the directory's round trips as a work amplifier. The
+    limiter's `email` column holds a username here — it is a TEXT bucket key,
+    and that is fine."""
+    if resolve_auth_method(get_settings()) != LDAP:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+    username = body.username.strip()
+    ip = client_ip(request)
+    # Two budgets, charged differently on purpose.
+    #
+    # The per-IP one is charged on EVERY request, success included: each call is
+    # a directory round trip and a session row with a ~30-day TTL, so one valid
+    # credential in a loop must still be bounded.
+    #
+    # The per-USERNAME one is only charged on FAILURE. A password form is
+    # mistyped far more often than an email address is, and counting successes
+    # too would walk somebody who signs in daily into a lockout for no reason.
+    # What bounds guessing is that every WRONG answer still counts, against both.
+    enforce_auth_ip_rate_limit(ip)
+    enforce_auth_rate_limit(username.lower(), ip, record=False)
+
+    try:
+        email = ldapauth.authenticate(username, body.password.get_secret_value())
+    except ldapauth.LdapError as e:
+        record_auth_attempt(username.lower(), ip)
+        log.warning("LDAP sign-in refused for %s: %s",
+                    _log_safe(username), _log_safe(str(e)))
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED) from e
+    except Exception as e:  # noqa: BLE001 -- an unreachable directory is a refusal too
+        record_auth_attempt(username.lower(), ip)
+        log.exception("LDAP sign-in errored for %s", _log_safe(username))
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED) from e
+
+    con = connect()
+    try:
+        # Same order and the same reasoning as the OIDC callback: the allowlist
+        # wins over a denial (auth.is_denied's documented invariant), and a
+        # blocked address is never provisioned on its way to being refused.
+        if not auth.is_allowlisted(con, email) and auth.is_denied(con, email):
+            record_auth_attempt(username.lower(), ip)
+            log.warning("LDAP sign-in refused: %s is blocked in this deployment",
+                        _log_safe(email))
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED)
+        auth.purge_expired_auth_rows(con)
+        auth.provision_from_idp(con, email, "ldap")
+        sess, user = auth.create_session(con, email)
+        con.commit()
+    finally:
+        con.close()
+    auth.set_session_cookie(response, sess)
+    return {"email": email, "is_admin": bool(user["is_admin"])}

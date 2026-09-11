@@ -360,6 +360,7 @@ including why the endpoint serves no OAuth discovery, is in
 | --- | --- |
 | `magic_link` (default) | Enter an email, get a one-time link. Access is granted by an administrator in **Admin → Users**. |
 | `oidc` | Click one button and sign in through your identity provider (Entra ID, Okta, Keycloak, Google Workspace, …). |
+| `ldap` | Type a directory username and password (Active Directory, OpenLDAP, …). |
 
 If the method you asked for is not usable — an unknown value, a blank issuer —
 the app **still starts**, serves the magic-link door, and logs a CRITICAL naming
@@ -401,7 +402,32 @@ OIDC_ALLOWED_DOMAINS=yourdomain.edu   # strongly recommended — see below
 > the provider identity that first signed into it, which stops the attack after
 > the first sign-in; the group is what stops it before.
 
-**Only the chosen method works.** Under `oidc` the magic-link endpoints answer
+#### Setting up LDAP
+
+```bash
+AUTH_METHOD=ldap
+LDAP_SERVER_URI=ldaps://ldap.yourdomain.edu:636
+LDAP_BIND_DN=cn=ipeds-oracle,ou=services,dc=yourdomain,dc=edu
+LDAP_BIND_PASSWORD=...
+LDAP_BASE_DN=ou=people,dc=yourdomain,dc=edu
+LDAP_USER_FILTER=(sAMAccountName={username})        # Active Directory
+LDAP_REQUIRED_GROUP_DN=cn=ipeds-users,ou=groups,dc=yourdomain,dc=edu
+```
+
+> **⚠ This is the one method where a password crosses the wire.** Plain `ldap://`
+> is refused unless you set `LDAP_START_TLS=true`, and the directory's
+> certificate is always verified — point `LDAP_TLS_CA_CERTS_FILE` at your CA
+> bundle if it is a private CA. `LDAP_ALLOW_INSECURE=true` exists for a local
+> test directory and shouts on every boot.
+
+A campus directory usually holds students and former staff too, so
+`LDAP_REQUIRED_GROUP_DN` matters more here than anywhere else — without it, the
+app starts and logs a CRITICAL saying everyone who can bind gets an account. The
+group fence needs the search-then-bind settings above; a direct bind
+(`LDAP_USER_DN_TEMPLATE`) cannot read groups, and configuring both is refused
+rather than silently ignored.
+
+**Only the chosen method works.** Under `oidc` or `ldap` the magic-link endpoints answer
 404 — otherwise anyone your provider had deactivated could still ask for an
 email link and get in, since auto-provisioning has already put them on the
 allowlist.

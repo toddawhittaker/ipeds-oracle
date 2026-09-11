@@ -38,6 +38,10 @@ backend/              the Python side (all Python tooling runs from here)
     oidc.py           OpenID Connect sign-in: Authlib builds the requests and
                       verifies the id_token; the HTTP and the SSRF checks are
                       ours (see docs/AUTH_AND_SECURITY.md for why)
+    ldapauth.py       directory sign-in over ldap3. The one method where a
+                      password crosses the wire, so TLS is enforced and the
+                      certificate is always verified (ldap3's own Tls() default
+                      is CERT_NONE)
     guard.py          topical guardrail in FRONT of the agent (off-topic never hits the DB)
     critic.py         post-answer review that can force one revision round
     feedback.py       distills a user's corrective feedback into a lesson
@@ -260,7 +264,15 @@ discovery, JWKS and the token endpoint over an `httpx.MockTransport` — the sam
 shape `test_nces.py` uses for NCES — and signs REAL RS256 id_tokens with a real
 key, so `app/oidc.py` runs its actual verification path. `app/oidc.py` exposes one
 seam for this, the module-level `_TRANSPORT`; every function also takes an
-explicit `transport` for direct unit tests. Be clear about what that buys: it
+explicit `transport` for direct unit tests.
+
+LDAP uses **`ldap3`'s own `MOCK_SYNC` strategy** — a real in-process ldap3
+server, so a wrong password fails because ldap3 says so. Inject it at
+`ldapauth._connection`, and note that MOCK_SYNC keeps entries on the *Server*
+object: share one between tests and entries leak across them (it made three
+sign-ins fail with "2 entries match" before each test got its own). What
+MOCK_SYNC cannot express — StartTLS, certificate validation, timeouts — is
+covered by inspecting what `ldapauth._server` builds. Be clear about what that buys: it
 proves the app's own logic, not interoperability with Entra ID or Okta. Real
 providers need a real provider.
 

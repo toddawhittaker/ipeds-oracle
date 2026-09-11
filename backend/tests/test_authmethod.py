@@ -21,9 +21,14 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.authmethod import (  # noqa: E402
+    LDAP,
     MAGIC_LINK,
     OIDC,
     boot_warning,
+    fence_warning,
+    insecure_ldap_warning,
+    ldap_bind_mode,
+    ldap_config_problems,
     oidc_config_problems,
     resolve_auth_method,
 )
@@ -31,9 +36,23 @@ from app.authmethod import (  # noqa: E402
 
 def _s(**kw):
     base = {"auth_method": MAGIC_LINK, "oidc_issuer": "", "oidc_client_id": "",
-            "oidc_client_secret": ""}
+            "oidc_client_secret": "", "oidc_allowed_domains": "",
+            "oidc_required_group": "",
+            "ldap_server_uri": "", "ldap_start_tls": False,
+            "ldap_allow_insecure": False, "ldap_user_dn_template": "",
+            "ldap_bind_dn": "", "ldap_bind_password": "", "ldap_base_dn": "",
+            "ldap_user_filter": "(uid={username})",
+            "ldap_allowed_domains": "", "ldap_required_group_dn": ""}
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def _good_ldap(**kw):
+    base = {"auth_method": LDAP, "ldap_server_uri": "ldaps://ldap.example.test",
+            "ldap_bind_dn": "cn=svc,dc=x", "ldap_bind_password": "svc-pw",
+            "ldap_base_dn": "ou=people,dc=x"}
+    base.update(kw)
+    return _s(**base)
 
 
 def _good_oidc(**kw):
@@ -126,6 +145,91 @@ def test_resolving_is_silent():
     assert records == [], f"resolve_auth_method logged {[r.getMessage() for r in records]}"
 
 
+
+# --- LDAP ------------------------------------------------------------------
+
+def test_a_fully_configured_ldap_resolves_to_ldap():
+    s = _good_ldap()
+    assert resolve_auth_method(s) == LDAP
+    assert boot_warning(s) is None
+    assert ldap_config_problems(s) == []
+
+
+def test_the_bind_mode_follows_what_is_configured():
+    assert ldap_bind_mode(_good_ldap()) == "search"
+    assert ldap_bind_mode(_s(ldap_user_dn_template="uid={username},dc=x")) == "direct"
+    assert ldap_bind_mode(_s()) == ""
+
+
+def test_plain_ldap_without_tls_is_a_config_problem():
+    """A simple bind sends the password, so this is refused at RESOLUTION —
+    the operator finds out at boot, not from a user who cannot sign in."""
+    s = _good_ldap(ldap_server_uri="ldap://ldap.example.test")
+    assert resolve_auth_method(s) == MAGIC_LINK
+    assert "LDAP_START_TLS" in (boot_warning(s) or ""), boot_warning(s)
+
+
+def test_plain_ldap_is_allowed_with_starttls_or_the_explicit_opt_out():
+    for s in (_good_ldap(ldap_server_uri="ldap://x", ldap_start_tls=True),
+              _good_ldap(ldap_server_uri="ldap://x", ldap_allow_insecure=True)):
+        assert resolve_auth_method(s) == LDAP, ldap_config_problems(s)
+
+
+def test_the_insecure_opt_out_still_shouts_at_boot():
+    """Reaching this means the operator set it deliberately, and it is still the
+    one method where a password crosses the wire."""
+    s = _good_ldap(ldap_server_uri="ldap://x", ldap_allow_insecure=True)
+    assert "unencrypted" in (insecure_ldap_warning(s) or ""), insecure_ldap_warning(s)
+    # Not shouted when the connection is actually protected.
+    assert insecure_ldap_warning(
+        _good_ldap(ldap_server_uri="ldap://x", ldap_start_tls=True,
+                   ldap_allow_insecure=True)) is None
+    assert insecure_ldap_warning(_good_ldap()) is None
+
+
+def test_a_blank_service_password_is_a_config_problem():
+    """It fails closed either way (ldap3 refuses an empty simple bind), but
+    without this every user is told to check a password that was never the
+    problem, and the boot log says nothing at all."""
+    s = _good_ldap(ldap_bind_password="")
+    assert resolve_auth_method(s) == MAGIC_LINK
+    assert "LDAP_BIND_PASSWORD" in (boot_warning(s) or ""), boot_warning(s)
+
+
+def test_a_template_that_lost_its_placeholder_is_refused():
+    """Fail-open in the worst way: every sign-in would bind as ONE fixed DN, so
+    whoever knows that one password signs in under any username and inherits
+    that entry's email."""
+    s = _s(auth_method=LDAP, ldap_server_uri="ldaps://x",
+           ldap_user_dn_template="uid=jdoe,ou=people,dc=x")
+    assert resolve_auth_method(s) == MAGIC_LINK
+    assert "{username}" in (boot_warning(s) or ""), boot_warning(s)
+
+    s2 = _good_ldap(ldap_user_filter="(uid=jdoe)")
+    assert resolve_auth_method(s2) == MAGIC_LINK
+    assert "LDAP_USER_FILTER" in (boot_warning(s2) or ""), boot_warning(s2)
+
+
+def test_a_group_fence_without_search_mode_is_refused():
+    """A direct bind never reads the entry, so it cannot check a group.
+    Silently ignoring the fence would be the worst of the three outcomes."""
+    s = _s(auth_method=LDAP, ldap_server_uri="ldaps://x",
+           ldap_user_dn_template="uid={username},dc=x",
+           ldap_required_group_dn="cn=staff,dc=x")
+    assert resolve_auth_method(s) == MAGIC_LINK
+    assert "LDAP_REQUIRED_GROUP_DN" in (boot_warning(s) or ""), boot_warning(s)
+
+
+def test_an_unfenced_auto_provisioning_method_is_called_out():
+    assert "NO fence" in (fence_warning(_good_ldap()) or "")
+    assert fence_warning(_good_ldap(ldap_required_group_dn="cn=staff,dc=x")) is None
+    assert fence_warning(_good_ldap(ldap_allowed_domains="example.edu")) is None
+    assert "NO fence" in (fence_warning(
+        _s(auth_method=OIDC, oidc_issuer="https://idp.test",
+           oidc_client_id="c")) or "")
+    # magic_link provisions nobody, so it is never the subject of this warning.
+    assert fence_warning(_s()) is None
+
 FAILURES: list[str] = []
 
 
@@ -157,6 +261,26 @@ def run():
     check("a plain http issuer is refused", test_a_plain_http_issuer_is_refused)
     check("a missing secret is not a problem", test_a_missing_secret_is_not_a_problem)
     check("resolving is silent", test_resolving_is_silent)
+
+    print("\nldap")
+    check("a fully configured ldap resolves to ldap",
+          test_a_fully_configured_ldap_resolves_to_ldap)
+    check("the bind mode follows what is configured",
+          test_the_bind_mode_follows_what_is_configured)
+    check("plain ldap without TLS is a config problem",
+          test_plain_ldap_without_tls_is_a_config_problem)
+    check("plain ldap is allowed with StartTLS or the explicit opt-out",
+          test_plain_ldap_is_allowed_with_starttls_or_the_explicit_opt_out)
+    check("the insecure opt-out still shouts at boot",
+          test_the_insecure_opt_out_still_shouts_at_boot)
+    check("a blank service password is a config problem",
+          test_a_blank_service_password_is_a_config_problem)
+    check("a template that lost its placeholder is refused",
+          test_a_template_that_lost_its_placeholder_is_refused)
+    check("a group fence without search mode is refused",
+          test_a_group_fence_without_search_mode_is_refused)
+    check("an unfenced auto-provisioning method is called out",
+          test_an_unfenced_auto_provisioning_method_is_called_out)
 
     print()
     if FAILURES:

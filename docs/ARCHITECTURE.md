@@ -63,11 +63,12 @@ documents are:
 
 ## Stack & data stores
 - **Backend** — FastAPI (`backend/app/`: `config`, `db`, `auth`, `authmethod`,
-  `oidc`, `security`, `mailer`, `llm`, `prompt`, `guard`, `critic`, `skills`,
+  `oidc`, `ldapauth`, `security`, `mailer`, `llm`, `prompt`, `guard`, `critic`, `skills`,
   `seeds`, `importer`, `nces`, `logbuffer`, `ratelimit`, `apikeys`, `tools/*`,
   `routers/*`, `mcpsrv/*`).
 - **There is more than one way in.** `AUTH_METHOD` selects exactly one sign-in
-  method — the passwordless magic link, or an OIDC provider — and every one of
+  method — the passwordless magic link, an OIDC provider, or an LDAP
+  directory — and every one of
   them converges on `auth.create_session` + `auth.set_session_cookie`, the only
   place a session row is written or a cookie set. `authmethod.py` resolves the
   method and falls back to magic link, never toward a method that auto-provisions.
