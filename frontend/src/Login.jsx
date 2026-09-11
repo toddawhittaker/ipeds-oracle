@@ -290,12 +290,20 @@ export default function Login({ notice = "" }) {
                  tabIndex={-1} ref={noticeRef}>{msg}</div>
           )}
           {!ok && method === "oidc" && (
+            // `btn-primary` because this button is NOT in a form, so it misses
+            // the `.login button[type=submit]` rule and renders as a bare
+            // browser default — which is exactly what it did, and what every
+            // test missed, since getByRole finds it either way. styles.css
+            // documents this hook; /verify's button needed it for the same
+            // reason.
+            //
             // aria-disabled + an early return, never `disabled`: disabling the
             // control the user just activated moves focus to <body>, and on a
             // failure this is the card's only control — a keyboard user would
             // have to Tab from the top of the document, past the figure
             // gallery, to try again. Same pattern as Keys.jsx and Chat.jsx.
-            <button type="button" onClick={startSso} aria-disabled={ssoBusy}>
+            <button type="button" className="btn-primary"
+                    onClick={startSso} aria-disabled={ssoBusy}>
               {ssoBusy ? "Redirecting…" : ssoLabel}
             </button>
           )}

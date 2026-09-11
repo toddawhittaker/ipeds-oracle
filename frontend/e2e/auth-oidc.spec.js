@@ -69,6 +69,23 @@ test.describe("the SSO door", () => {
         .toHaveAttribute("aria-disabled", "false");
     });
 
+  test("the SSO button is styled as the card's primary action", async ({ page }) => {
+    // It sits OUTSIDE a form, so it misses `.login button[type=submit]` and
+    // renders as a bare browser default unless it carries `.btn-primary`. It
+    // did exactly that, and no test noticed: getByRole finds a button whether
+    // or not it looks like one. Asserted on resolved pixels rather than on the
+    // class name, so a CSS change that drops the rule fails too.
+    await mockAuthConfig(page, { authMethod: "oidc" });
+    await page.goto("/");
+    const button = page.getByRole("button", { name: "Sign in with SSO" });
+    const box = await button.boundingBox();
+    const bg = await button.evaluate((el) => globalThis.getComputedStyle(el).backgroundColor);
+    expect(bg, "the SSO button has no background — it is an unstyled default")
+      .not.toBe("rgba(0, 0, 0, 0)");
+    expect(box.width, "the SSO button is not full-width like the other doors'")
+      .toBeGreaterThan(300);
+  });
+
   test("an auth_error in the URL is shown and then cleaned away", async ({ page }) => {
     // Same hygiene Verify.jsx applies to its token: the code has been read, so a
     // reload or a copied link must not re-raise an error already dealt with.
