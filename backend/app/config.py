@@ -278,6 +278,89 @@ class Settings(BaseSettings):
     # Set to 1 in production behind a single proxy hop (see the README).
     trusted_proxy_count: int = Field(default=0)
 
+    # --- Sign-in method ------------------------------------------------------
+    # Which door the app opens: "magic_link" (the default -- passwordless email
+    # link, gated by the manual allowlist), "oidc" (an OpenID Connect provider),
+    # or "ldap" (a directory). Exactly ONE is active; app/authmethod.py resolves it, and an
+    # unknown or incompletely-configured value falls back to magic_link with a
+    # CRITICAL rather than refusing to boot -- see that module's docstring for
+    # why that direction is the safe one.
+    #
+    # ⚠ oidc and ldap AUTO-PROVISION: anyone the provider or directory
+    # authenticates gets an account on first sign-in, so the population that can
+    # reach this app is whatever they can authenticate. The *_required_group and
+    # oidc_allowed_domains settings are the app-side fence, and on a shared
+    # tenant or a whole-campus directory they are the difference between "our
+    # staff" and "everyone".
+    auth_method: str = Field(default="magic_link")   # magic_link | oidc | ldap
+
+    # --- OIDC (authorization code + PKCE) ------------------------------------
+    # The provider's base issuer URL, e.g. https://idp.example.edu/realms/main.
+    # Discovery reads <issuer>/.well-known/openid-configuration, and every
+    # endpoint named there must live on this same host or the login is refused
+    # (a discovery document is otherwise a way to make this server POST its
+    # client secret wherever an attacker likes).
+    oidc_issuer: str = Field(default="")
+    oidc_client_id: str = Field(default="")
+    # Blank = a public client: PKCE alone proves the exchange. Set it for a
+    # confidential client, which is what most providers issue by default.
+    oidc_client_secret: str = Field(default="")
+    oidc_scopes: str = Field(default="openid email profile")
+    # Which claim carries the address that becomes users.email. There is NO
+    # fallback to sub/preferred_username on purpose: email is this app's identity
+    # key across users, allowlist, access_requests, api_keys and chat history, and
+    # a UUID sitting in that column makes an account the admin tools cannot name.
+    oidc_email_claim: str = Field(default="email")
+    oidc_groups_claim: str = Field(default="groups")
+    # Fences, both blank = no fence. A required group is checked against the
+    # groups claim; allowed domains against the email's domain (comma-separated).
+    oidc_required_group: str = Field(default="")
+    oidc_allowed_domains: str = Field(default="")
+    # What the sign-in button says. Institutions call this different things
+    # ("Sign in with Okta", "Use your NetID"), and the login page is the one
+    # screen where guessing wrong strands somebody.
+    oidc_button_label: str = Field(default="Sign in with SSO")
+    oidc_http_timeout_seconds: float = Field(default=10.0)
+
+    # --- LDAP ----------------------------------------------------------------
+    # The directory to bind against, e.g. ldaps://ldap.example.edu:636.
+    # ⚠ Prefer ldaps://. Plain ldap:// is REFUSED unless ldap_start_tls is on,
+    # or ldap_allow_insecure is explicitly set -- a simple bind sends the user's
+    # password, so an unencrypted connection hands it to anyone on the path.
+    ldap_server_uri: str = Field(default="")
+    ldap_start_tls: bool = Field(default=False)      # ldap:// + StartTLS
+    # DANGEROUS, and it says so at boot. Only for a test directory you control.
+    ldap_allow_insecure: bool = Field(default=False)
+    # PEM bundle for verifying the directory's certificate. Blank = the system
+    # trust store. Certificates are ALWAYS verified -- ldap3's own Tls() default
+    # is CERT_NONE, which this app never uses.
+    ldap_tls_ca_certs_file: str = Field(default="")
+    # Two bind modes, picked by which of these is set.
+    #   direct: ldap_user_dn_template, e.g. uid={username},ou=people,dc=x,dc=edu
+    #           -- no service account needed, but it cannot read a group.
+    #   search: ldap_bind_dn + ldap_bind_password + ldap_base_dn, which finds the
+    #           user first. What Active Directory deployments actually use, and
+    #           the only mode that can enforce a group fence.
+    ldap_user_dn_template: str = Field(default="")
+    ldap_bind_dn: str = Field(default="")
+    ldap_bind_password: str = Field(default="")
+    ldap_base_dn: str = Field(default="")
+    # `{username}` is substituted with the typed username, ESCAPED -- see
+    # ldapauth._user_filter. On Active Directory this is usually
+    # (sAMAccountName={username}).
+    ldap_user_filter: str = Field(default="(uid={username})")
+    # Which attribute carries the address that becomes the account. As with
+    # OIDC's email claim there is no fallback: an entry without it is refused.
+    ldap_email_attribute: str = Field(default="mail")
+    # The fences, both blank = no fence, which logs a CRITICAL at boot. The group
+    # is matched against the attribute below (`memberOf` on AD and most modern
+    # directories); the domains against the address the entry carries, which
+    # matters because a directory holds contacts and shared mailboxes too.
+    ldap_allowed_domains: str = Field(default="")
+    ldap_required_group_dn: str = Field(default="")
+    ldap_group_member_attribute: str = Field(default="memberOf")
+    ldap_timeout_seconds: float = Field(default=10.0)
+
     # --- Email --------------------------------------------------------------
     # Which transport delivers the magic-link / access-request / approval emails.
     # "auto" (default) picks resend if a Resend key is set, else smtp if SMTP_HOST
@@ -325,6 +408,31 @@ class Settings(BaseSettings):
     @property
     def admin_email_list(self) -> list[str]:
         return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
+
+    @property
+    def oidc_allowed_domain_list(self) -> list[str]:
+        """Lower-cased domains an OIDC-authenticated address must belong to.
+        Empty = no domain fence. A leading '@' is tolerated because writing
+        "@example.edu" is the obvious mistake and silently fencing everyone out
+        of their own app is a bad way to teach the format."""
+        return [d.strip().lower().lstrip("@")
+                for d in self.oidc_allowed_domains.split(",") if d.strip()]
+
+    @property
+    def ldap_allowed_domain_list(self) -> list[str]:
+        """Lower-cased domains a directory-supplied address must belong to.
+        Empty = no domain fence. Same shape and same leading-@ tolerance as
+        `oidc_allowed_domain_list`."""
+        return [d.strip().lower().lstrip("@")
+                for d in self.ldap_allowed_domains.split(",") if d.strip()]
+
+    @property
+    def oidc_scope_list(self) -> list[str]:
+        """Scopes to request, always including openid — without it the provider
+        runs a plain OAuth2 flow and returns no id_token at all, which fails
+        later and much less legibly than it would here."""
+        scopes = [s for s in self.oidc_scopes.replace(",", " ").split() if s]
+        return scopes if "openid" in scopes else ["openid", *scopes]
 
     @property
     def resolved_log_db_path(self) -> Path:

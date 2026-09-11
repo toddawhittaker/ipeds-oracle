@@ -62,18 +62,75 @@ export async function gotoAdmin(page) {
 }
 
 /**
- * GET /api/auth/config -> {email_domain}. Unauthenticated; Login.jsx polls
- * this on mount to build its "you@<domain>" placeholder hint (falling back to
- * the generic FALLBACK_HINT when email_domain is empty or the call fails).
+ * GET /api/auth/config -> {email_domain, auth_method, oidc_button_label}.
+ * Unauthenticated; Login.jsx polls this on mount to build its "you@<domain>"
+ * placeholder hint (falling back to the generic FALLBACK_HINT when email_domain
+ * is empty or the call fails) AND to decide which sign-in form to draw.
+ *
+ * Takes either a bare domain string (the original form, which a dozen specs
+ * still pass) or an options object. Keeping the positional form working is
+ * deliberate: churning every existing auth spec to add a method they do not care
+ * about would bury the two lines that actually change behaviour.
  */
-export async function mockAuthConfig(page, emailDomain = "") {
+export async function mockAuthConfig(page, arg = "") {
+  const opts = typeof arg === "string" ? { emailDomain: arg } : (arg || {});
+  const body = {
+    email_domain: opts.emailDomain ?? "",
+    auth_method: opts.authMethod ?? "magic_link",
+    oidc_button_label: opts.ssoLabel ?? "Sign in with SSO",
+  };
   await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ email_domain: emailDomain }),
+      body: JSON.stringify(body),
     });
   });
+}
+
+/**
+ * POST /api/auth/oidc/start -> {authorization_url}. Returns {calls} so a spec can
+ * assert the door asked the server exactly once before navigating away.
+ */
+export async function mockOidcStart(page, {
+  url = "https://idp.example.test/authorize?response_type=code&state=ST",
+  status = 200,
+  detail = "Single sign-on is unavailable right now.",
+} = {}) {
+  const calls = [];
+  await page.route("**/api/auth/oidc/start", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push(route.request().url());
+    await route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(status === 200 ? { authorization_url: url } : { detail }),
+    });
+  });
+  return { calls };
+}
+
+/**
+ * POST /api/auth/ldap -> {email, is_admin} or a neutral 401. Returns {calls} so
+ * a spec can assert what was posted (and that the password was posted once).
+ */
+export async function mockLdapSignIn(page, {
+  status = 200,
+  email = "jdoe@example.edu",
+  is_admin = false,
+  detail = "Sign-in failed. Check your username and password.",
+} = {}) {
+  const calls = [];
+  await page.route("**/api/auth/ldap", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push(route.request().postDataJSON());
+    await route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(status === 200 ? { email, is_admin } : { detail }),
+    });
+  });
+  return { calls };
 }
 
 /**

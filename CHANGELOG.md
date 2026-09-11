@@ -11,6 +11,95 @@ detail.
 
 ---
 
+## v0.6.0
+
+Sign-in is no longer only a magic link. A deployment can now hand authentication
+to an **OpenID Connect provider** or an **LDAP directory**, so people use the
+credentials they already have and offboarding happens where your institution
+already does it.
+
+### Read this before upgrading
+
+- **Nothing changes unless you ask for it.** `AUTH_METHOD` defaults to
+  `magic_link`, and an existing deployment that sets nothing behaves exactly as
+  it did. The magic-link door is untouched.
+- **⚠ This release cannot be rolled back.** Migrations 38 and 39 move `app.db`
+  past what v0.5.2 understands, and migrations are forward-only — an older image
+  refuses to start rather than write damage into your irreplaceable state. The
+  app snapshots `app.db` before migrating (`app.db.pre-v37`); restoring that
+  snapshot alongside the older image is the way back.
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot answers repeat questions fresh instead of instantly.
+  Expected, one time, no action.
+- **Upgrading from before v0.4.0?** That release's one-time
+  `sudo chown -R 10001:10001 ./srv-data` still applies.
+
+### Choosing a sign-in method
+
+`AUTH_METHOD` picks exactly one door — `magic_link`, `oidc` or `ldap` — and only
+that one works. Under an identity provider the magic-link endpoints answer 404,
+because otherwise anyone the provider had deactivated could still ask for an
+email link and walk past your group policy and MFA.
+
+If the method you asked for is not usable — an unknown value, a blank issuer, a
+directory with no bind settings — the app **still starts**, serves the
+magic-link door, and logs a CRITICAL naming the exact settings that are missing.
+A typo in `.env` should not lock you out of the console you would fix it from.
+
+The README's **Self-hosting → Sign-in method** section has a minimal `.env` for
+each, and the redirect URI to register with your provider.
+
+### ⚠ Both new methods auto-provision, and you should fence them
+
+Anyone your provider or directory can authenticate gets an account here on their
+first sign-in — the manual allowlist stops being the gate. On a tenant or a
+campus directory that also holds students, alumni or contractors, that is
+everyone. `OIDC_ALLOWED_DOMAINS` / `OIDC_REQUIRED_GROUP` and
+`LDAP_ALLOWED_DOMAINS` / `LDAP_REQUIRED_GROUP_DN` are the fences. With none set
+the app starts and logs a CRITICAL saying so on every boot.
+
+Two things change for administrators under an identity provider:
+
+- **Admin → Users becomes a record of who has signed in**, not a gate on who
+  may. Adding somebody by hand grants nothing new.
+- **Remove also blocks them.** Without that, removing someone would do nothing:
+  their next sign-in would simply re-create the account. The **Blocked users**
+  tab's unblock control is the undo.
+
+Set `ADMIN_EMAILS` before the first boot. On an existing deployment switching to
+an identity provider, promote your first SSO admin from an account that is
+already an admin.
+
+### If your provider is Entra ID
+
+Set `OIDC_REQUIRED_GROUP` if the app is reachable by guest or personal accounts.
+Entra lets those set their own `email` claim and sends no `email_verified`, so a
+domain fence alone does not stop somebody claiming a colleague's address. The app
+binds each account to the provider identity that first signed into it, which
+stops that after the first sign-in; the group is what stops it before.
+
+### The one where the password crosses the wire
+
+LDAP is the only method that carries a password, and it is treated that way:
+plain `ldap://` is refused unless you turn on StartTLS or set an explicit
+opt-out that shouts on every boot, the directory's certificate is always
+verified, referrals are never followed (the library default sends your service
+account's password to whatever host a referral names), and every rejection —
+wrong password, unknown user, missing group, blocked here, directory
+unreachable — returns one identical message so the form cannot be used to
+enumerate who exists.
+
+### Notes for the curious
+
+Three of the bugs fixed before release were found by standing a real provider up
+rather than by any test: a strict endpoint check that rejected Google Workspace
+outright, a float timeout that `ldap3` refuses so no directory bind could ever
+have succeeded, and a local provider the app would not talk to. `compose.test.yaml`
+now stands up a Keycloak and an OpenLDAP so the next person can check the same
+things. `docs/AUTH_AND_SECURITY.md` has the full reasoning.
+
+---
+
 ## v0.5.2
 
 A hotfix. One live bug is gone — the answer that streamed to completion and

@@ -32,6 +32,19 @@ tools — see the [Admin guide](ADMIN_GUIDE.md).)
 
 ## Signing in
 
+How you sign in depends on how your institution set the app up.
+
+If the sign-in page shows a single **Sign in with SSO** button (the wording may
+differ — "Sign in with NetID", say), click it and sign in the way you sign in to
+everything else. There is no email link and no password to remember here.
+
+If it asks for a **username and password**, those are your usual institution
+directory credentials — the same ones you use for email or the campus network.
+
+Either way, if it turns you away, your administrator controls who has access.
+
+Otherwise the page asks for your email, and the rest of this section applies.
+
 Access is by invitation, and there's **no password**. On the sign-in page, enter
 your email address:
 

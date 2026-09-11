@@ -84,9 +84,32 @@ def enforce_chat_rate_limit(user_id: int) -> None:
         con.close()
 
 
-def enforce_auth_rate_limit(email: str, ip: str) -> None:
+# Stored in the `email` column for attempts that have no email. Not a valid
+# address (no "@"), so it can never collide with a real one's budget.
+_IP_ONLY_SENTINEL = "-ip-only-"
+
+
+def record_auth_attempt(email: str, ip: str) -> None:
+    """Charge one attempt to both buckets, without checking either.
+
+    For a caller that wants to count only FAILURES -- the LDAP password form,
+    where a successful sign-in should not eat into the budget the way a wrong
+    guess does. `enforce_auth_rate_limit(..., record=False)` then does the
+    checking half."""
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
+            (email, ip, time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def enforce_auth_rate_limit(email: str, ip: str, *, record: bool = True) -> None:
     """Raise 429 if this email or IP has exceeded its window budget. Otherwise
-    record the attempt. `email` should already be normalized (lower/stripped)."""
+    record the attempt, unless `record=False` -- see `record_auth_attempt`.
+    `email` should already be normalized (lower/stripped)."""
     s = get_settings()
     now = time.time()
     cutoff = now - s.auth_rate_window_seconds
@@ -106,9 +129,47 @@ def enforce_auth_rate_limit(email: str, ip: str) -> None:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "Too many sign-in requests. Please wait a few minutes and try again.")
+        if record:
+            con.execute(
+                "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
+                (email, ip, now))
+            con.commit()
+    finally:
+        con.close()
+
+
+def enforce_auth_ip_rate_limit(ip: str) -> None:
+    """Per-IP budget for an auth endpoint that has no email to key on.
+
+    `POST /api/auth/oidc/start` is unauthenticated and, before this, unlimited:
+    each call wrote an `oidc_logins` row AND could issue an outbound discovery
+    request from a threadpool worker, so a burst could both grow app.db without
+    bound and park every sync route's thread waiting on a slow provider.
+
+    Deliberately shares `auth_request_attempts` and the per-IP cap with
+    `enforce_auth_rate_limit`, rather than getting a table and a setting of its
+    own: "sign-in attempts from this address" is one budget whichever door is
+    being knocked on, and one number is easier for an operator to reason about
+    than two. Rows are stored under a sentinel email that no real address can
+    collide with, so this can never consume a person's per-email budget.
+    """
+    s = get_settings()
+    now = time.time()
+    cutoff = now - s.auth_rate_window_seconds
+    con = connect()
+    try:
+        con.execute("DELETE FROM auth_request_attempts WHERE created_at < ?",
+                    (cutoff - s.auth_rate_window_seconds,))
+        by_ip = con.execute(
+            "SELECT COUNT(*) FROM auth_request_attempts WHERE ip=? AND created_at>=?",
+            (ip, cutoff)).fetchone()[0]
+        if by_ip >= s.auth_rate_max_per_ip:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many sign-in requests. Please wait a few minutes and try again.")
         con.execute(
             "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
-            (email, ip, now))
+            (_IP_ONLY_SENTINEL, ip, now))
         con.commit()
     finally:
         con.close()

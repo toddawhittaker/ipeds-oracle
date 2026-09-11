@@ -115,7 +115,8 @@ def may_request_access(email: str) -> bool:
 
 def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
     """Delete auth rows the code can never accept again: consumed or expired
-    magic-link tokens, and sessions past their expiry. The caller commits.
+    magic-link tokens, sessions past their expiry, and spent or expired OIDC
+    login states. The caller commits.
 
     Behaviour-preserving by construction — `peek_login`/`verify_login` already
     reject a token whose `used_at` is set or whose `expires_at` has passed, and
@@ -134,6 +135,12 @@ def purge_expired_auth_rows(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at < ?",
                 (now,))
     con.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+    # Same argument as login_tokens above: `oidc.complete_login` already refuses
+    # a state whose `used_at` is set or whose `expires_at` has passed, so
+    # removing those rows changes no outcome -- the lookup misses instead of
+    # failing the check, and both raise invalid_state.
+    con.execute("DELETE FROM oidc_logins WHERE used_at IS NOT NULL OR expires_at < ?",
+                (now,))
 
 
 def mint_login_link(con: sqlite3.Connection, email: str) -> str:
@@ -258,9 +265,118 @@ def peek_login(token: str) -> dict:
     return {"email": row["email"]}
 
 
+def idp_identity_conflicts(con: sqlite3.Connection, email: str,
+                           issuer: str, subject: str) -> bool:
+    """True when `email` is already bound to a DIFFERENT provider subject.
+
+    The account key in this app is the email address, and at several providers
+    the `email` claim is neither verified nor immutable -- see migration 39 for
+    the takeover this prevents. `sub` is the identifier a provider does promise
+    is stable, so the first OIDC sign-in for an address records the pair and
+    every later one has to match it.
+
+    Trust on first use: an unbound account (never signed in via OIDC, or created
+    before migration 39) does not conflict -- it binds on this sign-in.
+    """
+    row = con.execute("SELECT oidc_iss, oidc_sub FROM users WHERE email=?",
+                      (email,)).fetchone()
+    if not row or not row["oidc_sub"]:
+        return False
+    return row["oidc_iss"] != issuer or row["oidc_sub"] != subject
+
+
+def bind_idp_identity(con: sqlite3.Connection, email: str,
+                      issuer: str, subject: str) -> None:
+    """Record the provider identity for `email`, if it has none yet.
+
+    Only ever fills a blank: an established binding is what
+    `idp_identity_conflicts` checks against, so overwriting it here would undo
+    the guard the moment an attacker got one sign-in through. Does NOT commit.
+    """
+    con.execute(
+        "UPDATE users SET oidc_iss=?, oidc_sub=? WHERE email=? AND oidc_sub IS NULL",
+        (issuer, subject, email))
+
+
+def provision_from_idp(con: sqlite3.Connection, email: str, added_by: str) -> None:
+    """Grant `email` access on the strength of an external provider's word.
+
+    What this writes is an ALLOWLIST row, and that is the whole design. The
+    allowlist is re-checked on EVERY authenticated request
+    (`_user_from_request`) and on every MCP call (`apikeys.verify`), and those
+    two checks are the app's only per-request kill switch. Provisioning by
+    writing the row keeps them -- and Admin -> Users, offboarding, and API-key
+    revocation -- working exactly as they already do. The alternative, making
+    those checks method-aware, would leave a removed user's 30-day session
+    cookie and their API keys alive until they happened to expire.
+
+    `ON CONFLICT DO NOTHING`, never `DO UPDATE`: a row from the ADMIN_EMAILS
+    bootstrap, or one an admin added by hand, carries a note and an `added_by`
+    recording where that access came from. Somebody's first SSO sign-in must not
+    overwrite that with "auto-provisioned".
+
+    Does NOT commit -- it joins the caller's sign-in transaction, so a login that
+    fails after this point grants nothing.
+    """
+    con.execute(
+        "INSERT INTO allowlist(email, note, added_by, added_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(email) DO NOTHING",
+        (email, "auto-provisioned on first sign-in", added_by, time.time()))
+
+
+def create_session(con: sqlite3.Connection, email: str) -> tuple[str, sqlite3.Row]:
+    """Upsert the user for `email` and mint one session row for them.
+
+    THE ONLY PLACE A SESSION ROW IS EVER WRITTEN. Every way in converges here:
+    whatever proves the address -- a consumed magic-link token today, an OIDC
+    id_token or an LDAP bind later -- does its own proving and then calls this,
+    so there is one definition of what being signed in means.
+
+    Takes an OPEN connection and deliberately does NOT commit, so it joins the
+    caller's transaction. That is what stops a session existing for a magic-link
+    token that was never marked used: the UPDATE and this INSERT commit together
+    or not at all.
+
+    Only the SHA-256 hash reaches `sessions` -- the raw token is returned and
+    never stored, so a dump of app.db mints nothing.
+    """
+    now = time.time()
+    con.execute("INSERT INTO users(email, created_at, last_login) VALUES (?,?,?) "
+                "ON CONFLICT(email) DO UPDATE SET last_login=excluded.last_login",
+                (email, now, now))
+    user = con.execute("SELECT id, email, is_admin FROM users WHERE email=?",
+                       (email,)).fetchone()
+    sess = new_token()
+    con.execute(
+        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) "
+        "VALUES (?,?,?,?)",
+        (hash_token(sess), user["id"], now, session_expiry()))
+    return sess, user
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    """THE ONLY PLACE THE SESSION COOKIE IS SET.
+
+    Kept separate from `create_session` because the two halves run at different
+    moments: the DB write joins the caller's transaction, while the cookie is
+    applied AFTER the connection closes and -- for a redirect-based sign-in --
+    onto a RedirectResponse the handler builds for itself. Folding them into one
+    function would force such a caller to construct its response before opening
+    the database, purely to satisfy a signature.
+
+    `samesite="lax"` is load-bearing rather than a default worth tightening:
+    `strict` would drop this cookie on the cross-site top-level GET that an
+    external identity provider redirects back with, landing the user signed out
+    with no error to read.
+    """
+    s = get_settings()
+    response.set_cookie(
+        s.cookie_name, token, max_age=s.session_ttl_days * 86400,
+        httponly=True, secure=s.cookie_secure, samesite="lax", path="/")
+
+
 def verify_login(token: str, response: Response) -> dict:
     """Consume a magic-link token, upsert the user, and set a session cookie."""
-    s = get_settings()
     th = hash_token(token)
     con = connect()
     try:
@@ -276,24 +392,11 @@ def verify_login(token: str, response: Response) -> dict:
         email = row["email"]
         con.execute("UPDATE login_tokens SET used_at=? WHERE token_hash=?",
                     (time.time(), th))
-        # upsert user
-        con.execute("INSERT INTO users(email, created_at, last_login) VALUES (?,?,?) "
-                    "ON CONFLICT(email) DO UPDATE SET last_login=excluded.last_login",
-                    (email, time.time(), time.time()))
-        user = con.execute("SELECT id, email, is_admin FROM users WHERE email=?",
-                           (email,)).fetchone()
-        # create session
-        sess = new_token()
-        con.execute(
-            "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) "
-            "VALUES (?,?,?,?)",
-            (hash_token(sess), user["id"], time.time(), session_expiry()))
+        sess, user = create_session(con, email)
         con.commit()
     finally:
         con.close()
-    response.set_cookie(
-        s.cookie_name, sess, max_age=s.session_ttl_days * 86400,
-        httponly=True, secure=s.cookie_secure, samesite="lax", path="/")
+    set_session_cookie(response, sess)
     return {"email": email, "is_admin": bool(user["is_admin"])}
 
 

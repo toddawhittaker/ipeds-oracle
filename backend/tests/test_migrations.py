@@ -867,6 +867,13 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       "table": "messages",
       "unique": 0
     },
+    "ix_oidc_logins_expires": {
+      "columns": [
+        "expires_at"
+      ],
+      "table": "oidc_logins",
+      "unique": 0
+    },
     "ix_usage_time": {
       "columns": [
         "created_at"
@@ -1448,6 +1455,50 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
         0
       ]
     ],
+    "oidc_logins": [
+      [
+        "code_verifier",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "created_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "expires_at",
+        "REAL",
+        1,
+        null,
+        0
+      ],
+      [
+        "nonce",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        "state_hash",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        "used_at",
+        "REAL",
+        0,
+        null,
+        0
+      ]
+    ],
     "query_cache": [
       [
         "answer_md",
@@ -1873,6 +1924,20 @@ EXPECTED_SCHEMA_FINGERPRINT = json.loads(r"""
       [
         "last_login",
         "REAL",
+        0,
+        null,
+        0
+      ],
+      [
+        "oidc_iss",
+        "TEXT",
+        0,
+        null,
+        0
+      ],
+      [
+        "oidc_sub",
+        "TEXT",
         0,
         null,
         0

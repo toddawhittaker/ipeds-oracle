@@ -1,0 +1,57 @@
+# Local identity providers for testing the alternate sign-in doors BY HAND.
+#
+# NOT part of the app's deployment (that is compose.yaml) and NOT part of any
+# gate: CI proves the app's own logic against in-process fakes, with no
+# container and no network. What no fake can prove is that a REAL provider's
+# discovery document, claims and directory entries look the way we assumed --
+# and the one time that gap was tested, it found that Google Workspace was being
+# rejected outright. This file is how you check that yourself.
+#
+#   docker compose -f compose.test.yaml up -d
+#   docker compose -f compose.test.yaml down -v     # -v, or the seed won't re-run
+#
+# Then run the app against one of them; CONTRIBUTING.md -> "Testing the sign-in
+# doors" has the .env for each, and the accounts are listed there too.
+#
+# Everything here is loopback-only and seeded with throwaway passwords in plain
+# text. It is a fixture, not an example to copy into a deployment.
+
+services:
+  # OpenID Connect. Serves plain http on localhost, which the app accepts only
+  # in the dev posture (COOKIE_SECURE=false) and only for a loopback host -- the
+  # same carve-out csrf.py already makes for the Vite dev proxy.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: ipeds-test-keycloak
+    command: ["start-dev", "--import-realm", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./dev/keycloak:/opt/keycloak/data/import:ro
+    # Loopback only. Nothing here should be reachable from the network.
+    ports:
+      - "127.0.0.1:8081:8081"
+
+  # The directory. `ldap://` on 1389 so it needs no privileged port and no
+  # certificate; the app refuses plain ldap:// unless LDAP_ALLOW_INSECURE is set,
+  # which is the point -- you have to opt in, and it shouts on every boot.
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: ipeds-test-openldap
+    command: ["--copy-service"]
+    environment:
+      LDAP_ORGANISATION: IPEDS Oracle test directory
+      LDAP_DOMAIN: example.edu
+      LDAP_ADMIN_PASSWORD: admin-password
+      # The fixture writes memberOf directly (see dev/openldap/seed.ldif), so
+      # the memberof overlay is deliberately not configured.
+      #
+      # LDAP_SEED_INTERNAL_LDIF_PATH is deliberately NOT set: pointing it at the
+      # same directory this mounts applies the seed twice, and the second pass
+      # dies with LDAP error 68 (already exists) before slapd ever serves.
+    volumes:
+      - ./dev/openldap:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
+    ports:
+      - "127.0.0.1:1389:389"

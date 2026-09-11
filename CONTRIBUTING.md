@@ -33,6 +33,15 @@ backend/              the Python side (all Python tooling runs from here)
     llm.py            the tool-calling agent loop
     llmhttp.py        shared OpenAI-compatible transport (llm.py/guard.py/critic.py)
     prompt.py         system prompt (distilled from docs/SCHEMA.md)
+    authmethod.py     which sign-in door is active (magic_link | oidc), resolved
+                      the way mailer._resolve_backend picks a mail transport
+    oidc.py           OpenID Connect sign-in: Authlib builds the requests and
+                      verifies the id_token; the HTTP and the SSRF checks are
+                      ours (see docs/AUTH_AND_SECURITY.md for why)
+    ldapauth.py       directory sign-in over ldap3. The one method where a
+                      password crosses the wire, so TLS is enforced and the
+                      certificate is always verified (ldap3's own Tls() default
+                      is CERT_NONE)
     guard.py          topical guardrail in FRONT of the agent (off-topic never hits the DB)
     critic.py         post-answer review that can force one revision round
     feedback.py       distills a user's corrective feedback into a lesson
@@ -248,6 +257,25 @@ instead of counting runs.** Repetition could not settle that one; a throwaway
 spec that hovered, awaited the popover visible, then clicked failed 5/5 while the
 fix passed 5/5 — seconds, and conclusive.
 
+**There is no identity provider to test against, so one is faked in-process.**
+`backend/tests/fakeidp.py` is a HELPER, not a suite (both runners glob
+`test_*.py`, so the filename keeps it from being executed as one). It serves
+discovery, JWKS and the token endpoint over an `httpx.MockTransport` — the same
+shape `test_nces.py` uses for NCES — and signs REAL RS256 id_tokens with a real
+key, so `app/oidc.py` runs its actual verification path. `app/oidc.py` exposes one
+seam for this, the module-level `_TRANSPORT`; every function also takes an
+explicit `transport` for direct unit tests.
+
+LDAP uses **`ldap3`'s own `MOCK_SYNC` strategy** — a real in-process ldap3
+server, so a wrong password fails because ldap3 says so. Inject it at
+`ldapauth._connection`, and note that MOCK_SYNC keeps entries on the *Server*
+object: share one between tests and entries leak across them (it made three
+sign-ins fail with "2 entries match" before each test got its own). What
+MOCK_SYNC cannot express — StartTLS, certificate validation, timeouts — is
+covered by inspecting what `ldapauth._server` builds. Be clear about what that buys: it
+proves the app's own logic, not interoperability with Entra ID or Okta. Real
+providers need a real provider.
+
 `eval_nl2sql.py` is the **model‑swap regression gate** — it checks known answers
 (e.g. CA public CS bachelor's = 7,679). Run it before changing the model.
 
@@ -307,6 +335,79 @@ on your `PATH`.
 > `EMAIL_DOMAIN`: nothing could catch it, because the pre‑push gate exported the
 > blank before calling it and CI has no `.env` to bleed. It only failed when run
 > directly on a dev box, where it looked like a real test failure.
+
+### Testing the sign-in doors against real providers
+
+CI proves the app's own logic against in-process fakes — no container, no
+network. What a fake cannot prove is that a REAL provider's discovery document,
+claims and directory entries look the way we assumed, and that gap has bitten
+twice: the same-origin endpoint check rejected Google Workspace outright, and a
+float `LDAP_TIMEOUT_SECONDS` made every bind against a real directory fail with
+"the directory could not be reached". Neither was reachable from a fake.
+
+`compose.test.yaml` stands up a local Keycloak and a local OpenLDAP so you can
+check it yourself. It is a fixture — loopback-only, throwaway passwords in plain
+text — and is wired into no gate.
+
+```bash
+docker compose -f compose.test.yaml up -d
+# ... test ...
+docker compose -f compose.test.yaml down -v      # -v, or the seed won't re-run
+```
+
+Both are seeded with the same three accounts, so the same three outcomes are
+exercisable either way:
+
+| Account | Password | Expected |
+| --- | --- | --- |
+| `staff` | `staff-password` | **signs in** — in the group, right domain |
+| `student` | `student-password` | refused — not in the required group |
+| `outsider` | `outsider-password` | refused — in the group, but `@elsewhere.test` |
+
+**OIDC (Keycloak, `http://localhost:8081`).** Run the app on **port 8000** — the
+realm registers exactly `http://localhost:8000/api/auth/oidc/callback`, and a
+redirect URI the provider does not know is the first thing to get wrong.
+
+```bash
+AUTH_METHOD=oidc
+OIDC_ISSUER=http://localhost:8081/realms/ipeds-test
+OIDC_CLIENT_ID=ipeds-oracle
+OIDC_CLIENT_SECRET=local-test-secret
+OIDC_ALLOWED_DOMAINS=example.edu
+OIDC_REQUIRED_GROUP=ipeds-users
+COOKIE_SECURE=false        # required: the issuer is plain http on loopback
+```
+
+Keycloak's admin console is at <http://localhost:8081> (`admin` / `admin`) if you
+want to add a mapper or a user. The realm is `dev/keycloak/ipeds-test-realm.json`
+— Keycloak requires the filename to match the realm name, so rename both together
+or the container exits at boot.
+
+**LDAP (OpenLDAP, `ldap://127.0.0.1:1389`).**
+
+```bash
+AUTH_METHOD=ldap
+LDAP_SERVER_URI=ldap://127.0.0.1:1389   # 127.0.0.1, NOT localhost — see below
+LDAP_ALLOW_INSECURE=true                # the fixture serves plain ldap://
+LDAP_BIND_DN=cn=admin,dc=example,dc=edu
+LDAP_BIND_PASSWORD=admin-password
+LDAP_BASE_DN=ou=people,dc=example,dc=edu
+LDAP_USER_FILTER=(uid={username})
+LDAP_REQUIRED_GROUP_DN=cn=ipeds-users,ou=groups,dc=example,dc=edu
+LDAP_ALLOWED_DOMAINS=example.edu
+```
+
+`127.0.0.1`, not `localhost`: compose publishes the port on IPv4 only, and
+`localhost` resolves to `::1` first on most Linux boxes, so you get a connection
+refused that reads like the container is down.
+
+Two things about the fixture that differ from a production directory, both
+deliberate. `memberOf` is written as a real attribute in
+`dev/openldap/seed.ldif` rather than produced by slapd's `memberof` overlay — the
+app only reads the attribute, so it cannot tell, and this keeps the fixture to
+one mounted LDIF with no module configuration to get wrong. And the directory
+speaks plain `ldap://`, which the app refuses unless you set
+`LDAP_ALLOW_INSECURE` — that friction is the point, and it shouts on every boot.
 
 ### Screenshots for the guides
 

@@ -46,12 +46,19 @@ and explains the answer.
 
 ## Signing in
 
-Access is by invitation. On the sign‑in page, enter your email:
+How you sign in depends on how your institution set the app up.
+
+If the page shows a single **sign‑in button**, click it and sign in through your
+institution's usual login. No email link, no password to remember here.
+
+Otherwise the page asks for your email, and access is by invitation:
 
 - If you've been approved, you'll get a **one‑time sign‑in link** by email — no
   password to remember. Click it and you're in for about a month.
 - If you haven't been approved yet, you can **request access**, and an
   administrator will be notified.
+
+Administrators: see [Sign-in method](#sign-in-method) for choosing between them.
 
 ## Using it
 
@@ -344,6 +351,102 @@ per-user question limit and counts in the Admin → Usage totals like any other
 question (the screen does not yet separate the two doors). Full detail,
 including why the endpoint serves no OAuth discovery, is in
 [docs/MCP.md](docs/MCP.md).
+
+### Sign-in method
+
+`AUTH_METHOD` picks one door for the whole deployment:
+
+| Value | What people do |
+| --- | --- |
+| `magic_link` (default) | Enter an email, get a one-time link. Access is granted by an administrator in **Admin → Users**. |
+| `oidc` | Click one button and sign in through your identity provider (Entra ID, Okta, Keycloak, Google Workspace, …). |
+| `ldap` | Type a directory username and password (Active Directory, OpenLDAP, …). |
+
+If the method you asked for is not usable — an unknown value, a blank issuer —
+the app **still starts**, serves the magic-link door, and logs a CRITICAL naming
+the exact settings that are missing. That is deliberate: a typo in `.env` should
+not lock you out of the console you would fix it from.
+
+#### Setting up OIDC
+
+Register this **exact** redirect URI with your provider. It is built from
+`APP_PUBLIC_URL`, never from the incoming request, so it must match what you set
+there:
+
+```
+<APP_PUBLIC_URL>/api/auth/oidc/callback
+```
+
+Then, in `.env`:
+
+```bash
+AUTH_METHOD=oidc
+OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0   # must be https
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...          # omit for a public client (PKCE only)
+OIDC_ALLOWED_DOMAINS=yourdomain.edu   # strongly recommended — see below
+```
+
+> **⚠ OIDC auto-provisions, and you should fence it.** Anyone your provider can
+> authenticate gets an account here on their first sign-in — the allowlist stops
+> being the gate. On a tenant that also holds students, alumni or contractors,
+> that is everyone. Set `OIDC_ALLOWED_DOMAINS` (comma-separated) or
+> `OIDC_REQUIRED_GROUP` (matched against the `groups` claim) to fence it, and
+> check who has signed in under **Admin → Users**. With neither set, the app
+> starts but logs a CRITICAL saying so on every boot.
+>
+> If your provider is **Entra ID** and the app is reachable by guest (B2B) or
+> personal accounts, set `OIDC_REQUIRED_GROUP`. Entra lets those accounts set
+> their own `email` and sends no `email_verified`, so a domain fence alone does
+> not stop someone claiming a colleague's address. The app binds each account to
+> the provider identity that first signed into it, which stops the attack after
+> the first sign-in; the group is what stops it before.
+
+#### Setting up LDAP
+
+```bash
+AUTH_METHOD=ldap
+LDAP_SERVER_URI=ldaps://ldap.yourdomain.edu:636
+LDAP_BIND_DN=cn=ipeds-oracle,ou=services,dc=yourdomain,dc=edu
+LDAP_BIND_PASSWORD=...
+LDAP_BASE_DN=ou=people,dc=yourdomain,dc=edu
+LDAP_USER_FILTER=(sAMAccountName={username})        # Active Directory
+LDAP_REQUIRED_GROUP_DN=cn=ipeds-users,ou=groups,dc=yourdomain,dc=edu
+```
+
+> **⚠ This is the one method where a password crosses the wire.** Plain `ldap://`
+> is refused unless you set `LDAP_START_TLS=true`, and the directory's
+> certificate is always verified — point `LDAP_TLS_CA_CERTS_FILE` at your CA
+> bundle if it is a private CA. `LDAP_ALLOW_INSECURE=true` exists for a local
+> test directory and shouts on every boot.
+
+A campus directory usually holds students and former staff too, so
+`LDAP_REQUIRED_GROUP_DN` matters more here than anywhere else — without it, the
+app starts and logs a CRITICAL saying everyone who can bind gets an account. The
+group fence needs the search-then-bind settings above; a direct bind
+(`LDAP_USER_DN_TEMPLATE`) cannot read groups, and configuring both is refused
+rather than silently ignored.
+
+**Only the chosen method works.** Under `oidc` or `ldap` the magic-link endpoints answer
+404 — otherwise anyone your provider had deactivated could still ask for an
+email link and get in, since auto-provisioning has already put them on the
+allowlist.
+
+Two things change for administrators under OIDC:
+
+- **Admin → Users becomes a record of who has signed in**, not a gate on who may.
+  Adding someone by hand grants nothing new; their provider account is what lets
+  them in.
+- **Remove also blocks.** Otherwise removing someone would do nothing — their
+  next sign-in would simply re-create the account. The **Blocked users** tab's
+  unblock control is the undo.
+
+Set `ADMIN_EMAILS` **before the first boot**. On an existing deployment that is
+switching to OIDC, promote your first SSO admin from an account that is already
+an admin.
+
+The app never sees a password under OIDC, and `MAIL_BACKEND` still only matters
+for access-request and approval notices.
 
 ### Email
 

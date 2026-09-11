@@ -13,6 +13,8 @@ export declare const api: {
     verifyInfo: (token: any) => Promise<any>;
     verify: (token: any) => Promise<any>;
     logout: () => Promise<any>;
+    oidcStart: () => Promise<any>;
+    ldapSignIn: (username: any, password: any) => Promise<any>;
     conversations: (q: any) => Promise<any>;
     conversation: (id: any) => Promise<any>;
     renameConversation: (id: any, title: any) => Promise<any>;

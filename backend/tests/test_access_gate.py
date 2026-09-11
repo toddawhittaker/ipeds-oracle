@@ -10,9 +10,12 @@ domain, since the allowlist is the sole authority there. An empty EMAIL_DOMAIN
 message must be byte-identical whichever branch is taken -- a distinct message
 would let an attacker fingerprint which domain(s) a deployment serves.
 
-GET /api/auth/config is a new unauthenticated endpoint the login form polls to
-build its "you@yourschool.edu" placeholder hint; it must expose EXACTLY
-{"email_domain": ...} and nothing else, since it needs no session.
+GET /api/auth/config is an unauthenticated endpoint the login form polls to
+build its "you@yourschool.edu" placeholder hint and to decide which sign-in form
+to draw. It must expose EXACTLY the keys in PUBLIC_CONFIG_KEYS below and nothing
+else, since it needs no session -- see the comment there for why the active
+method's name belongs in that set and why an issuer URL or a client secret never
+could.
 """
 import os
 import sys
@@ -255,23 +258,46 @@ def test_domain_match_is_case_insensitive_and_tolerates_leading_at():
     assert len(spy2.calls) == 1, spy2.calls
 
 
+# The login form has to know which door to draw, so this endpoint now also
+# carries the active method's NAME and its button label. That is a deliberate
+# widening of an endpoint whose comment says "expose NOTHING else", and the
+# reason it is safe is the reason the comment gives: the email domain is public,
+# and so is the active method -- any visitor learns it by loading the page and
+# seeing which form appears. What must never cross is unchanged: the issuer URL,
+# the client id, the client secret, and every group/domain fence, each of which
+# is either a credential or free reconnaissance about the institution.
+PUBLIC_CONFIG_KEYS = {"email_domain", "auth_method", "oidc_button_label"}
+
+
 def test_auth_config_endpoint_needs_no_session():
     _set_domain("example.edu")
     with TestClient(app) as c:
         r = c.get("/api/auth/config")
     assert r.status_code == 200, r.text
-    assert r.json() == {"email_domain": "example.edu"}, r.json()
+    assert r.json()["email_domain"] == "example.edu", r.json()
 
 
-def test_auth_config_endpoint_exposes_exactly_email_domain():
+def test_auth_config_endpoint_exposes_exactly_the_public_keys():
     """A future edit adding another field to public_config() must not leak it
-    through this unauthenticated endpoint without a deliberate test change."""
+    through this unauthenticated endpoint without a deliberate test change.
+
+    Still an EXACT set, not a subset: loosening this to "contains" is what would
+    let the issuer URL or a client secret ride along unnoticed."""
     _set_domain("example.edu")
     with TestClient(app) as c:
         r = c.get("/api/auth/config")
     assert r.status_code == 200, r.text
-    assert set(r.json().keys()) == {"email_domain"}, \
-        f"GET /api/auth/config must expose exactly {{'email_domain'}}, got {set(r.json().keys())}"
+    assert set(r.json().keys()) == PUBLIC_CONFIG_KEYS, \
+        f"GET /api/auth/config must expose exactly {PUBLIC_CONFIG_KEYS}, got {set(r.json().keys())}"
+
+
+def test_auth_config_reports_the_default_method():
+    """The suite runs with no AUTH_METHOD set, which must read as magic_link --
+    the same default an operator who never touches the setting gets."""
+    with TestClient(app) as c:
+        r = c.get("/api/auth/config")
+    assert r.status_code == 200, r.text
+    assert r.json()["auth_method"] == "magic_link", r.json()
 
 
 def test_auth_config_reflects_empty_domain():
@@ -279,7 +305,7 @@ def test_auth_config_reflects_empty_domain():
     with TestClient(app) as c:
         r = c.get("/api/auth/config")
     assert r.status_code == 200, r.text
-    assert r.json() == {"email_domain": ""}, r.json()
+    assert r.json()["email_domain"] == "", r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -787,8 +813,10 @@ def run():
     check("domain match is case-insensitive and tolerates a leading '@'",
           test_domain_match_is_case_insensitive_and_tolerates_leading_at)
     check("GET /api/auth/config needs no session", test_auth_config_endpoint_needs_no_session)
-    check("GET /api/auth/config exposes exactly {'email_domain'}",
-          test_auth_config_endpoint_exposes_exactly_email_domain)
+    check("GET /api/auth/config exposes exactly the public keys",
+          test_auth_config_endpoint_exposes_exactly_the_public_keys)
+    check("GET /api/auth/config reports the default method",
+          test_auth_config_reports_the_default_method)
     check("GET /api/auth/config reflects an empty domain",
           test_auth_config_reflects_empty_domain)
     check("a denied address files no new row and sends no mail",
