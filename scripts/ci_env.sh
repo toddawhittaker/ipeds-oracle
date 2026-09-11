@@ -101,6 +101,24 @@ export OIDC_REQUIRED_GROUP=""
 export OIDC_ALLOWED_DOMAINS=""
 export OIDC_BUTTON_LABEL="Sign in with SSO"
 export OIDC_HTTP_TIMEOUT_SECONDS=10
+#   * Every LDAP setting, same reasoning and the same completeness rule. A
+#     developer whose .env points at a real directory would otherwise have
+#     test_ldap.py attempt a live bind; test_ldap.py sets the server URI and the
+#     service account itself at import.
+export LDAP_SERVER_URI=""
+export LDAP_START_TLS=false
+export LDAP_ALLOW_INSECURE=false
+export LDAP_TLS_CA_CERTS_FILE=""
+export LDAP_USER_DN_TEMPLATE=""
+export LDAP_BIND_DN=""
+export LDAP_BIND_PASSWORD=""
+export LDAP_BASE_DN=""
+export LDAP_USER_FILTER="(uid={username})"
+export LDAP_EMAIL_ATTRIBUTE="mail"
+export LDAP_ALLOWED_DOMAINS=""
+export LDAP_REQUIRED_GROUP_DN=""
+export LDAP_GROUP_MEMBER_ATTRIBUTE="memberOf"
+export LDAP_TIMEOUT_SECONDS=10
 #   * FIGURE_RETRY_ENABLED=false — the missing-figure retry makes a real LLM call
 #     when a data answer emits no figure. test_agent_loop.py sets its own test key,
 #     so with the retry ON its figureless numeric-answer cases would each attempt a

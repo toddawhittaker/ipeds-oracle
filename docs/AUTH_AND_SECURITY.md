@@ -2,8 +2,8 @@
 
 ## Sign-in methods
 
-`AUTH_METHOD` picks exactly one door: **`magic_link`** (the default) or
-**`oidc`**. `app/authmethod.py` resolves it, following `mailer._resolve_backend`
+`AUTH_METHOD` picks exactly one door: **`magic_link`** (the default), **`oidc`**,
+or **`ldap`**. `app/authmethod.py` resolves it, following `mailer._resolve_backend`
 — a string setting, a pure resolver, and an unknown or incompletely-configured
 value that degrades rather than raising.
 
@@ -153,11 +153,100 @@ message `code=` is usually an HTTP status). PKCE means a bare code is not
 redeemable alone, so this is defence in depth rather than a live hole — but the
 standard here is that credentials do not land in `docker logs`.
 
-## Auto-provisioning (oidc only)
+## LDAP
 
-**The provider is the authority on identity; the app still decides access.** On a
-first successful sign-in `auth.provision_from_idp` writes the **`allowlist`
-row** (the `users` row comes from `create_session`, as it does for every method).
+`app/ldapauth.py`, on `ldap3` — pure Python, so the image needs no apt package
+(`python-ldap` and `bonsai` both need C libraries). One route,
+`POST /api/auth/ldap`, taking a username and a password.
+
+**This is the one method where a password crosses the wire**, and the ORDER in
+`authenticate` is the security property rather than an implementation detail:
+
+1. **An empty password is refused before the directory is touched.** RFC 4513
+   makes a simple bind with a zero-length password an *anonymous* bind, which
+   most servers answer with success — "any username, no password" as a sign-in.
+   `ldap3` happens to refuse it itself, so in this codebase the bug it prevents
+   is an uncaught 500 where every other rejection is a neutral 401 — an
+   enumeration oracle wearing a different hat. Checking it here also keeps the
+   guard ours if ldap3 ever relaxes.
+2. **⚠ Certificates are always verified.** `ldap3.Tls()` defaults to
+   `validate=ssl.CERT_NONE`, so an `ldaps://` URI built with the default object
+   encrypts the password and then accepts *any* certificate — exactly the attack
+   it looks like it prevents. `ldapauth._tls` constructs it explicitly every
+   time, and a test asserts the constructed `Server`'s `.tls.validate`.
+3. **Plain `ldap://` is not a usable configuration** unless StartTLS is on, or
+   `LDAP_ALLOW_INSECURE` is set deliberately — which logs a CRITICAL on every
+   boot. Refusing at *resolution* means the operator learns at boot rather than
+   from a user who cannot sign in.
+4. **The username is escaped where the filter is built.** Unescaped, `*` matches
+   every entry and `)(uid=admin` rewrites the query.
+5. **Exactly one search result.** Zero refuses; two or more refuses loudly,
+   because an ambiguous filter is a configuration error and picking one entry is
+   how somebody signs in as the wrong person.
+6. **The user bind reuses the finder's connection** rather than opening a second
+   one — see the timing note below.
+
+**Every rejection is the same 401** — wrong password, unknown user, not in the
+group, blocked here, directory unreachable. Anything that varies by cause is a
+directory enumeration oracle; the reason goes to the log, which only an admin
+reads. The request model uses `SecretStr`, so FastAPI's own 422 echo cannot
+quote the password back, and a test drains the log to prove it appears in no
+record.
+
+**Rate-limited before the directory is touched**, reusing the magic-link
+limiter: this is the only method where online password guessing is possible, and
+an unlimited endpoint would also let an attacker use the directory's round trips
+as a work amplifier.
+
+**Two bind modes.** Direct bind (`LDAP_USER_DN_TEMPLATE`) needs no service
+account but cannot read an entry's groups, so configuring a group fence with it
+is a config *problem* rather than a silently ignored setting. Search-then-bind
+(`LDAP_BIND_DN` + `LDAP_BASE_DN`) is what Active Directory deployments run, and
+the only mode the fence works in.
+
+**⚠ Referrals are never followed** (`auto_referrals=False`, plus an empty
+`allowed_referral_hosts`). ldap3's defaults are the opposite, and both halves
+matter: `create_referral_connection` copies this connection's user and password
+into a connection to whatever host a referral names — with TLS only if the
+referral URL says so — and the referred server's answer then *replaces* the
+search result. So a single referral object inside `LDAP_BASE_DN` is both an
+exfiltration channel for `LDAP_BIND_PASSWORD` and a way to return
+`mail: admin@example.edu` with a satisfying `memberOf`, while the password check
+still runs against the real directory as the attacker's own account. ldap3
+refuses to follow a referral on a *bind*, which is why the search is the
+reachable half. Even with no attacker, a routine multi-domain Active Directory
+referral would otherwise ship the service-account password to the referred host.
+
+**A multi-valued `mail` is refused, not resolved.** LDAP attribute sets have no
+defined order, so taking the first value means one entry can land in either of
+two app accounts run to run — and if one of those addresses is an `ADMIN_EMAILS`
+one, that is an admin account. Refusing is the same call the one-result rule
+makes about an ambiguous search. Attribute names are matched
+case-insensitively for the same class of reason: `LDAP_GROUP_MEMBER_ATTRIBUTE=memberof`
+against a server answering `memberOf` would otherwise refuse everybody, and look
+exactly like a real refusal.
+
+**The user bind reuses the finder's connection** rather than opening a second
+one. A second connection costs an extra TCP connect and TLS handshake, and only
+when the username *exists* — tens of milliseconds of wall clock that turn the
+deliberately identical 401 into a username oracle.
+
+**Not built, and why:** LDAP accounts are not bound to a directory identity the
+way OIDC accounts are bound to a provider `sub` (migration 39). The nOAuth
+vector does not apply — `mail` is set by the directory administrator, not
+self-asserted by the user. What remains is two *different* entries carrying the
+same `mail`, which the one-result rule does **not** catch (it de-duplicates
+entries matching one username filter, not entries sharing an address): a shared
+mailbox, an alias object or a stale duplicate would collapse into one app
+account. `LDAP_ALLOWED_DOMAINS` and `LDAP_REQUIRED_GROUP_DN` are the practical
+fences. Worth revisiting if a deployment has a directory where `mail` is
+user-editable.
+
+## Auto-provisioning (oidc and ldap)
+
+**The provider is the authority on identity; the app still decides access.** This
+applies to OIDC and LDAP alike. On a first successful sign-in
+`auth.provision_from_idp` writes the **`allowlist` row** (the `users` row comes from `create_session`, as it does for every method).
 Writing that allowlist row is the whole design: the allowlist is
 re-checked on every authenticated request (`_user_from_request`) and every MCP
 call (`apikeys.verify`), and those two checks are the app's only per-request kill

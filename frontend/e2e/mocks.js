@@ -111,6 +111,29 @@ export async function mockOidcStart(page, {
 }
 
 /**
+ * POST /api/auth/ldap -> {email, is_admin} or a neutral 401. Returns {calls} so
+ * a spec can assert what was posted (and that the password was posted once).
+ */
+export async function mockLdapSignIn(page, {
+  status = 200,
+  email = "jdoe@example.edu",
+  is_admin = false,
+  detail = "Sign-in failed. Check your username and password.",
+} = {}) {
+  const calls = [];
+  await page.route("**/api/auth/ldap", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push(route.request().postDataJSON());
+    await route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(status === 200 ? { email, is_admin } : { detail }),
+    });
+  });
+  return { calls };
+}
+
+/**
  * GET /api/version -> {current, latest, update_available}. The Shell fetches it
  * once signed in; About shows the version line and Admin shows the update banner
  * when update_available. Defaults to "up to date" (no banner).

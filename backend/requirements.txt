@@ -22,3 +22,4 @@ authlib>=1.8.0
 # becomes ModuleNotFoundError at import of app/oidc.py.
 joserfc>=1.7.5
 cryptography>=45.0.1
+ldap3>=2.9.1

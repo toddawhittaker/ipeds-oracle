@@ -89,9 +89,27 @@ def enforce_chat_rate_limit(user_id: int) -> None:
 _IP_ONLY_SENTINEL = "-ip-only-"
 
 
-def enforce_auth_rate_limit(email: str, ip: str) -> None:
+def record_auth_attempt(email: str, ip: str) -> None:
+    """Charge one attempt to both buckets, without checking either.
+
+    For a caller that wants to count only FAILURES -- the LDAP password form,
+    where a successful sign-in should not eat into the budget the way a wrong
+    guess does. `enforce_auth_rate_limit(..., record=False)` then does the
+    checking half."""
+    con = connect()
+    try:
+        con.execute(
+            "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
+            (email, ip, time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def enforce_auth_rate_limit(email: str, ip: str, *, record: bool = True) -> None:
     """Raise 429 if this email or IP has exceeded its window budget. Otherwise
-    record the attempt. `email` should already be normalized (lower/stripped)."""
+    record the attempt, unless `record=False` -- see `record_auth_attempt`.
+    `email` should already be normalized (lower/stripped)."""
     s = get_settings()
     now = time.time()
     cutoff = now - s.auth_rate_window_seconds
@@ -111,10 +129,11 @@ def enforce_auth_rate_limit(email: str, ip: str) -> None:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "Too many sign-in requests. Please wait a few minutes and try again.")
-        con.execute(
-            "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
-            (email, ip, now))
-        con.commit()
+        if record:
+            con.execute(
+                "INSERT INTO auth_request_attempts(email, ip, created_at) VALUES (?,?,?)",
+                (email, ip, now))
+            con.commit()
     finally:
         con.close()
 
