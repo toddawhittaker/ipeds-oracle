@@ -14,3 +14,11 @@ fastembed>=0.8.0
 numpy>=2.5.2
 email-validator>=2.3.0
 mcp>=2.0.0
+authlib>=1.8.0
+# Imported directly by app/oidc.py (JWKS parsing + id_token signature) and by
+# tests/fakeidp.py. They arrive via authlib today, but "we import it" is what
+# decides whether a dependency is declared: authlib shipped its own authlib.jose
+# until recently, so the day it changes JOSE backends an undeclared joserfc
+# becomes ModuleNotFoundError at import of app/oidc.py.
+joserfc>=1.7.5
+cryptography>=45.0.1

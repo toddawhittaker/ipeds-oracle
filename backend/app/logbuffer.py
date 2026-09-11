@@ -46,6 +46,22 @@ _REDACT_RE = re.compile(r"(?i)(token=|bearer\s+|sk-or-[\w-]{0,4})[\w.\-]+")
 # _REDACT_RE's `[\w.\-]+`, which stops at the first percent-escape and would
 # leave most of a multi-word search in place.
 _ACCESS_QUERY_RE = re.compile(r"(?i)(\bq=)[^&\s]*")
+# The OIDC callback arrives as `GET /api/auth/oidc/callback?code=...&state=...`,
+# and uvicorn writes that whole path to stdout. That is the SAME leak the
+# magic-link `?token=` had, which is why the token moved to a URL fragment --
+# except a provider's redirect_uri cannot use a fragment, so the credential
+# genuinely does reach the access log and has to be scrubbed here instead.
+#
+# PKCE means a bare `code` is not redeemable on its own, and `state` is
+# single-use. So this is defence in depth rather than a live hole -- but the
+# standard in this repo is that credentials do not land in `docker logs`, where
+# a self-hoster reads them routinely, and a code is a credential.
+#
+# Access-log-scoped, NOT in _REDACT_RE, and that distinction is load-bearing in
+# the other direction from `q=`: "code=" in an ordinary log message is usually
+# an HTTP status or an error code, and redacting those would blind the admin
+# Logs tab for no gain.
+_ACCESS_CODE_RE = re.compile(r"(?i)\b(code=|state=)[^&\s]*")
 # Flatten CR/LF and other C0/DEL control chars to a space before a record is
 # persisted. This neutralizes log-injection (forged log lines via a newline in a
 # user-controlled value — an email, an entity label, an upstream error) for EVERY
@@ -263,11 +279,15 @@ def get_handler() -> SqliteLogHandler | None:
 
 
 class _AccessLogRedactor(logging.Filter):
-    """Scrub `token=...` and `q=...` out of uvicorn's access log line.
+    """Scrub `token=`, `q=`, `code=` and `state=` out of uvicorn's access log line.
 
     Also scrubs `q=` — the chat search term, which is the user's own private
     query text and has no business in a log an operator reads (see
     _ACCESS_QUERY_RE).
+
+    It also scrubs the OIDC callback's `code=`/`state=` (see _ACCESS_CODE_RE) --
+    the one credential that unavoidably travels in a query string, because a
+    provider's redirect_uri cannot be a fragment.
 
     Sign-in links now carry the token in a URL fragment, which browsers never
     transmit — so nothing reaches this filter from a link minted today. It
@@ -286,8 +306,10 @@ class _AccessLogRedactor(logging.Filter):
 
     @staticmethod
     def _scrub(s: str) -> str:
-        return _ACCESS_QUERY_RE.sub(r"\1<redacted>",
-                                    _REDACT_RE.sub(r"\1<redacted>", s))
+        return _ACCESS_CODE_RE.sub(
+            r"\1<redacted>",
+            _ACCESS_QUERY_RE.sub(r"\1<redacted>",
+                                 _REDACT_RE.sub(r"\1<redacted>", s)))
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args and isinstance(record.args, tuple):

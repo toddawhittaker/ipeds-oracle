@@ -73,6 +73,34 @@ export LLM_CACHE_READ_COST_PER_MTOK=0
 #     and absent in CI. Blanking them pins the key-free posture both places.
 export MODEL_DEFAULT=""
 export MODEL_ESCALATION=""
+#   * AUTH_METHOD + EVERY OIDC setting — all of them config.py's own defaults,
+#     pinned for the same reason as APP_PUBLIC_URL above: reproduce CI (no .env)
+#     exactly. AUTH_METHOD is the one that matters. A developer whose real .env
+#     runs oidc would otherwise have every auth suite take a DIFFERENT DOOR
+#     locally than in CI — /api/auth/request and the whole magic-link path stay
+#     live either way, but /api/auth/config reports a different method and the
+#     OIDC routes stop 404ing, so the failures would appear only on that one box
+#     and only in the local gate. The credential blanks stop a real .env pointing
+#     a suite at a live provider. test_oidc.py sets AUTH_METHOD=oidc and its own
+#     fake issuer at import, so it is deterministic on both.
+#     The list has to be COMPLETE, not just the credentials: a developer whose
+#     .env carries OIDC_ALLOWED_DOMAINS=their.edu fails about half of
+#     test_oidc.py locally while CI stays green, because the fence silently
+#     refuses the suite's fixture addresses. Same for the claim names, the
+#     scopes and the timeout. test_oidc.py sets AUTH_METHOD, the issuer, the
+#     client id and the secret itself at import; everything below is what stops
+#     a real .env leaking into the rest.
+export AUTH_METHOD="magic_link"
+export OIDC_ISSUER=""
+export OIDC_CLIENT_ID=""
+export OIDC_CLIENT_SECRET=""
+export OIDC_SCOPES="openid email profile"
+export OIDC_EMAIL_CLAIM="email"
+export OIDC_GROUPS_CLAIM="groups"
+export OIDC_REQUIRED_GROUP=""
+export OIDC_ALLOWED_DOMAINS=""
+export OIDC_BUTTON_LABEL="Sign in with SSO"
+export OIDC_HTTP_TIMEOUT_SECONDS=10
 #   * FIGURE_RETRY_ENABLED=false — the missing-figure retry makes a real LLM call
 #     when a data answer emits no figure. test_agent_loop.py sets its own test key,
 #     so with the retry ON its figureless numeric-answer cases would each attempt a

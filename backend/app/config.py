@@ -278,6 +278,49 @@ class Settings(BaseSettings):
     # Set to 1 in production behind a single proxy hop (see the README).
     trusted_proxy_count: int = Field(default=0)
 
+    # --- Sign-in method ------------------------------------------------------
+    # Which door the app opens: "magic_link" (the default -- passwordless email
+    # link, gated by the manual allowlist) or "oidc" (an OpenID Connect
+    # provider). Exactly ONE is active; app/authmethod.py resolves it, and an
+    # unknown or incompletely-configured value falls back to magic_link with a
+    # CRITICAL rather than refusing to boot -- see that module's docstring for
+    # why that direction is the safe one.
+    #
+    # ⚠ oidc AUTO-PROVISIONS: anyone the provider authenticates gets an account
+    # on first sign-in, so the population that can reach this app is whatever
+    # your provider can authenticate. oidc_allowed_domains and
+    # oidc_required_group are the app-side fence, and on a shared tenant they
+    # are the difference between "our staff" and "everyone".
+    auth_method: str = Field(default="magic_link")   # magic_link | oidc
+
+    # --- OIDC (authorization code + PKCE) ------------------------------------
+    # The provider's base issuer URL, e.g. https://idp.example.edu/realms/main.
+    # Discovery reads <issuer>/.well-known/openid-configuration, and every
+    # endpoint named there must live on this same host or the login is refused
+    # (a discovery document is otherwise a way to make this server POST its
+    # client secret wherever an attacker likes).
+    oidc_issuer: str = Field(default="")
+    oidc_client_id: str = Field(default="")
+    # Blank = a public client: PKCE alone proves the exchange. Set it for a
+    # confidential client, which is what most providers issue by default.
+    oidc_client_secret: str = Field(default="")
+    oidc_scopes: str = Field(default="openid email profile")
+    # Which claim carries the address that becomes users.email. There is NO
+    # fallback to sub/preferred_username on purpose: email is this app's identity
+    # key across users, allowlist, access_requests, api_keys and chat history, and
+    # a UUID sitting in that column makes an account the admin tools cannot name.
+    oidc_email_claim: str = Field(default="email")
+    oidc_groups_claim: str = Field(default="groups")
+    # Fences, both blank = no fence. A required group is checked against the
+    # groups claim; allowed domains against the email's domain (comma-separated).
+    oidc_required_group: str = Field(default="")
+    oidc_allowed_domains: str = Field(default="")
+    # What the sign-in button says. Institutions call this different things
+    # ("Sign in with Okta", "Use your NetID"), and the login page is the one
+    # screen where guessing wrong strands somebody.
+    oidc_button_label: str = Field(default="Sign in with SSO")
+    oidc_http_timeout_seconds: float = Field(default=10.0)
+
     # --- Email --------------------------------------------------------------
     # Which transport delivers the magic-link / access-request / approval emails.
     # "auto" (default) picks resend if a Resend key is set, else smtp if SMTP_HOST
@@ -325,6 +368,23 @@ class Settings(BaseSettings):
     @property
     def admin_email_list(self) -> list[str]:
         return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
+
+    @property
+    def oidc_allowed_domain_list(self) -> list[str]:
+        """Lower-cased domains an OIDC-authenticated address must belong to.
+        Empty = no domain fence. A leading '@' is tolerated because writing
+        "@example.edu" is the obvious mistake and silently fencing everyone out
+        of their own app is a bad way to teach the format."""
+        return [d.strip().lower().lstrip("@")
+                for d in self.oidc_allowed_domains.split(",") if d.strip()]
+
+    @property
+    def oidc_scope_list(self) -> list[str]:
+        """Scopes to request, always including openid — without it the provider
+        runs a plain OAuth2 flow and returns no id_token at all, which fails
+        later and much less legibly than it would here."""
+        scopes = [s for s in self.oidc_scopes.replace(",", " ").split() if s]
+        return scopes if "openid" in scopes else ["openid", *scopes]
 
     @property
     def resolved_log_db_path(self) -> Path:

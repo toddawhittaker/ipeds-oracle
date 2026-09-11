@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   SERVER_UNREACHABLE,
   SESSION_EXPIRED,
+  AUTH_ERROR_CODES,
+  authErrorMessage,
   detailText,
   loadErrorMessage,
   turnErrorMessage,
@@ -119,5 +121,50 @@ describe("detailText", () => {
   it("returns empty for a shape it can't read, so the caller falls back", () => {
     expect(detailText({ unexpected: true })).toBe("");
     expect(detailText([{ noMsg: 1 }])).toBe("");
+  });
+});
+
+// THE REGRESSION this guards: reflected text on the login door. The server
+// redirects with ?auth_error=<code> from a closed set, and this map is the
+// second half of that guarantee — a code from outside the set must render OUR
+// wording, never whatever arrived in the query string.
+describe("authErrorMessage", () => {
+  const GENERIC = authErrorMessage("__definitely_not_a_code__");
+
+  it("gives each known code its own sentence, not the fallback", () => {
+    // Compared against the FALLBACK, not merely against each other. Counting
+    // distinct strings passes with one code missing (it falls through, and the
+    // count still matches); this fires on the first one dropped — which is the
+    // real failure, a blocked user reading "try again" and retrying something
+    // that will never work.
+    expect(AUTH_ERROR_CODES.length).toBeGreaterThanOrEqual(5);
+    for (const code of AUTH_ERROR_CODES) {
+      expect(authErrorMessage(code), `${code} fell through to the fallback`)
+        .not.toBe(GENERIC);
+    }
+    expect(new Set(AUTH_ERROR_CODES.map(authErrorMessage)).size)
+      .toBe(AUTH_ERROR_CODES.length);
+  });
+
+  it("never echoes an unrecognised code back to the page", () => {
+    const hostile = [
+      "<script>alert(1)</script>",
+      "javascript:alert(1)",
+      "'; DROP TABLE users; --",
+      "", undefined, null, 42, {},
+    ];
+    for (const code of hostile) {
+      const msg = authErrorMessage(code);
+      expect(msg).toBeTruthy();
+      expect(msg).not.toMatch(/[<>]/);
+      if (typeof code === "string" && code) expect(msg).not.toContain(code);
+    }
+  });
+
+  it("distinguishes being fenced out from being blocked", () => {
+    // Both mention an administrator, so matching /administrator/i would pass
+    // with either one replaced by the other — or by the fallback.
+    expect(authErrorMessage("not_authorized")).not.toBe(authErrorMessage("denied"));
+    expect(authErrorMessage("denied")).toMatch(/withdrawn/i);
   });
 });

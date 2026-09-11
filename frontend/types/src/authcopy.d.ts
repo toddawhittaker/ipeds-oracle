@@ -3,3 +3,5 @@ export declare const SESSION_EXPIRED = "Your session expired. Sign in again to p
 export declare const SERVER_UNREACHABLE = "We couldn't reach the server. Check your connection and reload \u2014 you may still be signed in.";
 export declare function turnErrorMessage(status: any, detail: any): any;
 export declare function loadErrorMessage(what: any, detail: any): any;
+export declare const AUTH_ERROR_CODES: string[];
+export declare function authErrorMessage(code: any): any;

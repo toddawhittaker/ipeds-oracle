@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.routing import Route
 
-from app import version
+from app import authmethod, version
 from app.auth import current_user
 from app.bodylimit import BodyLimitMiddleware
 from app.config import PRODUCT_NAME, ROOT, get_settings
@@ -92,6 +92,16 @@ async def lifespan(app: FastAPI):
     if _warning:
         log.critical(_warning)
     _warning = _missing_model_warning(get_settings())
+    if _warning:
+        log.critical(_warning)
+    # Same terms as the two checks above: logged, not raised. A deployment that
+    # asked for a sign-in method it cannot get is served magic link instead, and
+    # is told which settings are missing -- see app/authmethod.py for why
+    # degrading beats refusing to boot here.
+    _warning = authmethod.boot_warning(get_settings())
+    if _warning:
+        log.critical(_warning)
+    _warning = authmethod.fence_warning(get_settings())
     if _warning:
         log.critical(_warning)
     init_db()

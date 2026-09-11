@@ -102,6 +102,12 @@ export const api = {
   verifyInfo: (token) => j("POST", "/api/auth/verify-info", { token }),
   verify: (token) => j("POST", "/api/auth/verify", { token }),
   logout: () => j("POST", "/api/auth/logout"),
+  // Begin an OIDC login: the server mints the pending-login row and returns the
+  // provider URL for the browser to visit. A POST returning JSON rather than a
+  // link the browser follows, so the door can render a failure in place instead
+  // of bouncing the visitor somewhere, and so the request passes the CSRF origin
+  // check on the way out.
+  oidcStart: () => j("POST", "/api/auth/oidc/start"),
 
   // `q` searches the caller's own history — their questions, the assistant's
   // replies, and conversation titles. Terms are ANDed and "a quoted run" is one
