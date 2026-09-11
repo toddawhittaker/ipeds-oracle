@@ -265,9 +265,11 @@ jobs:
     # --with-deps chromium` step (an apt-get of browser libs on every run,
     # ~2-3 min of fixed overhead). The tag is PINNED to the @playwright/test
     # version in frontend/package-lock.json — the two MUST match (Playwright
-    # refuses a browser build it didn't ship), so bump them together.
+    # refuses a browser build it didn't ship), so bump them together. A MINOR
+    # bump like 1.62->1.63 is exactly the case a patch pair survives by luck:
+    # patch releases share a browser build, minors do not.
     container:
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
     defaults:
       run:
         working-directory: frontend
