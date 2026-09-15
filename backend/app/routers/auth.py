@@ -242,13 +242,14 @@ def oidc_start(request: Request, response: Response):
     # can issue an outbound discovery request from a threadpool worker, so an
     # unlimited burst is both unbounded growth in app.db and a way to park every
     # sync route's thread behind a slow provider.
-    enforce_auth_ip_rate_limit(client_ip(request))
+    ip = client_ip(request)
+    enforce_auth_ip_rate_limit(ip)
     con = connect()
     try:
         url, state = oidc_mod.begin_login(con)
         con.commit()
     except oidc_mod.OidcError as e:
-        log.warning("OIDC start failed (%s): %s", e.code, _log_safe(e.detail))
+        log.warning("OIDC start failed (%s) from %s: %s", e.code, ip, _log_safe(e.detail))
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             "Single sign-on is unavailable right now. Try again, or contact "
@@ -275,14 +276,17 @@ def oidc_callback(request: Request, code: str | None = None,
     provisioning, THEN the session. A blocked or mismatched address must never
     be provisioned on its way to being refused."""
     _require_oidc()
+    # Every refusal below names the client IP so an operator grepping for a
+    # brute-force or replay source finds it in the same line as the reason.
+    ip = client_ip(request)
     cookie_state = request.cookies.get(oidc_mod.state_cookie_name())
     if error or not code or not state:
         # The provider refused (consent declined, and so on), or something
         # arrived here without the two parameters a real callback carries.
         # `error` is provider-controlled text and is logged, never echoed.
         if error:
-            log.warning("OIDC provider returned an error at the callback: %r",
-                        _log_safe(error)[:200])
+            log.warning("OIDC provider returned an error at the callback from %s: %r",
+                        ip, _log_safe(error)[:200])
         return _oidc_failure("provider_error" if error else "invalid_state")
 
     # THREE PHASES, and the split is deliberate: no app.db transaction may span
@@ -298,7 +302,7 @@ def oidc_callback(request: Request, code: str | None = None,
             # ATTEMPT, or a replayed callback URL simply gets another go.
             con.commit()
     except oidc_mod.OidcError as e:
-        log.warning("OIDC sign-in failed (%s): %s", e.code, _log_safe(e.detail))
+        log.warning("OIDC sign-in failed (%s) from %s: %s", e.code, ip, _log_safe(e.detail))
         return _oidc_failure(e.code)
     finally:
         con.close()
@@ -307,7 +311,7 @@ def oidc_callback(request: Request, code: str | None = None,
     try:
         identity = oidc_mod.exchange_code(code, nonce, verifier)
     except oidc_mod.OidcError as e:
-        log.warning("OIDC sign-in failed (%s): %s", e.code, _log_safe(e.detail))
+        log.warning("OIDC sign-in failed (%s) from %s: %s", e.code, ip, _log_safe(e.detail))
         return _oidc_failure(e.code)
 
     # Phase 3: decide and record, in one short transaction.
@@ -324,16 +328,16 @@ def oidc_callback(request: Request, code: str | None = None,
             # The provider is the authority on identity, not on access to this
             # application. A directory keeps departed staff and alumni for years,
             # so the block list is the only local revocation lever there is.
-            log.warning("OIDC sign-in refused: %s is blocked in this deployment",
-                        _log_safe(email))
+            log.warning("OIDC sign-in refused from %s: %s is blocked in this deployment",
+                        ip, _log_safe(email))
             return _oidc_failure("denied")
 
         # The account is keyed on the email claim, and at several providers that
         # claim is neither verified nor immutable -- so an address already bound
         # to a different provider subject is somebody else. See migration 39.
         if auth.idp_identity_conflicts(con, email, identity.issuer, identity.subject):
-            log.warning("OIDC sign-in refused: %s is bound to a different provider "
-                        "subject than the one presented", _log_safe(email))
+            log.warning("OIDC sign-in refused from %s: %s is bound to a different provider "
+                        "subject than the one presented", ip, _log_safe(email))
             return _oidc_failure("not_authorized")
 
         # The only sweep that runs on this path. `verify_login` carries it for
@@ -392,12 +396,12 @@ def ldap_login(body: LdapLoginRequest, request: Request, response: Response):
         email = ldapauth.authenticate(username, body.password.get_secret_value())
     except ldapauth.LdapError as e:
         record_auth_attempt(username.lower(), ip)
-        log.warning("LDAP sign-in refused for %s: %s",
-                    _log_safe(username), _log_safe(str(e)))
+        log.warning("LDAP sign-in refused for %s from %s: %s",
+                    _log_safe(username), ip, _log_safe(str(e)))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED) from e
     except Exception as e:  # noqa: BLE001 -- an unreachable directory is a refusal too
         record_auth_attempt(username.lower(), ip)
-        log.exception("LDAP sign-in errored for %s", _log_safe(username))
+        log.exception("LDAP sign-in errored for %s from %s", _log_safe(username), ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED) from e
 
     con = connect()
@@ -407,8 +411,8 @@ def ldap_login(body: LdapLoginRequest, request: Request, response: Response):
         # blocked address is never provisioned on its way to being refused.
         if not auth.is_allowlisted(con, email) and auth.is_denied(con, email):
             record_auth_attempt(username.lower(), ip)
-            log.warning("LDAP sign-in refused: %s is blocked in this deployment",
-                        _log_safe(email))
+            log.warning("LDAP sign-in refused from %s: %s is blocked in this deployment",
+                        ip, _log_safe(email))
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, _LDAP_REFUSED)
         auth.purge_expired_auth_rows(con)
         auth.provision_from_idp(con, email, "ldap")
