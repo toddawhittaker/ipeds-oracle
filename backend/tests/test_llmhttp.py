@@ -210,6 +210,25 @@ def test_tools_present_sets_tool_choice_auto():
     assert payload["tool_choice"] == "auto", payload
 
 
+def test_temperature_none_omits_the_key():
+    """The regression: gpt-5-class reasoning models behind LiteLLM 400 on
+    temperature=0 ("Only temperature=1 is supported"), and a JSON null is still
+    a set value to them — unset must mean the key is ABSENT from the body."""
+    client = _RecordingClient(_json_response(_OK_BODY))
+    _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=None,
+                                 settings=_settings(llm_temperature=None)))
+    assert "temperature" not in client.last["json"], client.last["json"]
+
+
+def test_temperature_zero_is_still_sent():
+    """0 is falsy — a `if temperature:` guard would silently drop the one value
+    a SQL-generating deployment on a plain model sets on purpose."""
+    client = _RecordingClient(_json_response(_OK_BODY))
+    _run(llmhttp.chat_completion(client, model="m", messages=[], temperature=0.0,
+                                 settings=_settings()))
+    assert client.last["json"]["temperature"] == 0.0, client.last["json"]
+
+
 def test_tools_none_omits_both_tools_and_tool_choice_keys():
     client = _RecordingClient(_json_response(_OK_BODY))
     s = _settings()
@@ -413,6 +432,10 @@ def run():
           test_custom_non_openrouter_base_url_is_honored)
     check("tools present -> payload carries tools + tool_choice=auto",
           test_tools_present_sets_tool_choice_auto)
+    check("temperature=None -> no temperature key in the body",
+          test_temperature_none_omits_the_key)
+    check("temperature=0.0 is still sent (falsy is not unset)",
+          test_temperature_zero_is_still_sent)
     check("tools=None -> neither tools nor tool_choice key present",
           test_tools_none_omits_both_tools_and_tool_choice_keys)
     check("tools=[] (falsy) -> neither tools nor tool_choice key present",

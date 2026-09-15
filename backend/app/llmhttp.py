@@ -95,7 +95,7 @@ def provider_headers(s: Any) -> dict[str, str]:
 
 
 async def chat_completion(client: httpx.AsyncClient, *, model: str, messages: list[dict],
-                          temperature: float, settings: Any,
+                          temperature: float | None, settings: Any,
                           tools: list[dict] | None = None,
                           tool_choice: str | dict | None = None,
                           reasoning: dict | None = None,
@@ -113,7 +113,12 @@ async def chat_completion(client: httpx.AsyncClient, *, model: str, messages: li
     `reasoning` (OpenRouter's unified param) is omitted by default → whatever
     the provider does on its own (thinking is ON by default on most reasoning
     models). Pass `{"enabled": False}` to turn thinking off for this call."""
-    payload: dict = {"model": model, "messages": messages, "temperature": temperature}
+    payload: dict = {"model": model, "messages": messages}
+    # None means the key is ABSENT, not null: reasoning models (gpt-5-class via
+    # LiteLLM, for one) reject any temperature but 1 while thinking is on, and
+    # a JSON null is still "set" to them. Callers pass settings.llm_temperature.
+    if temperature is not None:
+        payload["temperature"] = temperature
     # Omitting tools entirely (rather than tool_choice="none") forces a plain
     # text answer more portably across OpenAI-compatible providers — used for
     # the agent loop's final synthesis pass.

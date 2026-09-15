@@ -234,3 +234,19 @@ export const IconHelp = (p) => (
     <path d="M12 17.5h.01" />
   </Svg>
 );
+
+/** @param {IconProps} p */
+export const IconEye = (p) => (
+  <Svg {...p}>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </Svg>
+);
+
+/** @param {IconProps} p */
+export const IconEyeOff = (p) => (
+  <Svg {...p}>
+    <path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-6.5 0-10-7-10-7a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.8 9.8 0 0 1 12 4c6.5 0 10 7 10 7a18.6 18.6 0 0 1-2.2 3.2" />
+    <path d="M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20" />
+  </Svg>
+);

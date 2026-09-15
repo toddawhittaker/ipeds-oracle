@@ -12,6 +12,7 @@ reach the token endpoint).
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
@@ -223,6 +224,33 @@ def test_an_unknown_state_never_reaches_the_token_endpoint():
         r = _callback(c, "state-nobody-issued")
     assert _error_of(r) == "invalid_state", r.headers
     assert idp.token_requests == [], "an unissued state reached the token exchange"
+
+
+def test_a_refusal_log_line_names_the_client_ip():
+    """Same rule as the LDAP door: a forged or replayed state is the attack this
+    leg defends against, so its log line must say where it came from."""
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            if record.name == "ipeds.auth":
+                records.append(record)
+
+    idp = _fresh()
+    root = logging.getLogger()
+    handler = _Capture(level=logging.WARNING)
+    root.addHandler(handler)
+    try:
+        with TestClient(app) as c:
+            _start(c, idp)
+            r = _callback(c, "state-nobody-issued")
+    finally:
+        root.removeHandler(handler)
+    assert _error_of(r) == "invalid_state", r.headers
+    failed = [x.getMessage() for x in records if "OIDC sign-in failed" in x.getMessage()]
+    assert failed, [x.getMessage() for x in records]
+    # TestClient's socket peer is the literal string "testclient".
+    assert all(" from testclient: " in line for line in failed), failed
 
 
 def test_an_expired_state_is_refused():
@@ -815,6 +843,8 @@ def run():
     check("replaying the same state is refused", test_replaying_the_same_state_is_refused)
     check("an unknown state never reaches the token endpoint",
           test_an_unknown_state_never_reaches_the_token_endpoint)
+    check("a refusal log line names the client ip",
+          test_a_refusal_log_line_names_the_client_ip)
     check("an expired state is refused", test_an_expired_state_is_refused)
 
     print("\n2b. the browser binding")

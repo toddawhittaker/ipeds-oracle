@@ -213,9 +213,13 @@ standard here is that credentials do not land in `docker logs`.
 **Every rejection is the same 401** — wrong password, unknown user, not in the
 group, blocked here, directory unreachable. Anything that varies by cause is a
 directory enumeration oracle; the reason goes to the log, which only an admin
-reads. The request model uses `SecretStr`, so FastAPI's own 422 echo cannot
-quote the password back, and a test drains the log to prove it appears in no
-record.
+reads. Every LDAP and OIDC refusal line also names the client IP (from
+`client_ip`, so it honours `TRUSTED_PROXY_COUNT`), so an operator grepping for a
+guessing source finds it beside the reason. The request model uses `SecretStr`,
+so FastAPI's own 422 echo cannot quote the password back, and a test drains the
+log to prove it appears in no record. The password box has a show/hide toggle;
+it flips the input's `type`, never swaps the element, so what was typed
+survives the flip.
 
 **Rate-limited before the directory is touched**, reusing the magic-link
 limiter: this is the only method where online password guessing is possible, and
