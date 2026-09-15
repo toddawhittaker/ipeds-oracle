@@ -40,6 +40,8 @@ everything else. There is no email link and no password to remember here.
 
 If it asks for a **username and password**, those are your usual institution
 directory credentials — the same ones you use for email or the campus network.
+The eye icon at the end of the password box shows what you have typed; click it
+again to hide it.
 
 Either way, if it turns you away, your administrator controls who has access.
 

@@ -3,7 +3,9 @@ import { api } from "./api.js";
 import { authErrorMessage } from "./authcopy.js";
 import { loginMethod, ssoButtonLabel } from "./loginmethod.js";
 import Wordmark from "./Wordmark.jsx";
-import { IconChevronLeft, IconChevronRight, IconPause, IconPlay } from "./icons.jsx";
+import {
+  IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconPause, IconPlay,
+} from "./icons.jsx";
 
 // Shown until the server tells us the institution's domain, and if it never does.
 const FALLBACK_HINT = "you@yourschool.edu";
@@ -137,6 +139,7 @@ export default function Login({ notice = "" }) {
   const [ssoBusy, setSsoBusy] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   // Pause the gallery while the sign-in card holds focus — the input autoFocuses
   // on load, so the specimens don't slide in the user's peripheral vision at the
   // exact moment they're reading the instructions and typing their email.
@@ -316,11 +319,25 @@ export default function Login({ notice = "" }) {
                 value={username} onChange={(e) => setUsername(e.target.value)}
               />
               <label htmlFor="ldap-password" className="sr-only">Password</label>
-              <input
-                id="ldap-password" type="password" required
-                autoComplete="current-password" placeholder="Password"
-                value={password} onChange={(e) => setPassword(e.target.value)}
-              />
+              <div className="password-field">
+                <input
+                  id="ldap-password" type={showPassword ? "text" : "password"} required
+                  autoComplete="current-password" placeholder="Password"
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                />
+                {/* aria-pressed, not a label swap: the accessible name stays
+                    "Show password" and the state carries whether it is shown,
+                    so a screen reader announces one control changing, not two
+                    controls trading places. It stays in the Tab order — a
+                    keyboard user mistypes passwords too. */}
+                <button type="button" className="password-toggle"
+                        aria-label="Show password" title="Show password"
+                        aria-pressed={showPassword}
+                        aria-controls="ldap-password"
+                        onClick={() => setShowPassword((v) => !v)}>
+                  {showPassword ? <IconEyeOff size={18} /> : <IconEye size={18} />}
+                </button>
+              </div>
               <button type="submit" aria-disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </button>

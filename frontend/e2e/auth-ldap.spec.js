@@ -90,3 +90,46 @@ test.describe("the LDAP door", () => {
       await expect(page.getByPlaceholder("Username")).toHaveValue("jdoe");
     });
 });
+
+test.describe("the show-password toggle", () => {
+  test.beforeEach(async ({ page }) => {
+    await mockMe(page, null);
+    await mockAuthConfig(page, { authMethod: "ldap" });
+  });
+
+  test("reveals and re-hides the typed password without losing it", async ({ page }) => {
+    // The regression: a toggle that swaps the input element (rather than its
+    // type) drops what was typed, and one that swaps its accessible name reads
+    // as two different controls to a screen reader. So: same value across the
+    // flip, the name stays, and only aria-pressed moves.
+    await page.goto("/");
+    const pw = page.getByPlaceholder("Password");
+    const eye = page.getByRole("button", { name: "Show password" });
+    await pw.fill("s3cret");
+    await expect(eye).toHaveAttribute("aria-pressed", "false");
+
+    await eye.click();
+    await expect(pw).toHaveAttribute("type", "text");
+    await expect(pw).toHaveValue("s3cret");
+    await expect(eye).toHaveAttribute("aria-pressed", "true");
+
+    await eye.click();
+    await expect(pw).toHaveAttribute("type", "password");
+    await expect(pw).toHaveValue("s3cret");
+    await expect(eye).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("is reachable by keyboard and never submits the form", async ({ page }) => {
+    // type="button" is the whole guard: a bare <button> inside a form submits
+    // it, so pressing Enter on the eye would post a half-typed password.
+    const ldap = await mockLdapSignIn(page);
+    await page.goto("/");
+    await page.getByPlaceholder("Username").fill("jdoe");
+    await page.getByPlaceholder("Password").fill("s3cret");
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Show password" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByPlaceholder("Password")).toHaveAttribute("type", "text");
+    expect(ldap.calls).toHaveLength(0);
+  });
+});
