@@ -11,7 +11,7 @@ python-multipart>=0.0.32
 itsdangerous>=2.2
 resend>=2.44.0
 fastembed>=0.8.0
-numpy>=2.5.2
+numpy>=2.5.3
 email-validator>=2.3.0
 mcp>=2.2.0
 authlib>=1.8.0
@@ -21,5 +21,5 @@ authlib>=1.8.0
 # until recently, so the day it changes JOSE backends an undeclared joserfc
 # becomes ModuleNotFoundError at import of app/oidc.py.
 joserfc>=1.7.5
-cryptography>=45.0.1
+cryptography>=50.0.1
 ldap3>=2.9.1
