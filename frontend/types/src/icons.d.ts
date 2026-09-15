@@ -66,3 +66,7 @@ export declare const IconPause: (p: IconProps) => React.JSX.Element;
 export declare const IconPlay: (p: IconProps) => React.JSX.Element;
 /** @param {IconProps} p */
 export declare const IconHelp: (p: IconProps) => React.JSX.Element;
+/** @param {IconProps} p */
+export declare const IconEye: (p: IconProps) => React.JSX.Element;
+/** @param {IconProps} p */
+export declare const IconEyeOff: (p: IconProps) => React.JSX.Element;

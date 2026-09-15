@@ -244,6 +244,12 @@ Two consequences worth knowing:
 > The first boot on the new image will otherwise stop with instructions rather
 > than start — that is the startup check doing its job, not a broken release.
 
+> **Upgrading past v0.4.x on a non-reasoning model:** `LLM_TEMPERATURE` used to
+> default to `0`; it now defaults to blank, which sends no temperature at all.
+> Reasoning models (the gpt-5 family, DeepSeek reasoner, and so on) need the
+> blank. If you run a plain model and want the old deterministic behaviour back,
+> set `LLM_TEMPERATURE=0` in `.env` explicitly.
+
 ### Data
 
 The app serves a read‑only `ipeds.db`. Either drop a prebuilt one into the `/data`
@@ -475,6 +481,7 @@ commented list. The essentials:
 | --- | --- |
 | `LLM_API_KEY` / `LLM_BASE_URL` | LLM provider (OpenRouter by default) |
 | `MODEL_DEFAULT` / `MODEL_ESCALATION` | **which model to use — required, no default.** The app is provider‑agnostic, so it ships no vendor's model ID; use whatever your `LLM_BASE_URL` serves. `MODEL_ESCALATION` is an optional stronger model for hard questions (blank = never escalate) |
+| `LLM_TEMPERATURE` | sampling temperature, **blank by default = none sent**. Leave blank for a reasoning model (they reject any value but 1 while thinking). Set `0` on a plain, non-reasoning model for deterministic SQL |
 | `MAIL_BACKEND` / `RESEND_API_KEY` / `SMTP_*` / `MAIL_FROM` | email delivery (see [Email](#email)) |
 | `ADMIN_EMAILS` | bootstrap admin(s), auto‑allowlisted **once** — see below |
 | `APP_PUBLIC_URL` | the app's public URL (used in emails + CSRF checks) |

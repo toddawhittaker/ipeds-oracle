@@ -136,7 +136,8 @@ async def classify(question: str, history: list[dict] | None = None) -> Verdict:
     try:
         async with httpx.AsyncClient() as client:
             data = await chat_completion(client, model=s.model_default, messages=messages,
-                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+                                         temperature=s.llm_temperature, settings=s,
+                                         timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON — an endpoint fronted by a proxy
     # or captive portal answering with HTML. json() raises that, not an HTTPError, so
     # without it the failure escapes this handler and kills the SSE stream.

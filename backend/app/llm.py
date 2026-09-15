@@ -157,7 +157,8 @@ async def retry_missing_figure(question: str, answer: str) -> _FigureRetry:
     try:
         async with httpx.AsyncClient() as client:
             data = await chat_completion(client, model=s.model_default, messages=messages,
-                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+                                         temperature=s.llm_temperature, settings=s,
+                                         timeout=PROBE_TIMEOUT)
     except CHAT_ERRORS:
         return _FigureRetry()  # fail open — never block a finished answer
     u = Usage.from_response(data)
