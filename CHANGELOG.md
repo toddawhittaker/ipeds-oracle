@@ -11,6 +11,60 @@ detail.
 
 ---
 
+## v0.6.1
+
+A small release with one fix that matters if your model reasons. A deployment
+on a gpt-5-class model behind a LiteLLM proxy was refusing every question with
+`temperature=0.0 while reasoning is active. Only temperature=1 is supported`;
+that is gone. The rest is sign-in logging, a password field convenience, and
+the dependency queue.
+
+### Read this before upgrading
+
+- **`LLM_TEMPERATURE` is now blank by default, and blank sends no temperature
+  at all.** That is what reasoning models require, and it is the fix above.
+  If you run a plain, non-reasoning model and relied on the old default of `0`
+  for deterministic SQL, set `LLM_TEMPERATURE=0` in `.env` explicitly. The
+  README's Self-hosting table has the row.
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot answers repeat questions fresh instead of instantly.
+  Expected, one time, no action.
+- **No schema change.** `app.db` stays at migration 39, so this upgrades and
+  rolls back cleanly to v0.6.0. (v0.6.0's own no-rollback note still applies
+  below it.)
+
+### The temperature the model would not accept
+
+The app sent `temperature` on every request: the agent loop from the setting,
+and four short probe calls from a hard-coded `0.0`, so an environment override
+alone could not have fixed it. All six call sites now read the one setting, and
+when it is unset the key is left out of the request body entirely. Absent, not
+null: those models treat a JSON null as still set.
+
+### Who tried to sign in, and from where
+
+Every OpenID Connect and LDAP refusal in the server log now names the client IP
+beside the reason, so an operator grepping for a password-guessing or replayed
+callback source finds it in one line. The address comes from the same
+proxy-aware helper the rate limiter uses, so it honours `TRUSTED_PROXY_COUNT`.
+The reasons were already there; the address was not.
+
+### The eye on the password box
+
+The LDAP sign-in form has a show/hide toggle at the end of the password field.
+It flips the field in place, so what you typed survives, it never submits the
+form, and a screen reader hears one control changing state rather than two
+trading places.
+
+### Dependencies
+
+react 19.3, vite 8.3, vitest 5 (no test changes needed), numpy 2.5.3,
+cryptography 50.0.1, resend 2.44, ruff 0.16.7, codeql-action 4.38. Both
+dependency lockfiles were regenerated in the same PRs that moved the floors;
+`npm audit` and `pip-audit` are clean.
+
+---
+
 ## v0.6.0
 
 Sign-in is no longer only a magic link. A deployment can now hand authentication
