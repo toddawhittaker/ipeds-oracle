@@ -267,7 +267,8 @@ async def review(question: str, sql_log: list[str], answer: str,
     try:
         async with httpx.AsyncClient() as client:
             data = await chat_completion(client, model=s.model_default, messages=messages,
-                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+                                         temperature=s.llm_temperature, settings=s,
+                                         timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
     except CHAT_ERRORS:
         return Critique(ok=True)  # fail open — never drop an answer over the critic
