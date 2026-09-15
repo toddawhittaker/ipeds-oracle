@@ -84,7 +84,8 @@ async def distill_feedback(history: list[dict], latest_user_msg: str
     try:
         async with httpx.AsyncClient() as client:
             data = await chat_completion(client, model=s.model_default, messages=messages,
-                                         temperature=0.0, settings=s, timeout=PROBE_TIMEOUT)
+                                         temperature=s.llm_temperature, settings=s,
+                                         timeout=PROBE_TIMEOUT)
     # ValueError covers a 200 whose body isn't JSON (see the note in guard.classify).
     except CHAT_ERRORS:
         return None, Usage()  # fail open — never drop or crash a chat turn over this

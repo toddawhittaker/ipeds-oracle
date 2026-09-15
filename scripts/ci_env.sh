@@ -67,6 +67,9 @@ export APP_PUBLIC_URL="http://localhost:8000"
 export LLM_INPUT_COST_PER_MTOK=0
 export LLM_OUTPUT_COST_PER_MTOK=0
 export LLM_CACHE_READ_COST_PER_MTOK=0
+#   * LLM_TEMPERATURE blank — a prod value (0 on a plain model) would put a
+#     temperature key into payload-shape assertions that CI runs without one.
+export LLM_TEMPERATURE=""
 #   * MODEL_DEFAULT + MODEL_ESCALATION blank — these ship with NO default (the app
 #     is provider-agnostic), so CI resolves them to "". A dev .env necessarily sets
 #     real model IDs, which would otherwise be the one LLM setting present locally

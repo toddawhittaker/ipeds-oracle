@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger("ipeds.config")
@@ -81,6 +81,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @field_validator("llm_temperature", mode="before")
+    @classmethod
+    def _blank_temperature_is_none(cls, v):
+        """`LLM_TEMPERATURE=` (blank, as scripts/ci_env.sh writes it) must read
+        as unset, not as a float-parse failure that refuses to boot."""
+        return None if isinstance(v, str) and not v.strip() else v
+
     # --- Paths -------------------------------------------------------------
     ipeds_db_path: Path = Field(default=ROOT / "ipeds.db")
     app_db_path: Path = Field(default=ROOT / "app.db")
@@ -110,7 +117,13 @@ class Settings(BaseSettings):
     # Optional. The agent escalates to this model after repeated tool failures;
     # blank means "never escalate" (llm.py already guards on it being set).
     model_escalation: str = Field(default="")
-    llm_temperature: float = Field(default=0.0)
+    # Sampling temperature. None (the default, or a blank LLM_TEMPERATURE) means
+    # the key is OMITTED from every request, which is the only value reasoning
+    # models accept: gpt-5-class models behind LiteLLM 400 on temperature=0
+    # while reasoning is active ("Only temperature=1 is supported"), and 1 is
+    # the wrong value to send to a plain model generating SQL. A deployment on
+    # a non-reasoning model that wants determinism sets it to 0 explicitly.
+    llm_temperature: float | None = Field(default=None)
     llm_max_tool_iters: int = Field(default=20)
     # Fallback token prices (USD per 1,000,000 tokens) for the Usage spend total.
     # Spend normally uses the provider-reported per-request cost (OpenRouter's
