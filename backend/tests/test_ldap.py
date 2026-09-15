@@ -586,6 +586,37 @@ def test_the_password_never_reaches_a_log_record():
     assert not leaked, f"the password reached the log: {leaked}"
 
 
+def _drain_auth_log(fn) -> list[str]:
+    """Run `fn` with a capture handler on the root logger and return every
+    ipeds.auth message it emitted."""
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            if record.name == "ipeds.auth":
+                records.append(record)
+
+    root = logging.getLogger()
+    handler = _Capture(level=logging.WARNING)
+    root.addHandler(handler)
+    try:
+        fn()
+    finally:
+        root.removeHandler(handler)
+    return [r.getMessage() for r in records]
+
+
+def test_a_refusal_log_line_names_the_client_ip():
+    """An operator hunting a brute-force source greps the auth log; the reason
+    alone, with no address, made every refusal look like the same client."""
+    _wipe()
+    lines = _drain_auth_log(lambda: _login(_directory(), password="wrong"))
+    refused = [line for line in lines if "LDAP sign-in refused" in line]
+    assert refused, lines
+    # TestClient's socket peer is the literal string "testclient".
+    assert all(" from testclient: " in line for line in refused), refused
+
+
 def test_the_rate_limiter_refuses_after_the_cap():
     """The one method where online password guessing is possible."""
     _wipe()
@@ -697,6 +728,8 @@ def run():
     check("every rejection is the same answer", test_every_rejection_is_the_same_answer)
     check("the password never reaches a log record",
           test_the_password_never_reaches_a_log_record)
+    check("a refusal log line names the client ip",
+          test_a_refusal_log_line_names_the_client_ip)
     check("the rate limiter refuses after the cap",
           test_the_rate_limiter_refuses_after_the_cap)
     check("a successful sign-in does not consume the budget",
