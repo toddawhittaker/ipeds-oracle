@@ -137,7 +137,7 @@ def test_the_refusal_and_the_gate_describe_the_SAME_scope():
 
 def _configured_settings(**overrides):
     base = dict(guard_enabled=True, llm_api_key="test-key",
-               model_default="test-vendor/test-model",
+               model_default="test-vendor/test-model", llm_temperature=None,
                llm_base_url="https://openrouter.ai/api/v1",
                app_public_url="http://localhost:8000", llm_app_title="IPEDS Query")
     base.update(overrides)
