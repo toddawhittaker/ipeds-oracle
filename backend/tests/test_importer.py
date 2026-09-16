@@ -2266,6 +2266,60 @@ def test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wordin
     assert "2024-25" in report, report
 
 
+def _integrate_failing_with(exc):
+    """Run one integrate whose newly-selected year's fetch raises `exc`;
+    return the failed job's report text."""
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if start_year == 2026:
+            raise exc
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    try:
+        jid = create_job("integrate", "admin@example.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    return row["report"] or ""
+
+
+def test_run_integrate_severed_download_is_reported_as_a_network_problem():
+    """Regression: the live failure (a proxy closing the connection with no
+    HTTP response) was reported as "may have been moved or withdrawn", which
+    sent the wrong team looking. A network-shaped failure must name the
+    network and never suggest NCES withdrew the year."""
+    import httpx
+    report = _integrate_failing_with(
+        httpx.RemoteProtocolError("Server disconnected without sending a response."))
+    assert "network problem" in report, report
+    assert "proxy or firewall" in report, report
+    assert "moved or withdrawn" not in report, report
+    assert "Live database unchanged" in report, report
+
+
+def test_run_integrate_404_is_still_reported_as_moved_or_withdrawn():
+    import httpx
+    req = httpx.Request("GET", "https://nces.ed.gov/x")
+    report = _integrate_failing_with(httpx.HTTPStatusError(
+        "404", request=req, response=httpx.Response(404, request=req)))
+    assert "moved or withdrawn" in report, report
+    assert "network problem" not in report, report
+
+
 # ---------------------------------------------------------------------------
 # Disk-headroom preflight refusal — run_integrate must compute the
 # needed-vs-free estimate BEFORE fetching anything, and refuse (fail the job,
@@ -3561,6 +3615,10 @@ def run():
           test_run_integrate_fetch_failure_of_newly_selected_year_preserves_wording)
     check("run_integrate: fetch failure of an already-integrated year preserves wording",
           test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wording)
+    check("a severed download is reported as a network problem, not a withdrawn year",
+          test_run_integrate_severed_download_is_reported_as_a_network_problem)
+    check("a 404 is still reported as moved or withdrawn",
+          test_run_integrate_404_is_still_reported_as_moved_or_withdrawn)
     check("run_integrate: refuses (no fetch/swap) when disk headroom is insufficient",
           test_run_integrate_refuses_when_disk_headroom_insufficient)
     check("run_integrate: proceeds normally when disk headroom is sufficient",

@@ -1039,7 +1039,13 @@ def import_catalog(refresh: bool = False):
     s = get_settings()
     dc = estimate.disk_and_calibration(s, integrated_year_count=len(integrated_starts))
     du = shutil.disk_usage(Path(s.ipeds_db_path).parent)
+    # Whether a real DOWNLOAD works, not just the HEAD probes above (see
+    # nces.probe_reachability). Never cached, never raises.
+    reachability = nces.probe_reachability()
+    if not reachability["ok"]:
+        log.warning("NCES download check failed: %s", reachability["detail"])
     return {"probed_at": time.time(), "partial": partial, "years": years,
+           "reachability": reachability,
            "disk": {"free_bytes": du.free, "total_bytes": du.total, "used_bytes": du.used},
            "calibration": dc["calibration"]}
 

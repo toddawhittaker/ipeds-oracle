@@ -11,6 +11,23 @@
   an off-host/internal URL — the old final-host-only check (kept as defense-in-depth)
   ran only after that request was already sent. Applies to both `head_release` and
   the streamed `download_zip`.
+- **A download check rides along with every catalog load.** The year probes are
+  HEAD requests, and an egress proxy can pass those while severing a real
+  download — which is how a year showed as available at Franklin and the
+  integrate then died with `RemoteProtocolError: Server disconnected without
+  sending a response`. `nces.probe_reachability` fetches one ranged byte
+  (`Range: bytes=0-0`) of the fixed earliest-year Final zip, reads the body,
+  and returns `{ok, detail}`; `GET /import/catalog` embeds it as `reachability`
+  and the Imports tab shows a blocked download as an alert before any job
+  starts. It is **never cached** (unlike the hour-long catalog cache) so a
+  retry after a network fix reports the live answer, and it never raises.
+- **Fetch failures are classified, not lumped.** `nces.describe_fetch_error`
+  maps the exception to `not_found` (HTTP 404 — the year may really have been
+  moved or withdrawn), `http`, or `network` (DNS, refused, timeout, TLS, or a
+  connection closed with no HTTP response), and `run_integrate`'s job report
+  says which. Only a 404 blames NCES; a network failure tells the operator to
+  check their outbound proxy or firewall. Before this every failure read as
+  "may have been moved or withdrawn", which sent the wrong team looking.
 - Each run is a **full rebuild of the union** of already-integrated and
   newly-picked years (never an incremental merge), through the same **staging-DB +
   integrity-checks + atomic-swap** pipeline as a manual upload. Fetched `.accdb`

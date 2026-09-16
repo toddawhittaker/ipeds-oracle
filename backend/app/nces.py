@@ -128,6 +128,94 @@ def head_release(
             c.close()
 
 
+# --- Failure diagnosis -------------------------------------------------------
+# One integrate run at Franklin failed with "RemoteProtocolError: Server
+# disconnected without sending a response" and the job report said the year
+# "may have been moved or withdrawn". It hadn't: an egress proxy was cutting the
+# download off after the connection opened. A fetch can fail for very different
+# reasons -- the year really is gone (HTTP 404), or the network between this
+# server and nces.ed.gov is broken (DNS, refused, timeout, TLS, or a proxy that
+# closes the connection with no HTTP response). Only the first is NCES's doing;
+# the rest are the operator's, and the job report must say which so the right
+# team gets the ticket.
+
+def describe_fetch_error(e: BaseException) -> tuple[str, str]:
+    """Classify an exception from head_release/download_zip into
+    (kind, plain-English detail). `kind` is "not_found" (NCES answered 404),
+    "http" (any other HTTP status), "network" (never got a usable HTTP
+    answer -- DNS, connect, timeout, TLS, or a connection closed without a
+    response), or "other"."""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 404:
+            return "not_found", "NCES answered 404 Not Found"
+        return "http", f"NCES answered HTTP {code}"
+    if isinstance(e, httpx.RemoteProtocolError):
+        return "network", ("the connection to nces.ed.gov opened but was closed "
+                           "without an HTTP response (a proxy or firewall "
+                           "cutting the transfer off looks exactly like this)")
+    if isinstance(e, httpx.ConnectTimeout):
+        return "network", "connecting to nces.ed.gov timed out"
+    if isinstance(e, httpx.TimeoutException):
+        return "network", "nces.ed.gov stopped sending data and the transfer timed out"
+    if isinstance(e, httpx.ConnectError):
+        msg = str(e)
+        low = msg.lower()
+        if "getaddrinfo" in low or "name or service" in low or "nodename" in low \
+                or "name resolution" in low:
+            return "network", "the name nces.ed.gov could not be resolved (DNS)"
+        if "ssl" in low or "certificate" in low or "tls" in low:
+            return "network", f"the TLS handshake with nces.ed.gov failed ({msg})"
+        if "refused" in low:
+            return "network", "the connection to nces.ed.gov was refused"
+        return "network", f"could not connect to nces.ed.gov ({msg})"
+    if isinstance(e, (httpx.NetworkError, httpx.ProtocolError)):
+        return "network", f"network error talking to nces.ed.gov ({type(e).__name__}: {e})"
+    return "other", f"{type(e).__name__}: {e}"
+
+
+# The URL the reachability probe fetches one byte of: the earliest year's Final
+# release, which has been at the same address for two decades. Fixed on purpose
+# (SSRF posture above) -- never a caller-chosen year.
+_PROBE_START_YEAR = EARLIEST_START_YEAR
+
+
+def probe_reachability(client: httpx.Client | None = None) -> dict:
+    """Can this server actually DOWNLOAD from NCES? head_release's HEAD probes
+    can succeed while a real download is cut off (a proxy that lets small
+    requests through and kills bodies), which is how the catalog listed a year
+    as available and the fetch of it then died. So this issues one ranged GET
+    for the first byte of a fixed, long-lived zip and reads the body. Never
+    raises; returns {"ok": bool, "detail": str | None} where detail is the
+    plain-English cause from describe_fetch_error. Deliberately NOT cached,
+    unlike probe_catalog: an operator retrying after a network fix must see the
+    live answer, not an hour-old one."""
+    own_client = client is None
+    c = client or _client(get_settings().nces_http_timeout_seconds)
+    url = _zip_url(_PROBE_START_YEAR, "Final")
+    try:
+        for _ in range(_MAX_REDIRECTS + 1):
+            with c.stream("GET", url, headers={"Range": "bytes=0-0"},
+                          follow_redirects=False) as resp:
+                if resp.is_redirect:
+                    url = _validated_redirect_target(url, resp)
+                    continue
+                resp.raise_for_status()
+                if resp.url.host != NCES_HOST:  # defense-in-depth; hops validated
+                    raise ValueError(
+                        f"redirect for {url} resolved off {NCES_HOST} (to {resp.url.host})")
+                for _chunk in resp.iter_bytes():
+                    break  # one chunk proves the body flows; stop there
+                return {"ok": True, "detail": None}
+        raise ValueError(f"too many redirects fetching {url}")
+    except Exception as e:  # noqa: BLE001 -- a probe reports, it never raises
+        _kind, detail = describe_fetch_error(e)
+        return {"ok": False, "detail": detail}
+    finally:
+        if own_client:
+            c.close()
+
+
 # --- probe_catalog: one entry per start year, with a short TTL cache -------
 _CATALOG_TTL_SECONDS = 3600
 _catalog_cache: dict[str, object] = {"at": None, "data": None}

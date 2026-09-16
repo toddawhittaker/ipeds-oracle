@@ -106,6 +106,64 @@ def _make_zip(path, members: dict):
 
 
 # ---------------------------------------------------------------------------
+# describe_fetch_error / probe_reachability — a severed download must be
+# reported as a NETWORK problem, not as "the year was moved or withdrawn"
+# ---------------------------------------------------------------------------
+def test_describe_fetch_error_separates_not_found_from_network():
+    req = httpx.Request("GET", "https://nces.ed.gov/x")
+    kind, _ = nces.describe_fetch_error(
+        httpx.HTTPStatusError("404", request=req, response=httpx.Response(404, request=req)))
+    assert kind == "not_found", kind
+    kind, _ = nces.describe_fetch_error(
+        httpx.HTTPStatusError("503", request=req, response=httpx.Response(503, request=req)))
+    assert kind == "http", kind
+    # The exact exception from the live failure.
+    kind, detail = nces.describe_fetch_error(
+        httpx.RemoteProtocolError("Server disconnected without sending a response."))
+    assert kind == "network", kind
+    assert "closed without an HTTP response" in detail, detail
+    kind, detail = nces.describe_fetch_error(
+        httpx.ConnectError("[Errno -2] Name or service not known"))
+    assert kind == "network" and "DNS" in detail, (kind, detail)
+    kind, _ = nces.describe_fetch_error(httpx.ConnectTimeout("t"))
+    assert kind == "network", kind
+    kind, _ = nces.describe_fetch_error(httpx.ReadTimeout("t"))
+    assert kind == "network", kind
+    kind, _ = nces.describe_fetch_error(ValueError("redirect points off host"))
+    assert kind == "other", kind
+
+
+def test_probe_reachability_ok_reads_one_byte_and_never_follows_offhost():
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, str(req.url), req.headers.get("range")))
+        return httpx.Response(206, content=b"P")
+    r = nces.probe_reachability(client=_client(handler))
+    assert r == {"ok": True, "detail": None}, r
+    assert len(seen) == 1 and seen[0][0] == "GET", seen
+    assert seen[0][1].startswith(nces.NCES_BASE), seen
+    assert seen[0][2] == "bytes=0-0", seen
+
+
+def test_probe_reachability_reports_a_severed_connection_as_network_not_raise():
+    def handler(req):
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+    r = nces.probe_reachability(client=_client(handler))
+    assert r["ok"] is False, r
+    assert "closed without an HTTP response" in r["detail"], r
+
+
+def test_probe_reachability_refuses_an_offhost_redirect():
+    def handler(req):
+        if req.url.host == nces.NCES_HOST:
+            return httpx.Response(302, headers={"location": "https://evil.example/x"})
+        raise AssertionError("must never request the off-host target")
+    r = nces.probe_reachability(client=_client(handler))
+    assert r["ok"] is False and "off https://nces.ed.gov" in r["detail"], r
+
+
+# ---------------------------------------------------------------------------
 # _zip_url — SSRF guard: URLs built ONLY from fixed host + validated inputs
 # ---------------------------------------------------------------------------
 
@@ -783,6 +841,14 @@ def test_fetch_year_raises_when_year_unavailable():
 
 def run():
     print("nces contract:")
+    check("describe_fetch_error separates not-found from network failures",
+          test_describe_fetch_error_separates_not_found_from_network)
+    check("probe_reachability reads one ranged byte from the fixed NCES URL",
+          test_probe_reachability_ok_reads_one_byte_and_never_follows_offhost)
+    check("probe_reachability reports a severed connection instead of raising",
+          test_probe_reachability_reports_a_severed_connection_as_network_not_raise)
+    check("probe_reachability refuses an off-host redirect",
+          test_probe_reachability_refuses_an_offhost_redirect)
     check("_zip_url builds the exact URL string for a valid year",
           test_zip_url_builds_exact_string_for_a_valid_year)
     check("_zip_url accepts the full valid boundary range",
