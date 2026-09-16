@@ -625,10 +625,14 @@ export default function Imports({ onDataChanged }) {
                 job, in words the infrastructure team can act on. */}
             {catalog.reachability && !catalog.reachability.ok && (
               <div className="notice error" role="alert" data-testid="nces-download-check">
-                <strong>Downloads from NCES are blocked:</strong>{" "}
-                {catalog.reachability.detail}. This is a network problem between
-                this server and nces.ed.gov, not a change at NCES. Integrating a
-                year will fail until the outbound proxy or firewall allows it.{" "}
+                <strong>Downloads from NCES are failing:</strong>{" "}
+                {catalog.reachability.detail}.{" "}
+                {catalog.reachability.kind === "network"
+                  ? "This is a network problem between this server and nces.ed.gov, " +
+                    "not a change at NCES. Integrating a year will fail until the " +
+                    "outbound proxy or firewall allows it."
+                  : "NCES answered, so the network is fine; NCES itself may be " +
+                    "having trouble. Integrating a year is likely to fail until it clears."}{" "}
                 <button type="button" className="link" onClick={() => loadCatalog(true)}>
                   Check again
                 </button>

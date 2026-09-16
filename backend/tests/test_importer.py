@@ -2311,13 +2311,56 @@ def test_run_integrate_severed_download_is_reported_as_a_network_problem():
     assert "Live database unchanged" in report, report
 
 
-def test_run_integrate_404_is_still_reported_as_moved_or_withdrawn():
-    import httpx
-    req = httpx.Request("GET", "https://nces.ed.gov/x")
-    report = _integrate_failing_with(httpx.HTTPStatusError(
-        "404", request=req, response=httpx.Response(404, request=req)))
+def test_run_integrate_withdrawn_year_is_still_reported_as_moved_or_withdrawn():
+    """Regression: head_release never raises on a 404 (it falls back, then
+    returns None) and the REAL fetch_year raises its own not-found error. A
+    fake that raised an HTTPStatusError(404) passed while production printed
+    a raw ValueError echo, so this drives the real fetch_year with only
+    head_release faked to answer 'neither release exists'."""
+    import app.nces as nces_mod
+    d = Path(tempfile.mkdtemp())
+    live = d / "ipeds.db"
+    data_dir = d / "data"
+    _live_with_years(live, [2025])
+
+    real_fetch = nces_mod.fetch_year
+    orig_head = nces_mod.head_release
+
+    def fake_fetch_year(start_year, work_dir, on_progress=None):
+        if start_year == 2026:
+            return real_fetch(start_year, work_dir, on_progress=on_progress)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        p = Path(work_dir) / f"IPEDS{start_year}{str(start_year + 1)[-2:]}.accdb"
+        p.write_bytes(b"fake")
+        return p, "Final"
+
+    orig_settings = importer.get_settings
+    orig_fetch = importer.nces.fetch_year
+    importer.get_settings = lambda: _fake_settings(live, data_dir)
+    importer.nces.fetch_year = fake_fetch_year
+    nces_mod.head_release = lambda start_year, client=None: (None, None, None)
+    try:
+        jid = create_job("integrate", "admin@example.edu")
+        run_integrate(jid, [2026])
+    finally:
+        importer.get_settings = orig_settings
+        importer.nces.fetch_year = orig_fetch
+        nces_mod.head_release = orig_head
+    row = _job_row(jid)
+    assert row["status"] == "failed", row
+    report = row["report"] or ""
     assert "moved or withdrawn" in report, report
     assert "network problem" not in report, report
+    assert "ValueError:" not in report, report
+
+
+def test_run_integrate_proxy_error_is_reported_as_a_network_problem():
+    """httpx.ProxyError is a bare TransportError (not a NetworkError), and a
+    proxied deployment is exactly where this diagnosis matters."""
+    import httpx
+    report = _integrate_failing_with(httpx.ProxyError("502 from egress proxy"))
+    assert "network problem" in report, report
+    assert "proxy" in report, report
 
 
 # ---------------------------------------------------------------------------
@@ -3617,8 +3660,10 @@ def run():
           test_run_integrate_fetch_failure_of_already_integrated_year_preserves_wording)
     check("a severed download is reported as a network problem, not a withdrawn year",
           test_run_integrate_severed_download_is_reported_as_a_network_problem)
-    check("a 404 is still reported as moved or withdrawn",
-          test_run_integrate_404_is_still_reported_as_moved_or_withdrawn)
+    check("a withdrawn year is still reported as moved or withdrawn (real fetch_year)",
+          test_run_integrate_withdrawn_year_is_still_reported_as_moved_or_withdrawn)
+    check("a proxy error is reported as a network problem",
+          test_run_integrate_proxy_error_is_reported_as_a_network_problem)
     check("run_integrate: refuses (no fetch/swap) when disk headroom is insufficient",
           test_run_integrate_refuses_when_disk_headroom_insufficient)
     check("run_integrate: proceeds normally when disk headroom is sufficient",

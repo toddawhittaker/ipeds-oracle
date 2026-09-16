@@ -164,11 +164,12 @@ finishes.
   (for a year not in the catalog, or an air-gapped setup), expand **Manual
   upload** and drop the file in. It runs through the same checks.
 
-If the tab shows **Downloads from NCES are blocked**, the server can list the
-catalog but cannot pull a file from nces.ed.gov. That is a network problem on
-your side (an outbound proxy or firewall), not a change at NCES, and integrating
-will fail until it is fixed. The notice names the cause in plain words for your
-infrastructure team; **Check again** re-tests immediately. A failed integrate
+If the tab shows **Downloads from NCES are failing**, the server can list the
+catalog but could not pull a file from nces.ed.gov. The notice names the cause
+in plain words and says which side it is on: a network problem on your side (an
+outbound proxy or firewall) for your infrastructure team, or trouble at NCES
+itself, which usually clears on its own. Integrating will fail until it is
+fixed; **Check again** re-tests immediately. A failed integrate
 says the same thing in its job report, and says "moved or withdrawn" only when
 NCES itself answered that the file is not there.
 

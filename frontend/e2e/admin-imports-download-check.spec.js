@@ -27,9 +27,9 @@ async function openImports(page, catalog) {
 test("a blocked download is announced as an alert naming the network, with the year still listed", async ({ page }) => {
   await openImports(page, {
     ...BASE,
-    reachability: { ok: false, detail: "the connection to nces.ed.gov opened but was closed without an HTTP response" },
+    reachability: { ok: false, kind: "network", detail: "the connection to nces.ed.gov opened but was closed without an HTTP response" },
   });
-  const alert = page.getByRole("alert").filter({ hasText: "Downloads from NCES are blocked" });
+  const alert = page.getByRole("alert").filter({ hasText: "Downloads from NCES are failing" });
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("closed without an HTTP response");
   await expect(alert).toContainText("network problem");
@@ -37,8 +37,18 @@ test("a blocked download is announced as an alert naming the network, with the y
   await expect(page.getByText("2022-23")).toBeVisible();
 });
 
+test("an NCES-side failure is not blamed on the network", async ({ page }) => {
+  await openImports(page, {
+    ...BASE, reachability: { ok: false, kind: "http", detail: "NCES answered HTTP 503" },
+  });
+  const alert = page.getByRole("alert").filter({ hasText: "Downloads from NCES are failing" });
+  await expect(alert).toContainText("NCES answered HTTP 503");
+  await expect(alert).toContainText("the network is fine");
+  await expect(alert).not.toContainText("network problem");
+});
+
 test("a working download shows no alert", async ({ page }) => {
-  await openImports(page, { ...BASE, reachability: { ok: true, detail: null } });
+  await openImports(page, { ...BASE, reachability: { ok: true, kind: null, detail: null } });
   await expect(page.getByText("2022-23")).toBeVisible();
   await expect(page.getByTestId("nces-download-check")).toHaveCount(0);
 });

@@ -343,7 +343,7 @@ def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025), disk_us
     orig_disk = admin_router.shutil.disk_usage
     admin_router.nces.probe_catalog = lambda refresh=False: catalog
     # The download check would otherwise hit the real nces.ed.gov from a test.
-    reach = reachability or {"ok": True, "detail": None}
+    reach = reachability or {"ok": True, "kind": None, "detail": None}
     admin_router.nces.probe_reachability = lambda client=None: dict(reach)
     admin_router.importer._years = lambda path: list(integrated_years)
     admin_router.shutil.disk_usage = disk_usage or _fake_disk_usage()
@@ -416,7 +416,8 @@ def test_import_catalog_carries_the_download_check_verdict():
     with TestClient(app) as c:
         _login(c)
         restore = _patch_catalog(
-            reachability={"ok": False, "detail": "the connection to nces.ed.gov opened "
+            reachability={"ok": False, "kind": "network",
+                          "detail": "the connection to nces.ed.gov opened "
                           "but was closed without an HTTP response"})
         try:
             r = c.get("/api/admin/import/catalog")
@@ -425,6 +426,7 @@ def test_import_catalog_carries_the_download_check_verdict():
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["reachability"]["ok"] is False, body
+        assert body["reachability"]["kind"] == "network", body
         assert "closed without an HTTP response" in body["reachability"]["detail"], body
         # A blocked download must not hide the catalog itself.
         assert body["years"], body

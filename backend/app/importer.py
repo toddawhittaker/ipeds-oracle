@@ -1451,10 +1451,10 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
                            f"the outbound proxy or firewall, then use the "
                            f"Imports tab's NCES download check to confirm the fix.")
                 else:
-                    why = detail
+                    why = f"{detail}."
                 raise NCESFetchError(
                     f"Could not fetch {which} year {year_label} from NCES: {why} "
-                    f"Live database unchanged. ({type(e).__name__}: {e})") from e
+                    f"Live database unchanged. ({type(e).__name__})") from e
 
             with prog.lock:
                 progress["years"][str(sy)]["step"] = "fetched"
