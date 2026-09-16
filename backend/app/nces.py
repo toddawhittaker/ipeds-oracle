@@ -14,6 +14,7 @@ mirrors the existing `app/importer.py` monkeypatch convention.
 """
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import time
@@ -26,6 +27,8 @@ from urllib.parse import urljoin
 import httpx
 
 from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 # --- Fixed SSRF-safe constants (NOT config/env/admin-overridable) -----------
 NCES_BASE = "https://nces.ed.gov/ipeds/tablefiles/zipfiles"
@@ -152,7 +155,10 @@ def describe_fetch_error(e: BaseException) -> tuple[str, str]:
     (kind, plain-English detail). `kind` is "not_found" (NCES answered 404),
     "http" (any other HTTP status), "network" (never got a usable HTTP
     answer -- DNS, connect, timeout, TLS, or a connection closed without a
-    response), or "other"."""
+    response), or "other". `detail` never embeds the exception's own text:
+    it is returned to the browser by GET /import/catalog, and CodeQL's
+    py/stack-trace-exposure (alert 45) rightly flags exception text flowing
+    to a client. Callers that want the raw message log it server-side."""
     if isinstance(e, NCESNotFoundError):
         return "not_found", "NCES has neither a Final nor a Provisional release for it"
     if isinstance(e, httpx.HTTPStatusError):
@@ -161,11 +167,11 @@ def describe_fetch_error(e: BaseException) -> tuple[str, str]:
             return "not_found", "NCES answered 404 Not Found"
         return "http", f"NCES answered HTTP {code}"
     if isinstance(e, httpx.ProxyError):
-        return "network", f"the outbound proxy refused or failed the request ({e})"
+        return "network", "the outbound proxy refused or failed the request"
     if isinstance(e, httpx.PoolTimeout):
         return "other", "this server's own connection pool was exhausted (PoolTimeout)"
     if isinstance(e, httpx.LocalProtocolError):
-        return "other", f"this server built a malformed request (LocalProtocolError: {e})"
+        return "other", "this server built a malformed request (LocalProtocolError)"
     if isinstance(e, httpx.RemoteProtocolError):
         return "network", ("the connection to nces.ed.gov opened but was closed "
                            "without an HTTP response (a proxy or firewall "
@@ -181,13 +187,15 @@ def describe_fetch_error(e: BaseException) -> tuple[str, str]:
                 or "name resolution" in low:
             return "network", "the name nces.ed.gov could not be resolved (DNS)"
         if "ssl" in low or "certificate" in low or "tls" in low:
-            return "network", f"the TLS handshake with nces.ed.gov failed ({msg})"
+            return "network", "the TLS handshake with nces.ed.gov failed"
         if "refused" in low:
             return "network", "the connection to nces.ed.gov was refused"
-        return "network", f"could not connect to nces.ed.gov ({msg})"
+        return "network", "could not connect to nces.ed.gov"
     if isinstance(e, httpx.TransportError):  # every remaining transport failure
-        return "network", f"network error talking to nces.ed.gov ({type(e).__name__}: {e})"
-    return "other", f"{type(e).__name__}: {e}"
+        return "network", f"network error talking to nces.ed.gov ({type(e).__name__})"
+    if isinstance(e, ValueError):  # our own redirect / size refusals
+        return "other", "the fetch was refused by this server's own safety checks"
+    return "other", f"an unexpected {type(e).__name__}"
 
 
 # The URL the reachability probe fetches one byte of: the earliest year's Final
@@ -241,6 +249,8 @@ def probe_reachability(client: httpx.Client | None = None) -> dict:
         raise ValueError(f"too many redirects fetching {url}")
     except Exception as e:  # noqa: BLE001 -- a probe reports, it never raises
         kind, detail = describe_fetch_error(e)
+        # The raw message stays server-side (see describe_fetch_error).
+        log.warning("NCES download check failed: %s (%s: %s)", detail, type(e).__name__, e)
         return {"ok": False, "kind": kind, "detail": detail}
     finally:
         if own_client:

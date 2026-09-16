@@ -192,7 +192,21 @@ def test_probe_reachability_refuses_an_offhost_redirect():
             return httpx.Response(302, headers={"location": "https://evil.example/x"})
         raise AssertionError("must never request the off-host target")
     r = nces.probe_reachability(client=_client(handler))
-    assert r["ok"] is False and "off https://nces.ed.gov" in r["detail"], r
+    assert r["ok"] is False and r["kind"] == "other", r
+    # The target URL is exception text; it must not reach the browser
+    # (CodeQL py/stack-trace-exposure, alert 45). It is logged instead.
+    assert "evil.example" not in r["detail"], r
+
+
+def test_describe_fetch_error_never_echoes_exception_text():
+    """Regression: `detail` is returned to the browser by /import/catalog;
+    embedding str(e) put raw transport-error text on the wire (CodeQL 45)."""
+    marker = "raw exception text that must not reach the browser"
+    for exc in (httpx.ConnectError(marker), httpx.ProxyError(marker),
+                httpx.ReadError(marker), httpx.LocalProtocolError(marker),
+                ValueError(marker), RuntimeError(marker)):
+        _kind, detail = nces.describe_fetch_error(exc)
+        assert marker not in detail, (exc, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -885,6 +899,8 @@ def run():
           test_probe_reachability_404_is_not_blamed_on_the_network)
     check("probe_reachability reports a severed connection instead of raising",
           test_probe_reachability_reports_a_severed_connection_as_network_not_raise)
+    check("describe_fetch_error never echoes exception text to the client",
+          test_describe_fetch_error_never_echoes_exception_text)
     check("probe_reachability refuses an off-host redirect",
           test_probe_reachability_refuses_an_offhost_redirect)
     check("_zip_url builds the exact URL string for a valid year",

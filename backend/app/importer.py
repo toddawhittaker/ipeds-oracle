@@ -1442,6 +1442,10 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
                         else "a newly-selected")
                 year_label = f"{sy}-{str(sy + 1)[-2:]}"
                 kind, detail = nces.describe_fetch_error(e)
+                # The raw exception text goes to the job log only; the job
+                # report is shown in the browser and carries the classified
+                # sentence (see nces.describe_fetch_error).
+                _log(job_id, f"fetch of start year {sy} failed: {type(e).__name__}: {e}")
                 if kind == "not_found":
                     why = (f"{detail}, so the release may have been moved or "
                            f"withdrawn. Check the NCES site and refresh the catalog.")
