@@ -1432,13 +1432,33 @@ def run_integrate(job_id: int, start_years: list[int]) -> None:
                 # or relocated an already-integrated year, say exactly which
                 # year and which kind it was, rather than a generic error that
                 # reads like the newly-selected year(s) are the problem.
+                # And say WHY. A 404 means NCES moved or withdrew the year;
+                # anything network-shaped means this server cannot get to
+                # nces.ed.gov, which is the operator's problem, not NCES's.
+                # The first live failure was a proxy severing the download,
+                # reported as "may have been moved or withdrawn"; that sent
+                # the wrong team looking.
                 which = ("an already-integrated" if sy in already_integrated_starts
                         else "a newly-selected")
                 year_label = f"{sy}-{str(sy + 1)[-2:]}"
+                kind, detail = nces.describe_fetch_error(e)
+                # The raw exception text goes to the job log only; the job
+                # report is shown in the browser and carries the classified
+                # sentence (see nces.describe_fetch_error).
+                _log(job_id, f"fetch of start year {sy} failed: {type(e).__name__}: {e}")
+                if kind == "not_found":
+                    why = (f"{detail}, so the release may have been moved or "
+                           f"withdrawn. Check the NCES site and refresh the catalog.")
+                elif kind == "network":
+                    why = (f"{detail}. This is a network problem between this "
+                           f"server and nces.ed.gov, not a change at NCES: check "
+                           f"the outbound proxy or firewall, then use the "
+                           f"Imports tab's NCES download check to confirm the fix.")
+                else:
+                    why = f"{detail}."
                 raise NCESFetchError(
-                    f"Could not fetch {which} year {year_label} from NCES "
-                    f"(it may have been moved or withdrawn). Live database "
-                    f"unchanged. ({type(e).__name__}: {e})") from e
+                    f"Could not fetch {which} year {year_label} from NCES: {why} "
+                    f"Live database unchanged. ({type(e).__name__})") from e
 
             with prog.lock:
                 progress["years"][str(sy)]["step"] = "fetched"

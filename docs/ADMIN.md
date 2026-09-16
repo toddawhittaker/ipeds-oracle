@@ -11,6 +11,30 @@
   an off-host/internal URL — the old final-host-only check (kept as defense-in-depth)
   ran only after that request was already sent. Applies to both `head_release` and
   the streamed `download_zip`.
+- **A download check rides along with every catalog load.** The year probes are
+  HEAD requests, and an egress proxy can pass those while severing a real
+  download — which is how a year showed as available at Franklin and the
+  integrate then died with `RemoteProtocolError: Server disconnected without
+  sending a response`. `nces.probe_reachability` fetches one ranged byte
+  (`Range: bytes=0-0`) of the fixed earliest-year Final zip, requires at least
+  one non-empty body chunk (a filtering proxy answering 200 with nothing is a
+  blocked download too), and returns `{ok, kind, detail}`; `GET /import/catalog`
+  embeds it as `reachability` and the Imports tab shows a failing download as an
+  alert before any job starts, blaming the operator's network only when `kind`
+  is `network` (a 404/503 from NCES says so instead). It is **never cached**
+  (unlike the hour-long catalog cache) so a retry after a network fix reports
+  the live answer, runs on its own 10s timeout so a dropped packet cannot hold
+  the page for the 60s download timeout, and never raises.
+- **Fetch failures are classified, not lumped.** `nces.describe_fetch_error`
+  maps the exception to `not_found` (`NCESNotFoundError`, which `fetch_year`
+  raises when `head_release` finds neither release — `head_release` itself never
+  raises on a 404 — or a literal HTTP 404), `http`, `network` (every httpx
+  `TransportError`: DNS, refused, timeout, TLS, proxy, or a connection closed
+  with no HTTP response), or `other` (a local pool timeout, a malformed request,
+  an off-host redirect refusal), and `run_integrate`'s job report says which.
+  Only `not_found` says "moved or withdrawn"; `network` tells the operator to
+  check their outbound proxy or firewall. Before this every failure read as
+  "may have been moved or withdrawn", which sent the wrong team looking.
 - Each run is a **full rebuild of the union** of already-integrated and
   newly-picked years (never an incremental merge), through the same **staging-DB +
   integrity-checks + atomic-swap** pipeline as a manual upload. Fetched `.accdb`

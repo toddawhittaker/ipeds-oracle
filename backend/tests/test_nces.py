@@ -106,6 +106,110 @@ def _make_zip(path, members: dict):
 
 
 # ---------------------------------------------------------------------------
+# describe_fetch_error / probe_reachability — a severed download must be
+# reported as a NETWORK problem, not as "the year was moved or withdrawn"
+# ---------------------------------------------------------------------------
+def test_describe_fetch_error_separates_not_found_from_network():
+    req = httpx.Request("GET", "https://nces.ed.gov/x")
+    kind, _ = nces.describe_fetch_error(
+        httpx.HTTPStatusError("404", request=req, response=httpx.Response(404, request=req)))
+    assert kind == "not_found", kind
+    kind, _ = nces.describe_fetch_error(
+        httpx.HTTPStatusError("503", request=req, response=httpx.Response(503, request=req)))
+    assert kind == "http", kind
+    # The exact exception from the live failure.
+    kind, detail = nces.describe_fetch_error(
+        httpx.RemoteProtocolError("Server disconnected without sending a response."))
+    assert kind == "network", kind
+    assert "closed without an HTTP response" in detail, detail
+    kind, detail = nces.describe_fetch_error(
+        httpx.ConnectError("[Errno -2] Name or service not known"))
+    assert kind == "network" and "DNS" in detail, (kind, detail)
+    kind, _ = nces.describe_fetch_error(httpx.ConnectTimeout("t"))
+    assert kind == "network", kind
+    kind, _ = nces.describe_fetch_error(httpx.ReadTimeout("t"))
+    assert kind == "network", kind
+    kind, _ = nces.describe_fetch_error(httpx.ProxyError("502"))
+    assert kind == "network", kind
+    kind, _ = nces.describe_fetch_error(httpx.PoolTimeout("t"))
+    assert kind == "other", kind  # our own pool, not the network
+    kind, _ = nces.describe_fetch_error(nces.NCESNotFoundError("gone"))
+    assert kind == "not_found", kind
+    kind, _ = nces.describe_fetch_error(ValueError("redirect points off host"))
+    assert kind == "other", kind
+
+
+def test_fetch_year_raises_the_typed_not_found_error():
+    orig = nces.head_release
+    nces.head_release = lambda start_year, client=None: (None, None, None)
+    try:
+        _assert_raises(lambda: nces.fetch_year(2026, Path(tempfile.mkdtemp())),
+                       nces.NCESNotFoundError, "fetch_year must raise NCESNotFoundError")
+    finally:
+        nces.head_release = orig
+
+
+def test_probe_reachability_ok_needs_a_real_body_byte_and_is_uncached():
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, str(req.url), req.headers.get("range")))
+        return httpx.Response(206, content=b"P")
+    c = _client(handler)
+    r = nces.probe_reachability(client=c)
+    assert r == {"ok": True, "kind": None, "detail": None}, r
+    assert len(seen) == 1 and seen[0][0] == "GET", seen
+    assert seen[0][1].startswith(nces.NCES_BASE), seen
+    assert seen[0][2] == "bytes=0-0", seen
+    # Uncached: a second call must hit the network again (an operator retrying
+    # after a network fix needs the live answer, not an hour-old one).
+    nces.probe_reachability(client=c)
+    assert len(seen) == 2, seen
+
+
+def test_probe_reachability_empty_body_is_a_blocked_download():
+    # A filtering proxy that answers 200 with nothing in it.
+    r = nces.probe_reachability(client=_client(lambda req: httpx.Response(200, content=b"")))
+    assert r["ok"] is False and r["kind"] == "network", r
+
+
+def test_probe_reachability_404_is_not_blamed_on_the_network():
+    r = nces.probe_reachability(client=_client(lambda req: httpx.Response(404)))
+    assert r["ok"] is False and r["kind"] == "not_found", r
+
+
+def test_probe_reachability_reports_a_severed_connection_as_network_not_raise():
+    def handler(req):
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+    r = nces.probe_reachability(client=_client(handler))
+    assert r["ok"] is False, r
+    assert "closed without an HTTP response" in r["detail"], r
+
+
+def test_probe_reachability_refuses_an_offhost_redirect():
+    def handler(req):
+        if req.url.host == nces.NCES_HOST:
+            return httpx.Response(302, headers={"location": "https://evil.example/x"})
+        raise AssertionError("must never request the off-host target")
+    r = nces.probe_reachability(client=_client(handler))
+    assert r["ok"] is False and r["kind"] == "other", r
+    # The target URL is exception text; it must not reach the browser
+    # (CodeQL py/stack-trace-exposure, alert 45). It is logged instead.
+    assert "evil.example" not in r["detail"], r
+
+
+def test_describe_fetch_error_never_echoes_exception_text():
+    """Regression: `detail` is returned to the browser by /import/catalog;
+    embedding str(e) put raw transport-error text on the wire (CodeQL 45)."""
+    marker = "raw exception text that must not reach the browser"
+    for exc in (httpx.ConnectError(marker), httpx.ProxyError(marker),
+                httpx.ReadError(marker), httpx.LocalProtocolError(marker),
+                ValueError(marker), RuntimeError(marker)):
+        _kind, detail = nces.describe_fetch_error(exc)
+        assert marker not in detail, (exc, detail)
+
+
+# ---------------------------------------------------------------------------
 # _zip_url — SSRF guard: URLs built ONLY from fixed host + validated inputs
 # ---------------------------------------------------------------------------
 
@@ -783,6 +887,22 @@ def test_fetch_year_raises_when_year_unavailable():
 
 def run():
     print("nces contract:")
+    check("describe_fetch_error separates not-found from network failures",
+          test_describe_fetch_error_separates_not_found_from_network)
+    check("fetch_year raises the typed not-found error",
+          test_fetch_year_raises_the_typed_not_found_error)
+    check("probe_reachability needs a real body byte and is uncached",
+          test_probe_reachability_ok_needs_a_real_body_byte_and_is_uncached)
+    check("probe_reachability: an empty body is a blocked download",
+          test_probe_reachability_empty_body_is_a_blocked_download)
+    check("probe_reachability: a 404 is not blamed on the network",
+          test_probe_reachability_404_is_not_blamed_on_the_network)
+    check("probe_reachability reports a severed connection instead of raising",
+          test_probe_reachability_reports_a_severed_connection_as_network_not_raise)
+    check("describe_fetch_error never echoes exception text to the client",
+          test_describe_fetch_error_never_echoes_exception_text)
+    check("probe_reachability refuses an off-host redirect",
+          test_probe_reachability_refuses_an_offhost_redirect)
     check("_zip_url builds the exact URL string for a valid year",
           test_zip_url_builds_exact_string_for_a_valid_year)
     check("_zip_url accepts the full valid boundary range",

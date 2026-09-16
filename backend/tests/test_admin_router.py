@@ -331,20 +331,26 @@ def _seed_provenance(rows):
     return _restore
 
 
-def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025), disk_usage=None):
+def _patch_catalog(catalog=_FAKE_CATALOG, integrated_years=(2024, 2025), disk_usage=None,
+                   reachability=None):
     """integrated_years mirrors importer._years()'s return (ending years);
     already-integrated start_years = {y-1 for y in integrated_years}.
     disk_usage, if given, monkeypatches admin_router.shutil.disk_usage for a
     deterministic "disk" block in the /import/catalog response."""
     orig_probe = admin_router.nces.probe_catalog
+    orig_reach = admin_router.nces.probe_reachability
     orig_years = admin_router.importer._years
     orig_disk = admin_router.shutil.disk_usage
     admin_router.nces.probe_catalog = lambda refresh=False: catalog
+    # The download check would otherwise hit the real nces.ed.gov from a test.
+    reach = reachability or {"ok": True, "kind": None, "detail": None}
+    admin_router.nces.probe_reachability = lambda client=None: dict(reach)
     admin_router.importer._years = lambda path: list(integrated_years)
     admin_router.shutil.disk_usage = disk_usage or _fake_disk_usage()
 
     def _restore():
         admin_router.nces.probe_catalog = orig_probe
+        admin_router.nces.probe_reachability = orig_reach
         admin_router.importer._years = orig_years
         admin_router.shutil.disk_usage = orig_disk
     return _restore
@@ -400,6 +406,31 @@ def test_import_catalog_marks_integrated_vs_selectable():
         assert by_year[2025]["available"] is False, by_year[2025]
         assert by_year[2025]["selectable"] is False, by_year[2025]
         assert by_year[2025]["status"] == "unknown", by_year[2025]
+
+
+def test_import_catalog_carries_the_download_check_verdict():
+    """Regression: a proxy that passes HEAD probes but severs downloads left the
+    catalog looking healthy while every integrate failed. The route must run the
+    (uncached) download check and pass its verdict + plain-English cause through
+    so the Imports tab can warn before a job starts."""
+    with TestClient(app) as c:
+        _login(c)
+        restore = _patch_catalog(
+            reachability={"ok": False, "kind": "network",
+                          "detail": "the connection to nces.ed.gov opened "
+                          "but was closed without an HTTP response"})
+        try:
+            r = c.get("/api/admin/import/catalog")
+        finally:
+            restore()
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["reachability"]["ok"] is False, body
+        assert body["reachability"]["kind"] == "network", body
+        assert "closed without an HTTP response" in body["reachability"]["detail"], body
+        # A blocked download must not hide the catalog itself.
+        assert body["years"], body
+
 
 
 def test_import_catalog_marks_provisional_integrated_as_update_when_final_now_available():
@@ -4091,6 +4122,8 @@ def test_bulk_unblock_requires_admin_403_for_non_admin():
 def run():
     print("admin router contract:")
     check("import rejects a non-.accdb upload", test_import_rejects_non_accdb_extension)
+    check("catalog carries the NCES download-check verdict",
+          test_import_catalog_carries_the_download_check_verdict)
     check("import conflicts (409) while one is already running",
           test_import_conflicts_while_one_already_running)
     check("import success creates a job and the job appears in listing/detail",

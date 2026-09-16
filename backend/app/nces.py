@@ -14,6 +14,7 @@ mirrors the existing `app/importer.py` monkeypatch convention.
 """
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import time
@@ -27,6 +28,8 @@ import httpx
 
 from app.config import get_settings
 
+log = logging.getLogger(__name__)
+
 # --- Fixed SSRF-safe constants (NOT config/env/admin-overridable) -----------
 NCES_BASE = "https://nces.ed.gov/ipeds/tablefiles/zipfiles"
 NCES_HOST = "nces.ed.gov"
@@ -36,6 +39,14 @@ _RELEASES = ("Final", "Provisional")
 # Matches the one .accdb member inside an NCES zip, e.g. "IPEDS202324.accdb"
 # (case-insensitive — some zips ship a lowercase member name).
 ACCDB_NAME_RE = re.compile(r"IPEDS(\d{4})(\d{2})\.accdb$", re.IGNORECASE)
+
+
+class NCESNotFoundError(ValueError):
+    """fetch_year: NCES has neither a Final nor a Provisional release for the
+    year. head_release never raises on a 404 (it falls back, then returns
+    None), so this typed error is how "the year is gone" reaches
+    describe_fetch_error as `not_found` rather than as an anonymous
+    ValueError."""
 
 
 def _zip_url(start_year: int, release: str) -> str:
@@ -123,6 +134,124 @@ def head_release(
                 zip_bytes = int(declared) if declared is not None and declared.isdigit() else None
                 return release, url, zip_bytes
         return None, None, None
+    finally:
+        if own_client:
+            c.close()
+
+
+# --- Failure diagnosis -------------------------------------------------------
+# One integrate run at Franklin failed with "RemoteProtocolError: Server
+# disconnected without sending a response" and the job report said the year
+# "may have been moved or withdrawn". It hadn't: an egress proxy was cutting the
+# download off after the connection opened. A fetch can fail for very different
+# reasons -- the year really is gone (HTTP 404), or the network between this
+# server and nces.ed.gov is broken (DNS, refused, timeout, TLS, or a proxy that
+# closes the connection with no HTTP response). Only the first is NCES's doing;
+# the rest are the operator's, and the job report must say which so the right
+# team gets the ticket.
+
+def describe_fetch_error(e: BaseException) -> tuple[str, str]:
+    """Classify an exception from head_release/download_zip into
+    (kind, plain-English detail). `kind` is "not_found" (NCES answered 404),
+    "http" (any other HTTP status), "network" (never got a usable HTTP
+    answer -- DNS, connect, timeout, TLS, or a connection closed without a
+    response), or "other". `detail` never embeds the exception's own text:
+    it is returned to the browser by GET /import/catalog, and CodeQL's
+    py/stack-trace-exposure (alert 45) rightly flags exception text flowing
+    to a client. Callers that want the raw message log it server-side."""
+    if isinstance(e, NCESNotFoundError):
+        return "not_found", "NCES has neither a Final nor a Provisional release for it"
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 404:
+            return "not_found", "NCES answered 404 Not Found"
+        return "http", f"NCES answered HTTP {code}"
+    if isinstance(e, httpx.ProxyError):
+        return "network", "the outbound proxy refused or failed the request"
+    if isinstance(e, httpx.PoolTimeout):
+        return "other", "this server's own connection pool was exhausted (PoolTimeout)"
+    if isinstance(e, httpx.LocalProtocolError):
+        return "other", "this server built a malformed request (LocalProtocolError)"
+    if isinstance(e, httpx.RemoteProtocolError):
+        return "network", ("the connection to nces.ed.gov opened but was closed "
+                           "without an HTTP response (a proxy or firewall "
+                           "cutting the transfer off looks exactly like this)")
+    if isinstance(e, httpx.ConnectTimeout):
+        return "network", "connecting to nces.ed.gov timed out"
+    if isinstance(e, httpx.TimeoutException):
+        return "network", "nces.ed.gov stopped sending data and the transfer timed out"
+    if isinstance(e, httpx.ConnectError):
+        msg = str(e)
+        low = msg.lower()
+        if "getaddrinfo" in low or "name or service" in low or "nodename" in low \
+                or "name resolution" in low:
+            return "network", "the name nces.ed.gov could not be resolved (DNS)"
+        if "ssl" in low or "certificate" in low or "tls" in low:
+            return "network", "the TLS handshake with nces.ed.gov failed"
+        if "refused" in low:
+            return "network", "the connection to nces.ed.gov was refused"
+        return "network", "could not connect to nces.ed.gov"
+    if isinstance(e, httpx.TransportError):  # every remaining transport failure
+        return "network", f"network error talking to nces.ed.gov ({type(e).__name__})"
+    if isinstance(e, ValueError):  # our own redirect / size refusals
+        return "other", "the fetch was refused by this server's own safety checks"
+    return "other", f"an unexpected {type(e).__name__}"
+
+
+# The URL the reachability probe fetches one byte of: the earliest year's Final
+# release, which has been at the same address for two decades. Fixed on purpose
+# (SSRF posture above) -- never a caller-chosen year.
+_PROBE_START_YEAR = EARLIEST_START_YEAR
+# Its own short timeout: the catalog's HEAD probes run from an hour-long cache,
+# but this runs live on every Imports-tab load, so a silently dropped packet
+# must not hold the page for the 60s download timeout.
+_PROBE_TIMEOUT_SECONDS = 10.0
+
+
+def probe_reachability(client: httpx.Client | None = None) -> dict:
+    """Can this server actually DOWNLOAD from NCES? head_release's HEAD probes
+    can succeed while a real download is cut off (a proxy that lets small
+    requests through and kills bodies), which is how the catalog listed a year
+    as available and the fetch of it then died. So this issues one ranged GET
+    for the first byte of a fixed, long-lived zip and reads the body. Never
+    raises; returns {"ok": bool, "kind": str | None, "detail": str | None}
+    where kind/detail come from describe_fetch_error (the UI picks its wording
+    from kind: only "network" blames the operator's network). Requires at
+    least one non-empty body chunk: a filtering proxy that answers 200 with an
+    empty body is a blocked download too. Deliberately NOT cached,
+    unlike probe_catalog: an operator retrying after a network fix must see the
+    live answer, not an hour-old one."""
+    own_client = client is None
+    c = client or _client(_PROBE_TIMEOUT_SECONDS)
+    url = _zip_url(_PROBE_START_YEAR, "Final")
+    try:
+        for _ in range(_MAX_REDIRECTS + 1):
+            with c.stream("GET", url, headers={"Range": "bytes=0-0"},
+                          follow_redirects=False) as resp:
+                if resp.is_redirect:
+                    url = _validated_redirect_target(url, resp)
+                    continue
+                resp.raise_for_status()
+                if resp.url.host != NCES_HOST:  # defense-in-depth; hops validated
+                    raise ValueError(
+                        f"redirect for {url} resolved off {NCES_HOST} (to {resp.url.host})")
+                got_byte = False
+                for chunk in resp.iter_bytes():
+                    if chunk:
+                        got_byte = True
+                        break  # one real byte proves the body flows; stop there
+                if not got_byte:
+                    return {"ok": False, "kind": "network",
+                            "detail": "nces.ed.gov answered, but the response body was "
+                                      "empty (a filtering proxy stripping downloads "
+                                      "looks like this)"}
+                return {"ok": True, "kind": None, "detail": None}
+        raise ValueError(f"too many redirects fetching {url}")
+    except Exception as e:  # noqa: BLE001 -- a probe reports, it never raises
+        kind, detail = describe_fetch_error(e)
+        # The raw message stays server-side (see describe_fetch_error).
+        log.warning("NCES download check failed: %s (%s: %s)", detail, type(e).__name__, e)
+        return {"ok": False, "kind": kind, "detail": detail}
     finally:
         if own_client:
             c.close()
@@ -342,7 +471,8 @@ def fetch_year(start_year: int, work_dir: Path, *, on_progress=None) -> tuple[Pa
 
     release, url, head_bytes = head_release(start_year)
     if not release or not url:
-        raise ValueError(f"NCES has no Final or Provisional release for start year {start_year}")
+        raise NCESNotFoundError(
+            f"NCES has no Final or Provisional release for start year {start_year}")
 
     zip_path = work_dir / f"nces_download_{start_year}.zip"
     try:
