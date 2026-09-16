@@ -11,6 +11,49 @@ detail.
 
 ---
 
+## v0.6.2
+
+One fix, for administrators who run the Imports tab behind an outbound proxy.
+A live integrate failed because an egress proxy closed the NCES download after
+the connection opened, and the job report blamed NCES, saying the year "may
+have been moved or withdrawn". It had not been. The wording sent the wrong team
+looking, and the catalog kept listing the year as available because its
+lightweight probes passed through the same proxy.
+
+### Read this before upgrading
+
+- **No schema change.** `app.db` stays at migration 39, so this upgrades and
+  rolls back cleanly to v0.6.1.
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot answers repeat questions fresh instead of instantly.
+  Expected, one time, no action.
+- **The catalog now makes one small outbound request to NCES on every load.**
+  It fetches a single byte of a fixed zip file to prove downloads work. If your
+  proxy logs egress, that is the new entry.
+
+### The job report says what actually failed
+
+A failed fetch is now classified before it is reported. Only a genuine missing
+release, an HTTP 404 from NCES, gets the "moved or withdrawn" wording. A
+network failure of any kind, including a proxy error or a connection closed
+with no response, tells you to check the outbound proxy or firewall. Other
+HTTP errors and unexpected failures are named as such. The exception text
+itself stays in the server log, not the report.
+
+### Downloads are checked before a job starts
+
+Loading the Imports tab now performs a real ranged download of one byte from
+NCES, uncached, with its own ten-second timeout, and requires a non-empty body.
+If that fails, the tab shows an alert above the catalog before any job can be
+started, and blames the network only when the failure is network-shaped. The
+HEAD probes that populate the catalog were not enough: a proxy that accepts a
+connection and then drops the body passes them.
+
+`docs/ADMIN.md` describes the classification and the probe; `docs/ADMIN_GUIDE.md`
+has the administrator's view.
+
+---
+
 ## v0.6.1
 
 A small release with one fix that matters if your model reasons. A deployment
