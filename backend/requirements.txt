@@ -3,13 +3,13 @@
 # regenerate it after editing this file with:
 #   pip-compile --generate-hashes --output-file requirements.lock requirements.txt
 fastapi>=0.141.1
-uvicorn[standard]>=0.52.4
+uvicorn[standard]>=0.54.0
 pydantic>=2.13.5
 pydantic-settings>=2.15.0
 httpx>=0.28.1
 python-multipart>=0.0.32
 itsdangerous>=2.2
-resend>=2.44.0
+resend>=2.48.0
 fastembed>=0.8.0
 numpy>=2.5.3
 email-validator>=2.3.0
