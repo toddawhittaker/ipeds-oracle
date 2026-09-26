@@ -305,9 +305,17 @@ describe("downloadServerCsv", () => {
       if (tag === "a") { el.click = () => {}; anchors.push(el); }
       return el;
     });
-    if (!URL.createObjectURL) URL.createObjectURL = () => "blob:stub";
-    if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
-    return { anchors, restore: () => spy.mockRestore() };
+    // Stub unconditionally. The old "stub only if missing" guard never fired:
+    // vitest's jsdom environment supplies its own URL.createObjectURL, which
+    // converts a jsdom Blob by reading jsdom's private `_buffer` field. jsdom
+    // 30.1 changed those internals, so the real call throws. These tests check
+    // the request URL and the filename, not blob conversion.
+    const created = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:stub");
+    const revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    return {
+      anchors,
+      restore: () => { spy.mockRestore(); created.mockRestore(); revoked.mockRestore(); },
+    };
   }
 
   it("requests the message CSV URL, adding ?cols only for a positive integer",
