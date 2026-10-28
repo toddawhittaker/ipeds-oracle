@@ -11,6 +11,48 @@ detail.
 
 ---
 
+## v0.6.3
+
+A security release. It changes no application code: it updates the libraries
+the image ships with, because several of them had published vulnerabilities.
+Upgrade when you can.
+
+### Read this before upgrading
+
+- **No schema change.** `app.db` stays at migration 39, so this upgrades and
+  rolls back cleanly to v0.6.2.
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot answers repeat questions fresh instead of instantly.
+  Expected, one time, no action.
+- **Saved skills and lessons keep working.** The embedding library moved from
+  fastembed 0.8.0 to 0.9.1, and it produces identical vectors for the model
+  this app uses, so nothing needs re-embedding.
+
+### What was patched
+
+- **authlib 1.9.1** (from 1.8.0), which handles single sign-on (OIDC). Six
+  advisories.
+- **PyJWT 2.15.1** (from 2.13.0). One advisory is rated high: a token signed
+  with an empty key could be accepted as valid. The app does not call PyJWT
+  itself; it arrives with the MCP library.
+- **Pillow 13.0.0** (from 12.3.0). The app does not use it for any user input;
+  it arrives with the embedding library, which is why fastembed moved to 0.9.1.
+- **urllib3 2.8.0, certifi 2026.10.23, dnspython 2.9.0, filelock 4.2.4 and
+  opentelemetry-api 1.45.1**, each for a published advisory.
+- **The web frontend** was rebuilt with patched build tools (Vite 8.3.5). It
+  also picks up the earlier routine updates since v0.6.2, among them
+  react-router 8.4, uvicorn 0.54.0 and resend 2.48.0.
+
+### About the Brotli vulnerability
+
+CVE-2026-111497, a heap overflow in the Brotli decompressor, does not affect
+this app. Nothing in it decompresses Brotli data from users or the network.
+Pillow still bundles an affected copy (no fixed Pillow has been released), but
+Pillow uses it only to read WOFF2 fonts, which this app never does. Your host's
+own Brotli library is your operating system's to patch.
+
+---
+
 ## v0.6.2
 
 One fix, for administrators who run the Imports tab behind an outbound proxy.
