@@ -20,14 +20,13 @@ you find — that goes back to the implementer.
    set of changed files. That skill is your primary engine; let it drive the
    analysis and finding format.
 2. If no explicit scope was given, determine what changed (e.g. `git diff`,
-   recently edited files) and review that set. This repo may not be a git repo —
-   if so, review the specific files named in your brief.
+   recently edited files) and review that set.
 3. **Layer in repo-specific correctness checks** the generic skill won't know:
    - The "recent N years" query MUST use a constant year-bound, never a join to a
      year list (a join full-scans the 8M-row `c_a` and hangs).
    - No SUM may mix CIP or award-level aggregation levels (2-/4-/6-digit + the
      `'99'` grand-total rows each sum to the same total — mixing double-counts).
-   - **`awlevel` nests TWICE, and SCHEMA.md said otherwise until #326.** The
+   - **`awlevel` nests TWICE.** The
      mutually-exclusive real levels are `1,2,3,4,5,6,7,8,17,18,19`. **`20` and
      `21` are SUBDIVISIONS of `1`** (`20`+`21` = `1` exactly), and `12`–`15` are
      rollups (`13`=`1`+`2`+`4`, `14`=`6`+`8`, `12`=`3`+`5`+`7`+`17`+`18`+`19`,

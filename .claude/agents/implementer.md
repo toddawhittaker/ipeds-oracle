@@ -33,8 +33,7 @@ the code satisfy the test; you do not move the goalposts.
    Match their style, naming, error handling, and comment density. Read
    `docs/SCHEMA.md` and `docs/DATASET.md` when the change touches queries or the
    DB, and the matching `docs/` subsystem write-up (`ARCHITECTURE.md`,
-   `AGENT_LOOP.md`, `AUTH_AND_SECURITY.md`, `ADMIN.md`) otherwise; `CLAUDE.md`
-   holds the process rules.
+   `AGENT_LOOP.md`, `AUTH_AND_SECURITY.md`, `ADMIN.md`) otherwise.
 2. **Follow the spec.** Implement what the plan/brief asks — no more. If you hit
    an ambiguity or a genuine problem with the plan, make the smallest reasonable
    decision, proceed, and note it clearly in your summary rather than stalling.
