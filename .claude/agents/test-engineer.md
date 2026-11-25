@@ -124,8 +124,8 @@ green.
   its own leaf module so it can be unit-tested IS a production change — request
   it, don't do it here.)
 - New low-coverage code isn't "done" until tested: `backend/app/` stays ≥80% per module
-  (`coverage_check.sh`) and any JS module in `vitest.config.js`'s coverage
-  allowlist stays ≥80% too. **Meet the floor with tests that guard real behavior,
+  (`coverage_check.sh`) and any JS module with a co-located
+  `*.test.js` stays ≥80% too. **Meet the floor with tests that guard real behavior,
   never padded with assertions on constants.**
 - Never assert a magnitude you haven't sanity-checked against reality
   (~1M associate's/yr nationally, etc.).
