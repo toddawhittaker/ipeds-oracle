@@ -25,9 +25,9 @@ Reachable at `http://localhost:8000` and on the LAN at `http://<lan-ip>:8000`
 
 **If the port is already taken, use another one: `make up PORT=8100`.** Every
 target honours `PORT`, and `APP_PUBLIC_URL` follows it, so sign-in links stay
-correct. `up`/`full` now **poll `/api/health` and fail with the log tail** if the
-server did not come up — they used to print a URL regardless, because a detached
-`nohup … &` "succeeds" even when uvicorn exits a moment later on a bound port.
+correct. `up`/`full` **poll `/api/health` and fail with the log tail** if the
+server did not come up, because a detached `nohup … &` "succeeds" even when uvicorn
+exits a moment later on a bound port.
 Note `make down` cannot free a **Docker-published** port (that belongs to the
 proxy, not a local process); it says so rather than reporting success.
 
