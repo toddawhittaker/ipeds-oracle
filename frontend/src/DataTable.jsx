@@ -336,7 +336,7 @@ const DataTable = forwardRef(function DataTable({
         <div className="pager-nav">
           <button type="button" className="pgbtn" aria-label="Previous page" ref={prevRef}
                   disabled={view.page <= 1} onClick={() => goPage(view.page - 1)}>
-            ‹ Prev
+            ‹ Previous
           </button>
           <span className="pager-page">Page {view.page} of {view.totalPages}</span>
           <button type="button" className="pgbtn" aria-label="Next page" ref={nextRef}

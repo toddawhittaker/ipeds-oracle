@@ -149,7 +149,7 @@ test("pagination pages through and disables Prev/Next at the ends", async ({ pag
   await expect(page.getByRole("button", { name: "Previous page" })).toBeEnabled();
   // The short last page (5 of 25 rows) is padded to full height with one empty
   // row per missing slot, so the pager below doesn't shift when you page back —
-  // the cursor stays over "‹ Prev".
+  // the cursor stays over "‹ Previous".
   await expect(page.locator("#userpanel-current tbody tr.filler")).toHaveCount(20);
   // The real invariant: the table is the SAME height on the short last page as on
   // a full page (to the pixel), so nothing below it moves. Guards against a future

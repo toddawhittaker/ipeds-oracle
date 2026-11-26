@@ -6,7 +6,7 @@ import { mockMe, mockLogout, mockConversations, mockAttention } from "./mocks.js
 // Admin surface is a menu item under the user badge, not a top-bar tab; the
 // signed-in email is surfaced inside that menu. (The menu's keyboard/About/theme
 // mechanics live in user-menu.spec.js — this file guards the role gating + email.)
-const avatar = (page) => page.getByRole("button", { name: /Account menu/ });
+const avatar = (page) => page.getByRole("button", { name: /account menu/i });
 
 test.describe("app shell / roles", () => {
   test("non-admin: the menu surfaces the email but has no Admin item", async ({ page }) => {

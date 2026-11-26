@@ -484,6 +484,28 @@ test.describe("axe smoke scan", () => {
       expect(found, JSON.stringify(found, null, 2)).toEqual([]);
     });
 
+  // Label in Name (WCAG 2.5.3, axe label-content-name-mismatch) in the state
+  // the other scans never reach. Their admin is "admin@…", whose one-letter
+  // monogram axe skips as uninterpretable, and their counts stay under the 99
+  // cap. A two-letter monogram is checked for real, and a 250 count shows the
+  // pill "99+", which the tab's name must repeat. This catches a name that
+  // drops the initials, or one that says 250 where the pill says 99+.
+  test("Admin with a two-letter monogram and a capped 99+ count keeps every visible label in its name",
+    async ({ page }) => {
+      await adminA11yMocks(page);
+      await mockMe(page, { email: "jane.doe@example.edu", is_admin: true });
+      await mockAttention(page, { users: 2, skills: 250, logs: 4 });
+      await page.goto("/admin/users/current");
+      await expect(page.locator(".avatar")).toHaveText("JD");
+      await expect(page.locator(".avatar-badge")).toHaveText("99+");
+
+      const r = await new AxeBuilder({ page }).withRules(["label-content-name-mismatch"]).analyze();
+      expect(r.violations, JSON.stringify(r.violations, null, 2)).toEqual([]);
+      // Not vacuous: the rule actually judged the avatar rather than skipping it.
+      const judged = r.passes.flatMap((v) => v.nodes.map((n) => n.target.join(" ")));
+      expect(judged).toContain(".avatar");
+    });
+
   // THE SCANS ABOVE ONLY EVER SAW THE EMPTY STATE.
   //
   // Login and an empty Chat are the app's two least-populated screens. Every

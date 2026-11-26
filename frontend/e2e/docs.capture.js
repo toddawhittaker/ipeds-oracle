@@ -402,7 +402,7 @@ test("user-menu", async ({ page }) => {
   await adminMocks(page);
   await page.goto("/chat/7");
   await expect(page.getByRole("table")).toBeVisible();
-  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("button", { name: /account menu/i }).click();
   await expect(page.getByRole("menu")).toBeVisible();
   await shot(page, `${OUT}/user-menu.png`);
 });

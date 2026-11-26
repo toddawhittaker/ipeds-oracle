@@ -123,7 +123,15 @@ needs it or it is theatre. Widening it also exposed a latent mid-animation flake
 elsewhere, so **`reducedMotion: "reduce"` now applies to EVERY scan**, not just
 Login's — that reasoning was never Login-specific, Login was just the only scan
 close enough to the top of the page to be bitten.
-**(4) `aria-prohibited-attr` returns `incomplete`, not a violation, whenever the
+**(4) Label in Name (`label-content-name-mismatch`, WCAG 2.5.3) is on by default
+from axe 4.14**, and it reads a control's text the way it is drawn, not the way a
+screen reader hears it. `aria-hidden` does not remove text from it, and it joins
+sibling elements' text with **no separator**, so `<span>Users</span><span>3</span>`
+reads as "Users3" and matches nothing. Put a real space (`{" "}`) between spans
+whose text must read as separate words; inside a flex container it draws nothing.
+It also skips a one-character label, so the fixture admin's "A" monogram proves
+nothing: the scan that covers it uses a two-letter one.
+**(5) `aria-prohibited-attr` returns `incomplete`, not a violation, whenever the
 element has text content** — so `aria-label` on a roleless `<span>` (role
 `generic`, where ARIA prohibits it) is never gated. Worse, Playwright's
 `getByLabel` computes the name WITHOUT applying the role prohibition, so an e2e

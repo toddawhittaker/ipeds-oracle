@@ -56,7 +56,7 @@ export async function mockMe(page, user) {
  */
 export async function gotoAdmin(page) {
   const { expect } = await import("@playwright/test");
-  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("button", { name: /account menu/i }).click();
   await page.getByRole("menuitem", { name: "Admin" }).click();
   await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/admin\b/);
 }

@@ -95,6 +95,29 @@ test("a large count collapses to a capped 99+ form", async ({ page }) => {
   await page.goto("/admin/users/current");
   await expect(page.locator(".avatar-badge")).toHaveText("99+");
   await expect(page.locator(".subtabs").getByRole("link", { name: /^Skills/ })).toContainText("99+");
+  // The name carries the pill's text, not the raw 250: WCAG 2.5.3 needs the
+  // visible "Skills 99+" inside the name, and axe flags it otherwise.
+  await expect(page.locator(".subtabs").getByRole("link", { name: "Skills, 99+ awaiting attention", exact: true })).toBeVisible();
+});
+
+test("clicking the avatar's count pill still opens the account menu", async ({ page }) => {
+  // The pill lives outside the button (so it is not part of the button's
+  // visible text) and overhangs the round button. The button's ::after hit
+  // area reaches under it; without that, a click on the pill hits nothing.
+  await adminMocks(page);
+  await mockAttention(page, { users: 2, skills: 0, logs: 0 });
+  await mockMarkLogsSeen(page);
+
+  await page.goto("/admin/users/current");
+  const box = await page.locator(".avatar-badge").boundingBox();
+  // The pill's far corner, the part furthest outside the circle.
+  const corner = { x: box.x + box.width - 2, y: box.y + 2 };
+  await page.mouse.click(corner.x, corner.y);
+  await expect(page.getByRole("menu")).toBeVisible();
+  // A second click toggles it shut and hands focus back to the avatar.
+  await page.mouse.click(corner.x, corner.y);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page.locator(".avatar")).toBeFocused();
 });
 
 test("no work waiting means no badge anywhere", async ({ page }) => {

@@ -43,7 +43,7 @@ test.describe("auth / verify (magic-link confirm)", () => {
     expect(verify.calls[0]).toEqual({ token: "tok-abc-123" });
 
     // …and we land in the signed-in app shell (the account-menu avatar is present).
-    await expect(page.getByRole("button", { name: /Account menu/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /account menu/i })).toBeVisible();
   });
 
   test("signs in from a legacy ?token= link already sitting in an inbox",
