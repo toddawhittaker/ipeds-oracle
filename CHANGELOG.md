@@ -11,6 +11,37 @@ detail.
 
 ---
 
+## v0.6.4
+
+A security release. It changes no application code: it updates libraries the
+image ships with that had published vulnerabilities. Upgrade when you can.
+
+### Read this before upgrading
+
+- **No schema change.** `app.db` stays at migration 39, so this upgrades and
+  rolls back cleanly to v0.6.3.
+- **Tagging wipes the answer cache once.** `APP_VERSION` is the cache's version
+  key, so the first boot answers repeat questions fresh instead of instantly.
+  Expected, one time, no action.
+
+### What was patched
+
+- **joserfc 1.7.7** (from 1.7.5), which checks single sign-on (OIDC) tokens.
+  One advisory: an oversized token was copied into memory in full before the
+  size check rejected it.
+- **pyasn1 0.6.5** (from 0.6.4). Four advisories, each a way for crafted input
+  to use excessive CPU while decoding. It arrives with the LDAP library, so the
+  input it decodes comes from your directory server.
+- **opentelemetry-api 1.45.2** (from 1.45.1). One advisory: a crafted
+  `traceparent` header value could make its parser use excessive CPU. The app
+  does not call it itself; it arrives with the MCP library.
+- **dnspython 2.9.2** (from 2.9.0). One advisory, in its zone-file parser,
+  which this app does not use; it arrives with the email-address validator.
+- **Routine updates** since v0.6.3: cryptography 50.0.2, numpy 2.5.4 and
+  resend 2.50.1 on the server, and react 19.3.1, react-router 8.5.2,
+  recharts 3.11 and sql-formatter 15.10 in the web frontend, which was rebuilt
+  with Vite 8.3.8.
+
 ## v0.6.3
 
 A security release. It changes no application code: it updates the libraries
