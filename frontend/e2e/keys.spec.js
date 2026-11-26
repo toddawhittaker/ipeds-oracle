@@ -27,7 +27,7 @@ test("the account menu reaches /keys, and the page announces the navigation", as
   await mockApiKeys(page, [KEY]);
   await page.goto("/");
 
-  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("button", { name: /account menu/i }).click();
   await page.getByRole("menuitem", { name: "API keys" }).click();
 
   await expect.poll(() => new URL(page.url()).pathname).toBe("/keys");

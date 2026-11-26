@@ -35,8 +35,13 @@ export default function Wordmark({ showIcon = true }) {
           <rect className="wm-cap" x="14" y="47.6" width="36" height="5.4" rx="1.6" />
         </svg>
       )}
-      <span className="wm-ipeds" aria-hidden="true">IPEDS</span>
-      <span className="wm-div" aria-hidden="true" />
+      {/* The spaces between the spans draw nothing (a flex container drops
+          whitespace-only text), but they keep the visible text "IPEDS Oracle"
+          rather than "IPEDSOracle". axe's label-content-name-mismatch joins
+          sibling text with no separator, so without them the brand link's name
+          no longer contains its visible text (WCAG 2.5.3). */}
+      <span className="wm-ipeds" aria-hidden="true">IPEDS</span>{" "}
+      <span className="wm-div" aria-hidden="true" />{" "}
       <span className="wm-oracle" aria-hidden="true">Oracle</span>
     </span>
   );

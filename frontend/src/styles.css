@@ -860,7 +860,9 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* ── Top-bar account control (UserMenu.jsx) ───────────────────────────────
    A round avatar (initials) that opens a menu; the only right-hand item in the
    top bar. Colors reuse existing tokens, so no per-theme triplication. */
-.user-menu { position: relative; margin-left: auto; }
+/* flex, so the wrapper is exactly the avatar's 34px box (no line-box strut):
+   the count pill is positioned against the wrapper, not the button. */
+.user-menu { position: relative; margin-left: auto; display: flex; }
 .avatar {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0; border-radius: 50%;
@@ -872,11 +874,18 @@ h1, h2, h3, .md h1, .md h2, .md h3 {
 /* Attention count riding the avatar corner (admins). Reuses the .tab-badge accent
    language; positioned as a small pill overlapping the top-right. */
 .avatar-badge {
-  position: absolute; top: -5px; right: -6px; min-width: 1.4em; padding: 0 5px;
+  position: absolute; top: -6px; right: -7px; min-width: 1.4em; padding: 0 5px;
   border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1.6;
   text-align: center; background: var(--accent); color: var(--on-fg);
   border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent-d);
+  pointer-events: none;
 }
+/* The pill sits outside the button (UserMenu.jsx) and overhangs the circle,
+   where a pointer-events: none pill would leave a dead corner. This box
+   stretches the button's own hit area under it, so a click or hover there is
+   the button's. A square, not a circle: a "99+" pill's corner falls outside
+   any circle that stays this tight. Empty content adds no text to the name. */
+.avatar::after { content: ""; position: absolute; top: -7px; right: -8px; bottom: 0; left: 0; }
 .user-menu-panel {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 20;
   min-width: 232px; padding: 6px; text-align: left;

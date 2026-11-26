@@ -159,9 +159,14 @@ export default function UserMenu({
     item.onSelect?.();
   }
 
+  // The name leads with the visible initials (WCAG 2.5.3, Label in Name): a
+  // speech-control user who sees "TW" can say "click TW". The "?" fallback is
+  // not a label anyone would speak, so it is left out.
+  const monogram = initials(email);
+  const menuName = monogram === "?" ? "Account menu" : `${monogram}, account menu`;
   const label = badge
-    ? `Account menu, ${attentionTotal} ${attentionTotal === 1 ? "item needs" : "items need"} attention`
-    : "Account menu";
+    ? `${menuName}, ${attentionTotal} ${attentionTotal === 1 ? "item needs" : "items need"} attention`
+    : menuName;
 
   return (
     <div className="user-menu" ref={wrapRef}>
@@ -176,9 +181,14 @@ export default function UserMenu({
         onClick={() => (open ? close() : openMenu(0))}
         onKeyDown={onTriggerKeyDown}
       >
-        <span aria-hidden="true">{initials(email)}</span>
-        {badge && <span className="avatar-badge" aria-hidden="true">{badge}</span>}
+        <span aria-hidden="true">{monogram}</span>
       </button>
+      {/* The count pill sits OUTSIDE the button so it is not part of the
+          button's visible text: axe would read "TW3" and find it nowhere in
+          the name. The count is already in the name. The pill ignores the
+          pointer, and the button's ::after stretches its hit area under the
+          pill (styles.css), so a click or hover on the pill lands on the button. */}
+      {badge && <span className="avatar-badge" aria-hidden="true">{badge}</span>}
       {open && (
         <div
           className="user-menu-panel"

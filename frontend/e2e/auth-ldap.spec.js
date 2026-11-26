@@ -50,7 +50,7 @@ test.describe("the LDAP door", () => {
 
       await expect.poll(() => ldap.calls.length).toBe(1);
       expect(ldap.calls[0]).toEqual({ username: "jdoe", password: "s3cret" });
-      await expect(page.getByRole("button", { name: /Account menu/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: /account menu/i })).toBeVisible();
     });
 
   test("a second identical failure is still announced", async ({ page }) => {

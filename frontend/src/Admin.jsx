@@ -87,15 +87,18 @@ export default function Admin({ me, tab, sub, onDataChanged, attention, onAttent
           // Only areas with an actionable backlog carry a count (users/skills/
           // logs); imports/usage are absent from `counts` → no badge.
           const badge = formatBadge(counts[t]);
-          const n = counts[t] || 0;
           return (
             // Users drops `end` so it stays active across its sub-tab paths
             // (/admin/users/current|pending|blocked, all prefixes of /admin/users);
             // the other tabs match exactly.
             <NavLink key={t} to={`/admin/${t}`} end={t !== "users"}
-                     aria-label={n > 0 ? `${t[0].toUpperCase() + t.slice(1)}, ${n} awaiting attention` : undefined}
+                     aria-label={badge ? `${t[0].toUpperCase() + t.slice(1)}, ${badge} awaiting attention` : undefined}
                      className={({ isActive }) => (isActive ? "on" : "")}>
-              {t[0].toUpperCase() + t.slice(1)}
+              {/* The space and the badge text in the name serve WCAG 2.5.3:
+                  the visible "Users 99+" must appear, in order, in the name.
+                  Without the space axe reads "Users99+"; with the raw count
+                  the name says 250 where the pill says 99+. */}
+              {t[0].toUpperCase() + t.slice(1)}{" "}
               {badge && <span className="tab-badge attention" aria-hidden="true">{badge}</span>}
             </NavLink>
           );

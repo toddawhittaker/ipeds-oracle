@@ -31,7 +31,7 @@ async function signedIn(page, { admin = false, email, attention, version } = {})
   }
 }
 
-const avatar = (page) => page.getByRole("button", { name: /Account menu/ });
+const avatar = (page) => page.getByRole("button", { name: /account menu/i });
 
 test("top bar holds only the wordmark link and the avatar — no loose controls", async ({ page }) => {
   await signedIn(page);
